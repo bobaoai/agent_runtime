@@ -6,7 +6,7 @@ import hashlib
 import json
 
 from ..contracts.execution_module_definition import ModuleInputBinding
-from .provider_schema_projection import task_plane_output_schema
+from .invocation_schema_projection import task_plane_output_schema
 
 
 PROMPT_ONLY_JSON = "prompt_only_json"

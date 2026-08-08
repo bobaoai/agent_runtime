@@ -13,11 +13,11 @@ from agent_runtime.contracts import (
     ModuleOutcome,
     ModuleOutcomeDisposition,
 )
-from agent_runtime.execution import (
+from agent_runtime.ledger import (
     InMemoryRuntimeExecutionRecordStore,
     RuntimeExecutionRecordStore,
 )
-from agent_runtime.contracts.execution_record_definition import (
+from agent_runtime.contracts.ledger_record_definition import (
     WorkflowAttemptRecord,
     LegacyExecutionEntitlementSnapshot,
     ExecutionInputRef,
@@ -626,8 +626,8 @@ def test_gate_c_core_has_no_project_domain_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     for relative_path in (
             "src/agent_runtime/contracts/registry_workflow_definition.py",
-            "src/agent_runtime/contracts/execution_record_definition.py",
-            "src/agent_runtime/execution/execution_record_persistence.py",
+            "src/agent_runtime/contracts/ledger_record_definition.py",
+            "src/agent_runtime/ledger/ledger_record_persistence.py",
     ):
         source = (repo_root / relative_path).read_text(encoding="utf-8")
         assert "research_theme_report_workflow" not in source

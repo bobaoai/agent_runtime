@@ -2,7 +2,7 @@
 
 Agent Runtime is an independently publishable infrastructure product for
 registering AI Modules, executing durable Workflows, recording every execution,
-and reviewing those executions from their authoritative PostgreSQL records.
+and inspecting those executions from an authoritative Execution Ledger.
 
 Business roles such as Writer, Router, Verifier, Reviewer, or Expert come from
 domain plugins. Runtime does not define their business meaning. It guarantees
@@ -10,38 +10,44 @@ that the exact registered version is executed, every invocation is recorded,
 failed work can be recovered, and an authorized reviewer can inspect what
 happened.
 
-## Product flow
+## Logical responsibility flow
+
+Arrows in this diagram mean Runtime call or committed-fact flow. Every node is
+one peer logical responsibility.
 
 ```mermaid
 flowchart LR
-    SOURCE["Module and Workflow source"] --> REGISTRY["Release registration"]
-    REGISTRY --> RELEASES["Registered releases in PostgreSQL"]
-
-    HOST["Product host"] --> EXECUTION["Workflow execution"]
-    RELEASES --> EXECUTION
-    EXECUTION --> PROVIDER["Model or tool invocation"]
-    EXECUTION <--> TEMPORAL["Temporal coordination"]
-    EXECUTION --> RECORDS["Execution records and content in PostgreSQL"]
-
-    RECORDS --> QUERY["Authorized execution query"]
-    QUERY --> REVIEW["Workflow Inspector"]
+    REGISTRY["Registry"] --> EXECUTION["Execution"]
+    EXECUTION --> INVOCATION["Invocation"]
+    EXECUTION <--> DURABILITY["Durability"]
+    EXECUTION --> LEDGER["Execution Ledger"]
+    LEDGER --> INSPECTION["Inspection"]
 ```
 
-PostgreSQL is the system of record for Runtime releases, execution records, and
-recorded execution content. Temporal coordinates durable progress; it is not
-the execution ledger. Claude, Codex, and future providers execute one admitted
-Module invocation; they do not own Workflow state.
+Concrete technologies are registered separately as implementation bindings:
 
-## Product modules
+```mermaid
+flowchart LR
+    REGISTRY["Registry"] -. "implemented by" .-> POSTGRES["PostgreSQL"]
+    INVOCATION["Invocation"] -. "implemented by" .-> CLAUDE["Claude Agent SDK"]
+    INVOCATION -. "implemented by" .-> CODEX["Codex CLI"]
+    DURABILITY["Durability"] -. "implemented by" .-> TEMPORAL["Temporal"]
+    INSPECTION["Inspection"] -. "implemented by" .-> HTML["HTML renderer"]
+```
 
-| Module | Responsibility | Does not own |
+PostgreSQL, Temporal, provider SDKs, CLIs, and renderers are replaceable
+implementations. None is a peer logical responsibility or execution authority.
+
+## Logical responsibilities
+
+| Logical responsibility | Owns | Does not own |
 | --- | --- | --- |
 | Registry | Compile, validate, register, and activate immutable Module and Workflow releases | Workflow execution or business meaning |
-| Execution | Start Workflow executions; create Module Runs, Variants, and Attempts; own portable execution-record interfaces and Cell-local staging; evaluate, resolve, and recover work | Product Entitlements, provider implementation, or production PostgreSQL storage |
-| Provider | Assemble the admitted model context and invoke the selected provider profile | Workflow routing, release selection, or canonical records |
-| Durability | Coordinate waits, retries, external events, and recovery through Temporal | Prompt, output, usage, or product data storage |
-| PostgreSQL | Implement production PostgreSQL persistence for Runtime releases, execution records, and recorded content | Portable execution contracts, domain data policy, or Workflow decisions |
-| Review | Query authorized Runtime records and render the live read-only Workflow Inspector | Execution mutation, approval, retry, or publication |
+| Execution | Start and advance Workflow executions; stage admitted content; coordinate authorization, Evaluation, and Resolution | Product Entitlements, provider implementation, or canonical execution facts |
+| Invocation | Assemble admitted model context and invoke one registered model or tool profile | Workflow routing, release selection, or canonical records |
+| Durability | Coordinate acknowledged commands, waits, retries, replay, and recovery | Prompt, output, usage, or product data storage |
+| Ledger | Commit authoritative execution lineage, Attempts, usage, outcomes, and Resolution facts | Workflow decisions, provider sessions, or inspection presentation |
+| Inspection | Project and render authorized, read-only Runtime release and execution views | Execution mutation, approval, retry, or publication |
 
 Product Authorization and governed Data Access remain external authorities.
 Runtime carries the admitted authorization context and calls those authorities
@@ -60,11 +66,11 @@ Examples:
 ```text
 registry_release_registration.py
 execution_module_invocation.py
-execution_record_persistence.py
-provider_prompt_assembly.py
+ledger_record_persistence.py
+invocation_prompt_assembly.py
 durability_temporal_coordination.py
-postgres_release_persistence.py
-review_release_rendering.py
+registry_postgres_persistence.py
+inspection_release_rendering.py
 ```
 
 The first term identifies the responsible module, the second identifies the
@@ -88,10 +94,10 @@ agent_runtime/
   contracts/
   registry/
   execution/
-  provider/
+  invocation/
   durability/
-  postgres/
-  review/
+  ledger/
+  inspection/
   testing/
 ```
 
@@ -100,21 +106,23 @@ agent_runtime/
 | `registry_*_*` | `agent_runtime_01_module_contract_and_assembly.md` |
 | `execution_*_*` | `agent_runtime_00_execution_charter.md` and `agent_runtime_06_standalone_package_and_lifecycle_contract.md` |
 | `execution_authorization_*` and `execution_data_*` | `agent_runtime_09_authorization_integration_contract.md` |
-| `provider_*_*` | `agent_runtime_08_agent_execution_adapter_contract.md` |
+| `invocation_*_*` | `agent_runtime_08_agent_execution_adapter_contract.md` |
 | `durability_*_*` | `agent_runtime_07_temporal_durable_adapter_contract.md` |
-| `postgres_*_*` | the contract for the Runtime fact being persisted |
-| `review_*_*` | `agent_runtime_06_standalone_package_and_lifecycle_contract.md` |
+| `ledger_*_*` | `agent_runtime_06_standalone_package_and_lifecycle_contract.md` |
+| `inspection_*_*` | `agent_runtime_06_standalone_package_and_lifecycle_contract.md` |
 
 Per-file exceptions are code-owned and appear in the generated architecture
 report. In particular, `registry_architecture_registration` is owned by
 `agent_runtime_06`, `registry_migration_validation` by `agent_runtime_05`, and
 the portable topology plus retired-backend evaluations by `agent_runtime_02`.
 
-The code-owned `registry_architecture_registration` assigns every target source
-file to one logical product module, one physical source directory, and one
-canonical Design Contract. Repository tests scan every Runtime Python file and
-reject unregistered or misplaced files, missing contracts, generic filenames,
-duplicate dispositions, and stale migration-debt paths.
+The code-owned `registry_architecture_registration` maintains three independent
+registries: logical responsibilities, physical source directories, and concrete
+implementation bindings. Every target source file maps to exactly one logical
+responsibility and one physical directory, and only concrete technology files
+map to an implementation binding. Repository tests reject mixed axes,
+unregistered or misplaced files, missing contracts, duplicate dispositions, and
+stale migration-debt paths.
 
 The current wheel still contains five explicitly enumerated predecessor
 semantic surfaces while migration is in progress. They are listed in
@@ -201,7 +209,7 @@ Every published Runtime release contains:
 - the public Python API and JSON schemas;
 - PostgreSQL schema migrations;
 - the live Workflow Inspector assets; and
-- architecture, clean-wheel, execution, recovery, provider, and review tests.
+- architecture, clean-wheel, execution, recovery, invocation, and inspection tests.
 
 The README is the human entry point. Design Contracts define intent and stable
 invariants. Code, PostgreSQL records, and generated architecture reports define

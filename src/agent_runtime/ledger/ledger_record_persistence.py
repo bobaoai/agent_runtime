@@ -12,7 +12,7 @@ from threading import RLock
 from typing import Callable, Protocol, runtime_checkable
 
 from ..contracts.registry_workflow_definition import ModuleOutcome
-from ..contracts.execution_record_definition import (
+from ..contracts.ledger_record_definition import (
     LegacyAttemptBeginBatch,
     AttemptBeginReceipt,
     AttemptClaim,

@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from ..registry.registry_architecture_registration import (
+    RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS,
+    RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS,
     RUNTIME_MIGRATION_DEBT_PATHS,
-    RUNTIME_PRODUCT_MODULE_REGISTRATIONS,
     RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS,
     RUNTIME_SOURCE_FILE_REGISTRATIONS,
     RUNTIME_STRUCTURAL_SOURCE_PATHS,
@@ -16,7 +17,7 @@ from ..registry.registry_architecture_registration import (
 
 
 ARCHITECTURE_PROJECTION_SCHEMA_VERSION = (
-    "agent_runtime_architecture_projection_v2"
+    "agent_runtime_architecture_projection_v3"
 )
 
 
@@ -37,23 +38,42 @@ def build_runtime_architecture_projection(
     }
     return {
         "schema_version": ARCHITECTURE_PROJECTION_SCHEMA_VERSION,
-        "product_modules": [
+        "logical_responsibilities": [
             {
-                "module_id": row.module_id,
-                "source_directory": directories[row.module_id],
+                "responsibility_id": row.responsibility_id,
                 "responsibility": row.responsibility,
                 "owner_contract_ref": row.owner_contract_ref,
             }
-            for row in RUNTIME_PRODUCT_MODULE_REGISTRATIONS
+            for row in RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS
+        ],
+        "physical_source_directories": [
+            {
+                "source_directory_id": row.source_directory_id,
+                "source_directory": row.source_directory,
+                "purpose": row.purpose,
+            }
+            for row in RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS
+        ],
+        "implementation_bindings": [
+            {
+                "implementation_binding_id": row.implementation_binding_id,
+                "logical_responsibility_id": row.logical_responsibility_id,
+                "technology_id": row.technology_id,
+                "implementation_source_paths": list(
+                    row.implementation_source_paths
+                ),
+            }
+            for row in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
         ],
         "target_source_files": [
             {
                 "source_path": row.source_path,
-                "module_id": row.module_id,
+                "logical_responsibility_id": row.logical_responsibility_id,
                 "physical_directory": directories[row.source_directory_id],
                 "subject": row.subject,
                 "nominalized_action": row.nominalized_action,
                 "owner_contract_ref": row.owner_contract_ref,
+                "implementation_binding_id": row.implementation_binding_id,
             }
             for row in RUNTIME_SOURCE_FILE_REGISTRATIONS
         ],
@@ -83,29 +103,65 @@ def render_runtime_architecture_markdown() -> str:
         f"| Structural package file | `{len(projection['structural_source_files'])}` |",
         f"| Explicit migration debt | `{len(projection['migration_debt_source_files'])}` |",
         "",
-        "## Product Modules",
+        "## Logical Responsibilities",
         "",
-        "| Module | Source directory | Responsibility | Design owner |",
-        "| --- | --- | --- | --- |",
+        "| Responsibility | Owns | Design owner |",
+        "| --- | --- | --- |",
     ]
-    for module in projection["product_modules"]:
+    for responsibility in projection["logical_responsibilities"]:
         lines.append(
-            f"| `{module['module_id']}` | `{module['source_directory']}` | "
-            f"{module['responsibility']} | `{module['owner_contract_ref']}` |"
+            f"| `{responsibility['responsibility_id']}` | "
+            f"{responsibility['responsibility']} | "
+            f"`{responsibility['owner_contract_ref']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Physical Source Directories",
+            "",
+            "| Directory ID | Physical path | Purpose |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for directory in projection["physical_source_directories"]:
+        lines.append(
+            f"| `{directory['source_directory_id']}` | "
+            f"`{directory['source_directory']}` | {directory['purpose']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Implementation Bindings",
+            "",
+            "| Binding | Logical responsibility | Technology | Sources |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for binding in projection["implementation_bindings"]:
+        sources = "<br/>".join(
+            f"`{path}`" for path in binding["implementation_source_paths"]
+        )
+        lines.append(
+            f"| `{binding['implementation_binding_id']}` | "
+            f"`{binding['logical_responsibility_id']}` | "
+            f"`{binding['technology_id']}` | {sources} |"
         )
     lines.extend(
         [
             "",
             "## Target Source Files",
             "",
-            "| Source | Logical module | Physical directory | Subject | Action | Design owner |",
-            "| --- | --- | --- | --- | --- | --- |",
+            "| Source | Logical responsibility | Physical directory | Implementation binding | Subject | Action | Design owner |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for source in projection["target_source_files"]:
+        binding = source["implementation_binding_id"] or ""
         lines.append(
-            f"| `{source['source_path']}` | `{source['module_id']}` | "
-            f"`{source['physical_directory']}` | `{source['subject']}` | "
+            f"| `{source['source_path']}` | "
+            f"`{source['logical_responsibility_id']}` | "
+            f"`{source['physical_directory']}` | `{binding}` | "
+            f"`{source['subject']}` | "
             f"`{source['nominalized_action']}` | "
             f"`{source['owner_contract_ref']}` |"
         )

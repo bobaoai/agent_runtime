@@ -59,9 +59,9 @@ outputs:
   - Module Execution Variant A/B contract
   - execution-mode, Attempt-workspace, and network-policy contract
 truth_surfaces:
-  - src/agent_runtime/contracts/provider_invocation_definition.py
-  - src/agent_runtime/providers/codex_cli.py
-  - src/agent_runtime/model_execution_gateway.py
+  - src/agent_runtime/contracts/invocation_adapter_definition.py
+  - src/agent_runtime/invocation/invocation_codex_module_invocation.py
+  - src/agent_runtime/invocation/invocation_model_invocation.py
 runtime_triggers: none
 downstream_consumers:
   - Agent Runtime invocation and evaluation services
@@ -71,9 +71,9 @@ downstream_consumers:
 open_decisions: none
 review_gate: provider conformance, data-leakage, lifecycle-order, and clean-wheel tests
 runtime_surface_ledger:
-  - "active DTO/protocol baseline: src/agent_runtime/contracts/provider_invocation_definition.py"
-  - "shadow executable Codex CLI Module Executor: src/agent_runtime/providers/codex_cli.py"
-  - "target model-execution authorization seam: src/agent_runtime/model_execution_gateway.py"
+  - "active DTO/protocol baseline: src/agent_runtime/contracts/invocation_adapter_definition.py"
+  - "executable Codex CLI Module Executor: src/agent_runtime/invocation/invocation_codex_module_invocation.py"
+  - "model-execution authorization seam: src/agent_runtime/invocation/invocation_model_invocation.py"
 verification_hooks:
   - ./.venv/bin/python -m pytest tests/test_agent_runtime_public_adapter_contracts.py -q
   - ./.venv/bin/python -m pytest tests/test_agent_runtime_codex_cli_executor.py -q

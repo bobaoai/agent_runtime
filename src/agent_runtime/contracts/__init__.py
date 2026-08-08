@@ -55,7 +55,7 @@ from .durability_backend_definition import (
     ExecutionSnapshot,
     StartExecutionRequest,
 )
-from .provider_invocation_definition import (
+from .invocation_adapter_definition import (
     AdapterContextRequest,
     AdapterContextResult,
     AuthorizedAgentExecutionAdapter,
@@ -115,7 +115,7 @@ from .registry_release_definition import (
     WorkflowNodeExecutionProfileBinding,
     WorkflowRelease,
 )
-from .execution_lineage_definition import (
+from .ledger_lineage_definition import (
     ModuleAttemptRecord,
     ModuleAttemptStartedRecord,
     ModuleExecutionVariantRecord,

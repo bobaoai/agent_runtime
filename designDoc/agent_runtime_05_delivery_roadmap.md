@@ -52,7 +52,7 @@ outputs:
 truth_surfaces:
   - designDoc/agent_runtime_05_delivery_roadmap.md
   - src/agent_runtime/registry.py
-  - src/agent_runtime/review/review_release_rendering.py
+  - src/agent_runtime/inspection/inspection_release_rendering.py
   - src/runtime_composition.py
 runtime_triggers: none
 downstream_consumers:

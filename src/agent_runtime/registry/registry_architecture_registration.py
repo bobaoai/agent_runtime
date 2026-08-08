@@ -1,9 +1,10 @@
 """Code-owned registration of the Agent Runtime product architecture.
 
-This repository-only registry separates logical product ownership from physical
-source placement.  CI compares every Runtime Python file with either one target
-registration, one structural-package exception, or one explicit migration-debt
-entry.  A new file therefore cannot silently bypass architecture review.
+This repository-only registry keeps logical responsibilities, physical source
+placement, and concrete implementation bindings as independent axes. CI
+compares every Runtime Python file with either one target registration, one
+structural-package exception, or one explicit migration-debt entry. A new file
+therefore cannot silently bypass architecture review.
 """
 
 from __future__ import annotations
@@ -18,15 +19,23 @@ _SOURCE_NAME = re.compile(
     r"^[a-z][a-z0-9]*_[a-z][a-z0-9_]*_[a-z][a-z0-9]*$"
 )
 _RUNTIME_SOURCE_ROOT = "src/agent_runtime"
+RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS = (
+    "registry",
+    "execution",
+    "invocation",
+    "durability",
+    "ledger",
+    "inspection",
+)
 
 
 @dataclass(frozen=True)
-class RuntimeProductModuleRegistration:
-    """One peer logical responsibility inside Agent Runtime."""
+class RuntimeLogicalResponsibilityRegistration:
+    """One stable logical responsibility owned by Agent Runtime."""
 
-    record_type: ClassVar[str] = "runtime_product_module_registration"
+    record_type: ClassVar[str] = "runtime_logical_responsibility_registration"
 
-    module_id: str
+    responsibility_id: str
     responsibility: str
     owner_contract_ref: str
 
@@ -49,59 +58,84 @@ class RuntimeSourceFileRegistration:
     record_type: ClassVar[str] = "runtime_source_file_registration"
 
     source_path: str
-    module_id: str
+    logical_responsibility_id: str
     source_directory_id: str
     subject: str
     nominalized_action: str
     owner_contract_ref: str
+    implementation_binding_id: str | None = None
 
     @property
     def expected_file_name(self) -> str:
         """Return the required three-part Python filename."""
 
-        return f"{self.module_id}_{self.subject}_{self.nominalized_action}.py"
+        return (
+            f"{self.logical_responsibility_id}_"
+            f"{self.subject}_{self.nominalized_action}.py"
+        )
 
 
-RUNTIME_PRODUCT_MODULE_REGISTRATIONS = (
-    RuntimeProductModuleRegistration(
-        module_id="registry",
+@dataclass(frozen=True)
+class RuntimeImplementationBindingRegistration:
+    """One concrete technology implementing a logical responsibility."""
+
+    record_type: ClassVar[str] = "runtime_implementation_binding_registration"
+
+    implementation_binding_id: str
+    logical_responsibility_id: str
+    technology_id: str
+    implementation_source_paths: tuple[str, ...]
+
+
+RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS = (
+    RuntimeLogicalResponsibilityRegistration(
+        responsibility_id="registry",
         responsibility=(
             "Register Runtime architecture; compile, activate, retrieve, and "
             "project immutable releases."
         ),
         owner_contract_ref="designDoc/agent_runtime_01_module_contract_and_assembly.md",
     ),
-    RuntimeProductModuleRegistration(
-        module_id="execution",
+    RuntimeLogicalResponsibilityRegistration(
+        responsibility_id="execution",
         responsibility=(
-            "Run workflows and modules; own portable execution-record "
-            "contracts, Cell-local staging, and execution lineage."
+            "Start and advance workflows and modules; stage admitted content; "
+            "coordinate authorization, evaluation, and output resolution."
         ),
         owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
     ),
-    RuntimeProductModuleRegistration(
-        module_id="provider",
-        responsibility="Assemble model context and invoke registered provider profiles.",
+    RuntimeLogicalResponsibilityRegistration(
+        responsibility_id="invocation",
+        responsibility=(
+            "Assemble admitted model context and invoke registered model or "
+            "tool execution profiles."
+        ),
         owner_contract_ref="designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
-    RuntimeProductModuleRegistration(
-        module_id="durability",
-        responsibility="Coordinate durable workflow execution through Temporal.",
+    RuntimeLogicalResponsibilityRegistration(
+        responsibility_id="durability",
+        responsibility=(
+            "Coordinate acknowledged commands, waits, retries, replay, and "
+            "recovery through a replaceable durable backend."
+        ),
         owner_contract_ref="designDoc/agent_runtime_07_temporal_durable_adapter_contract.md",
     ),
-    RuntimeProductModuleRegistration(
-        module_id="postgres",
+    RuntimeLogicalResponsibilityRegistration(
+        responsibility_id="ledger",
         responsibility=(
-            "Implement production PostgreSQL persistence for Runtime releases, "
-            "execution records, and recorded content."
+            "Define and commit authoritative execution lineage, attempts, "
+            "usage, outcomes, and resolution facts."
         ),
         owner_contract_ref=(
             "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md"
         ),
     ),
-    RuntimeProductModuleRegistration(
-        module_id="review",
-        responsibility="Read and render authorized Runtime execution records.",
+    RuntimeLogicalResponsibilityRegistration(
+        responsibility_id="inspection",
+        responsibility=(
+            "Project and render authorized, read-only Runtime release and "
+            "execution views."
+        ),
         owner_contract_ref=(
             "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md"
         ),
@@ -112,16 +146,21 @@ RUNTIME_PRODUCT_MODULE_REGISTRATIONS = (
 RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS = (
     *(
         RuntimeSourceDirectoryRegistration(
-            source_directory_id=module.module_id,
-            source_directory=f"{_RUNTIME_SOURCE_ROOT}/{module.module_id}",
-            purpose=f"{module.module_id} product implementation",
+            source_directory_id=responsibility_id,
+            source_directory=f"{_RUNTIME_SOURCE_ROOT}/{responsibility_id}",
+            purpose=f"{responsibility_id} logical responsibility implementation",
         )
-        for module in RUNTIME_PRODUCT_MODULE_REGISTRATIONS
+        for responsibility_id in (
+            RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS
+        )
     ),
     RuntimeSourceDirectoryRegistration(
         source_directory_id="contracts",
         source_directory=f"{_RUNTIME_SOURCE_ROOT}/contracts",
-        purpose="cross-module boundary definitions owned by a product module",
+        purpose=(
+            "cross-responsibility boundary definitions owned by one logical "
+            "responsibility"
+        ),
     ),
     RuntimeSourceDirectoryRegistration(
         source_directory_id="testing",
@@ -131,25 +170,71 @@ RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS = (
 )
 
 
+RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
+    RuntimeImplementationBindingRegistration(
+        implementation_binding_id="registry_postgres_persistence",
+        logical_responsibility_id="registry",
+        technology_id="postgresql",
+        implementation_source_paths=(
+            "src/agent_runtime/registry/registry_postgres_persistence.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
+        implementation_binding_id="invocation_claude_agent_sdk",
+        logical_responsibility_id="invocation",
+        technology_id="claude_agent_sdk",
+        implementation_source_paths=(
+            "src/agent_runtime/invocation/invocation_claude_module_invocation.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
+        implementation_binding_id="invocation_codex_cli",
+        logical_responsibility_id="invocation",
+        technology_id="codex_cli",
+        implementation_source_paths=(
+            "src/agent_runtime/invocation/invocation_codex_module_invocation.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
+        implementation_binding_id="durability_temporal_coordination",
+        logical_responsibility_id="durability",
+        technology_id="temporal",
+        implementation_source_paths=(
+            "src/agent_runtime/durability/durability_temporal_coordination.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
+        implementation_binding_id="inspection_html_rendering",
+        logical_responsibility_id="inspection",
+        technology_id="html",
+        implementation_source_paths=(
+            "src/agent_runtime/inspection/inspection_snapshot_rendering.py",
+        ),
+    ),
+)
+
+
 def _source(
-    module_id: str,
+    logical_responsibility_id: str,
     subject: str,
     nominalized_action: str,
     owner_contract_ref: str,
     *,
     source_directory_id: str | None = None,
+    implementation_binding_id: str | None = None,
 ) -> RuntimeSourceFileRegistration:
-    physical_directory = source_directory_id or module_id
+    physical_directory = source_directory_id or logical_responsibility_id
     return RuntimeSourceFileRegistration(
         source_path=(
             f"{_RUNTIME_SOURCE_ROOT}/{physical_directory}/"
-            f"{module_id}_{subject}_{nominalized_action}.py"
+            f"{logical_responsibility_id}_{subject}_{nominalized_action}.py"
         ),
-        module_id=module_id,
+        logical_responsibility_id=logical_responsibility_id,
         source_directory_id=physical_directory,
         subject=subject,
         nominalized_action=nominalized_action,
         owner_contract_ref=owner_contract_ref,
+        implementation_binding_id=implementation_binding_id,
     )
 
 
@@ -203,8 +288,8 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         source_directory_id="contracts",
     ),
     _source(
-        "provider",
         "invocation",
+        "adapter",
         "definition",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
         source_directory_id="contracts",
@@ -217,14 +302,14 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         source_directory_id="contracts",
     ),
     _source(
-        "execution",
+        "ledger",
         "lineage",
         "definition",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
         source_directory_id="contracts",
     ),
     _source(
-        "execution",
+        "ledger",
         "record",
         "definition",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
@@ -287,19 +372,19 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "designDoc/agent_runtime_00_execution_charter.md",
     ),
     _source(
-        "execution",
+        "ledger",
         "lineage",
         "recording",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     ),
     _source(
-        "execution",
+        "ledger",
         "record",
         "persistence",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     ),
     _source(
-        "execution",
+        "ledger",
         "usage",
         "aggregation",
         "designDoc/agent_runtime_00_execution_charter.md",
@@ -329,37 +414,39 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "designDoc/agent_runtime_09_authorization_integration_contract.md",
     ),
     _source(
-        "provider",
+        "invocation",
         "prompt",
         "assembly",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
     _source(
-        "provider",
+        "invocation",
         "schema",
         "projection",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
     _source(
-        "provider",
+        "invocation",
         "model",
         "invocation",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
     _source(
-        "provider",
+        "invocation",
         "claude_module",
         "invocation",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+        implementation_binding_id="invocation_claude_agent_sdk",
     ),
     _source(
-        "provider",
+        "invocation",
         "codex_module",
         "invocation",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+        implementation_binding_id="invocation_codex_cli",
     ),
     _source(
-        "provider",
+        "invocation",
         "tool",
         "definition",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
@@ -375,6 +462,7 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "temporal",
         "coordination",
         "designDoc/agent_runtime_07_temporal_durable_adapter_contract.md",
+        implementation_binding_id="durability_temporal_coordination",
     ),
     _source(
         "durability",
@@ -411,37 +499,39 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         source_directory_id="testing",
     ),
     _source(
+        "registry",
         "postgres",
-        "release",
         "persistence",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+        implementation_binding_id="registry_postgres_persistence",
     ),
     _source(
-        "review",
+        "inspection",
         "architecture",
         "rendering",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     ),
     _source(
-        "review",
+        "inspection",
         "release",
         "rendering",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     ),
     _source(
-        "review",
+        "inspection",
         "snapshot",
         "definition",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     ),
     _source(
-        "review",
+        "inspection",
         "snapshot",
         "rendering",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+        implementation_binding_id="inspection_html_rendering",
     ),
     _source(
-        "review",
+        "inspection",
         "snapshot",
         "exporting",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
@@ -454,12 +544,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
 RUNTIME_STRUCTURAL_SOURCE_PATHS = (
     "src/agent_runtime/__init__.py",
     "src/agent_runtime/contracts/__init__.py",
-    "src/agent_runtime/execution/__init__.py",
     "src/agent_runtime/durability/__init__.py",
-    "src/agent_runtime/postgres/__init__.py",
-    "src/agent_runtime/provider/__init__.py",
+    "src/agent_runtime/execution/__init__.py",
+    "src/agent_runtime/inspection/__init__.py",
+    "src/agent_runtime/invocation/__init__.py",
+    "src/agent_runtime/ledger/__init__.py",
     "src/agent_runtime/registry/__init__.py",
-    "src/agent_runtime/review/__init__.py",
     "src/agent_runtime/testing/__init__.py",
 )
 
@@ -480,15 +570,44 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
     """Return deterministic repository architecture violations."""
 
     errors: list[str] = []
-    modules = {item.module_id: item for item in RUNTIME_PRODUCT_MODULE_REGISTRATIONS}
+    responsibilities = {
+        item.responsibility_id: item
+        for item in RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS
+    }
     directories = {
         item.source_directory_id: item
         for item in RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS
     }
-    if len(modules) != len(RUNTIME_PRODUCT_MODULE_REGISTRATIONS):
-        errors.append("duplicate Runtime product module")
+    implementation_bindings = {
+        item.implementation_binding_id: item
+        for item in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+    }
+    if len(responsibilities) != len(
+        RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS
+    ):
+        errors.append("duplicate Runtime logical responsibility")
+    if tuple(responsibilities) != RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS:
+        errors.append(
+            "Runtime logical responsibilities must be exactly: "
+            + ", ".join(RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS)
+        )
     if len(directories) != len(RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS):
         errors.append("duplicate Runtime source directory")
+    if len(implementation_bindings) != len(
+        RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+    ):
+        errors.append("duplicate Runtime implementation binding")
+
+    for binding in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS:
+        if binding.logical_responsibility_id not in responsibilities:
+            errors.append(
+                f"{binding.implementation_binding_id}: unknown logical "
+                f"responsibility {binding.logical_responsibility_id}"
+            )
+        if not binding.implementation_source_paths:
+            errors.append(
+                f"{binding.implementation_binding_id}: no implementation source"
+            )
 
     source_paths: set[str] = set()
     detached_file_names: set[str] = set()
@@ -496,9 +615,10 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
         if source.source_path in source_paths:
             errors.append(f"duplicate Runtime source path: {source.source_path}")
         source_paths.add(source.source_path)
-        if source.module_id not in modules:
+        if source.logical_responsibility_id not in responsibilities:
             errors.append(
-                f"{source.source_path}: unknown product module {source.module_id}"
+                f"{source.source_path}: unknown logical responsibility "
+                f"{source.logical_responsibility_id}"
             )
         directory = directories.get(source.source_directory_id)
         if directory is None:
@@ -529,6 +649,43 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
                 f"{source.source_path}: owner contract not found: "
                 f"{source.owner_contract_ref}"
             )
+        if source.implementation_binding_id is not None:
+            binding = implementation_bindings.get(
+                source.implementation_binding_id
+            )
+            if binding is None:
+                errors.append(
+                    f"{source.source_path}: unknown implementation binding "
+                    f"{source.implementation_binding_id}"
+                )
+            elif (
+                binding.logical_responsibility_id
+                != source.logical_responsibility_id
+            ):
+                errors.append(
+                    f"{source.source_path}: implementation binding crosses "
+                    "logical responsibility"
+                )
+            elif source.source_path not in binding.implementation_source_paths:
+                errors.append(
+                    f"{source.source_path}: implementation binding does not "
+                    "declare this source"
+                )
+
+    registered_implementation_sources = {
+        source.source_path: source.implementation_binding_id
+        for source in RUNTIME_SOURCE_FILE_REGISTRATIONS
+        if source.implementation_binding_id is not None
+    }
+    for binding in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS:
+        for source_path in binding.implementation_source_paths:
+            if registered_implementation_sources.get(source_path) != (
+                binding.implementation_binding_id
+            ):
+                errors.append(
+                    f"{binding.implementation_binding_id}: implementation source "
+                    f"is not bound by its source registration: {source_path}"
+                )
 
     declared_paths = (
         source_paths
@@ -558,12 +715,15 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
 
 
 __all__ = [
+    "RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS",
+    "RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS",
     "RUNTIME_MIGRATION_DEBT_PATHS",
-    "RUNTIME_PRODUCT_MODULE_REGISTRATIONS",
+    "RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS",
     "RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS",
     "RUNTIME_SOURCE_FILE_REGISTRATIONS",
     "RUNTIME_STRUCTURAL_SOURCE_PATHS",
-    "RuntimeProductModuleRegistration",
+    "RuntimeImplementationBindingRegistration",
+    "RuntimeLogicalResponsibilityRegistration",
     "RuntimeSourceDirectoryRegistration",
     "RuntimeSourceFileRegistration",
     "validate_registry_architecture_registration",

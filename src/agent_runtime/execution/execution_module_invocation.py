@@ -35,7 +35,7 @@ from ..contracts.registry_release_definition import (
     ReleaseSubjectKind,
     RuntimeModuleRelease,
 )
-from ..contracts.execution_lineage_definition import (
+from ..contracts.ledger_lineage_definition import (
     ModuleAttemptRecord,
     ModuleAttemptStartedRecord,
     ModuleExecutionVariantRecord,

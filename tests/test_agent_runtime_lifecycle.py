@@ -5,8 +5,8 @@ from dataclasses import replace
 import pytest
 
 from agent_runtime.contracts import ModuleOutcome, ModuleOutcomeDisposition
-from agent_runtime.execution.execution_record_persistence import InMemoryRuntimeExecutionRecordStore
-from agent_runtime.contracts.execution_record_definition import (
+from agent_runtime.ledger.ledger_record_persistence import InMemoryRuntimeExecutionRecordStore
+from agent_runtime.contracts.ledger_record_definition import (
     LegacyAttemptBeginBatch,
     AttemptClaim,
     AttemptFinalizationBatch,

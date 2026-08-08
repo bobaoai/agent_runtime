@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .review_snapshot_rendering import render_workflow_review_html
+from .inspection_snapshot_rendering import render_workflow_review_html
 
 
 def main() -> int:

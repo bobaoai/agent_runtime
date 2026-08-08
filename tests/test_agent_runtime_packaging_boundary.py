@@ -29,6 +29,11 @@ DOMAIN_PACKAGE_PREFIXES = (
     "src.research_theme_report_workflow",
     "src.trade",
 )
+PREDECESSOR_RUNTIME_PACKAGE_PREFIXES = (
+    "agent_runtime/postgres/",
+    "agent_runtime/provider/",
+    "agent_runtime/review/",
+)
 
 
 def _run_isolated_python(source: str, *args: str, cwd: Path) -> dict[str, object]:
@@ -107,17 +112,17 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
         "test": ["pytest>=8"],
     }
     assert configuration["project"]["scripts"] == {
-        "agent-runtime-review": "agent_runtime.review.review_snapshot_exporting:main",
+        "agent-runtime-inspect": "agent_runtime.inspection.inspection_snapshot_exporting:main",
     }
     assert configuration["tool"]["setuptools"]["packages"] == [
         "agent_runtime",
         "agent_runtime.contracts",
         "agent_runtime.durability",
         "agent_runtime.execution",
-        "agent_runtime.postgres",
-        "agent_runtime.provider",
+        "agent_runtime.inspection",
+        "agent_runtime.invocation",
+        "agent_runtime.ledger",
         "agent_runtime.registry",
-        "agent_runtime.review",
         "agent_runtime.testing",
     ]
     assert configuration["tool"]["setuptools"]["package-dir"]["agent_runtime"] == (
@@ -168,9 +173,14 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         for prefix in DOMAIN_PACKAGE_PREFIXES
         for member in members
     )
+    assert not any(
+        member.startswith(prefix)
+        for prefix in PREDECESSOR_RUNTIME_PACKAGE_PREFIXES
+        for member in members
+    )
     assert "agent_runtime/README.md" in members
     assert (
-        "agent_runtime/review/review_snapshot_definition.schema.json"
+        "agent_runtime/inspection/inspection_snapshot_definition.schema.json"
         in members
     )
     assert "agent_runtime/design_contract/manifest.json" in members
@@ -189,7 +199,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
             WorkflowAdmissionState,
             WorkflowRuntimeRegistration,
         )
-        from agent_runtime.review.review_release_rendering import (
+        from agent_runtime.inspection.inspection_release_rendering import (
             build_runtime_inventory,
         )
         from agent_runtime.registry.registry_plugin_registration import DomainRuntimePlugin, register_runtime_plugin
@@ -297,7 +307,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
         import sys
 
         sys.path.insert(0, sys.argv[1])
-        from agent_runtime.contracts.execution_lineage_definition import (
+        from agent_runtime.contracts.ledger_lineage_definition import (
             ModuleUsageObservation,
         )
         from agent_runtime.contracts.execution_module_definition import (
@@ -317,7 +327,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             ReleaseSubjectKind,
             RuntimeModuleRelease,
         )
-        from agent_runtime.execution.execution_lineage_recording import (
+        from agent_runtime.ledger.ledger_lineage_recording import (
             InMemoryModuleExecutionLedger,
         )
         from agent_runtime.execution.execution_module_invocation import (

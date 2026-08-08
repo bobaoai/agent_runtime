@@ -32,7 +32,7 @@ from .registry_module_exporting import (
     MODULE_PROMPT_FILENAME,
     load_skill_runtime_module_exports,
 )
-from ..provider.provider_schema_projection import task_plane_output_schema
+from ..invocation.invocation_schema_projection import task_plane_output_schema
 
 
 def sha256_text(value: str) -> str:

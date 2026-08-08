@@ -26,7 +26,7 @@ from typing import Callable
 from jsonschema import Draft202012Validator
 
 from ..contracts.registry_release_definition import ModuleKind
-from ..contracts.execution_lineage_definition import ModuleUsageObservation
+from ..contracts.ledger_lineage_definition import ModuleUsageObservation
 from ..contracts.execution_module_definition import (
     ModuleExecutorFailure,
     ModuleExecutorRequest,
@@ -34,8 +34,8 @@ from ..contracts.execution_module_definition import (
     ModuleOutputBinding,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
-from .provider_tool_definition import ModuleArtifactHost
-from .provider_prompt_assembly import (
+from .invocation_tool_definition import ModuleArtifactHost
+from .invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     codex_native_output_schema,
     normalize_codex_native_output,

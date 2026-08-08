@@ -19,7 +19,7 @@ from .registry_contract_validation import (
     validate_opaque_ref,
     validate_sha256,
 )
-from .execution_lineage_definition import (
+from .ledger_lineage_definition import (
     ModuleAttemptRecord,
     ModuleAttemptStartedRecord,
     ModuleExecutionVariantRecord,

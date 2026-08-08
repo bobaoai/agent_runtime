@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from ..execution import RuntimeExecutionRecordStore
-    from ..contracts.execution_record_definition import ExternalEventApplicationRecord
+    from ..contracts.ledger_record_definition import ExternalEventApplicationRecord
 
 
 _ID = re.compile(r"^[a-z][a-z0-9_]*$")

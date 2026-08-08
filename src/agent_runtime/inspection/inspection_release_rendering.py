@@ -15,7 +15,7 @@ from typing import Any, Sequence
 
 from ..durability.durability_backend_registration import TEMPORAL_DESCRIPTOR
 from ..contracts.registry_release_definition import ReleaseSubjectKind
-from .review_architecture_rendering import (
+from .inspection_architecture_rendering import (
     build_runtime_architecture_projection,
     render_runtime_architecture_markdown,
 )

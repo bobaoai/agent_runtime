@@ -18,7 +18,7 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, TypeAlias, TypeVar
 
-from .execution_lineage_definition import ModuleOutputResolutionRecord
+from .ledger_lineage_definition import ModuleOutputResolutionRecord
 from .registry_workflow_definition import ModuleOutcome
 
 

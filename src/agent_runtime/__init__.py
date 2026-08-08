@@ -81,7 +81,7 @@ from .execution.execution_authorization_resolution import (
     ProductAuthorizationContextClient,
     ProductOperationAuthorizationClient,
 )
-from .provider.provider_model_invocation import (
+from .invocation.invocation_model_invocation import (
     ModelExecutionAuthorization,
     ModelExecutionDenied,
     ModelExecutionGateway,
@@ -100,7 +100,7 @@ from .execution.execution_event_ingestion import (
     InMemoryExternalEventIngress,
     TrustedRequestContext,
 )
-from .execution.execution_lineage_recording import InMemoryModuleExecutionLedger
+from .ledger.ledger_lineage_recording import InMemoryModuleExecutionLedger
 from .contracts.execution_module_definition import (
     ModuleExecutionRequest,
     ModuleExecutorResult,
@@ -113,7 +113,7 @@ from .execution.execution_module_invocation import (
     ModuleExecutorRegistry,
     run_module,
 )
-from .contracts.execution_lineage_definition import ModuleUsageObservation
+from .contracts.ledger_lineage_definition import ModuleUsageObservation
 from .registry.registry_release_retrieval import RuntimeModuleReleaseClient
 from .contracts.execution_host_definition import (
     AgentRuntimeProductHostApi,
@@ -135,7 +135,7 @@ from .registry.registry_release_registration import (
     RuntimeReleaseRegistry,
 )
 from .registry.registry_workflow_registration import WorkflowRuntimeRegistry
-from .execution.execution_usage_aggregation import aggregate_model_usage
+from .ledger.ledger_usage_aggregation import aggregate_model_usage
 
 __all__ = [
     "AgenticWorkflowConformancePackage",

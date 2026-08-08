@@ -16,8 +16,8 @@ reader_persona:
 # Agent Runtime Standalone Package and Execution Lifecycle Contract
 
 **Purpose**: Define the independently publishable Runtime package, its
-responsibility-based source structure, its PostgreSQL-backed review surface,
-and its append-only execution lifecycle.
+three-axis architecture registration, its inspection surface, and its
+append-only execution lifecycle.
 
 **Required reader gain**: A maintainer can identify what every top-level source
 module and file does, find its canonical Design Contract, install Runtime in a
@@ -65,23 +65,23 @@ truth_surfaces:
   - src/agent_runtime/contracts/
   - src/agent_runtime/registry/
   - src/agent_runtime/execution/
-  - src/agent_runtime/provider/
+  - src/agent_runtime/invocation/
   - src/agent_runtime/durability/
-  - src/agent_runtime/postgres/
-  - src/agent_runtime/review/
+  - src/agent_runtime/ledger/
+  - src/agent_runtime/inspection/
   - tests/test_agent_runtime_packaging_boundary.py
   - tests/test_runtime_architecture_validation.py
   - tests/test_agent_runtime_execution_records.py
-  - tests/test_agent_runtime_review_interface.py
+  - tests/test_agent_runtime_inspection_interface.py
 generated_projection_surfaces:
   - designDoc/generated/agent_runtime_surface_status.md
 runtime_triggers: none
 open_decisions: []
 review_gate: contract review followed by clean-wheel and lifecycle conformance tests
 verification_hooks:
-  - ./.venv/bin/python -m pytest tests/test_agent_runtime_packaging_boundary.py tests/test_runtime_architecture_validation.py tests/test_agent_runtime_execution_records.py tests/test_agent_runtime_review_interface.py -q
+  - ./.venv/bin/python -m pytest tests/test_agent_runtime_packaging_boundary.py tests/test_runtime_architecture_validation.py tests/test_agent_runtime_execution_records.py tests/test_agent_runtime_inspection_interface.py -q
 future_release_gate:
-  - python -m agent_runtime.review.review_http_serving
+  - python -m agent_runtime.inspection.inspection_http_serving
 ```
 
 ## 1. Portable Product Boundary
@@ -92,14 +92,11 @@ other domain semantics are not part of Runtime package identity.
 
 ```mermaid
 flowchart LR
-    SOURCE["Module and Workflow source"] --> REGISTRY["Release registration"]
-    REGISTRY --> RELEASES["Registered releases in PostgreSQL"]
-    HOST["Product host"] --> EXECUTION["Workflow execution"]
-    RELEASES --> EXECUTION
-    EXECUTION --> PROVIDER["Provider invocation"]
-    EXECUTION <--> TEMPORAL["Temporal coordination"]
-    EXECUTION --> RECORDS["Execution records and content in PostgreSQL"]
-    RECORDS --> REVIEW["Authorized Workflow Inspector"]
+    REGISTRY["Registry"] --> EXECUTION["Execution"]
+    EXECUTION --> INVOCATION["Invocation"]
+    EXECUTION <--> DURABILITY["Durability"]
+    EXECUTION --> LEDGER["Execution Ledger"]
+    LEDGER --> INSPECTION["Inspection"]
 ```
 
 The canonical import namespace is `agent_runtime.*`. Runtime has no required
@@ -108,38 +105,35 @@ optional integrations. PostgreSQL is required by a production deployment
 because registered releases and formal execution records cannot be rebuilt
 from an in-memory process after failure.
 
-## 2. Source Modules and Naming
+## 2. Architecture Axes and Naming
 
-The target package is organized by product responsibility and must not expose
-`release_control`, `ports`, `adapters`, bare `persistence`, or `inspection` as
-top-level concepts. During migration, every remaining predecessor file and
-package is enumerated in code-owned `RUNTIME_MIGRATION_DEBT_PATHS`; none is
-presented as target implementation. Structural package initializers may
-temporarily re-export those predecessor symbols for existing callers, but the
-exports are compatibility-only and must retire with the owning debt entry.
-New Runtime or plugin code imports target contracts from their explicit
-three-part modules.
+Architecture is registered through three independent axes. A name on one axis
+cannot be inferred from or promoted into another axis.
 
-| Product module | Responsibility | Canonical Design Contract |
+### 2.1 Logical responsibilities
+
+| Logical responsibility | Owns | Canonical Design Contract |
 | --- | --- | --- |
 | `registry` | Release compilation, validation, registration, activation, and exact retrieval | `agent_runtime_01` |
-| `execution` | Workflow initiation, Module invocation, portable execution-record contracts, Cell-local staging, Attempt recording, Evaluation, output Resolution, checkpoint, and recovery | `agent_runtime_00` and `agent_runtime_06` |
-| `provider` | Prompt assembly and Claude, Codex, or future provider invocation | `agent_runtime_08` |
-| `durability` | Temporal Workflow coordination, acknowledged commands, replay, and recovery | `agent_runtime_07` |
-| `postgres` | Production PostgreSQL persistence for Runtime releases, execution records, and recorded content | Contract owning the persisted fact |
-| `review` | Authorized execution retrieval and live Workflow Inspector rendering | `agent_runtime_06` |
+| `execution` | Workflow initiation and advancement, Module invocation coordination, Cell-local staging, Evaluation, Resolution, checkpoint, and recovery | `agent_runtime_00` and `agent_runtime_06` |
+| `invocation` | Prompt assembly plus registered model and tool invocation | `agent_runtime_08` |
+| `durability` | Acknowledged commands, waits, retries, replay, and recovery | `agent_runtime_07` |
+| `ledger` | Authoritative execution lineage, Attempts, usage, outcomes, and Resolution facts | `agent_runtime_06` |
+| `inspection` | Authorized read models and Workflow Inspector rendering | `agent_runtime_06` |
 
-`contracts/` and `testing/` are supporting physical source directories, not
-additional product modules. A contracts file keeps the owning product module
-as the first filename term; the architecture registration records the separate
-physical `source_directory_id`. Tests follow the same logical owner in their
-registration metadata.
+### 2.2 Physical source organization
 
-The `execution` module owns the portable `RuntimeExecutionRecordStore`
-protocol, Cell-local staging, and in-memory conformance implementations. The
-`postgres` module owns production PostgreSQL implementations of release,
-execution-record, and recorded-content persistence. This is an interface-to-
-implementation dependency, not shared ownership of canonical Runtime facts.
+Physical directories are `contracts`, `registry`, `execution`, `invocation`,
+`durability`, `ledger`, `inspection`, and `testing`. `contracts/` and
+`testing/` are supporting directories, not logical responsibilities. A file in
+`contracts/` retains the owning logical responsibility as its filename prefix.
+
+### 2.3 Implementation bindings
+
+PostgreSQL, Temporal, Claude Agent SDK, Claude CLI, Codex CLI, and HTML are
+concrete technologies. Each registered binding names exactly one logical
+responsibility, one technology, and the exact implementation source files.
+Technology names cannot appear in the logical-responsibility registry.
 
 Every source file uses:
 
@@ -165,43 +159,39 @@ agent_runtime/
   contracts/
   registry/
   execution/
-  provider/
+  invocation/
   durability/
-  postgres/
-  review/
+  ledger/
+  inspection/
   testing/
 ```
 
-The code-owned `registry_architecture_registration` assigns every target Python
-file to one logical product module, one physical source directory, and one
-canonical Design Contract. Repository validation scans the full Runtime source
-tree and requires every Python file to be either target, structural package
-plumbing, or explicit migration debt. It fails on an unregistered or misplaced
-file, missing contract, generic or nonconforming filename, duplicate
+The code-owned `registry_architecture_registration` maintains distinct record
+types for logical responsibilities, physical directories, implementation
+bindings, and source-file mappings. Repository validation fails on mixed axes,
+an unregistered or misplaced file, a technology registered as a logical
+responsibility, a cross-responsibility binding, a missing contract, duplicate
 disposition, or stale debt path.
 
-The allowed dependency direction is:
+The logical call and committed-fact flow is:
 
 ```mermaid
 flowchart LR
-    CONTRACTS["contracts"] --> REGISTRY["registry"]
-    CONTRACTS --> EXECUTION["execution"]
-    REGISTRY --> EXECUTION
-    EXECUTION --> PROVIDER["provider"]
-    EXECUTION --> DURABILITY["durability"]
-    REGISTRY --> POSTGRES["postgres"]
-    EXECUTION --> POSTGRES
-    POSTGRES --> REVIEW["review"]
+    REGISTRY["Registry"] --> EXECUTION["Execution"]
+    EXECUTION --> INVOCATION["Invocation"]
+    EXECUTION <--> DURABILITY["Durability"]
+    EXECUTION --> LEDGER["Execution Ledger"]
+    LEDGER --> INSPECTION["Inspection"]
 ```
 
-Diagram nodes are logical product owners; a file physically stored under
-`contracts/` remains part of its registered logical owner. Arrows point from an
-imported dependency toward the module allowed to import it.
+Every node is a logical responsibility. Arrows mean Runtime calls or committed
+fact flow; they do not mean source imports, directory containment, or
+implementation selection.
 
 Only `registry_release_compilation` may read editable Module authoring files.
-Production Execution reads admitted PostgreSQL releases. Provider and Temporal
-code cannot choose releases or Workflow edges. Review code reads registered and
-committed Runtime facts and cannot mutate them.
+Production Execution reads admitted releases. Invocation and Durability
+implementations cannot choose releases or Workflow edges. Inspection reads
+registered and committed Runtime facts and cannot mutate them.
 
 ## 3. Published and Operated Interfaces
 

@@ -14,7 +14,7 @@ from agent_runtime.contracts import (
     validate_domain_runtime_manifest,
 )
 from agent_runtime.registry.registry_graph_projection import compile_registered_graph
-from agent_runtime.review.review_release_rendering import build_runtime_inventory
+from agent_runtime.inspection.inspection_release_rendering import build_runtime_inventory
 from agent_runtime.registry.registry_plugin_registration import (
     DomainRuntimePlugin,
     register_runtime_plugin,

@@ -17,7 +17,102 @@ def test_runtime_architecture_registration_covers_every_python_source() -> None:
 def test_target_source_names_match_logical_owner_module() -> None:
     for source in architecture.RUNTIME_SOURCE_FILE_REGISTRATIONS:
         assert Path(source.source_path).name == source.expected_file_name
-        assert source.expected_file_name.startswith(f"{source.module_id}_")
+        assert source.expected_file_name.startswith(
+            f"{source.logical_responsibility_id}_"
+        )
+
+
+def test_architecture_axes_are_registered_independently() -> None:
+    responsibility_ids = tuple(
+        row.responsibility_id
+        for row in architecture.RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS
+    )
+    directory_ids = {
+        row.source_directory_id
+        for row in architecture.RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS
+    }
+    technology_ids = {
+        row.technology_id
+        for row in architecture.RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+    }
+
+    assert responsibility_ids == (
+        "registry",
+        "execution",
+        "invocation",
+        "durability",
+        "ledger",
+        "inspection",
+    )
+    assert {"contracts", "testing"}.issubset(directory_ids)
+    assert {"postgresql", "temporal", "claude_agent_sdk", "codex_cli", "html"}.issubset(
+        technology_ids
+    )
+    assert not set(responsibility_ids).intersection(technology_ids)
+    assert {"provider", "postgres", "review"}.isdisjoint(responsibility_ids)
+
+
+def test_every_implementation_source_has_one_matching_binding() -> None:
+    source_bindings = {
+        row.source_path: row.implementation_binding_id
+        for row in architecture.RUNTIME_SOURCE_FILE_REGISTRATIONS
+        if row.implementation_binding_id is not None
+    }
+
+    for binding in architecture.RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS:
+        for source_path in binding.implementation_source_paths:
+            assert source_bindings[source_path] == binding.implementation_binding_id
+
+
+def test_technology_cannot_be_added_as_a_logical_responsibility(
+    monkeypatch,
+) -> None:
+    original = architecture.RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS
+    technology = architecture.RuntimeLogicalResponsibilityRegistration(
+        responsibility_id="postgres",
+        responsibility="Concrete database implementation.",
+        owner_contract_ref=(
+            "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md"
+        ),
+    )
+    monkeypatch.setattr(
+        architecture,
+        "RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS",
+        (*original, technology),
+    )
+
+    errors = architecture.validate_registry_architecture_registration(REPO_ROOT)
+
+    assert any(
+        "logical responsibilities must be exactly" in error for error in errors
+    )
+
+
+def test_cross_responsibility_implementation_binding_fails_validation(
+    monkeypatch,
+) -> None:
+    original = architecture.RUNTIME_SOURCE_FILE_REGISTRATIONS
+    target_index = next(
+        index
+        for index, source in enumerate(original)
+        if source.implementation_binding_id == "durability_temporal_coordination"
+    )
+    malformed = replace(
+        original[target_index],
+        logical_responsibility_id="execution",
+    )
+    monkeypatch.setattr(
+        architecture,
+        "RUNTIME_SOURCE_FILE_REGISTRATIONS",
+        (*original[:target_index], malformed, *original[target_index + 1 :]),
+    )
+
+    errors = architecture.validate_registry_architecture_registration(REPO_ROOT)
+
+    assert any(
+        "implementation binding crosses logical responsibility" in error
+        for error in errors
+    )
 
 
 def test_predecessor_workflow_registry_is_debt_not_target() -> None:

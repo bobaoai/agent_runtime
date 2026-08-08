@@ -11,7 +11,7 @@ from agent_runtime.contracts.durability_backend_definition import (
     ExecutionSnapshot,
     StartExecutionRequest,
 )
-from agent_runtime.contracts.provider_invocation_definition import (
+from agent_runtime.contracts.invocation_adapter_definition import (
     AdapterContextRequest,
     AdapterContextResult,
     AgentExecutionAdapterDescriptor,

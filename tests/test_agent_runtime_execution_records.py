@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.contracts.execution_record_definition import (
+from agent_runtime.contracts.ledger_record_definition import (
     WorkflowAttemptRecord,
     AttemptOutputBundle,
     ExecutionOutputRef,

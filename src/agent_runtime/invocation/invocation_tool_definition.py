@@ -8,7 +8,7 @@ from typing import Any, Mapping, Protocol
 from jsonschema import Draft202012Validator
 
 from ..contracts.registry_contract_validation import validate_id
-from ..contracts.execution_lineage_definition import ModuleToolCallObservation
+from ..contracts.ledger_lineage_definition import ModuleToolCallObservation
 from ..contracts.execution_module_definition import (
     ModuleExecutorRequest,
     ModuleFailureDetailBinding,

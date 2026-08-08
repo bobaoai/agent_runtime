@@ -86,10 +86,10 @@ truth_surfaces:
   - src/agent_runtime/contracts/
   - src/agent_runtime/registry/
   - src/agent_runtime/execution/
-  - src/agent_runtime/provider/
+  - src/agent_runtime/invocation/
   - src/agent_runtime/durability/
-  - src/agent_runtime/postgres/
-  - src/agent_runtime/review/
+  - src/agent_runtime/ledger/
+  - src/agent_runtime/inspection/
 generated_projection_surfaces:
   - designDoc/generated/agent_runtime_surface_status.md
 runtime_triggers:
@@ -116,20 +116,22 @@ verification_hooks:
 
 Agent Runtime is an independently distributable infrastructure product. It
 registers explicit business-owned plugins, executes their admitted Workflows,
-records execution facts in PostgreSQL, and exposes those facts through a live
-read-only Inspector without interpreting business meaning.
+commits execution facts to its Execution Ledger, and exposes authorized
+read-only projections without interpreting business meaning.
+
+Arrows below mean logical call or committed-fact flow. Concrete technology
+bindings are intentionally absent.
 
 ```mermaid
 flowchart LR
-    DOMAIN["Domain plugin"] --> REGISTRY["Release registration"]
-    REGISTRY --> RELEASES["Registered releases in PostgreSQL"]
-    HOST["Product host"] --> EXECUTION["Workflow execution"]
+    DOMAIN["Domain plugin"] --> REGISTRY["Registry"]
+    HOST["Product host"] --> EXECUTION["Execution"]
     AUTH["Authorization context"] --> EXECUTION
-    RELEASES --> EXECUTION
-    EXECUTION --> PROVIDER["Provider invocation"]
-    EXECUTION <--> TEMPORAL["Temporal coordination"]
-    EXECUTION --> RECORDS["Execution records and content in PostgreSQL"]
-    RECORDS --> REVIEW["Authorized Workflow Inspector"]
+    REGISTRY --> EXECUTION
+    EXECUTION --> INVOCATION["Invocation"]
+    EXECUTION <--> DURABILITY["Durability"]
+    EXECUTION --> LEDGER["Execution Ledger"]
+    LEDGER --> INSPECTION["Inspection"]
 ```
 
 The Runtime core understands identities, versions, references, hashes, lifecycle states, and declared contracts. It treats domain states, roles, artifacts, evaluator meanings, and terminal outcomes as opaque values.
@@ -212,9 +214,9 @@ module_subject_nominalized_action
 The first term identifies the responsible Runtime module, the second identifies
 the subject being acted on, and the third names the action as a noun. Examples
 include `registry_release_registration`, `execution_module_invocation`,
-`execution_record_persistence`, `provider_prompt_assembly`,
-`durability_temporal_coordination`, `postgres_release_persistence`, and
-`review_release_rendering`.
+`ledger_record_persistence`, `invocation_prompt_assembly`,
+`durability_temporal_coordination`, `registry_postgres_persistence`, and
+`inspection_release_rendering`.
 
 The name must remain understandable when copied without its directory. Bare
 implementation-pattern or role names such as `service`, `manager`, `utils`,
@@ -231,27 +233,27 @@ the `PascalCase` projection of the same three semantic terms. Opaque identifiers
 owned by an external protocol remain byte-exact. Provider-required filenames
 such as `SKILL.md` are protocol exceptions.
 
-The independently published Runtime exposes product modules, not generic
-architectural layers:
+The independently published Runtime exposes stable logical responsibilities,
+not source directories or currently selected technologies:
 
-| Product module | Owns |
+| Logical responsibility | Owns |
 | --- | --- |
 | Registry | Release compilation, validation, registration, activation, and exact retrieval |
-| Execution | Workflow initiation, Module invocation, portable execution-record contracts, Cell-local staging, Attempt recording, Evaluation, output Resolution, checkpoint, and recovery |
-| Provider | Prompt assembly and provider-specific invocation |
-| Durability | Temporal-backed Workflow coordination and replay |
-| PostgreSQL | Production PostgreSQL persistence for Runtime releases, execution records, and recorded content |
-| Review | Authorized execution retrieval and live Workflow Inspector rendering |
+| Execution | Workflow initiation and advancement, Module invocation coordination, Cell-local staging, Evaluation, output Resolution, checkpoint, and recovery |
+| Invocation | Prompt assembly plus registered model and tool invocation |
+| Durability | Acknowledged commands, waits, retries, replay, and recovery through a replaceable durable backend |
+| Ledger | Authoritative execution lineage, Attempts, usage, outcomes, and Resolution facts |
+| Inspection | Authorized read models and Workflow Inspector rendering |
 
 Authorization and governed Data Access are external authorities consumed by
 Execution. Their Runtime clients carry exact execution context; they are not
 alternate Runtime control planes.
 
-The Execution module owns provider-neutral persistence protocols, Cell-local
-staging, and in-memory conformance implementations. The PostgreSQL module owns
-the production PostgreSQL implementations of release, execution-record, and
-recorded-content persistence. This interface/implementation split does not
-create a second Runtime record authority.
+PostgreSQL, Temporal, Claude Agent SDK, Claude CLI, Codex CLI, and HTML are
+implementation bindings. Each binding implements exactly one logical
+responsibility and cannot become a peer responsibility or record authority.
+Physical `contracts/` and `testing/` directories likewise do not become logical
+responsibilities.
 
 A domain plugin submits one dependency-closed `runtime_release_bundle` through a
 `runtime_module_plugin`. The bundle may contain Schema Asset, Skill Package,
@@ -262,17 +264,18 @@ and release compatibility. It does not infer behavior from names, inspect
 domain prose to invent a release, or maintain a parallel stable-registration
 object beside the immutable releases.
 
-Dependency direction is fixed:
+Logical call and committed-fact flow is fixed. Every node below is a logical
+responsibility; arrows do not mean source placement or technology binding:
 
 ```mermaid
 flowchart LR
     PLUGIN["Domain plugin"] --> REGISTRY["Registry"]
     REGISTRY --> EXECUTION["Execution"]
     HOST["Product host"] --> EXECUTION
-    EXECUTION --> PROVIDER["Provider invocation"]
-    EXECUTION <--> DURABILITY["Temporal coordination"]
-    EXECUTION --> POSTGRES["Runtime PostgreSQL records"]
-    POSTGRES --> REVIEW["Authorized review"]
+    EXECUTION --> INVOCATION["Invocation"]
+    EXECUTION <--> DURABILITY["Durability"]
+    EXECUTION --> LEDGER["Execution Ledger"]
+    LEDGER --> INSPECTION["Inspection"]
 ```
 
 Runtime imports no domain package, host catalog, product route table, or Skill
@@ -280,11 +283,13 @@ projection during production execution. The host installs compatible Runtime,
 provider, durability, and domain-plugin releases explicitly. Discovery alone
 grants no execution authority.
 
-A code-owned `registry_architecture_registration` assigns every shipped source
-file to one logical product owner, one physical source directory, and one
-canonical Design Contract. Repository CI scans the complete Runtime source
-tree and rejects an unregistered file, misplaced file, missing contract,
-generic filename, duplicate disposition, or undeclared migration-debt file.
+A code-owned `registry_architecture_registration` separately registers logical
+responsibilities, physical source directories, and concrete implementation
+bindings. Every shipped source file maps to exactly one logical responsibility,
+one physical directory, and one canonical Design Contract. Only a concrete
+technology implementation may also map to an implementation binding.
+Repository CI rejects mixed axes, an unregistered or misplaced file, a missing
+contract, a generic filename, a duplicate disposition, or undeclared debt.
 README and stable Design Contracts explain the module law; the generated
 architecture report is the exhaustive current file inventory.
 

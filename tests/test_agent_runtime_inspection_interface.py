@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from agent_runtime.review import (
+from agent_runtime.inspection import (
     ReviewContent,
     build_workflow_review_bundle,
     render_workflow_review_html,
@@ -169,7 +169,7 @@ def test_review_cli_renders_bundle_to_one_offline_html(tmp_path: Path) -> None:
         [
             sys.executable,
             "-m",
-            "src.agent_runtime.review.review_snapshot_exporting",
+            "src.agent_runtime.inspection.inspection_snapshot_exporting",
             str(bundle_path),
             "--output",
             str(output_path),

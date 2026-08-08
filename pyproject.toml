@@ -17,7 +17,7 @@ postgres = ["psycopg[binary]>=3.2"]
 test = ["pytest>=8"]
 
 [project.scripts]
-agent-runtime-review = "agent_runtime.review.review_snapshot_exporting:main"
+agent-runtime-inspect = "agent_runtime.inspection.inspection_snapshot_exporting:main"
 
 [tool.setuptools]
 packages = [
@@ -25,10 +25,10 @@ packages = [
   "agent_runtime.contracts",
   "agent_runtime.durability",
   "agent_runtime.execution",
-  "agent_runtime.postgres",
-  "agent_runtime.provider",
+  "agent_runtime.inspection",
+  "agent_runtime.invocation",
+  "agent_runtime.ledger",
   "agent_runtime.registry",
-  "agent_runtime.review",
   "agent_runtime.testing",
 ]
 
@@ -37,7 +37,7 @@ packages = [
 
 [tool.setuptools.package-data]
 "agent_runtime" = ["README.md", "design_contract/*.md", "design_contract/*.json"]
-"agent_runtime.review" = ["*.json"]
+"agent_runtime.inspection" = ["*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -57,7 +57,7 @@ outputs:
 truth_surfaces:
   - src/agent_runtime/contracts/durability_topology_definition.py
   - src/agent_runtime/registry.py
-  - src/agent_runtime/review/review_release_rendering.py
+  - src/agent_runtime/inspection/inspection_release_rendering.py
   - src/runtime_composition.py
 generated_projection_surfaces:
   - designDoc/generated/agent_runtime_surface_status.md

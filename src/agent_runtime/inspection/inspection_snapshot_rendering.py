@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from .review_snapshot_definition import validate_workflow_review_bundle
+from .inspection_snapshot_definition import validate_workflow_review_bundle
 
 
 def _embedded_json(bundle: Mapping[str, Any]) -> str:

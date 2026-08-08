@@ -33,19 +33,19 @@ from claude_agent_sdk import (
 )
 
 from ..contracts.registry_release_definition import ModuleKind
-from ..contracts.execution_lineage_definition import ModuleUsageObservation
+from ..contracts.ledger_lineage_definition import ModuleUsageObservation
 from ..contracts.execution_module_definition import (
     ModuleExecutorFailure,
     ModuleExecutorRequest,
     ModuleExecutorResult,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
-from .provider_tool_definition import (
+from .invocation_tool_definition import (
     ModuleArtifactHost,
     ModuleProviderToolSessionFactory,
     ProviderToolDefinition,
 )
-from .provider_prompt_assembly import (
+from .invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     provider_output_schema,
     validate_prompt_output_constraint,

@@ -61,7 +61,7 @@ truth_surfaces:
   - src/agent_runtime/testing/durability_temporal_conformance.py
   - src/agent_runtime/graph_projection.py
   - src/agent_runtime/release_registry.py
-  - src/agent_runtime/review/review_release_rendering.py
+  - src/agent_runtime/inspection/inspection_release_rendering.py
 generated_projection_surfaces:
   - designDoc/generated/agent_runtime_surface_status.md
 verification_hooks:

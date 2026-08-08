@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from threading import RLock
 
-from ..contracts.execution_lineage_definition import (
+from ..contracts.ledger_lineage_definition import (
     ModuleAttemptRecord,
     ModuleAttemptStartedRecord,
     ModuleExecutionVariantRecord,
