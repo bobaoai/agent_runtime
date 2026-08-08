@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+from threading import RLock
 from typing import Callable
 
 from ..contracts.execution_authorization_definition import (
@@ -51,6 +52,7 @@ class InMemoryExecutionAuthorizationLedger:
     """Duplicate-safe Runtime ledger for portable tests and host integration."""
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._bindings_by_ref: dict[str, ExecutionAuthorizationContextBinding] = {}
         self._binding_ref_by_execution: dict[str, str] = {}
         self._fences_by_ref: dict[str, ExecutionAuthorizationFence] = {}
@@ -66,29 +68,35 @@ class InMemoryExecutionAuthorizationLedger:
         """Commit one duplicate-safe authorization binding per execution."""
 
         binding.validate()
-        existing_ref = self._binding_ref_by_execution.get(
-            binding.workflow_execution_id
-        )
-        if existing_ref is not None:
-            existing = self._bindings_by_ref[existing_ref]
-            if existing != binding:
-                raise ValueError("Workflow Execution authorization binding conflict")
-            return existing
-        if binding.binding_ref in self._bindings_by_ref:
-            raise ValueError("execution authorization binding ref conflict")
-        self._bindings_by_ref[binding.binding_ref] = binding
-        self._binding_ref_by_execution[binding.workflow_execution_id] = (
-            binding.binding_ref
-        )
-        return binding
+        with self._lock:
+            existing_ref = self._binding_ref_by_execution.get(
+                binding.workflow_execution_id
+            )
+            if existing_ref is not None:
+                existing = self._bindings_by_ref[existing_ref]
+                if existing != binding:
+                    raise ValueError(
+                        "Workflow Execution authorization binding conflict"
+                    )
+                return existing
+            if binding.binding_ref in self._bindings_by_ref:
+                raise ValueError("execution authorization binding ref conflict")
+            self._bindings_by_ref[binding.binding_ref] = binding
+            self._binding_ref_by_execution[binding.workflow_execution_id] = (
+                binding.binding_ref
+            )
+            return binding
 
     def binding(self, binding_ref: str) -> ExecutionAuthorizationContextBinding:
         """Resolve one committed execution authorization binding."""
 
-        try:
-            return self._bindings_by_ref[binding_ref]
-        except KeyError as exc:
-            raise KeyError(f"unknown execution authorization binding: {binding_ref}") from exc
+        with self._lock:
+            try:
+                return self._bindings_by_ref[binding_ref]
+            except KeyError as exc:
+                raise KeyError(
+                    f"unknown execution authorization binding: {binding_ref}"
+                ) from exc
 
     def commit_fence(
         self,
@@ -97,53 +105,61 @@ class InMemoryExecutionAuthorizationLedger:
         """Commit a fence without reopening a previously fenced binding."""
 
         fence.validate()
-        current_ref = self._current_fence_ref_by_binding.get(fence.binding_ref)
-        if current_ref is not None:
-            current = self._fences_by_ref[current_ref]
-            if (
-                current.state is ExecutionAuthorizationFenceState.FENCED
-                and fence.state is ExecutionAuthorizationFenceState.OPEN
-            ):
-                return current
-        existing = self._fences_by_ref.get(fence.fence_ref)
-        if existing is not None and existing != fence:
-            raise ValueError("execution authorization fence ref conflict")
-        self._fences_by_ref[fence.fence_ref] = fence
-        self._current_fence_ref_by_binding[fence.binding_ref] = fence.fence_ref
-        return fence
+        with self._lock:
+            current_ref = self._current_fence_ref_by_binding.get(fence.binding_ref)
+            if current_ref is not None:
+                current = self._fences_by_ref[current_ref]
+                if (
+                    current.state is ExecutionAuthorizationFenceState.FENCED
+                    and fence.state is ExecutionAuthorizationFenceState.OPEN
+                ):
+                    return current
+            existing = self._fences_by_ref.get(fence.fence_ref)
+            if existing is not None and existing != fence:
+                raise ValueError("execution authorization fence ref conflict")
+            self._fences_by_ref[fence.fence_ref] = fence
+            self._current_fence_ref_by_binding[fence.binding_ref] = fence.fence_ref
+            return fence
 
     def current_fence(self, binding_ref: str) -> ExecutionAuthorizationFence:
         """Return the current monotonic fence for an authorization binding."""
 
-        try:
-            return self._fences_by_ref[
-                self._current_fence_ref_by_binding[binding_ref]
-            ]
-        except KeyError as exc:
-            raise KeyError(f"unknown execution authorization fence: {binding_ref}") from exc
+        with self._lock:
+            try:
+                return self._fences_by_ref[
+                    self._current_fence_ref_by_binding[binding_ref]
+                ]
+            except KeyError as exc:
+                raise KeyError(
+                    f"unknown execution authorization fence: {binding_ref}"
+                ) from exc
 
     def commit_intent(self, intent: ProtectedOperationIntent) -> ProtectedOperationIntent:
         """Commit one protected-operation intent by idempotency identity."""
 
         intent.validate()
         key = (intent.binding_ref, intent.idempotency_key)
-        existing_ref = self._intent_ref_by_idempotency.get(key)
-        if existing_ref is not None:
-            existing = self._intents_by_ref[existing_ref]
-            if existing != intent:
-                raise ValueError("protected operation idempotency conflict")
-            return existing
-        self._intents_by_ref[intent.intent_ref] = intent
-        self._intent_ref_by_idempotency[key] = intent.intent_ref
-        return intent
+        with self._lock:
+            existing_ref = self._intent_ref_by_idempotency.get(key)
+            if existing_ref is not None:
+                existing = self._intents_by_ref[existing_ref]
+                if existing != intent:
+                    raise ValueError("protected operation idempotency conflict")
+                return existing
+            self._intents_by_ref[intent.intent_ref] = intent
+            self._intent_ref_by_idempotency[key] = intent.intent_ref
+            return intent
 
     def intent(self, intent_ref: str) -> ProtectedOperationIntent:
         """Resolve one committed protected-operation intent."""
 
-        try:
-            return self._intents_by_ref[intent_ref]
-        except KeyError as exc:
-            raise KeyError(f"unknown protected operation intent: {intent_ref}") from exc
+        with self._lock:
+            try:
+                return self._intents_by_ref[intent_ref]
+            except KeyError as exc:
+                raise KeyError(
+                    f"unknown protected operation intent: {intent_ref}"
+                ) from exc
 
     def intents_for_execution(
         self,
@@ -151,11 +167,12 @@ class InMemoryExecutionAuthorizationLedger:
     ) -> tuple[ProtectedOperationIntent, ...]:
         """Return committed intents for one execution in commit order."""
 
-        return tuple(
-            intent
-            for intent in self._intents_by_ref.values()
-            if intent.workflow_execution_id == workflow_execution_id
-        )
+        with self._lock:
+            return tuple(
+                intent
+                for intent in self._intents_by_ref.values()
+                if intent.workflow_execution_id == workflow_execution_id
+            )
 
     def observations_for_execution(
         self,
@@ -163,11 +180,12 @@ class InMemoryExecutionAuthorizationLedger:
     ) -> tuple[GatewayAuthorizationObservation, ...]:
         """Return terminal Gateway observations for one execution's intents."""
 
-        return tuple(
-            self._observations_by_intent[intent.intent_ref]
-            for intent in self.intents_for_execution(workflow_execution_id)
-            if intent.intent_ref in self._observations_by_intent
-        )
+        with self._lock:
+            return tuple(
+                self._observations_by_intent[intent.intent_ref]
+                for intent in self.intents_for_execution(workflow_execution_id)
+                if intent.intent_ref in self._observations_by_intent
+            )
 
     def resolve_protected_operation_intent(
         self,
@@ -200,13 +218,14 @@ class InMemoryExecutionAuthorizationLedger:
         """Commit one terminal Gateway observation per protected intent."""
 
         observation.validate()
-        existing = self._observations_by_intent.get(observation.intent_ref)
-        if existing is not None:
-            if existing != observation:
-                raise ValueError("Gateway authorization observation conflict")
-            return existing
-        self._observations_by_intent[observation.intent_ref] = observation
-        return observation
+        with self._lock:
+            existing = self._observations_by_intent.get(observation.intent_ref)
+            if existing is not None:
+                if existing != observation:
+                    raise ValueError("Gateway authorization observation conflict")
+                return existing
+            self._observations_by_intent[observation.intent_ref] = observation
+            return observation
 
 
 class ExecutionAuthorizationController:
@@ -305,7 +324,7 @@ class ExecutionAuthorizationController:
             cell_id=envelope.cell_id,
             effective_at_utc=envelope.effective_at_utc,
             expiry_at_utc=envelope.expiry_at_utc,
-            recorded_at_utc=self._clock(),
+            recorded_at_utc=observed_at_utc,
         )
         binding = self._ledger.commit_binding(binding)
         fence = self._commit_fence(
@@ -519,7 +538,7 @@ class ExecutionAuthorizationController:
             reason_code=reason_code,
             product_status_ref=status.status_ref,
             product_status_sha256=status.status_sha256,
-            recorded_at_utc=self._clock(),
+            recorded_at_utc=status.observed_at_utc,
         )
         return self._ledger.commit_fence(fence)
 

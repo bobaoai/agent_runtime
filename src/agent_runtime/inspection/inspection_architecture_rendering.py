@@ -32,9 +32,16 @@ def build_runtime_architecture_projection(
     supplied by a source-checkout audit.
     """
 
+    source_root = project_root
+    if source_root is None:
+        candidate = Path(__file__).resolve().parents[3]
+        if (candidate / "pyproject.toml").is_file() and (
+            candidate / "designDoc"
+        ).is_dir():
+            source_root = candidate
     errors = (
-        validate_registry_architecture_registration(project_root)
-        if project_root is not None
+        validate_registry_architecture_registration(source_root)
+        if source_root is not None
         else validate_runtime_architecture_registration()
     )
     if errors:

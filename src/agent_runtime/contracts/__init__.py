@@ -32,7 +32,7 @@ from .registry_workflow_definition import (
     DomainDriver,
     ExecutionOutputRegistrationRequest,
     ExecutionOutputRegistrationResult,
-    ExternalEvent,
+    ExternalEvent as PredecessorWorkflowExternalEvent,
     ResolvedArtifactRef,
     ResolvedExecutionProfile,
     RuntimeExecutionServices,
@@ -50,10 +50,13 @@ from .registry_workflow_definition import (
 from .durability_backend_definition import (
     BackendEvent,
     BackendExecutionRef,
-    CancellationRequest,
     DurableBackendAdapter,
     ExecutionSnapshot,
-    StartExecutionRequest,
+    ExternalEvent,
+)
+from .execution_host_definition import (
+    RuntimeCancellationRequest,
+    RuntimeWorkflowStartRequest,
 )
 from .invocation_adapter_definition import (
     AdapterContextRequest,
@@ -92,6 +95,10 @@ from .execution_authorization_definition import (
     ProductOperationDecision,
     ProductAuthorizationContextStatus,
     ProtectedOperationIntent,
+)
+from .execution_event_definition import (
+    ExternalEventAcknowledgement,
+    ExternalEventIngressRequest,
 )
 from .registry_release_definition import (
     ExecutionProfileRelease,
@@ -149,7 +156,6 @@ __all__ = [
     "AuthorizedExecutionInput",
     "BackendEvent",
     "BackendExecutionRef",
-    "CancellationRequest",
     "CellModuleDispatchContext",
     "ModuleInputProjection",
     "ModuleInputProjectionContract",
@@ -174,6 +180,9 @@ __all__ = [
     "ExecutionOutputRegistrationRequest",
     "ExecutionOutputRegistrationResult",
     "ExternalEvent",
+    "PredecessorWorkflowExternalEvent",
+    "ExternalEventAcknowledgement",
+    "ExternalEventIngressRequest",
     "GatewayAuthorizationObservation",
     "GatewayDecisionEffect",
     "OperationAuthorizationQuery",
@@ -219,7 +228,8 @@ __all__ = [
     "SchemaAssetRelease",
     "SkillModuleExport",
     "SkillPackageRelease",
-    "StartExecutionRequest",
+    "RuntimeCancellationRequest",
+    "RuntimeWorkflowStartRequest",
     "ModuleDispatchRequest",
     "ModuleOutcome",
     "ModuleOutcomeDisposition",

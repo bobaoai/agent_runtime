@@ -30,6 +30,24 @@ SURFACE_INVENTORY_SCHEMA_VERSION = ARCHITECTURE_PROJECTION_SCHEMA_VERSION
 RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v1"
 
 
+def _latest_admission_state(
+    release_registry: RuntimeReleaseRegistry,
+    subject_kind: ReleaseSubjectKind,
+    release_ref: str,
+) -> str | None:
+    """Return the latest state without treating an unadmitted release as invalid."""
+
+    try:
+        return release_registry.get_admission_state(
+            subject_kind,
+            release_ref,
+        ).value
+    except RuntimeError as exc:
+        if str(exc).startswith("release has no admission record:"):
+            return None
+        raise
+
+
 def build_runtime_inventory(
     *,
     registry: WorkflowRuntimeRegistry | None = None,
@@ -124,10 +142,11 @@ def build_runtime_release_inventory(
                 "version": release.skill_package_version,
                 "release_ref": release.release_ref,
                 "release_sha256": release.release_sha256,
-                "latest_admission_state": release_registry.get_admission_state(
+                "latest_admission_state": _latest_admission_state(
+                    release_registry,
                     ReleaseSubjectKind.SKILL_PACKAGE,
                     release.release_ref,
-                ).value,
+                ),
                 "exports": [
                     {
                         "export_id": export.export_id,
@@ -154,10 +173,11 @@ def build_runtime_release_inventory(
                 "version": release.prompt_bundle_version,
                 "release_ref": release.release_ref,
                 "release_sha256": release.release_sha256,
-                "latest_admission_state": release_registry.get_admission_state(
+                "latest_admission_state": _latest_admission_state(
+                    release_registry,
                     ReleaseSubjectKind.PROMPT_BUNDLE,
                     release.release_ref,
-                ).value,
+                ),
             }
             for release in snapshot.prompt_bundles
         ],
@@ -173,10 +193,11 @@ def build_runtime_release_inventory(
                 "model_id": release.model_id,
                 "reasoning_profile": release.reasoning_profile,
                 "output_constraint_mode": release.output_constraint_mode,
-                "latest_admission_state": release_registry.get_admission_state(
+                "latest_admission_state": _latest_admission_state(
+                    release_registry,
                     ReleaseSubjectKind.EXECUTION_PROFILE,
                     release.release_ref,
-                ).value,
+                ),
             }
             for release in snapshot.execution_profiles
         ],
@@ -192,10 +213,11 @@ def build_runtime_release_inventory(
                 "declared_operation_ids": list(
                     release.declared_operation_ids
                 ),
-                "latest_admission_state": release_registry.get_admission_state(
+                "latest_admission_state": _latest_admission_state(
+                    release_registry,
                     ReleaseSubjectKind.RUNTIME_MODULE,
                     release.release_ref,
-                ).value,
+                ),
             }
             for release in snapshot.modules
         ],
@@ -210,10 +232,11 @@ def build_runtime_release_inventory(
                 "graph_sha256": release.graph_sha256,
                 "nodes": [node.as_dict() for node in release.nodes],
                 "edges": [edge.as_dict() for edge in release.edges],
-                "latest_admission_state": release_registry.get_admission_state(
+                "latest_admission_state": _latest_admission_state(
+                    release_registry,
                     ReleaseSubjectKind.WORKFLOW,
                     release.release_ref,
-                ).value,
+                ),
             }
             for release in snapshot.workflows
         ],

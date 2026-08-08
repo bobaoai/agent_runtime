@@ -108,12 +108,13 @@ services outside Temporal replay.
 
 ## 2. Canonical Durable Interface
 
-The target cursor and coordinator records are code-owned in
-`src/agent_runtime/contracts/registry_workflow_definition.py`,
-`src/agent_runtime/contracts/execution_host_definition.py`, and
-`src/agent_runtime/contracts/durability_topology_definition.py`. Temporal uses those records without renaming
-fields or adding authority. `src/agent_runtime/contracts/durability_backend_definition.py` remains a
-predecessor lifecycle surface until its migration is complete.
+The canonical backend protocol is code-owned in
+`src/agent_runtime/contracts/durability_backend_definition.py`. It reuses the
+target host commands from `execution_host_definition.py` and the backend cursor
+records from `durability_topology_definition.py`; it does not declare another
+start request, execution ref, event, cancellation, or snapshot type family.
+Temporal consumes these exact type identities without renaming fields or
+adding authority.
 
 The adapter provides these logical operations:
 
@@ -252,6 +253,12 @@ the last committed domain state, quarantine late results, close provider
 Context, and reconcile issued grants or effects. They do not fabricate a
 domain transition. Restored permission starts a newly authorized Workflow
 Execution.
+
+The Temporal cancellation path is a typed acknowledged Update. It stores the
+exact cancellation identity and reason Artifact ref, changes only
+`runtime_status_id`, returns the resulting `execution_snapshot`, and permits
+exact replay of the same Update identity. Native free-text cancellation is not
+part of the Runtime backend protocol.
 
 ## 7. Ref-only Temporal History
 

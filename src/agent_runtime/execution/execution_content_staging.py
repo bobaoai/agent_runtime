@@ -154,7 +154,7 @@ class InMemoryCellArtifactStore:
 
         request.validate()
         schema_ref = f"schema:{request.output_type_id}@{request.schema_version}"
-        schema_sha256 = hashlib.sha256(schema_ref.encode("utf-8")).hexdigest()
+        schema_sha256 = _sha256(schema_ref.encode("utf-8"))
         resolved = self.put_bytes(
             artifact_kind_id=request.output_type_id,
             schema_version=request.schema_version,
@@ -199,8 +199,12 @@ class InMemoryCellArtifactStore:
             schema_sha256=schema_sha256,
             media_type=media_type,
             content=content,
-            idempotency_key=(
-                f"{module_run_id}_{variant_id}_{attempt_id}_{logical_name}"
+            idempotency_key=_stable_id(
+                "module_output_commit",
+                module_run_id,
+                variant_id,
+                attempt_id,
+                logical_name,
             ),
             logical_name=logical_name,
         )
@@ -235,8 +239,12 @@ class InMemoryCellArtifactStore:
             schema_sha256=_sha256(schema_ref.encode("utf-8")),
             media_type=media_type,
             content=content,
-            idempotency_key=(
-                f"{module_run_id}_{variant_id}_{attempt_id}_{failure_class}"
+            idempotency_key=_stable_id(
+                "module_failure_commit",
+                module_run_id,
+                variant_id,
+                attempt_id,
+                failure_class,
             ),
             logical_name="failure_detail",
         )

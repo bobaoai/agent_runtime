@@ -7,7 +7,6 @@ No Agency Platform type appears in this interface.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
@@ -17,23 +16,16 @@ from .registry_contract_validation import (
     validate_opaque_ref,
     validate_sha256,
     validate_string_tuple,
+    validate_utc_timestamp,
 )
-from ..execution.execution_event_ingestion import (
+from .execution_event_definition import (
     ExternalEventAcknowledgement,
     ExternalEventIngressRequest,
 )
 
 
 def _validate_utc(label: str, value: Any) -> None:
-    if type(value) is not str or not value:
-        raise ValueError(f"{label} is required")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid {label}: {value!r}") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"{label} must include an offset")
-    parsed.astimezone(timezone.utc)
+    validate_utc_timestamp(label, value)
 
 
 class RuntimeExecutionStatus(StrEnum):
@@ -256,6 +248,22 @@ class RuntimeCancellationRequest:
         ):
             validate_sha256(label, value)
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the exact ref-only cancellation command payload."""
+
+        self.validate()
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RuntimeCancellationRequest":
+        """Reconstruct an exact cancellation request without extra fields."""
+
+        if set(payload) != set(cls.__dataclass_fields__):
+            raise ValueError("Runtime cancellation request has an invalid shape")
+        request = cls(**payload)
+        request.validate()
+        return request
 
 
 @dataclass(frozen=True)

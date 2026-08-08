@@ -7,9 +7,14 @@ import json
 import pytest
 
 from agent_runtime.contracts.durability_backend_definition import (
-    CancellationRequest,
     ExecutionSnapshot,
-    StartExecutionRequest,
+    ExternalEvent,
+    RuntimeCancellationRequest,
+    RuntimeWorkflowStartRequest,
+)
+from agent_runtime.contracts.ledger_lineage_definition import (
+    ModuleAttemptRecord,
+    ModuleUsageObservation,
 )
 from agent_runtime.contracts.invocation_adapter_definition import (
     AdapterContextRequest,
@@ -25,25 +30,27 @@ from agent_runtime.contracts.invocation_adapter_definition import (
 )
 
 
-def _durable_start_request() -> StartExecutionRequest:
-    return StartExecutionRequest(
+def _durable_start_request() -> RuntimeWorkflowStartRequest:
+    return RuntimeWorkflowStartRequest(
         workflow_execution_id="execution_synthetic_001",
-        workflow_id="workflow_synthetic",
-        workflow_contract_version="v1",
+        tenant_id="tenant_synthetic_001",
+        cell_id="cell_synthetic_001",
+        workflow_release_ref="runtime-workflow:synthetic@v1",
+        workflow_release_sha256="a" * 64,
         execution_release_ref="release-ref:execution-v1",
-        runtime_release_ref="release-ref:runtime-v1",
-        graph_projection_ref="graph-ref:synthetic-v1",
-        graph_sha256="a" * 64,
-        cell_binding_ref="cell-ref:synthetic-v1",
-        cell_binding_sha256="b" * 64,
-        entitlement_snapshot_ref="entitlement-ref:synthetic-v1",
-        entitlement_snapshot_hash="c" * 64,
+        execution_release_sha256="b" * 64,
+        execution_profile_selection_ref="profile-selection:synthetic@v1",
+        execution_profile_selection_sha256="c" * 64,
+        runtime_execution_binding_ref="runtime-binding:synthetic@v1",
+        runtime_execution_binding_sha256="d" * 64,
+        execution_authorization_binding_ref="authorization:synthetic@v1",
+        execution_authorization_binding_sha256="e" * 64,
+        execution_start_admission_ref="start-admission:synthetic@v1",
+        execution_start_admission_sha256="f" * 64,
         execution_input_package_refs=("artifact-ref:input-001",),
-        execution_input_package_sha256="d" * 64,
-        max_transition_count=20,
-        max_dispatch_count=30,
-        backend_namespace="namespace_synthetic",
-        task_queue="queue_synthetic",
+        execution_input_package_sha256="1" * 64,
+        idempotency_key="start_synthetic_001",
+        recorded_at_utc="2026-08-08T12:00:00Z",
     )
 
 
@@ -299,7 +306,9 @@ def _non_tuple_container(kind: str, record: object) -> object:
 def test_durable_start_and_snapshot_are_exact_ref_only_contracts() -> None:
     request = _durable_start_request()
     payload = request.as_dict()
-    assert set(payload) == {field.name for field in fields(StartExecutionRequest)}
+    assert set(payload) == {
+        field.name for field in fields(RuntimeWorkflowStartRequest)
+    }
     assert "content" not in " ".join(payload)
     assert "prompt" not in " ".join(payload)
 
@@ -307,32 +316,72 @@ def test_durable_start_and_snapshot_are_exact_ref_only_contracts() -> None:
         backend_id="backend_synthetic",
         backend_execution_id="backend-execution-001",
         workflow_execution_id=request.workflow_execution_id,
-        workflow_id=request.workflow_id,
-        workflow_contract_version=request.workflow_contract_version,
-        execution_release_ref=request.execution_release_ref,
-        runtime_release_ref=request.runtime_release_ref,
-        graph_sha256=request.graph_sha256,
-        domain_state_id="state_waiting",
-        runtime_status_id="waiting_external_event",
-        transition_sequence=2,
-        retry_sequence=0,
+        workflow_id="workflow_synthetic",
+        graph_sha256="a" * 64,
+        start_request_sha256="b" * 64,
+        current_state="state_waiting",
         terminal=False,
-        wait_policy_ref="wait-policy-ref:synthetic-v1",
+        applied_events=(),
     )
     snapshot.validate()
-    assert snapshot.domain_state_id != snapshot.runtime_status_id
+    assert snapshot.current_state == "state_waiting"
+
+
+def test_public_external_event_is_the_durable_backend_event() -> None:
+    from agent_runtime.contracts import ExternalEvent as PublicExternalEvent
+
+    assert PublicExternalEvent is ExternalEvent
+
+
+def test_module_attempt_rejects_reversed_period() -> None:
+    attempt = ModuleAttemptRecord(
+        module_run_id="module_synthetic_001",
+        variant_id="variant_synthetic_001",
+        attempt_id="attempt_synthetic_001",
+        status="failed",
+        output_refs=(),
+        usage=ModuleUsageObservation(None, None, None, None),
+        failure_class="provider_failure",
+        period_start_at_utc="2026-08-08T12:01:00Z",
+        period_end_at_utc="2026-08-08T12:00:00Z",
+        recorded_at_utc="2026-08-08T12:01:00Z",
+    )
+
+    with pytest.raises(ValueError, match="precedes"):
+        attempt.validate()
+
+
+def test_durable_snapshot_terminal_flag_matches_runtime_status() -> None:
+    snapshot = ExecutionSnapshot(
+        backend_id="backend_synthetic",
+        backend_execution_id="backend-execution-001",
+        workflow_execution_id="execution_synthetic_001",
+        workflow_id="workflow_synthetic",
+        graph_sha256="a" * 64,
+        start_request_sha256="b" * 64,
+        current_state="state_waiting",
+        terminal=True,
+        applied_events=(),
+        runtime_status_id="running",
+    )
+
+    with pytest.raises(ValueError, match="terminal flag"):
+        snapshot.validate()
 
 
 def test_cancellation_requires_authorized_artifact_and_hash() -> None:
-    request = CancellationRequest(
-        request_id="cancellation_synthetic_001",
+    request = RuntimeCancellationRequest(
+        cancellation_request_id="cancellation_synthetic_001",
         workflow_execution_id="execution_synthetic_001",
-        expected_domain_state_id="state_waiting",
+        expected_snapshot_ref="runtime-snapshot:synthetic@v1",
+        expected_snapshot_sha256="d" * 64,
         reason_code="operator_requested",
         reason_artifact_ref="artifact-ref:cancellation-001",
         reason_artifact_sha256="e" * 64,
-        authorization_ref="authorization-ref:allow-001",
-        graph_sha256="a" * 64,
+        authorization_decision_ref="authorization-ref:allow-001",
+        authorization_decision_sha256="f" * 64,
+        idempotency_key="cancel_synthetic_001",
+        recorded_at_utc="2026-08-08T12:01:00Z",
     )
     request.validate()
     with pytest.raises(ValueError, match="reason_artifact_ref"):
@@ -397,8 +446,7 @@ def test_provider_failure_keeps_raw_detail_behind_cell_local_ref() -> None:
         ("workflow_execution_id", 123),
         ("execution_release_ref", 123),
         ("execution_input_package_refs", (123,)),
-        ("max_transition_count", True),
-        ("max_dispatch_count", 1.5),
+        ("recorded_at_utc", 1.5),
     ),
 )
 def test_durable_start_rejects_python_coercions(
@@ -411,37 +459,24 @@ def test_durable_start_rejects_python_coercions(
         request.validate()
 
 
-@pytest.mark.parametrize(
-    ("field_name", "invalid_value"),
-    (
-        ("transition_sequence", True),
-        ("transition_sequence", 1.5),
-        ("retry_sequence", False),
-        ("retry_sequence", 0.25),
-    ),
-)
-def test_durable_snapshot_rejects_bool_and_float_sequences(
-    field_name: str,
-    invalid_value: object,
+@pytest.mark.parametrize("invalid_terminal", (1, 0.0, "false"))
+def test_durable_snapshot_rejects_non_boolean_terminal(
+    invalid_terminal: object,
 ) -> None:
     snapshot = ExecutionSnapshot(
         backend_id="backend_synthetic",
         backend_execution_id="backend-execution-001",
         workflow_execution_id="execution_synthetic_001",
         workflow_id="workflow_synthetic",
-        workflow_contract_version="v1",
-        execution_release_ref="release-ref:execution-v1",
-        runtime_release_ref="release-ref:runtime-v1",
         graph_sha256="a" * 64,
-        domain_state_id="state_waiting",
-        runtime_status_id="waiting_external_event",
-        transition_sequence=2,
-        retry_sequence=0,
+        start_request_sha256="b" * 64,
+        current_state="state_waiting",
         terminal=False,
+        applied_events=(),
     )
 
-    with pytest.raises(ValueError, match="integer"):
-        replace(snapshot, **{field_name: invalid_value}).validate()
+    with pytest.raises(ValueError, match="boolean"):
+        replace(snapshot, terminal=invalid_terminal).validate()
 
 
 def test_provider_operation_expiry_rejects_bool_and_float_counts() -> None:

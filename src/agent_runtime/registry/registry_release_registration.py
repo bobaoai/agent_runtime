@@ -39,6 +39,41 @@ _ReleaseT = TypeVar(
 )
 
 
+def _allowed_admission_states(
+    purpose: ModuleExecutionPurpose,
+) -> frozenset[ReleaseAdmissionState]:
+    """Return the shared release-admission matrix for one execution purpose."""
+
+    if purpose in {
+        ModuleExecutionPurpose.TEST,
+        ModuleExecutionPurpose.EVALUATION,
+    }:
+        return frozenset(
+            {
+                ReleaseAdmissionState.CANDIDATE,
+                ReleaseAdmissionState.SHADOW_EXECUTABLE,
+                ReleaseAdmissionState.PRODUCTION_CANARY,
+                ReleaseAdmissionState.ACTIVE,
+            }
+        )
+    if purpose is ModuleExecutionPurpose.REPLAY:
+        return frozenset(
+            {
+                ReleaseAdmissionState.CANDIDATE,
+                ReleaseAdmissionState.SHADOW_EXECUTABLE,
+                ReleaseAdmissionState.PRODUCTION_CANARY,
+                ReleaseAdmissionState.ACTIVE,
+                ReleaseAdmissionState.SUPERSEDED,
+            }
+        )
+    return frozenset(
+        {
+            ReleaseAdmissionState.PRODUCTION_CANARY,
+            ReleaseAdmissionState.ACTIVE,
+        }
+    )
+
+
 @dataclass(frozen=True)
 class RuntimeReleaseBundle:
     """One atomic registration batch across all dependency-ordered release kinds."""
@@ -210,14 +245,17 @@ class RuntimeReleaseRegistry:
     ) -> SchemaAssetRelease:
         """Resolve one exact schema body by its logical ref and content hash."""
 
-        try:
-            record = self._schema_assets[release_ref]
-        except KeyError as exc:
-            raise KeyError(f"unknown Schema Asset release: {release_ref}") from exc
-        if record.schema_sha256 != schema_sha256:
-            raise ValueError(f"Schema Asset hash mismatch: {release_ref}")
-        record.validate()
-        return record
+        with self._registration_lock:
+            try:
+                record = self._schema_assets[release_ref]
+            except KeyError as exc:
+                raise KeyError(
+                    f"unknown Schema Asset release: {release_ref}"
+                ) from exc
+            if record.schema_sha256 != schema_sha256:
+                raise ValueError(f"Schema Asset hash mismatch: {release_ref}")
+            record.validate()
+            return record
 
     def get_execution_profile(
         self, release_ref: str, release_sha256: str
@@ -271,10 +309,11 @@ class RuntimeReleaseRegistry:
     ) -> ReleaseAdmissionState:
         """Return the latest append-only admission state for one exact release."""
 
-        history = self._admission_history.get((subject_kind, release_ref))
-        if not history:
-            raise RuntimeError(f"release has no admission record: {release_ref}")
-        return history[-1].state
+        with self._registration_lock:
+            history = self._admission_history.get((subject_kind, release_ref))
+            if not history:
+                raise RuntimeError(f"release has no admission record: {release_ref}")
+            return history[-1].state
 
     def active_release_ref(
         self,
@@ -283,12 +322,13 @@ class RuntimeReleaseRegistry:
     ) -> str:
         """Return the active pointer for inspection or new-execution binding."""
 
-        try:
-            return self._active_release_refs[(subject_kind, subject_id)]
-        except KeyError as exc:
-            raise KeyError(
-                f"no active {subject_kind.value} release: {subject_id}"
-            ) from exc
+        with self._registration_lock:
+            try:
+                return self._active_release_refs[(subject_kind, subject_id)]
+            except KeyError as exc:
+                raise KeyError(
+                    f"no active {subject_kind.value} release: {subject_id}"
+                ) from exc
 
     def assert_module_execution_allowed(
         self,
@@ -305,29 +345,7 @@ class RuntimeReleaseRegistry:
             ReleaseSubjectKind.RUNTIME_MODULE,
             module.release_ref,
         )
-        if purpose in {
-            ModuleExecutionPurpose.TEST,
-            ModuleExecutionPurpose.EVALUATION,
-        }:
-            allowed = {
-                ReleaseAdmissionState.CANDIDATE,
-                ReleaseAdmissionState.SHADOW_EXECUTABLE,
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-            }
-        elif purpose is ModuleExecutionPurpose.REPLAY:
-            allowed = {
-                ReleaseAdmissionState.CANDIDATE,
-                ReleaseAdmissionState.SHADOW_EXECUTABLE,
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-                ReleaseAdmissionState.SUPERSEDED,
-            }
-        else:
-            allowed = {
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-            }
+        allowed = _allowed_admission_states(purpose)
         if state not in allowed:
             raise PermissionError(
                 f"Module release is not admitted for {purpose.value}: {state.value}"
@@ -353,29 +371,7 @@ class RuntimeReleaseRegistry:
             ReleaseSubjectKind.WORKFLOW,
             workflow.release_ref,
         )
-        if purpose in {
-            ModuleExecutionPurpose.TEST,
-            ModuleExecutionPurpose.EVALUATION,
-        }:
-            allowed = {
-                ReleaseAdmissionState.CANDIDATE,
-                ReleaseAdmissionState.SHADOW_EXECUTABLE,
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-            }
-        elif purpose is ModuleExecutionPurpose.REPLAY:
-            allowed = {
-                ReleaseAdmissionState.CANDIDATE,
-                ReleaseAdmissionState.SHADOW_EXECUTABLE,
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-                ReleaseAdmissionState.SUPERSEDED,
-            }
-        else:
-            allowed = {
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-            }
+        allowed = _allowed_admission_states(purpose)
         if state not in allowed:
             raise PermissionError(
                 f"Workflow release is not admitted for {purpose.value}: {state.value}"
@@ -468,7 +464,7 @@ class RuntimeReleaseRegistry:
         record.validate()
         existing = target.get(record.release_ref)
         if existing is not None:
-            if existing.as_dict() != record.as_dict():
+            if existing != record:
                 raise ValueError(f"release_ref collision: {record.release_ref}")
             return
         version_key = (kind, stable_id, version)
@@ -486,7 +482,7 @@ class RuntimeReleaseRegistry:
         record.validate()
         existing = self._schema_assets.get(record.release_ref)
         if existing is not None:
-            if existing.as_dict() != record.as_dict():
+            if existing != record:
                 raise ValueError(
                     f"Schema Asset release_ref collision: {record.release_ref}"
                 )
@@ -697,20 +693,21 @@ class RuntimeReleaseRegistry:
                 f"illegal release admission transition: {prior_label} -> {target.value}"
             )
 
-    @staticmethod
     def _get_exact(
+        self,
         table: Mapping[str, _ReleaseT],
         release_ref: str,
         release_sha256: str,
         label: str,
     ) -> _ReleaseT:
-        try:
-            record = table[release_ref]
-        except KeyError as exc:
-            raise KeyError(f"unknown {label} release: {release_ref}") from exc
-        if record.release_sha256 != release_sha256:
-            raise ValueError(f"{label} release hash mismatch: {release_ref}")
-        return record
+        with self._registration_lock:
+            try:
+                record = table[release_ref]
+            except KeyError as exc:
+                raise KeyError(f"unknown {label} release: {release_ref}") from exc
+            if record.release_sha256 != release_sha256:
+                raise ValueError(f"{label} release hash mismatch: {release_ref}")
+            return record
 
 
 __all__ = [

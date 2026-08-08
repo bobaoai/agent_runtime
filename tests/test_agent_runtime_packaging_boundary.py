@@ -635,8 +635,11 @@ def test_clean_wheel_temporal_descriptor_resolves_public_namespace(
 
     assert result == {
         "implementation_ref": (
-            "agent_runtime.testing.durability_temporal_conformance:TemporalConformanceWorkflow"
+            "agent_runtime.durability.durability_backend_registration:"
+            "load_temporal_workflow_release_adapter"
         ),
-        "implementation_module": "agent_runtime.testing.durability_temporal_conformance",
-        "implementation_name": "TemporalConformanceWorkflow",
+        "implementation_module": (
+            "agent_runtime.durability.durability_backend_registration"
+        ),
+        "implementation_name": "load_temporal_workflow_release_adapter",
     }

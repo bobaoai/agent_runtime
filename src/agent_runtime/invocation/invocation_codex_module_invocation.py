@@ -25,7 +25,6 @@ from typing import Callable
 
 from jsonschema import Draft202012Validator
 
-from ..contracts.registry_release_definition import ModuleKind
 from ..contracts.ledger_lineage_definition import ModuleUsageObservation
 from ..contracts.execution_module_definition import (
     ModuleExecutorFailure,
@@ -39,13 +38,19 @@ from .invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     codex_native_output_schema,
     normalize_codex_native_output,
-    validate_prompt_output_constraint,
-    validate_registered_output_schema,
+)
+from .invocation_context_preparation import (
+    InvocationExecutionExpectation,
+    prepare_registered_invocation_context,
+)
+from .invocation_failure_recording import build_provider_failure_detail
+from .invocation_workspace_preparation import (
+    AttemptWorkspaceConflictError,
+    prepare_attempt_workspace,
 )
 
 
 _APP_BUNDLE_BIN = "/Applications/Codex.app/Contents/Resources/codex"
-_FAILURE_RESPONSE_MAX_BYTES = 96 * 1024
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,7 @@ def _default_invoke(
         input=prompt,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         cwd=str(cwd),
         timeout=timeout_seconds,
         check=False,
@@ -169,37 +175,6 @@ def _parse_final_agent_message(stdout: str) -> bytes:
     ).encode("utf-8")
 
 
-def _failure_detail_bytes(
-    *,
-    failure_class: str,
-    failure_code: str,
-    message: str,
-    provider_response: str,
-    provider_error_message: str | None,
-    transport_exit_code: int | None,
-    retryable: bool,
-) -> bytes:
-    response_bytes = provider_response.encode("utf-8")
-    bounded = response_bytes[:_FAILURE_RESPONSE_MAX_BYTES]
-    return json.dumps(
-        {
-            "failure_class": failure_class,
-            "failure_code": failure_code,
-            "message": message,
-            "provider_error_code": None,
-            "provider_error_message": provider_error_message,
-            "transport_exit_code": transport_exit_code,
-            "retryable": retryable,
-            "provider_response": bounded.decode("utf-8", errors="replace"),
-            "provider_response_byte_size": len(response_bytes),
-            "provider_response_truncated": len(bounded) != len(response_bytes),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-
 def _failed_process_response(result: CodexCliInvocationResult) -> str:
     """Preserve both Codex JSONL errors and process diagnostics for audit."""
 
@@ -252,77 +227,50 @@ class _CodexCliExecutorBase:
     def execute(self, request: ModuleExecutorRequest) -> ModuleExecutorResult:
         """Run one exact Variant Attempt in a newly isolated local workspace."""
 
-        if type(request) is not ModuleExecutorRequest:
-            raise ValueError("request must be an exact ModuleExecutorRequest")
+        prepared = prepare_registered_invocation_context(
+            request=request,
+            release_registry=self._release_registry,
+            artifact_host=self._artifact_host,
+            expectation=InvocationExecutionExpectation(
+                executor_adapter_id=self.executor_adapter_id,
+                executor_adapter_revision=self.executor_adapter_revision,
+                transport_kind="codex_cli",
+                execution_mode=self.expected_execution_mode,
+                semantic_input_delivery_mode=(
+                    self.expected_semantic_input_delivery_mode
+                ),
+                attempt_workspace_policy=self.expected_attempt_workspace_policy,
+                network_policy=self.expected_network_policy,
+                tool_policy=self.expected_tool_policy,
+            ),
+        )
         module = request.module
         profile = request.execution_profile
-        module.validate()
-        profile.validate()
-        if module.module_kind is not ModuleKind.AGENT:
-            raise ValueError("Codex CLI Executor accepts only Agent Modules")
-        if profile.executor_adapter_id != self.executor_adapter_id:
-            raise ValueError("Execution Profile targets another Executor adapter")
-        if profile.executor_adapter_revision != self.executor_adapter_revision:
-            raise ValueError("Execution Profile targets another Executor revision")
-        if profile.transport_kind != "codex_cli":
-            raise ValueError("Codex CLI Executor requires codex_cli transport")
-        if profile.transport_kind not in module.compatible_transport_kinds:
-            raise ValueError("Execution Profile transport is incompatible with Module")
-        if profile.execution_mode != self.expected_execution_mode:
-            raise ValueError("Execution Profile execution mode differs from Executor mode")
-        if (
-            profile.semantic_input_delivery_mode
-            != self.expected_semantic_input_delivery_mode
-        ):
-            raise ValueError(
-                "Execution Profile semantic input delivery differs from Executor mode"
-            )
-        if (
-            profile.attempt_workspace_policy
-            != self.expected_attempt_workspace_policy
-        ):
-            raise ValueError(
-                "Execution Profile workspace policy differs from Executor mode"
-            )
-        if profile.tool_policy != self.expected_tool_policy:
-            raise ValueError("Execution Profile tool policy differs from Executor mode")
-        if profile.network_policy != self.expected_network_policy:
-            raise ValueError("Execution Profile network policy differs from Executor mode")
-        if module.prompt_bundle_ref is None or module.prompt_bundle_sha256 is None:
-            raise ValueError("Agent Module lacks an exact Prompt Bundle")
-        prompt_bundle = self._release_registry.get_prompt_bundle(
-            module.prompt_bundle_ref,
-            module.prompt_bundle_sha256,
-        )
-        output_schema_asset = self._release_registry.get_schema_asset(
-            module.output_schema_ref,
-            module.output_schema_sha256,
-        )
-        registered_output_schema = validate_registered_output_schema(
-            compiled_static_body=prompt_bundle.compiled_static_body,
-            canonical_schema=output_schema_asset.schema_document(),
-        )
+        registered_output_schema = prepared.registered_output_schema
 
-        workspace = self._workspace_root / request.attempt_id
-        workspace.mkdir(parents=True, exist_ok=False)
-        if request.prompt_envelope_ref is None:
-            raise ValueError("Codex CLI Agent execution requires a final Prompt Envelope")
-        if request.prompt_envelope_sha256 is None:
-            raise ValueError("Prompt Envelope hash is missing")
-        prompt_bytes = self._artifact_host.read_bytes(
-            request.prompt_envelope_ref,
-            request.prompt_envelope_sha256,
-        )
-        if _sha256(prompt_bytes) != request.prompt_envelope_sha256:
-            raise ValueError("Prompt Envelope content hash mismatch")
         try:
-            prompt = prompt_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError("Prompt Envelope must be exact UTF-8 provider text") from exc
-        validate_prompt_output_constraint(
-            prompt=prompt,
-            output_constraint_mode=profile.output_constraint_mode,
-        )
+            workspace = prepare_attempt_workspace(
+                workspace_root=self._workspace_root,
+                attempt_identity={
+                    "attempt_id": request.attempt_id,
+                    "module_run_id": request.module_run_id,
+                    "variant_id": request.variant_id,
+                    "module_release_sha256": module.release_sha256,
+                    "execution_profile_sha256": profile.release_sha256,
+                    "prompt_envelope_sha256": request.prompt_envelope_sha256,
+                },
+            )
+        except (OSError, AttemptWorkspaceConflictError) as exc:
+            self._raise_failure(
+                request=request,
+                failure_class="workspace_initialization_failure",
+                failure_code="codex_attempt_workspace_unavailable",
+                message="Codex Attempt workspace could not be prepared",
+                provider_response="",
+                usage=ModuleUsageObservation(None, None, None, None),
+                cause=exc,
+            )
+        prompt = prepared.prompt
         argv = [
             self._codex_bin or _resolve_codex_bin(),
             "exec",
@@ -532,7 +480,7 @@ class _CodexCliExecutorBase:
             variant_id=request.variant_id,
             attempt_id=request.attempt_id,
             failure_class=failure_class,
-            content=_failure_detail_bytes(
+            content=build_provider_failure_detail(
                 failure_class=failure_class,
                 failure_code=failure_code,
                 message=message,

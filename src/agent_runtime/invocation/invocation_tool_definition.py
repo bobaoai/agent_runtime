@@ -96,9 +96,30 @@ class ModuleProviderToolSessionFactory(Protocol):
         """Bind exact Module inputs and authorization to one provider Attempt."""
 
 
+def validate_provider_tool_set(
+    definitions: tuple[ProviderToolDefinition, ...],
+    tool_policy: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Validate exact set equality while preserving provider definition order."""
+
+    for definition in definitions:
+        if type(definition) is not ProviderToolDefinition:
+            raise ValueError("tool session returned an invalid definition")
+        definition.validate()
+    declared_names = tuple(definition.tool_name for definition in definitions)
+    if len(declared_names) != len(set(declared_names)):
+        raise ValueError("Gateway tool session returned duplicate tool names")
+    if set(declared_names) != set(tool_policy):
+        raise PermissionError(
+            "Gateway tool session differs from the selected Execution Profile"
+        )
+    return declared_names
+
+
 __all__ = [
     "ModuleArtifactHost",
     "ModuleProviderToolSession",
     "ModuleProviderToolSessionFactory",
     "ProviderToolDefinition",
+    "validate_provider_tool_set",
 ]

@@ -314,9 +314,13 @@ The boundary is enforced as follows:
   `work/`.
   This permits genuine within-invocation self-review without a second model
   call or a Runtime-created draft tool.
-- Workspace access never grants access to another Variant or Attempt. A retry
-  receives a new workspace unless an exact recovery contract admits a committed
-  checkpoint by ref and hash.
+- Workspace access never grants access to another Variant or Attempt. A new
+  Attempt receives a new workspace. Re-entry of the same exact Attempt may
+  recover its existing workspace only when a Runtime-authored identity marker
+  matches the Attempt, Module Run, Variant, Module Release, Execution Profile,
+  and Prompt Envelope closure. This allows the Agent to reread its own drafts
+  after infrastructure interruption without admitting another Attempt's state.
+  An unowned non-empty directory or a marker mismatch fails closed.
 - Workspace contents remain Cell-local and ephemeral by default. Runtime
   records file-operation observations and hashes when supported, but the Agent
   never writes its own audit, usage, authorization, or billing records.

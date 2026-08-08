@@ -9,6 +9,7 @@ model-authored output.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime
 import hashlib
 import json
 from typing import Any
@@ -248,6 +249,16 @@ class ModuleAttemptRecord:
             ("recorded_at_utc", self.recorded_at_utc),
         ):
             validate_utc_timestamp(label, value)
+        period_start = datetime.fromisoformat(
+            self.period_start_at_utc[:-1] + "+00:00"
+        )
+        period_end = datetime.fromisoformat(
+            self.period_end_at_utc[:-1] + "+00:00"
+        )
+        if period_end < period_start:
+            raise ValueError(
+                "Module Attempt period_end_at_utc precedes period_start_at_utc"
+            )
         validate_exact_record_tuple(
             "tool_calls",
             self.tool_calls,

@@ -210,6 +210,15 @@ Structural package initializers may temporarily re-export predecessor symbols
 for existing callers. Those exports are compatibility-only, cannot be used by
 new integrations, and retire with the owning debt entry.
 
+This repository is still an unreleased `0.1.0.dev0` extraction with no tagged
+public package predecessor. Compatibility applies only to symbols explicitly
+exported by the current package initializers; it does not preserve the former
+host repository's physical `postgres`, `provider`, or `review` package layout.
+Before the first standalone release is pinned, the host migration gate must
+scan and replace those vendored import paths with the registered `registry`,
+`invocation`, `inspection`, and `ledger` surfaces. The standalone wheel must
+not be presented as an in-place upgrade until that consumer migration passes.
+
 ## 3. Published and Operated Interfaces
 
 Every Runtime release contains:

@@ -325,6 +325,13 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "execution",
+        "event",
+        "definition",
+        "designDoc/agent_runtime_03_authorized_external_event_ingress.md",
+        source_directory_id="contracts",
+    ),
+    _source(
+        "execution",
         "authorization",
         "definition",
         "designDoc/agent_runtime_09_authorization_integration_contract.md",
@@ -422,6 +429,18 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "invocation",
+        "context",
+        "preparation",
+        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+    ),
+    _source(
+        "invocation",
+        "failure",
+        "recording",
+        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+    ),
+    _source(
+        "invocation",
         "schema",
         "projection",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
@@ -450,6 +469,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "invocation",
         "tool",
         "definition",
+        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+    ),
+    _source(
+        "invocation",
+        "workspace",
+        "preparation",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
     _source(

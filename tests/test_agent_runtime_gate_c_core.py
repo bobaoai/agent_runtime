@@ -7,7 +7,7 @@ import pytest
 
 from agent_runtime.contracts import (
     CellModuleDispatchContext,
-    ExternalEvent,
+    PredecessorWorkflowExternalEvent,
     RuntimeExecutionServices,
     ModuleDispatchRequest,
     ModuleOutcome,
@@ -283,7 +283,7 @@ def test_dispatch_context_and_outcomes_are_minimal_and_structural() -> None:
 
 
 def test_external_event_is_authorized_hash_bound_and_content_free() -> None:
-    event = ExternalEvent(
+    event = PredecessorWorkflowExternalEvent(
         event_id="event_opaque_001",
         workflow_execution_id="execution_opaque_001",
         expected_domain_state="state_waiting",

@@ -36,6 +36,7 @@ from .contracts import (
     WorkflowNodeBinding,
     WorkflowNodeExecutionProfileBinding,
     WorkflowRelease,
+    ExternalEvent,
     AuthorizationEffect,
     ExecutionAuthorizationBinding,
     ExecutionAuthorizationContextBinding,
@@ -91,14 +92,16 @@ from .invocation.invocation_model_invocation import (
 from .execution.execution_operation_resolution import RuntimeProtectedOperationClient
 from .execution.execution_event_ingestion import (
     ExternalActionAuthorizationEvidence,
-    ExternalEvent,
-    ExternalEventAcknowledgement,
+    ExternalEvent as AuthorizedExternalEvent,
     ExternalEventApplicationRecord,
     ExternalEventIngressRecord,
-    ExternalEventIngressRequest,
     ExecutionSnapshotToken,
     InMemoryExternalEventIngress,
     TrustedRequestContext,
+)
+from .contracts.execution_event_definition import (
+    ExternalEventAcknowledgement,
+    ExternalEventIngressRequest,
 )
 from .ledger.ledger_lineage_recording import InMemoryModuleExecutionLedger
 from .contracts.execution_module_definition import (
@@ -168,6 +171,7 @@ __all__ = [
     "ExecutionControlFenceStatus",
     "ExecutionSnapshotToken",
     "ExternalActionAuthorizationEvidence",
+    "AuthorizedExternalEvent",
     "ExternalEvent",
     "GatewayAuthorizationObservation",
     "GatewayDecisionEffect",

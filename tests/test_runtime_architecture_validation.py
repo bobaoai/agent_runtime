@@ -18,6 +18,7 @@ def test_runtime_architecture_registration_covers_every_python_source() -> None:
     assert architecture.validate_registry_architecture_registration(REPO_ROOT) == ()
     projection = build_runtime_architecture_projection(REPO_ROOT)
     assert projection["schema_version"] == "agent_runtime_architecture_projection_v3"
+    assert build_runtime_architecture_projection() == projection
 
 
 def test_target_source_names_match_logical_owner_module() -> None:

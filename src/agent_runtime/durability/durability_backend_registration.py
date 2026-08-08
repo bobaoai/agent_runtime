@@ -24,13 +24,27 @@ TEMPORAL_DESCRIPTOR = BackendDescriptor(
     admission_state=BackendAdmissionState.INTEGRATION_TESTED,
     evaluation_role=BackendEvaluationRole.SELECTED_CANDIDATE,
     implementation_ref=(
-        "agent_runtime.testing.durability_temporal_conformance:"
-        "TemporalConformanceWorkflow"
+        "agent_runtime.durability.durability_backend_registration:"
+        "load_temporal_workflow_release_adapter"
     ),
     supports_dedicated=True,
     supports_pooled=True,
     requires_external_service=True,
 )
+
+
+def load_temporal_workflow_release_adapter():
+    """Load the selected adapter only after the optional SDK is available."""
+
+    if not temporal_sdk_available():
+        raise RuntimeError(
+            "Temporal adapter requires the agent-runtime-core[temporal] extra"
+        )
+    from .durability_temporal_coordination import (
+        TemporalWorkflowReleaseBackendAdapter,
+    )
+
+    return TemporalWorkflowReleaseBackendAdapter
 
 
 def temporal_sdk_available() -> bool:

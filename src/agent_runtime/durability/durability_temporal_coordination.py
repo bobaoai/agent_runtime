@@ -26,21 +26,18 @@ from temporalio.worker import Worker
 
 from .durability_backend_registration import TEMPORAL_DESCRIPTOR
 from ..contracts.registry_release_definition import ModuleExecutionPurpose
-from ..registry.registry_graph_projection import (
-    compile_registered_graph,
-    project_workflow_release_graph,
+from ..registry.registry_graph_projection import project_workflow_release_graph
+from ..contracts.execution_host_definition import (
+    RuntimeCancellationRequest,
+    RuntimeWorkflowStartRequest,
 )
-from ..contracts.execution_host_definition import RuntimeWorkflowStartRequest
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
-from ..registry.registry_workflow_registration import WorkflowRuntimeRegistry
 from ..contracts.durability_topology_definition import (
     BackendEvent,
     BackendExecutionRef,
     CellRuntimeBinding,
-    ExecutionEnvelope,
     ExecutionSnapshot,
     ExternalEvent,
-    StartExecutionRequest,
     WorkflowGraphProjection,
     assert_ref_only_backend_payload,
 )
@@ -48,6 +45,7 @@ from ..contracts.durability_topology_definition import (
 
 TEMPORAL_DURABLE_WORKFLOW_NAME = "agent_runtime_durable_cursor_v1"
 TEMPORAL_DURABLE_UPDATE_NAME = "apply_external_event"
+TEMPORAL_DURABLE_CANCELLATION_UPDATE_NAME = "request_cancellation"
 TEMPORAL_DURABLE_QUERY_NAME = "execution_snapshot"
 
 
@@ -82,19 +80,16 @@ def _validated_temporal_start_payload(
     assert_ref_only_backend_payload(start_payload)
     graph = WorkflowGraphProjection.from_backend_payload(graph_payload)
 
-    if "workflow_release_ref" in execution:
-        if not _TARGET_EXECUTION_CONTEXT_KEYS.issubset(execution):
-            raise ValueError("target Temporal execution lacks workflow context")
-        request_payload = {
-            key: value
-            for key, value in execution.items()
-            if key not in _TARGET_EXECUTION_CONTEXT_KEYS
-        }
-        request = RuntimeWorkflowStartRequest.from_dict(request_payload)
-        if request.workflow_execution_id != execution["workflow_execution_id"]:
-            raise ValueError("target Temporal execution identity is inconsistent")
-    else:
-        ExecutionEnvelope.from_backend_payload(execution)
+    if not _TARGET_EXECUTION_CONTEXT_KEYS.issubset(execution):
+        raise ValueError("target Temporal execution lacks workflow context")
+    request_payload = {
+        key: value
+        for key, value in execution.items()
+        if key not in _TARGET_EXECUTION_CONTEXT_KEYS
+    }
+    request = RuntimeWorkflowStartRequest.from_dict(request_payload)
+    if request.workflow_execution_id != execution["workflow_execution_id"]:
+        raise ValueError("target Temporal execution identity is inconsistent")
 
     if execution["workflow_id"] != graph.workflow_id:
         raise ValueError("Temporal execution does not match projected workflow")
@@ -140,6 +135,8 @@ class TemporalDurableCursorWorkflow:
         self._allowed_targets: dict[str, tuple[str, ...]] = {}
         self._events: list[dict[str, str]] = []
         self._events_by_id: dict[str, dict[str, str]] = {}
+        self._runtime_status_id = "running"
+        self._cancellation_by_id: dict[str, Any] | None = None
 
     @workflow.run
     async def run(self, start_payload: dict[str, Any]) -> dict[str, Any]:
@@ -159,7 +156,10 @@ class TemporalDurableCursorWorkflow:
             state.state_id: state.allowed_next_state_ids for state in graph.states
         }
         await workflow.wait_condition(
-            lambda: self._current_state in self._terminal_states
+            lambda: (
+                self._current_state in self._terminal_states
+                or self._runtime_status_id == "cancelled"
+            )
         )
         return self.execution_snapshot()
 
@@ -199,159 +199,69 @@ class TemporalDurableCursorWorkflow:
 
         self._validate_event(event_payload)
 
+    def _validate_cancellation(
+        self,
+        request_payload: Mapping[str, Any],
+    ) -> RuntimeCancellationRequest:
+        request = RuntimeCancellationRequest.from_dict(dict(request_payload))
+        if request.workflow_execution_id != self._workflow_execution_id:
+            raise PermissionError("Temporal cancellation crossed workflow execution")
+        if self._current_state in self._terminal_states:
+            raise ValueError("completed Temporal execution cannot be cancelled")
+        if self._cancellation_by_id is not None:
+            if self._cancellation_by_id != request.as_dict():
+                raise ValueError(
+                    "Temporal cancellation id was reused with different content"
+                )
+        return request
+
+    @workflow.update(name=TEMPORAL_DURABLE_CANCELLATION_UPDATE_NAME)
+    def request_cancellation(
+        self,
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Acknowledge one typed cancellation without changing domain state."""
+
+        request = self._validate_cancellation(request_payload)
+        if self._cancellation_by_id is None:
+            self._cancellation_by_id = request.as_dict()
+            self._runtime_status_id = "cancelled"
+        return self.execution_snapshot()
+
+    @request_cancellation.validator
+    def validate_cancellation(self, request_payload: dict[str, Any]) -> None:
+        """Reject invalid cancellation Updates before history admission."""
+
+        self._validate_cancellation(request_payload)
+
     @workflow.query(name=TEMPORAL_DURABLE_QUERY_NAME)
     def execution_snapshot(self) -> dict[str, Any]:
         """Return a content-free snapshot for operators and local drivers."""
 
+        domain_terminal = self._current_state in self._terminal_states
+        runtime_status_id = (
+            "completed" if domain_terminal else self._runtime_status_id
+        )
         return {
             "workflow_id": self._workflow_id,
             "workflow_execution_id": self._workflow_execution_id,
             "graph_sha256": self._graph_sha256,
             "start_request_sha256": self._start_request_sha256,
             "current_state": self._current_state,
-            "terminal": self._current_state in self._terminal_states,
+            "terminal": domain_terminal or runtime_status_id == "cancelled",
             "applied_events": list(self._events),
+            "runtime_status_id": runtime_status_id,
+            "acknowledged_cancellation_id": (
+                None
+                if self._cancellation_by_id is None
+                else self._cancellation_by_id["cancellation_request_id"]
+            ),
+            "acknowledged_cancellation_ref": (
+                None
+                if self._cancellation_by_id is None
+                else self._cancellation_by_id["reason_artifact_ref"]
+            ),
         }
-
-
-@dataclass(frozen=True)
-class TemporalDurableBackendAdapter:
-    """Cell-bound implementation of the generic durable backend contract."""
-
-    client: Client
-    binding: CellRuntimeBinding
-    registry: WorkflowRuntimeRegistry
-    task_queue: str
-
-    descriptor = TEMPORAL_DESCRIPTOR
-
-    def __post_init__(self) -> None:
-        self.binding.validate()
-        if self.binding.backend_id != "temporal":
-            raise ValueError("Temporal adapter requires a Temporal Cell binding")
-        if not self.task_queue or any(character.isspace() for character in self.task_queue):
-            raise ValueError("Temporal adapter requires a bounded task queue")
-
-    def build_worker(self) -> Worker:
-        """Build a worker that registers only the generic cursor workflow."""
-
-        return Worker(
-            self.client,
-            task_queue=self.task_queue,
-            workflows=[TemporalDurableCursorWorkflow],
-        )
-
-    def _validate_execution(self, execution: BackendExecutionRef) -> None:
-        if execution.backend_id != "temporal":
-            raise PermissionError("foreign backend execution ref")
-        if execution.backend_namespace != self.binding.backend_namespace:
-            raise PermissionError("Temporal execution crossed Cell namespace")
-
-    async def start(
-        self,
-        request: StartExecutionRequest,
-    ) -> BackendExecutionRef:
-        """Start or safely recover the same local workflow execution."""
-
-        request.validate()
-        if request.binding != self.binding:
-            raise PermissionError("Temporal start request crossed Cell binding")
-        registration = self.registry.get(request.envelope.workflow_id)
-        registration.validate()
-        if "temporal" not in registration.allowed_backend_ids:
-            raise PermissionError("workflow registration does not admit Temporal")
-        compiled_graph = compile_registered_graph(registration)
-        if request.graph != compiled_graph:
-            raise ValueError("Temporal start request uses a stale or forged graph")
-
-        try:
-            start_payload = request.to_backend_payload()
-            start_request_sha256 = _canonical_payload_sha256(start_payload)
-            handle = await self.client.start_workflow(
-                TemporalDurableCursorWorkflow.run,
-                start_payload,
-                id=request.envelope.workflow_execution_id,
-                task_queue=self.task_queue,
-                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
-                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-            )
-        except WorkflowAlreadyStartedError:
-            handle = self.client.get_workflow_handle(
-                request.envelope.workflow_execution_id
-            )
-        execution = BackendExecutionRef(
-            backend_id="temporal",
-            backend_namespace=self.binding.backend_namespace,
-            backend_execution_id=handle.id,
-            workflow_execution_id=request.envelope.workflow_execution_id,
-        )
-        snapshot = await self.query(execution)
-        if (
-            snapshot.workflow_id != request.graph.workflow_id
-            or snapshot.graph_sha256 != request.graph.graph_sha256
-            or snapshot.start_request_sha256 != start_request_sha256
-        ):
-            raise RuntimeError("Temporal workflow id collides with another start request")
-        return execution
-
-    async def signal(
-        self,
-        execution: BackendExecutionRef,
-        event: ExternalEvent,
-    ) -> ExecutionSnapshot:
-        """Apply one transition through an acknowledged, idempotent Update."""
-
-        self._validate_execution(execution)
-        event.validate()
-        if event.workflow_execution_id != execution.workflow_execution_id:
-            raise PermissionError("Temporal event crossed local workflow identity")
-        handle = self.client.get_workflow_handle(execution.backend_execution_id)
-        raw = await handle.execute_update(
-            TemporalDurableCursorWorkflow.apply_external_event,
-            event.to_backend_payload(),
-            id=event.event_id,
-        )
-        return _snapshot_from_payload(execution, raw)
-
-    async def query(self, execution: BackendExecutionRef) -> ExecutionSnapshot:
-        """Query the current durable cursor without reading customer content."""
-
-        self._validate_execution(execution)
-        handle = self.client.get_workflow_handle(execution.backend_execution_id)
-        raw = await handle.query(TemporalDurableCursorWorkflow.execution_snapshot)
-        return _snapshot_from_payload(execution, raw)
-
-    async def cancel(self, execution: BackendExecutionRef, reason: str) -> None:
-        """Cancel one validated execution with a bounded operator reason."""
-
-        self._validate_execution(execution)
-        if not reason.strip() or len(reason) > 256:
-            raise ValueError("Temporal cancellation requires a bounded reason")
-        handle = self.client.get_workflow_handle(execution.backend_execution_id)
-        await handle.cancel(reason=reason)
-
-    async def recover(self, execution: BackendExecutionRef) -> ExecutionSnapshot:
-        """Recover by querying server-authoritative state after worker restart."""
-
-        return await self.query(execution)
-
-    async def list_events(
-        self,
-        execution: BackendExecutionRef,
-    ) -> Sequence[BackendEvent]:
-        """Map admitted Temporal Updates back to local execution identity."""
-
-        snapshot = await self.query(execution)
-        return tuple(
-            BackendEvent(
-                backend_id="temporal",
-                backend_execution_id=execution.backend_execution_id,
-                workflow_execution_id=execution.workflow_execution_id,
-                event_type=event.event_type,
-                payload_ref=event.evidence_ref,
-            )
-            for event in snapshot.applied_events
-        )
 
 
 @dataclass(frozen=True)
@@ -458,7 +368,7 @@ class TemporalWorkflowReleaseBackendAdapter:
             raise RuntimeError("Temporal workflow id collides with another start request")
         return execution
 
-    async def signal(
+    async def apply_external_event(
         self,
         execution: BackendExecutionRef,
         event: ExternalEvent,
@@ -477,6 +387,15 @@ class TemporalWorkflowReleaseBackendAdapter:
         )
         return _snapshot_from_payload(execution, raw)
 
+    async def signal(
+        self,
+        execution: BackendExecutionRef,
+        event: ExternalEvent,
+    ) -> ExecutionSnapshot:
+        """Compatibility alias for predecessor coordinator callers."""
+
+        return await self.apply_external_event(execution, event)
+
     async def query(self, execution: BackendExecutionRef) -> ExecutionSnapshot:
         """Query the current target-release cursor."""
 
@@ -487,10 +406,58 @@ class TemporalWorkflowReleaseBackendAdapter:
         )
         return _snapshot_from_payload(execution, raw)
 
+    async def request_cancellation(
+        self,
+        execution: BackendExecutionRef,
+        request: RuntimeCancellationRequest,
+    ) -> ExecutionSnapshot:
+        """Apply one typed, acknowledged Runtime cancellation Update."""
+
+        self._validate_execution(execution)
+        request.validate()
+        if request.workflow_execution_id != execution.workflow_execution_id:
+            raise PermissionError("Temporal cancellation crossed local execution")
+        handle = self.client.get_workflow_handle(execution.backend_execution_id)
+        raw = await handle.execute_update(
+            TemporalDurableCursorWorkflow.request_cancellation,
+            request.as_dict(),
+            id=request.cancellation_request_id,
+        )
+        return _snapshot_from_payload(execution, raw)
+
     async def recover(self, execution: BackendExecutionRef) -> ExecutionSnapshot:
         """Recover the server-authoritative cursor after host re-entry."""
 
         return await self.query(execution)
+
+    async def list_events(
+        self,
+        execution: BackendExecutionRef,
+    ) -> Sequence[BackendEvent]:
+        """Map target cursor commands into local Runtime event identity."""
+
+        snapshot = await self.query(execution)
+        events = [
+            BackendEvent(
+                backend_id="temporal",
+                backend_execution_id=execution.backend_execution_id,
+                workflow_execution_id=execution.workflow_execution_id,
+                event_type=event.event_type,
+                payload_ref=event.evidence_ref,
+            )
+            for event in snapshot.applied_events
+        ]
+        if snapshot.acknowledged_cancellation_id is not None:
+            events.append(
+                BackendEvent(
+                    backend_id="temporal",
+                    backend_execution_id=execution.backend_execution_id,
+                    workflow_execution_id=execution.workflow_execution_id,
+                    event_type="runtime_cancellation",
+                    payload_ref=snapshot.acknowledged_cancellation_ref,
+                )
+            )
+        return tuple(events)
 
 
 def _snapshot_from_payload(
@@ -505,6 +472,9 @@ def _snapshot_from_payload(
         "current_state",
         "terminal",
         "applied_events",
+        "runtime_status_id",
+        "acknowledged_cancellation_id",
+        "acknowledged_cancellation_ref",
     }
     if set(payload) != expected_keys:
         raise ValueError("Temporal execution snapshot has an invalid shape")
@@ -521,6 +491,17 @@ def _snapshot_from_payload(
         current_state=str(payload["current_state"]),
         terminal=bool(payload["terminal"]),
         applied_events=events,
+        runtime_status_id=str(payload["runtime_status_id"]),
+        acknowledged_cancellation_id=(
+            None
+            if payload["acknowledged_cancellation_id"] is None
+            else str(payload["acknowledged_cancellation_id"])
+        ),
+        acknowledged_cancellation_ref=(
+            None
+            if payload["acknowledged_cancellation_ref"] is None
+            else str(payload["acknowledged_cancellation_ref"])
+        ),
     )
     snapshot.validate()
     if snapshot.workflow_execution_id != execution.workflow_execution_id:

@@ -1,6 +1,11 @@
 """Release authority plus an explicit predecessor-registry compatibility export."""
 
 from .registry_release_registration import RuntimeReleaseBundle, RuntimeReleaseRegistry
+from .registry_postgres_persistence import (
+    PostgresRuntimeReleaseStore,
+    postgres_release_ddl,
+    serialize_registry_tables,
+)
 from .registry_workflow_registration import (
     WorkflowRuntimeRegistry,
     resolve_registration_reference,
@@ -31,12 +36,15 @@ __all__ = [
     "RUNTIME_STRUCTURAL_SOURCE_PATHS",
     "RuntimeImplementationBindingRegistration",
     "RuntimeLogicalResponsibilityRegistration",
+    "PostgresRuntimeReleaseStore",
     "RuntimeReleaseBundle",
     "RuntimeReleaseRegistry",
     "RuntimeSourceFileRegistration",
     "RuntimeSourceDirectoryRegistration",
     "WorkflowRuntimeRegistry",
+    "postgres_release_ddl",
     "resolve_registration_reference",
+    "serialize_registry_tables",
     "validate_registry_architecture_registration",
     "validate_runtime_architecture_registration",
 ]

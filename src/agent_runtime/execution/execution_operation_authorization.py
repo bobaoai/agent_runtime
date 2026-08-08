@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+from threading import RLock
 from typing import Callable, ClassVar, Protocol
 
 from ..contracts.execution_operation_definition import (
@@ -63,6 +64,7 @@ class InMemoryAuthorizationLedger:
     service_id: ClassVar[str] = "in_memory_authorization_ledger"
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._requests: dict[str, OperationAuthorizationRequest] = {}
         self._results: dict[str, BoundOperationAuthorization] = {}
 
@@ -72,29 +74,32 @@ class InMemoryAuthorizationLedger:
     ) -> BoundOperationAuthorization | None:
         """Return the committed result for an identical request, when present."""
 
-        existing_request = self._requests.get(request.authorization_request_ref)
-        if existing_request is not None and existing_request != request:
-            raise ValueError("authorization request ref collision")
-        return self._results.get(request.authorization_request_ref)
+        with self._lock:
+            existing_request = self._requests.get(request.authorization_request_ref)
+            if existing_request is not None and existing_request != request:
+                raise ValueError("authorization request ref collision")
+            return self._results.get(request.authorization_request_ref)
 
     def commit_request(self, request: OperationAuthorizationRequest) -> None:
         """Commit one exact request before Product Authorization is called."""
 
-        existing = self._requests.get(request.authorization_request_ref)
-        if existing is not None and existing != request:
-            raise ValueError("authorization request ref collision")
-        self._requests[request.authorization_request_ref] = request
+        with self._lock:
+            existing = self._requests.get(request.authorization_request_ref)
+            if existing is not None and existing != request:
+                raise ValueError("authorization request ref collision")
+            self._requests[request.authorization_request_ref] = request
 
     def commit_result(self, result: BoundOperationAuthorization) -> None:
         """Commit one terminal Product result without overwriting a conflict."""
 
         request_ref = result.request.authorization_request_ref
-        if request_ref not in self._requests:
-            raise RuntimeError("authorization request must commit before result")
-        existing = self._results.get(request_ref)
-        if existing is not None and existing != result:
-            raise ValueError("authorization result conflict")
-        self._results[request_ref] = result
+        with self._lock:
+            if request_ref not in self._requests:
+                raise RuntimeError("authorization request must commit before result")
+            existing = self._results.get(request_ref)
+            if existing is not None and existing != result:
+                raise ValueError("authorization result conflict")
+            self._results[request_ref] = result
 
 
 class RuntimeAuthorizationCoordinator:

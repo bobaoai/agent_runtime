@@ -1681,8 +1681,6 @@ class ContextBinding:
     recorded_at_utc: str
 
     def validate(self) -> None:
-        """Validate one candidate, evaluator, and result edge."""
-
         """Validate context lineage, reference, and compatibility hashes."""
 
         for label, value in (
@@ -1698,8 +1696,6 @@ class ContextBinding:
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
 
     def as_dict(self) -> dict[str, Any]:
-        """Return the validated JSON-ready evaluation coverage edge."""
-
         """Return a validated JSON-ready context binding."""
 
         self.validate()

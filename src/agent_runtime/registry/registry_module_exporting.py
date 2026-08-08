@@ -270,6 +270,8 @@ def load_skill_runtime_module_exports(
 ) -> tuple[RuntimeModuleExportSource, ...]:
     """Load every Module export in one Skill Package in stable order."""
 
+    if type(skill_id) is not str or not _SKILL_ID_PATTERN.fullmatch(skill_id):
+        raise ValueError("invalid skill_id")
     root = (
         project_root
         / CANONICAL_SKILL_PACKAGE_ROOT

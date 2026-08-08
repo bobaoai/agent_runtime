@@ -32,7 +32,6 @@ from claude_agent_sdk import (
     query,
 )
 
-from ..contracts.registry_release_definition import ModuleKind
 from ..contracts.ledger_lineage_definition import ModuleUsageObservation
 from ..contracts.execution_module_definition import (
     ModuleExecutorFailure,
@@ -44,17 +43,25 @@ from .invocation_tool_definition import (
     ModuleArtifactHost,
     ModuleProviderToolSessionFactory,
     ProviderToolDefinition,
+    validate_provider_tool_set,
 )
 from .invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     provider_output_schema,
-    validate_prompt_output_constraint,
-    validate_registered_output_schema,
+)
+from .invocation_context_preparation import (
+    InvocationExecutionExpectation,
+    prepare_registered_invocation_context,
+)
+from .invocation_failure_recording import build_provider_failure_detail
+from .invocation_schema_projection import transform_json_schema_nodes
+from .invocation_workspace_preparation import (
+    AttemptWorkspaceConflictError,
+    prepare_attempt_workspace,
 )
 
 
 _MCP_SERVER_NAME = "runtime_data_access"
-_FAILURE_RESPONSE_MAX_BYTES = 96 * 1024
 _DRAFT_WORKSPACE_TOOLS = ("Read", "Write", "Edit")
 
 
@@ -209,53 +216,15 @@ def _structured_output_format(compiled_static_body: str) -> dict[str, Any]:
         "else",
     }
 
-    def project(value: object) -> object:
-        if isinstance(value, dict):
-            return {
-                key: project(item)
-                for key, item in value.items()
-                if key not in unsupported_composition
-            }
-        if isinstance(value, list):
-            return [project(item) for item in value]
-        return value
-
-    provider_schema = project(schema)
-    if not isinstance(provider_schema, dict):
-        raise AssertionError("provider output schema must remain an object")
+    provider_schema = transform_json_schema_nodes(
+        schema,
+        lambda node: {
+            key: value
+            for key, value in node.items()
+            if key not in unsupported_composition
+        },
+    )
     return {"type": "json_schema", "schema": provider_schema}
-
-
-def _failure_detail_bytes(
-    *,
-    failure_class: str,
-    failure_code: str,
-    message: str,
-    provider_response: str,
-    provider_error_message: str | None,
-    transport_exit_code: int | None,
-    retryable: bool,
-) -> bytes:
-    response_bytes = provider_response.encode("utf-8")
-    bounded = response_bytes[:_FAILURE_RESPONSE_MAX_BYTES]
-    payload = {
-        "failure_class": failure_class,
-        "failure_code": failure_code,
-        "message": message,
-        "provider_error_code": None,
-        "provider_error_message": provider_error_message,
-        "transport_exit_code": transport_exit_code,
-        "retryable": retryable,
-        "provider_response": bounded.decode("utf-8", errors="replace"),
-        "provider_response_byte_size": len(response_bytes),
-        "provider_response_truncated": len(bounded) != len(response_bytes),
-    }
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
 
 
 def _is_quota_response(provider_response: str) -> bool:
@@ -337,72 +306,27 @@ class _ClaudeAgentSdkExecutorBase:
         self._max_turns = max_turns
 
     def execute(self, request: ModuleExecutorRequest) -> ModuleExecutorResult:
-        if type(request) is not ModuleExecutorRequest:
-            raise ValueError("request must be an exact ModuleExecutorRequest")
+        prepared = prepare_registered_invocation_context(
+            request=request,
+            release_registry=self._release_registry,
+            artifact_host=self._artifact_host,
+            expectation=InvocationExecutionExpectation(
+                executor_adapter_id=self.executor_adapter_id,
+                executor_adapter_revision=self.executor_adapter_revision,
+                transport_kind="claude_agent_sdk",
+                execution_mode=self.expected_execution_mode,
+                semantic_input_delivery_mode=(
+                    self.expected_semantic_input_delivery_mode
+                ),
+                attempt_workspace_policy=self.expected_attempt_workspace_policy,
+                network_policy=self.expected_network_policy,
+                tool_policy=None if self.requires_gateway else (),
+            ),
+        )
         module = request.module
         profile = request.execution_profile
-        module.validate()
-        profile.validate()
-        if module.module_kind is not ModuleKind.AGENT:
-            raise ValueError("Claude SDK Executor accepts only Agent Modules")
-        if profile.executor_adapter_id != self.executor_adapter_id:
-            raise ValueError("Execution Profile targets another Executor adapter")
-        if profile.executor_adapter_revision != self.executor_adapter_revision:
-            raise ValueError("Execution Profile targets another Executor revision")
-        if profile.transport_kind != "claude_agent_sdk":
-            raise ValueError("Claude SDK Executor requires claude_agent_sdk transport")
-        if profile.transport_kind not in module.compatible_transport_kinds:
-            raise ValueError("Execution Profile transport is incompatible with Module")
-        if profile.execution_mode != self.expected_execution_mode:
-            raise ValueError("Execution Profile execution mode differs from Executor mode")
-        if (
-            profile.semantic_input_delivery_mode
-            != self.expected_semantic_input_delivery_mode
-        ):
-            raise ValueError(
-                "Execution Profile semantic input delivery differs from Executor mode"
-            )
-        if (
-            profile.attempt_workspace_policy
-            != self.expected_attempt_workspace_policy
-        ):
-            raise ValueError(
-                "Execution Profile workspace policy differs from Executor mode"
-            )
-        if profile.network_policy != self.expected_network_policy:
-            raise ValueError("Execution Profile network policy differs from Executor mode")
-        if not self.requires_gateway and profile.tool_policy:
-            raise ValueError("Claude inline Executor requires an empty tool policy")
-        if module.prompt_bundle_ref is None or module.prompt_bundle_sha256 is None:
-            raise ValueError("Agent Module lacks an exact Prompt Bundle")
-        prompt_bundle = self._release_registry.get_prompt_bundle(
-            module.prompt_bundle_ref,
-            module.prompt_bundle_sha256,
-        )
-        output_schema_asset = self._release_registry.get_schema_asset(
-            module.output_schema_ref,
-            module.output_schema_sha256,
-        )
-        registered_output_schema = validate_registered_output_schema(
-            compiled_static_body=prompt_bundle.compiled_static_body,
-            canonical_schema=output_schema_asset.schema_document(),
-        )
-        if request.prompt_envelope_ref is None or request.prompt_envelope_sha256 is None:
-            raise ValueError("Claude SDK execution requires a final Prompt Envelope")
-        prompt_bytes = self._artifact_host.read_bytes(
-            request.prompt_envelope_ref,
-            request.prompt_envelope_sha256,
-        )
-        if _sha256(prompt_bytes) != request.prompt_envelope_sha256:
-            raise ValueError("Prompt Envelope content hash mismatch")
-        try:
-            prompt = prompt_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError("Prompt Envelope must be exact UTF-8 provider text") from exc
-        validate_prompt_output_constraint(
-            prompt=prompt,
-            output_constraint_mode=profile.output_constraint_mode,
-        )
+        registered_output_schema = prepared.registered_output_schema
+        prompt = prepared.prompt
 
         session = None
         definitions: tuple[ProviderToolDefinition, ...] = ()
@@ -411,15 +335,10 @@ class _ClaudeAgentSdkExecutorBase:
                 raise ValueError("Claude Gateway Executor requires a tool session factory")
             session = self._tool_session_factory.open_session(request)
             definitions = session.definitions
-        for definition in definitions:
-            if type(definition) is not ProviderToolDefinition:
-                raise ValueError("tool session returned an invalid definition")
-            definition.validate()
-        declared_names = tuple(definition.tool_name for definition in definitions)
-        if declared_names != profile.tool_policy:
-            raise PermissionError(
-                "Gateway tool session differs from the selected Execution Profile"
-            )
+        declared_names = validate_provider_tool_set(
+            definitions,
+            profile.tool_policy,
+        )
 
         full_names = tuple(
             f"mcp__{_MCP_SERVER_NAME}__{tool_name}"
@@ -475,10 +394,19 @@ class _ClaudeAgentSdkExecutorBase:
                 interrupt=True,
             )
 
-        workspace = self._workspace_root / request.attempt_id
         try:
-            workspace.mkdir(parents=True, exist_ok=False)
-        except OSError as exc:
+            workspace = prepare_attempt_workspace(
+                workspace_root=self._workspace_root,
+                attempt_identity={
+                    "attempt_id": request.attempt_id,
+                    "module_run_id": request.module_run_id,
+                    "variant_id": request.variant_id,
+                    "module_release_sha256": module.release_sha256,
+                    "execution_profile_sha256": profile.release_sha256,
+                    "prompt_envelope_sha256": request.prompt_envelope_sha256,
+                },
+            )
+        except (OSError, AttemptWorkspaceConflictError) as exc:
             self._raise_failure(
                 request=request,
                 failure_class="workspace_initialization_failure",
@@ -707,7 +635,7 @@ class _ClaudeAgentSdkExecutorBase:
             variant_id=request.variant_id,
             attempt_id=request.attempt_id,
             failure_class=failure_class,
-            content=_failure_detail_bytes(
+            content=build_provider_failure_detail(
                 failure_class=failure_class,
                 failure_code=failure_code,
                 message=message,

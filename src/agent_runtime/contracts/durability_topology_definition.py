@@ -14,15 +14,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from types import MappingProxyType
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from .registry_workflow_definition import (
     validate_capability_id,
     validate_runtime_ref,
 )
+from .registry_contract_validation import validate_bool, validate_id
 
 
-_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _OPAQUE_REF = re.compile(r"^[a-z][a-z0-9+.-]{0,63}:[^\s]{1,447}$")
 _SECRET_MARKERS = ("password=", "token=", "secret=", "apikey=", "api_key=")
@@ -64,14 +64,6 @@ class DeploymentMode(StrEnum):
     POOLED = "pooled"
 
 
-class PrincipalRole(StrEnum):
-    """Initial product roles used for server-authoritative tenant routing."""
-
-    ADMIN = "admin"
-    ANALYST = "analyst"
-    VIEWER = "viewer"
-
-
 class BackendAdmissionState(StrEnum):
     """How far a durable backend has progressed through product admission."""
 
@@ -93,8 +85,7 @@ class BackendEvaluationRole(StrEnum):
 
 
 def _validate_id(label: str, value: str) -> None:
-    if not isinstance(value, str) or not _ID.fullmatch(value):
-        raise ValueError(f"invalid {label}: {value!r}")
+    validate_id(label, value)
 
 
 def _validate_opaque_ref(label: str, value: str) -> None:
@@ -234,7 +225,6 @@ class PrincipalContext:
 
     principal_id: str
     tenant_id: str
-    role: PrincipalRole
 
     def validate(self) -> None:
         """Validate authenticated principal and tenant identity."""
@@ -844,44 +834,11 @@ class WorkflowGraphProjection:
     def allowed_targets(self, state_id: str) -> tuple[str, ...]:
         """Return the declared successors for one state, failing on unknown state."""
 
-        self.validate()
+        _validate_id("state_id", state_id)
         for state in self.states:
             if state.state_id == state_id:
                 return state.allowed_next_state_ids
         raise KeyError(f"unknown projected workflow state: {state_id}")
-
-
-@dataclass(frozen=True)
-class StartExecutionRequest:
-    """Frozen Cell, execution, and registry-derived graph sent to a backend."""
-
-    binding: CellRuntimeBinding
-    envelope: ExecutionEnvelope
-    graph: WorkflowGraphProjection
-
-    def validate(self) -> None:
-        """Reject cross-Cell, cross-workflow, or stale-graph start requests."""
-
-        self.envelope.validate(self.binding)
-        self.graph.validate()
-        if self.envelope.workflow_id != self.graph.workflow_id:
-            raise ValueError("execution workflow does not match graph projection")
-        if (
-            self.envelope.workflow_contract_version
-            != self.graph.workflow_contract_version
-        ):
-            raise ValueError("execution contract does not match graph projection")
-
-    def to_backend_payload(self) -> dict[str, Any]:
-        """Return the complete content-free durable start payload."""
-
-        self.validate()
-        payload = {
-            "execution": self.envelope.to_backend_payload(self.binding),
-            "graph": self.graph.to_backend_payload(),
-        }
-        assert_ref_only_backend_payload(payload)
-        return payload
 
 
 @dataclass(frozen=True)
@@ -966,6 +923,9 @@ class ExecutionSnapshot:
     current_state: str
     terminal: bool
     applied_events: tuple[ExternalEvent, ...]
+    runtime_status_id: str = "running"
+    acknowledged_cancellation_id: str | None = None
+    acknowledged_cancellation_ref: str | None = None
 
     def validate(self) -> None:
         """Validate snapshot identity and its recorded external events."""
@@ -974,11 +934,35 @@ class ExecutionSnapshot:
         _validate_token("backend_execution_id", self.backend_execution_id)
         _validate_id("workflow_execution_id", self.workflow_execution_id)
         _validate_id("workflow_id", self.workflow_id)
+        _validate_id("runtime_status_id", self.runtime_status_id)
         if not _SHA256.fullmatch(self.graph_sha256):
             raise ValueError("invalid snapshot graph sha256")
         if not _SHA256.fullmatch(self.start_request_sha256):
             raise ValueError("invalid snapshot start request sha256")
         _validate_id("current_state", self.current_state)
+        validate_bool("terminal", self.terminal)
+        if self.runtime_status_id not in {"running", "completed", "cancelled"}:
+            raise ValueError("invalid durable Runtime status")
+        expected_terminal = self.runtime_status_id != "running"
+        if self.terminal is not expected_terminal:
+            raise ValueError("terminal flag must match durable Runtime status")
+        if (self.acknowledged_cancellation_id is None) != (
+            self.acknowledged_cancellation_ref is None
+        ):
+            raise ValueError("cancellation acknowledgement fields must be paired")
+        if self.acknowledged_cancellation_id is not None:
+            _validate_id(
+                "acknowledged_cancellation_id",
+                self.acknowledged_cancellation_id,
+            )
+            _validate_opaque_ref(
+                "acknowledged_cancellation_ref",
+                self.acknowledged_cancellation_ref,
+            )
+            if self.runtime_status_id != "cancelled":
+                raise ValueError(
+                    "cancellation acknowledgement requires cancelled status"
+                )
         seen_event_ids: set[str] = set()
         for event in self.applied_events:
             event.validate()
@@ -987,53 +971,6 @@ class ExecutionSnapshot:
             if event.event_id in seen_event_ids:
                 raise ValueError("snapshot event ids must be unique")
             seen_event_ids.add(event.event_id)
-
-
-@runtime_checkable
-class DurableBackendAdapter(Protocol):
-    """Async control contract implemented by every durable backend adapter."""
-
-    descriptor: BackendDescriptor
-
-    async def start(
-        self,
-        request: StartExecutionRequest,
-    ) -> BackendExecutionRef:
-        """Start one workflow-scoped durable execution."""
-
-        ...
-
-    async def signal(
-        self,
-        execution: BackendExecutionRef,
-        event: ExternalEvent,
-    ) -> ExecutionSnapshot:
-        """Apply one external event and return the acknowledged snapshot."""
-
-        ...
-
-    async def query(self, execution: BackendExecutionRef) -> ExecutionSnapshot:
-        """Return the current content-free execution snapshot."""
-
-        ...
-
-    async def cancel(self, execution: BackendExecutionRef, reason: str) -> None:
-        """Request bounded cancellation for one durable execution."""
-
-        ...
-
-    async def recover(self, execution: BackendExecutionRef) -> ExecutionSnapshot:
-        """Recover server-authoritative execution state after interruption."""
-
-        ...
-
-    async def list_events(
-        self,
-        execution: BackendExecutionRef,
-    ) -> Sequence[BackendEvent]:
-        """Return backend events mapped into local workflow identity."""
-
-        ...
 
 
 class BackendCandidateSet:

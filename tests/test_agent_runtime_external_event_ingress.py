@@ -11,7 +11,9 @@ from agent_runtime.contracts.execution_operation_definition import (
     ExecutionAuthorizationStatusEvidence,
     ExecutionControlFenceStatus,
 )
-from agent_runtime.contracts.durability_backend_definition import ExecutionSnapshot
+from agent_runtime.contracts.execution_event_definition import (
+    ExternalEventExecutionSnapshot,
+)
 from agent_runtime.contracts.registry_release_definition import (
     ModuleEntryPolicy,
     ModuleKind,
@@ -73,7 +75,11 @@ def _module() -> RuntimeModuleRelease:
     )
 
 
-def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
+def _workflow(
+    module: RuntimeModuleRelease,
+    *,
+    approval_is_terminal: bool = False,
+) -> WorkflowRelease:
     return WorkflowRelease.build(
         workflow_id="research_external_event",
         workflow_version="1.0.0",
@@ -93,6 +99,15 @@ def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
                 input_mapping_ref="input-map:waiting@1",
                 input_mapping_sha256="8" * 64,
             ),
+        ) if approval_is_terminal else (
+            WorkflowNodeBinding(
+                node_id="waiting_state",
+                node_kind=WorkflowNodeKind.MODULE,
+                module_release_ref=module.release_ref,
+                module_release_sha256=module.release_sha256,
+                input_mapping_ref="input-map:waiting@1",
+                input_mapping_sha256="8" * 64,
+            ),
             WorkflowNodeBinding(
                 node_id="next_state",
                 node_kind=WorkflowNodeKind.MODULE,
@@ -103,6 +118,13 @@ def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
             ),
         ),
         edges=(
+            WorkflowEdge(
+                source_node_id="waiting_state",
+                outcome_id="approval_received",
+                target_node_id=None if approval_is_terminal else "next_state",
+                terminal=approval_is_terminal,
+            ),
+        ) if approval_is_terminal else (
             WorkflowEdge(
                 source_node_id="waiting_state",
                 outcome_id="approval_received",
@@ -126,9 +148,10 @@ def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
 def _catalog(
     *,
     workflow_state: ReleaseAdmissionState = ReleaseAdmissionState.ACTIVE,
+    approval_is_terminal: bool = False,
 ) -> tuple[RuntimeReleaseRegistry, WorkflowRelease]:
     module = _module()
-    workflow = _workflow(module)
+    workflow = _workflow(module, approval_is_terminal=approval_is_terminal)
     admissions = [
         ReleaseAdmissionRecord.build(
             admission_id="workflow_admission_candidate_001",
@@ -165,8 +188,8 @@ def _catalog(
     return catalog, workflow
 
 
-def _snapshot() -> ExecutionSnapshot:
-    return ExecutionSnapshot(
+def _snapshot() -> ExternalEventExecutionSnapshot:
+    return ExternalEventExecutionSnapshot(
         backend_id="temporal_backend_001",
         backend_execution_id="backend-execution-001",
         workflow_execution_id="workflow_execution_001",
@@ -299,7 +322,7 @@ def _prepare(
     release_registry: RuntimeReleaseRegistry,
     workflow: WorkflowRelease,
     binding: ExecutionAuthorizationBinding,
-    snapshot: ExecutionSnapshot,
+    snapshot: ExternalEventExecutionSnapshot,
     token: ExecutionSnapshotToken,
     request: ExternalEventIngressRequest,
     authorization: ExternalActionAuthorizationEvidence,
@@ -379,6 +402,94 @@ def test_ingress_application_and_acknowledgement_are_exact_and_idempotent() -> N
     )
     assert acknowledgement.application_record_ref == application.application_record_ref
     assert acknowledgement.event_ref == first_ingress.event.event_ref
+
+
+def test_ingress_replay_returns_committed_record_across_retry_timestamps() -> None:
+    catalog, workflow = _catalog()
+    binding = _binding(workflow)
+    snapshot = _snapshot()
+    token = _token()
+    request = _request(token)
+    authorization = _authorization(request, binding)
+    service = InMemoryExternalEventIngress()
+
+    first = _prepare(
+        service,
+        release_registry=catalog,
+        workflow=workflow,
+        binding=binding,
+        snapshot=snapshot,
+        token=token,
+        request=request,
+        authorization=authorization,
+    )
+    replay = service.prepare_ingress(
+        request=request,
+        trusted_context=_context(),
+        authorization=authorization,
+        execution_binding=binding,
+        status_evidence=_status(binding),
+        snapshot=snapshot,
+        snapshot_token=token,
+        release_registry=catalog,
+        workflow_release_ref=workflow.release_ref,
+        workflow_release_sha256=workflow.release_sha256,
+        claim_at_utc="2026-08-05T12:00:01Z",
+    )
+
+    assert replay is first
+    assert replay.recorded_at_utc == NOW
+
+
+def test_terminal_external_event_targets_runtime_completed_state() -> None:
+    catalog, workflow = _catalog(approval_is_terminal=True)
+    binding = _binding(workflow)
+    token = _token()
+    request = _request(token)
+
+    ingress = _prepare(
+        InMemoryExternalEventIngress(),
+        release_registry=catalog,
+        workflow=workflow,
+        binding=binding,
+        snapshot=_snapshot(),
+        token=token,
+        request=request,
+        authorization=_authorization(request, binding),
+    )
+
+    assert ingress.event.target_domain_state == "completed"
+
+
+def test_application_rejects_snapshot_that_does_not_match_its_token() -> None:
+    catalog, workflow = _catalog()
+    binding = _binding(workflow)
+    snapshot = _snapshot()
+    token = _token()
+    request = _request(token)
+    service = InMemoryExternalEventIngress()
+    ingress = _prepare(
+        service,
+        release_registry=catalog,
+        workflow=workflow,
+        binding=binding,
+        snapshot=snapshot,
+        token=token,
+        request=request,
+        authorization=_authorization(request, binding),
+    )
+
+    with pytest.raises(PermissionError, match="stale_external_action"):
+        service.apply(
+            ingress=ingress,
+            current_snapshot=replace(
+                snapshot,
+                workflow_execution_id="workflow_execution_other",
+            ),
+            current_snapshot_token=token,
+            current_status_evidence=_status(binding),
+            claim_at_utc=NOW,
+        )
 
 
 def test_deny_or_unadmitted_workflow_produces_no_ingress_record() -> None:

@@ -138,6 +138,13 @@ by a new integration, and retire with the corresponding debt path; a
 structural `__init__.py` does not turn the imported predecessor into target
 implementation.
 
+`0.1.0.dev0` is the first standalone extraction and has no tagged public wheel
+predecessor. It intentionally does not recreate the former host repository's
+physical `postgres`, `provider`, or `review` packages. A host must migrate
+those vendored imports to the registered `registry`, `invocation`,
+`inspection`, and `ledger` surfaces before pinning the first standalone
+release; this wheel is not an in-place upgrade until that migration gate passes.
+
 ## Release registration
 
 A domain plugin keeps each Module's editable source together: its instruction,

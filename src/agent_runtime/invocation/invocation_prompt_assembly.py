@@ -6,7 +6,11 @@ import hashlib
 import json
 
 from ..contracts.execution_module_definition import ModuleInputBinding
-from .invocation_schema_projection import task_plane_output_schema
+from .invocation_schema_projection import (
+    resolve_local_schema_reference,
+    task_plane_output_schema,
+    transform_json_schema_nodes,
+)
 
 
 PROMPT_ONLY_JSON = "prompt_only_json"
@@ -148,19 +152,15 @@ def codex_native_output_schema(
             return projected
         return {"anyOf": [projected, {"type": "null"}]}
 
-    def project(value: object) -> object:
-        if isinstance(value, list):
-            return [project(item) for item in value]
-        if not isinstance(value, dict):
-            return value
+    def project_node(node: dict[str, object]) -> dict[str, object]:
         projected = {
-            key: project(item)
-            for key, item in value.items()
+            key: item
+            for key, item in node.items()
             if key not in _CODEX_NATIVE_UNSUPPORTED_SCHEMA_KEYS
         }
         properties = projected.get("properties")
         if isinstance(properties, dict):
-            canonical_required = value.get("required", [])
+            canonical_required = node.get("required", [])
             required_names = (
                 set(canonical_required)
                 if isinstance(canonical_required, list)
@@ -174,7 +174,10 @@ def codex_native_output_schema(
             projected["additionalProperties"] = False
         return projected
 
-    projected = project(provider_output_schema(compiled_static_body))
+    projected = transform_json_schema_nodes(
+        provider_output_schema(compiled_static_body),
+        project_node,
+    )
     if not isinstance(projected, dict) or projected.get("type") != "object":
         raise ValueError("Codex native output schema root must be one object")
     _validate_codex_native_schema(projected)
@@ -248,6 +251,11 @@ def normalize_codex_native_output(
     ) -> bool:
         """Return whether null is meaningful in the registered task schema."""
 
+        schema = resolve_local_schema_reference(
+            schema,
+            canonical_schema,
+            seen_refs=seen_refs,
+        )
         if not isinstance(schema, dict):
             return False
         declared_type = schema.get("type")
@@ -267,22 +275,10 @@ def normalize_codex_native_output(
                 for option in alternatives
             ):
                 return True
-        reference = schema.get("$ref")
-        if (
-            isinstance(reference, str)
-            and reference.startswith("#/$defs/")
-            and reference not in seen_refs
-        ):
-            definition_name = reference.removeprefix("#/$defs/")
-            definitions = canonical_schema.get("$defs", {})
-            if isinstance(definitions, dict):
-                return canonical_schema_allows_null(
-                    definitions.get(definition_name, {}),
-                    seen_refs=seen_refs | {reference},
-                )
         return False
 
     def normalize(value: object, schema: object) -> object:
+        schema = resolve_local_schema_reference(schema, canonical_schema)
         if isinstance(value, list):
             item_schema = schema.get("items", {}) if isinstance(schema, dict) else {}
             return [normalize(item, item_schema) for item in value]

@@ -110,3 +110,16 @@ def test_runtime_cancellation_is_authorized_and_snapshot_bound() -> None:
 
     with pytest.raises(ValueError, match="expected_snapshot_sha256"):
         replace(request, expected_snapshot_sha256="invalid").validate()
+
+
+@pytest.mark.parametrize(
+    "recorded_at_utc",
+    (
+        "2026-08-08T12:00:00+05:30",
+        "2026-08-08T12:00:00+00:00",
+        "2026-08-08T12:00:00",
+    ),
+)
+def test_host_contracts_require_canonical_z_utc(recorded_at_utc: str) -> None:
+    with pytest.raises(ValueError, match="ending in Z"):
+        replace(_start_request(), recorded_at_utc=recorded_at_utc).validate()

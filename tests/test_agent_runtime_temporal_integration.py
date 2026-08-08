@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+pytest.importorskip("temporalio")
+
 from temporalio.api.history.v1 import History
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker

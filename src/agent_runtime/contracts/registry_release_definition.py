@@ -8,7 +8,6 @@ opaque; Runtime validates identity, hashes, dependency closure, and lifecycle.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from enum import StrEnum
 import hashlib
 import json
@@ -23,6 +22,7 @@ from .registry_contract_validation import (
     validate_sha256,
     validate_snake_case_name,
     validate_string_tuple,
+    validate_utc_timestamp,
 )
 
 
@@ -55,17 +55,6 @@ def _validate_optional_opaque_ref(label: str, value: Any) -> None:
 def _validate_optional_sha256(label: str, value: Any) -> None:
     if value is not None:
         validate_sha256(label, value)
-
-
-def _validate_utc(label: str, value: Any) -> None:
-    if type(value) is not str or not value.endswith("Z"):
-        raise ValueError(f"invalid {label}: UTC timestamp ending in Z required")
-    try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
-    except ValueError as exc:
-        raise ValueError(f"invalid {label}: UTC timestamp required") from exc
-    if parsed.utcoffset() is None or parsed.utcoffset().total_seconds() != 0:
-        raise ValueError(f"invalid {label}: UTC timestamp required")
 
 
 class ModuleKind(StrEnum):
@@ -648,6 +637,8 @@ class ExecutionProfileRelease:
             item_validator=lambda label, value: validate_id(label, value),
             require_non_empty=False,
         )
+        if len(self.tool_policy) != len(set(self.tool_policy)):
+            raise ValueError("Execution Profile tool_policy must be unique")
         if self.network_policy not in {
             "denied",
             "gateway_only",
@@ -1422,7 +1413,7 @@ class ReleaseAdmissionRecord:
             unique_key_label="member_ref",
             require_non_empty=False,
         )
-        _validate_utc("recorded_at_utc", self.recorded_at_utc)
+        validate_utc_timestamp("recorded_at_utc", self.recorded_at_utc)
         validate_sha256("admission_sha256", self.admission_sha256)
         if self.admission_sha256 != _canonical_sha256(self._payload()):
             raise ValueError("release admission hash mismatch")

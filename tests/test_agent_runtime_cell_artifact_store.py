@@ -75,6 +75,32 @@ def test_cell_artifact_store_maps_provider_output_schema_to_domain_kind() -> Non
     assert output.output_sha256 == _sha('{"status":"drafted"}')
 
 
+def test_module_output_idempotency_identity_is_tuple_unambiguous() -> None:
+    store = InMemoryCellArtifactStore()
+    common = {
+        "logical_name": "result",
+        "schema_ref": "schema:module_output@v1",
+        "schema_sha256": "2" * 64,
+        "media_type": "application/json",
+    }
+    first = store.commit_output(
+        module_run_id="module_a_b",
+        variant_id="variant_c",
+        attempt_id="attempt_d",
+        content=b'{"value":1}',
+        **common,
+    )
+    second = store.commit_output(
+        module_run_id="module_a",
+        variant_id="b_variant_c",
+        attempt_id="attempt_d",
+        content=b'{"value":2}',
+        **common,
+    )
+
+    assert first.output_ref != second.output_ref
+
+
 def test_deterministic_output_registration_uses_same_store() -> None:
     store = InMemoryCellArtifactStore()
     result = store.record_execution_output(

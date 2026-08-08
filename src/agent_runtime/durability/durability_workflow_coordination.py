@@ -20,6 +20,7 @@ from ..contracts.registry_workflow_definition import (
 )
 from ..registry.registry_graph_projection import project_workflow_release_graph
 from ..contracts.execution_host_definition import RuntimeWorkflowStartRequest
+from ..contracts.durability_backend_definition import DurableBackendAdapter
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from ..contracts.durability_topology_definition import (
     BackendExecutionRef,
@@ -33,39 +34,15 @@ class DurableExecutionStopReason(StrEnum):
     """Reason a bounded coordinator call returned control to its caller."""
 
     TERMINAL = "terminal"
+    CANCELLED = "cancelled"
     WAIT = "wait"
     RETRYABLE_FAILURE = "retryable_failure"
     DISPATCH_LIMIT = "dispatch_limit"
 
 
-@runtime_checkable
-class DurableWorkflowCursor(Protocol):
-    """Backend-neutral cursor operations required by the coordinator."""
-
-    async def start(
-        self,
-        request: RuntimeWorkflowStartRequest,
-    ) -> BackendExecutionRef:
-        """Start or recover one exact Workflow Execution."""
-
-        ...
-
-    async def query(
-        self,
-        execution: BackendExecutionRef,
-    ) -> ExecutionSnapshot:
-        """Return the backend-authoritative cursor."""
-
-        ...
-
-    async def signal(
-        self,
-        execution: BackendExecutionRef,
-        event: ExternalEvent,
-    ) -> ExecutionSnapshot:
-        """Acknowledge one committed outcome and advance the cursor."""
-
-        ...
+# Temporary import compatibility; the coordinator consumes the full canonical
+# backend contract and no longer defines a second cursor protocol.
+DurableWorkflowCursor = DurableBackendAdapter
 
 
 @runtime_checkable
@@ -117,9 +94,17 @@ class DurableExecutionProgress:
             self.backend_execution.workflow_execution_id
         ):
             raise PermissionError("snapshot crossed Workflow Execution")
-        if self.stop_reason is DurableExecutionStopReason.TERMINAL:
+        if self.stop_reason in {
+            DurableExecutionStopReason.TERMINAL,
+            DurableExecutionStopReason.CANCELLED,
+        }:
             if not self.snapshot.terminal:
                 raise ValueError("terminal progress requires a terminal snapshot")
+            if (
+                self.stop_reason is DurableExecutionStopReason.CANCELLED
+                and self.snapshot.runtime_status_id != "cancelled"
+            ):
+                raise ValueError("cancelled progress requires cancelled Runtime status")
         elif self.snapshot.terminal:
             raise ValueError("nonterminal progress cannot carry a terminal snapshot")
         if self.stop_reason is DurableExecutionStopReason.WAIT:
@@ -188,7 +173,7 @@ class DurableExecutionCoordinator:
             return self._progress(
                 execution,
                 snapshot,
-                DurableExecutionStopReason.TERMINAL,
+                self._terminal_stop_reason(snapshot),
                 dispatch_count=0,
                 last_outcome=None,
             )
@@ -226,7 +211,7 @@ class DurableExecutionCoordinator:
                     outcome,
                 )
 
-            snapshot = await self._cursor.signal(
+            snapshot = await self._cursor.apply_external_event(
                 execution,
                 ExternalEvent(
                     event_id=dispatch.dispatch_id,
@@ -242,7 +227,7 @@ class DurableExecutionCoordinator:
                 return self._progress(
                     execution,
                     snapshot,
-                    DurableExecutionStopReason.TERMINAL,
+                    self._terminal_stop_reason(snapshot),
                     dispatch_count,
                     outcome,
                 )
@@ -330,8 +315,6 @@ class DurableExecutionCoordinator:
         execution: BackendExecutionRef,
     ) -> None:
         snapshot.validate()
-        graph.validate()
-        execution.validate()
         if (
             snapshot.backend_id != execution.backend_id
             or snapshot.backend_execution_id != execution.backend_execution_id
@@ -352,9 +335,24 @@ class DurableExecutionCoordinator:
             state = event.target_state
         if snapshot.current_state != state:
             raise ValueError("durable cursor state differs from its event chain")
-        expected_terminal = state in graph.terminal_states
+        expected_domain_terminal = state in graph.terminal_states
+        expected_terminal = (
+            expected_domain_terminal or snapshot.runtime_status_id == "cancelled"
+        )
         if snapshot.terminal is not expected_terminal:
             raise ValueError("durable cursor terminal flag differs from graph state")
+        if snapshot.runtime_status_id == "completed" and not expected_domain_terminal:
+            raise ValueError("completed Runtime status requires terminal domain state")
+
+    @staticmethod
+    def _terminal_stop_reason(
+        snapshot: ExecutionSnapshot,
+    ) -> DurableExecutionStopReason:
+        return (
+            DurableExecutionStopReason.CANCELLED
+            if snapshot.runtime_status_id == "cancelled"
+            else DurableExecutionStopReason.TERMINAL
+        )
 
     @staticmethod
     def _validate_outcome(

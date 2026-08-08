@@ -29,13 +29,18 @@ from ..contracts.execution_operation_definition import (
     ExecutionAuthorizationStatusEvidence,
     ExecutionControlFenceStatus,
 )
-from ..contracts.durability_backend_definition import ExecutionSnapshot
+from ..contracts.execution_event_definition import (
+    ExternalEventExecutionSnapshot,
+    ExternalEventAcknowledgement,
+    ExternalEventIngressRequest,
+)
 from ..contracts.registry_release_definition import (
     ReleaseAdmissionState,
     ReleaseSubjectKind,
     WorkflowRelease,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
+from ..registry.registry_graph_projection import RUNTIME_TERMINAL_STATE_ID
 
 
 def _canonical_sha256(payload: Mapping[str, Any]) -> str:
@@ -132,80 +137,6 @@ class ExecutionSnapshotToken:
         record = cls(
             **fields,
             snapshot_sha256=_canonical_sha256(provisional._payload()),
-        )
-        record.validate()
-        return record
-
-
-@dataclass(frozen=True)
-class ExternalEventIngressRequest:
-    """One typed external-action intention supplied by the Product Gateway."""
-
-    record_type: ClassVar[str] = "external_event_ingress_request"
-
-    ingress_request_id: str
-    request_ref: str
-    idempotency_key: str
-    workflow_execution_id: str
-    expected_snapshot_ref: str
-    expected_snapshot_sha256: str
-    expected_transition_sequence: int
-    expected_domain_state: str
-    requested_event_type: str
-    decision_artifact_ref: str
-    decision_artifact_sha256: str
-    request_sha256: str
-
-    def _payload(self) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in self.__dict__.items()
-            if key != "request_sha256"
-        }
-
-    def validate(self) -> None:
-        """Validate the caller intention, expected snapshot, and request hash."""
-
-        for label, value in (
-            ("ingress_request_id", self.ingress_request_id),
-            ("idempotency_key", self.idempotency_key),
-            ("workflow_execution_id", self.workflow_execution_id),
-        ):
-            validate_id(label, value)
-        validate_snake_case_name(
-            "expected_domain_state", self.expected_domain_state
-        )
-        validate_snake_case_name(
-            "requested_event_type", self.requested_event_type
-        )
-        for label, value in (
-            ("request_ref", self.request_ref),
-            ("expected_snapshot_ref", self.expected_snapshot_ref),
-            ("decision_artifact_ref", self.decision_artifact_ref),
-        ):
-            validate_opaque_ref(label, value)
-        for label, value in (
-            ("expected_snapshot_sha256", self.expected_snapshot_sha256),
-            ("decision_artifact_sha256", self.decision_artifact_sha256),
-            ("request_sha256", self.request_sha256),
-        ):
-            validate_sha256(label, value)
-        validate_int(
-            "expected_transition_sequence",
-            self.expected_transition_sequence,
-            minimum=0,
-        )
-        if self.request_sha256 != _canonical_sha256(self._payload()):
-            raise ValueError("external-event ingress request hash mismatch")
-
-    @classmethod
-    def build(cls, **fields: Any) -> "ExternalEventIngressRequest":
-        """Build and validate one hash-complete ingress request."""
-
-        provisional = cls(**fields, request_sha256="0" * 64)
-        record = cls(
-            **fields,
-            request_sha256=_canonical_sha256(provisional._payload()),
         )
         record.validate()
         return record
@@ -532,47 +463,6 @@ class ExternalEventApplicationRecord:
         return record
 
 
-@dataclass(frozen=True)
-class ExternalEventAcknowledgement:
-    """Content-free backend acknowledgement of one applied event."""
-
-    record_type: ClassVar[str] = "external_event_acknowledgement"
-
-    event_ref: str
-    event_sha256: str
-    ingress_record_ref: str
-    ingress_record_sha256: str
-    application_record_ref: str
-    application_record_sha256: str
-    execution_snapshot_ref: str
-    execution_snapshot_sha256: str
-    backend_acknowledgement_ref: str
-    backend_acknowledgement_sha256: str
-
-    def validate(self) -> None:
-        """Validate the backend acknowledgement and applied snapshot refs."""
-
-        for label, value in (
-            ("event_ref", self.event_ref),
-            ("ingress_record_ref", self.ingress_record_ref),
-            ("application_record_ref", self.application_record_ref),
-            ("execution_snapshot_ref", self.execution_snapshot_ref),
-            ("backend_acknowledgement_ref", self.backend_acknowledgement_ref),
-        ):
-            validate_opaque_ref(label, value)
-        for label, value in (
-            ("event_sha256", self.event_sha256),
-            ("ingress_record_sha256", self.ingress_record_sha256),
-            ("application_record_sha256", self.application_record_sha256),
-            ("execution_snapshot_sha256", self.execution_snapshot_sha256),
-            (
-                "backend_acknowledgement_sha256",
-                self.backend_acknowledgement_sha256,
-            ),
-        ):
-            validate_sha256(label, value)
-
-
 class InMemoryExternalEventIngress:
     """Duplicate-safe conformance implementation of ingress and wait claim."""
 
@@ -590,7 +480,7 @@ class InMemoryExternalEventIngress:
         authorization: ExternalActionAuthorizationEvidence,
         execution_binding: ExecutionAuthorizationBinding,
         status_evidence: ExecutionAuthorizationStatusEvidence,
-        snapshot: ExecutionSnapshot,
+        snapshot: ExternalEventExecutionSnapshot,
         snapshot_token: ExecutionSnapshotToken,
         release_registry: RuntimeReleaseRegistry,
         workflow_release_ref: str,
@@ -637,8 +527,9 @@ class InMemoryExternalEventIngress:
             if edge.source_node_id == snapshot.domain_state_id
             and edge.outcome_id == request.requested_event_type
         )
-        if len(routes) != 1 or routes[0].target_node_id is None:
-            raise PermissionError("external event has no unique nonterminal graph edge")
+        if len(routes) != 1:
+            raise PermissionError("external event has no unique graph edge")
+        route = routes[0]
         event_id = _stable_id(
             "external_event",
             request.request_sha256,
@@ -657,7 +548,11 @@ class InMemoryExternalEventIngress:
             expected_snapshot_sha256=request.expected_snapshot_sha256,
             expected_transition_sequence=request.expected_transition_sequence,
             expected_domain_state=request.expected_domain_state,
-            target_domain_state=routes[0].target_node_id,
+            target_domain_state=(
+                RUNTIME_TERMINAL_STATE_ID
+                if route.terminal
+                else str(route.target_node_id)
+            ),
             event_type=request.requested_event_type,
             wait_policy_ref=snapshot.wait_policy_ref or "wait-policy:missing",
             decision_artifact_ref=request.decision_artifact_ref,
@@ -669,6 +564,12 @@ class InMemoryExternalEventIngress:
             execution_authorization_binding_ref=execution_binding.binding_ref,
             execution_authorization_binding_sha256=execution_binding.binding_sha256,
         )
+        existing = self._ingress_by_request.get(request.request_ref)
+        if existing is not None:
+            if existing.event != event:
+                raise ValueError("external-event ingress idempotency conflict")
+            return existing
+
         record_id = _stable_id(
             "external_event_ingress",
             request.request_sha256,
@@ -680,11 +581,6 @@ class InMemoryExternalEventIngress:
             event=event,
             recorded_at_utc=claim_at_utc,
         )
-        existing = self._ingress_by_request.get(request.request_ref)
-        if existing is not None:
-            if existing != record:
-                raise ValueError("external-event ingress idempotency conflict")
-            return existing
         self._ingress_by_request[request.request_ref] = record
         return record
 
@@ -692,7 +588,7 @@ class InMemoryExternalEventIngress:
         self,
         *,
         ingress: ExternalEventIngressRecord,
-        current_snapshot: ExecutionSnapshot,
+        current_snapshot: ExternalEventExecutionSnapshot,
         current_snapshot_token: ExecutionSnapshotToken,
         current_status_evidence: ExecutionAuthorizationStatusEvidence,
         claim_at_utc: str,
@@ -706,6 +602,17 @@ class InMemoryExternalEventIngress:
         validate_utc_timestamp("claim_at_utc", claim_at_utc)
         event = ingress.event
         if (
+            current_snapshot.workflow_execution_id
+            != current_snapshot_token.workflow_execution_id
+            or current_snapshot.domain_state_id
+            != current_snapshot_token.domain_state_id
+            or current_snapshot.runtime_status_id
+            != current_snapshot_token.runtime_status_id
+            or current_snapshot.transition_sequence
+            != current_snapshot_token.transition_sequence
+            or current_snapshot.workflow_execution_id
+            != event.workflow_execution_id
+            or
             current_snapshot_token.snapshot_ref != event.expected_snapshot_ref
             or current_snapshot_token.snapshot_sha256
             != event.expected_snapshot_sha256
@@ -804,7 +711,7 @@ class InMemoryExternalEventIngress:
         authorization: ExternalActionAuthorizationEvidence,
         execution_binding: ExecutionAuthorizationBinding,
         status_evidence: ExecutionAuthorizationStatusEvidence,
-        snapshot: ExecutionSnapshot,
+        snapshot: ExternalEventExecutionSnapshot,
         snapshot_token: ExecutionSnapshotToken,
         workflow: WorkflowRelease,
         claim_at_utc: str,

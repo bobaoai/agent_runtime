@@ -22,12 +22,15 @@ CANONICAL_DOCUMENTS = (
     "designDoc/the_agent_runtime.md",
     "designDoc/agent_runtime_00_execution_charter.md",
     "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+    "designDoc/agent_runtime_02_product_target_topology.md",
     "designDoc/agent_runtime_03_authorized_external_event_ingress.md",
     "designDoc/agent_runtime_04_publication_transaction_contract.md",
+    "designDoc/agent_runtime_05_delivery_roadmap.md",
     "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     "designDoc/agent_runtime_07_temporal_durable_adapter_contract.md",
     "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     "designDoc/agent_runtime_09_authorization_integration_contract.md",
+    "designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md",
 )
 
 

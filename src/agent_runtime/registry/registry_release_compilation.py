@@ -50,27 +50,16 @@ def sha256_file(path: Path) -> str:
 
 
 def managed_skill_projection(path: Path) -> str:
-    """Load one legacy Skill projection or one fixed Module prompt source."""
+    """Load one fixed Module prompt source."""
 
     if not path.is_file():
-        raise ValueError(f"Skill projection is missing: {path}")
+        raise ValueError(f"Module prompt is missing: {path}")
+    if path.name != MODULE_PROMPT_FILENAME:
+        raise ValueError("Module prompt must use the fixed prompt.md read channel")
     text = path.read_text(encoding="utf-8")
-    if path.name == MODULE_PROMPT_FILENAME:
-        if not text.strip() or not text.endswith("\n"):
-            raise ValueError(f"fixed Module prompt is malformed: {path}")
-        return text
-    marker = "## Task Instructions"
-    if marker not in text:
-        marker = "## Managed Runtime Contract"
-    if marker not in text:
-        marker = "## Managed Execution Boundary"
-    if marker not in text:
-        raise ValueError(f"Skill has no managed Runtime projection: {path}")
-    start = text.index(marker)
-    end = text.find("\n## Predecessor Development-Only Path", start)
-    if end < 0:
-        end = len(text)
-    return text[start:end].strip() + "\n"
+    if not text.strip() or not text.endswith("\n"):
+        raise ValueError(f"fixed Module prompt is malformed: {path}")
+    return text
 
 
 def _instruction_member_ref(
@@ -110,8 +99,8 @@ class AgentModuleReleaseSpec:
     reasoning_profile: str
     output_constraint_mode: str
     timeout_seconds: int
-    input_schema_path: str | None = None
-    output_schema_path: str | None = None
+    input_schema_path: str
+    output_schema_path: str
     execution_mode: str = "tool_free"
     semantic_input_delivery_mode: str = "inline"
     attempt_workspace_policy: str = "none"
@@ -255,166 +244,108 @@ def compile_agent_module_release(
     """Compile one exact Skill projection into candidate Runtime releases."""
 
     owner_path = project_root / spec.owner_contract_path
-    skill_path = project_root / spec.skill_projection_path
     owner_sha256 = sha256_file(owner_path)
-    instructions = managed_skill_projection(skill_path)
-    fixed_module_prompt = skill_path.name == MODULE_PROMPT_FILENAME
-    if fixed_module_prompt:
-        package_sources = load_skill_runtime_module_exports(
-            project_root,
-            skill_id=spec.skill_id,
+    package_sources = load_skill_runtime_module_exports(
+        project_root,
+        skill_id=spec.skill_id,
+    )
+    target_sources = tuple(
+        source
+        for source in package_sources
+        if source.module_id == spec.module_id
+    )
+    if len(target_sources) != 1:
+        raise ValueError("Module prompt has no unique package export")
+    target_source = target_sources[0]
+    if target_source.prompt_path != spec.skill_projection_path:
+        raise ValueError("Module spec does not use the fixed prompt read channel")
+    package_id = target_source.skill_package_id
+    instructions = target_source.prompt_text
+    instruction_member = ReleaseMember(
+        member_ref=_instruction_member_ref(
+            skill_package_id=package_id,
+            module_id=spec.module_id,
+            release_version=spec.release_version,
+        ),
+        member_sha256=sha256_text(instructions),
+        media_type="text/markdown",
+    )
+    _, input_schema_asset, _ = _registered_schema_asset(
+        project_root,
+        schema_ref=spec.input_schema_ref,
+        schema_path=spec.input_schema_path,
+    )
+    _, output_schema_asset, output_schema_member = _registered_schema_asset(
+        project_root,
+        schema_ref=spec.output_schema_ref,
+        schema_path=spec.output_schema_path,
+    )
+    prompt_members = (instruction_member, output_schema_member)
+    compiled_static_body = (
+        instructions
+        + "\n## Required Output Shape\n\n"
+        + json.dumps(
+            task_plane_output_schema(output_schema_asset.schema_document()),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
         )
-        target_sources = tuple(
-            source
-            for source in package_sources
-            if source.module_id == spec.module_id
-        )
-        if len(target_sources) != 1:
-            raise ValueError("fixed Module prompt has no unique package export")
-        target_source = target_sources[0]
-        if target_source.prompt_path != spec.skill_projection_path:
-            raise ValueError("Module spec does not use the fixed prompt read channel")
-        package_id = target_source.skill_package_id
-        instruction_member = ReleaseMember(
-            member_ref=_instruction_member_ref(
-                skill_package_id=package_id,
-                module_id=spec.module_id,
-                release_version=spec.release_version,
-            ),
-            member_sha256=sha256_text(instructions),
-            media_type="text/markdown",
-        )
-    else:
-        skill_text = skill_path.read_text(encoding="utf-8")
-        instruction_fragment = (
-            "task_instructions"
-            if "## Task Instructions" in skill_text
-            else "managed_runtime_contract"
-        )
-        package_sources = ()
-        target_source = None
-        package_id = f"{spec.module_id}_skill_package"
-        instruction_member = ReleaseMember(
-            member_ref=_instruction_member_ref(
-                skill_package_id=package_id,
-                module_id=spec.module_id,
-                release_version=spec.release_version,
-                fragment=instruction_fragment,
-            ),
-            member_sha256=sha256_text(instructions),
-            media_type="text/markdown",
-        )
-    schema_paths = (spec.input_schema_path, spec.output_schema_path)
-    if any(schema_paths) and not all(schema_paths):
-        raise ValueError(
-            "Agent Module release requires both concrete schema paths or neither"
-        )
-    prompt_members: tuple[ReleaseMember, ...] = (instruction_member,)
-    compiled_static_body = instructions
-    if spec.input_schema_path is not None:
-        _, input_schema_asset, _ = _registered_schema_asset(
-            project_root,
-            schema_ref=spec.input_schema_ref,
-            schema_path=spec.input_schema_path,
-        )
-        _, output_schema_asset, output_schema_member = (
-            _registered_schema_asset(
-                project_root,
-                schema_ref=spec.output_schema_ref,
-                schema_path=spec.output_schema_path or "",
-            )
-        )
-        prompt_members = (
-            instruction_member,
-            output_schema_member,
-        )
-        compiled_static_body = (
-            instructions
-            + "\n## Required Output Shape\n\n"
-            + json.dumps(
-                task_plane_output_schema(
-                    output_schema_asset.schema_document()
-                ),
-                ensure_ascii=False,
-                sort_keys=True,
-                indent=2,
-            )
-            + "\n"
-        )
-        schema_assets = (input_schema_asset, output_schema_asset)
-        input_schema_sha256 = input_schema_asset.schema_sha256
-        output_schema_sha256 = output_schema_asset.schema_sha256
-    else:
-        # Compatibility path for domain plugins not yet migrated to concrete
-        # schema assets. New Module registrations must supply both paths.
-        input_schema_sha256 = sha256_text(spec.input_schema_ref)
-        output_schema_sha256 = sha256_text(spec.output_schema_ref)
-        schema_assets = ()
+        + "\n"
+    )
+    schema_assets = (input_schema_asset, output_schema_asset)
+    input_schema_sha256 = input_schema_asset.schema_sha256
+    output_schema_sha256 = output_schema_asset.schema_sha256
 
-    if fixed_module_prompt:
-        assert target_source is not None
-        expected_registration = {
-            "owner_contract_ref": spec.owner_contract_ref,
-            "owner_contract_path": spec.owner_contract_path,
-            "input_schema_ref": spec.input_schema_ref,
-            "input_schema_path": spec.input_schema_path,
-            "output_schema_ref": spec.output_schema_ref,
-            "output_schema_path": spec.output_schema_path,
-            "declared_operation_ids": spec.declared_operation_ids,
-            "compatible_transport_kinds": spec.compatible_transport_kinds,
-            "context_policy_ref": spec.context_policy_ref,
-            "evaluation_policy_ref": spec.evaluation_policy_ref,
-            "retry_policy_ref": spec.retry_policy_ref,
-            "entry_policy": spec.entry_policy,
-            "output_resolution_policy": spec.output_resolution_policy,
-        }
-        observed_registration = {
-            "owner_contract_ref": target_source.owner_contract_ref,
-            "owner_contract_path": target_source.owner_contract_path,
-            "input_schema_ref": target_source.input_schema_ref,
-            "input_schema_path": target_source.input_schema_path,
-            "output_schema_ref": target_source.output_schema_ref,
-            "output_schema_path": target_source.output_schema_path,
-            "declared_operation_ids": target_source.declared_operation_ids,
-            "compatible_transport_kinds": (
-                target_source.compatible_transport_kinds
-            ),
-            "context_policy_ref": target_source.context_policy_ref,
-            "evaluation_policy_ref": target_source.evaluation_policy_ref,
-            "retry_policy_ref": target_source.retry_policy_ref,
-            "entry_policy": target_source.entry_policy,
-            "output_resolution_policy": (
-                target_source.output_resolution_policy
-            ),
-        }
-        if expected_registration != observed_registration:
-            raise ValueError("Module spec differs from module_registration.json")
-        module_exports = tuple(
-            SkillModuleExport(
-                export_id=source.export_id,
-                module_id=source.module_id,
-                instruction_members=(
-                    ReleaseMember(
-                        member_ref=_instruction_member_ref(
-                            skill_package_id=package_id,
-                            module_id=source.module_id,
-                            release_version=spec.release_version,
-                        ),
-                        member_sha256=sha256_text(source.prompt_text),
-                        media_type="text/markdown",
+    expected_registration = {
+        "owner_contract_ref": spec.owner_contract_ref,
+        "owner_contract_path": spec.owner_contract_path,
+        "input_schema_ref": spec.input_schema_ref,
+        "input_schema_path": spec.input_schema_path,
+        "output_schema_ref": spec.output_schema_ref,
+        "output_schema_path": spec.output_schema_path,
+        "declared_operation_ids": spec.declared_operation_ids,
+        "compatible_transport_kinds": spec.compatible_transport_kinds,
+        "context_policy_ref": spec.context_policy_ref,
+        "evaluation_policy_ref": spec.evaluation_policy_ref,
+        "retry_policy_ref": spec.retry_policy_ref,
+        "entry_policy": spec.entry_policy,
+        "output_resolution_policy": spec.output_resolution_policy,
+    }
+    observed_registration = {
+        "owner_contract_ref": target_source.owner_contract_ref,
+        "owner_contract_path": target_source.owner_contract_path,
+        "input_schema_ref": target_source.input_schema_ref,
+        "input_schema_path": target_source.input_schema_path,
+        "output_schema_ref": target_source.output_schema_ref,
+        "output_schema_path": target_source.output_schema_path,
+        "declared_operation_ids": target_source.declared_operation_ids,
+        "compatible_transport_kinds": target_source.compatible_transport_kinds,
+        "context_policy_ref": target_source.context_policy_ref,
+        "evaluation_policy_ref": target_source.evaluation_policy_ref,
+        "retry_policy_ref": target_source.retry_policy_ref,
+        "entry_policy": target_source.entry_policy,
+        "output_resolution_policy": target_source.output_resolution_policy,
+    }
+    if expected_registration != observed_registration:
+        raise ValueError("Module spec differs from module_registration.json")
+    module_exports = tuple(
+        SkillModuleExport(
+            export_id=source.export_id,
+            module_id=source.module_id,
+            instruction_members=(
+                ReleaseMember(
+                    member_ref=_instruction_member_ref(
+                        skill_package_id=package_id,
+                        module_id=source.module_id,
+                        release_version=spec.release_version,
                     ),
+                    member_sha256=sha256_text(source.prompt_text),
+                    media_type="text/markdown",
                 ),
-            )
-            for source in package_sources
-        )
-    else:
-        module_exports = (
-            SkillModuleExport(
-                export_id=spec.module_id,
-                module_id=spec.module_id,
-                instruction_members=(instruction_member,),
             ),
         )
+        for source in package_sources
+    )
     package = SkillPackageRelease.build(
         skill_package_id=package_id,
         skill_package_version=spec.release_version,

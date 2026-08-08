@@ -170,6 +170,56 @@ def test_admission_binds_subject_and_actor_without_execution_principal() -> None
     ]
 
 
+def test_binding_and_fence_replay_ignore_host_clock_progress() -> None:
+    envelope = _envelope()
+
+    class _StableClient(_Client):
+        def validate_execution_context(
+            self,
+            context_id: str,
+            tenant_id: str,
+            observed_at_utc: str,
+        ) -> ProductAuthorizationContextStatus:
+            self.calls.append((context_id, tenant_id, observed_at_utc))
+            return ProductAuthorizationContextStatus.build(
+                status_ref="product-authorization:context-status-stable",
+                context_id=self.envelope.context_id,
+                context_ref=self.envelope.context_ref,
+                context_sha256=self.envelope.context_sha256,
+                state=self.state,
+                reason_code=self.reason_code,
+                observed_at_utc=observed_at_utc,
+            )
+
+    ticks = iter(
+        (
+            "2026-08-05T12:00:01Z",
+            "2026-08-05T12:00:02Z",
+            "2026-08-05T12:00:03Z",
+        )
+    )
+    client = _StableClient(envelope)
+    controller = ExecutionAuthorizationController(
+        client=client,
+        ledger=InMemoryExecutionAuthorizationLedger(),
+        module_release_client=_ModuleReleaseClient(_module()),
+        clock=lambda: next(ticks),
+    )
+
+    first = _admit(controller)
+    replay = _admit(controller)
+    fence_replay = controller.revalidate(
+        binding_ref=first.binding.binding_ref,
+        observed_at_utc=NOW,
+    )
+
+    assert replay.binding is first.binding
+    assert replay.fence == first.fence
+    assert fence_replay == first.fence
+    assert first.binding.recorded_at_utc == NOW
+    assert first.fence.recorded_at_utc == NOW
+
+
 def test_caller_selected_tenant_mismatch_fails_before_binding() -> None:
     controller, client = _controller()
     envelope = _envelope()
