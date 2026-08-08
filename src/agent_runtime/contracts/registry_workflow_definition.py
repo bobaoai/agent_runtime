@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from ..execution import RuntimeExecutionRecordStore
+    from ..ledger import RuntimeExecutionRecordStore
     from ..contracts.ledger_record_definition import ExternalEventApplicationRecord
 
 

@@ -58,14 +58,17 @@ outputs:
   - module_run, module_execution_variant, attempt, and module_output_resolution lineage
 truth_surfaces:
   - designDoc/agent_runtime_01_module_contract_and_assembly.md
-  - src/agent_runtime/contracts/module.py
-  - src/agent_runtime/release_registry.py
-  - src/agent_runtime/plugin_sdk.py
-  - src/agent_runtime/module_execution.py
-  - src/agent_runtime/persistence/postgres.py
+  - src/agent_runtime/contracts/execution_module_definition.py
+  - src/agent_runtime/contracts/registry_release_definition.py
+  - src/agent_runtime/contracts/registry_package_definition.py
+  - src/agent_runtime/registry/registry_release_registration.py
+  - src/agent_runtime/registry/registry_plugin_registration.py
+  - src/agent_runtime/registry/registry_postgres_persistence.py
+  - src/agent_runtime/execution/execution_module_invocation.py
   - Postgres control-plane and Cell-local execution records
 generated_projection_surfaces:
-  - designDoc/generated/agent_runtime_surface_status.md
+  - agent_runtime.inspection.inspection_release_rendering:build_runtime_release_inventory
+  - agent_runtime.inspection.inspection_release_rendering:render_runtime_release_markdown
 review_gate: design approval before implementation; independent engineering review after implementation
 ```
 

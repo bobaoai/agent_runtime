@@ -91,7 +91,8 @@ truth_surfaces:
   - src/agent_runtime/ledger/
   - src/agent_runtime/inspection/
 generated_projection_surfaces:
-  - designDoc/generated/agent_runtime_surface_status.md
+  - agent_runtime.inspection.inspection_architecture_rendering:build_runtime_architecture_projection
+  - agent_runtime.inspection.inspection_architecture_rendering:render_runtime_architecture_markdown
 runtime_triggers:
   - admitted Workflow Execution request
   - admitted external event or protected-operation request through a Runtime service boundary
@@ -104,7 +105,7 @@ open_decisions: []
 review_gate: design_doc_review, standalone import-boundary conformance, and independent engineering review
 runtime_surface_ledger:
   - generated from registry_architecture_registration and the Runtime Release Registry; never maintained manually in this document
-  - designDoc/generated/agent_runtime_surface_status.md is the deterministic current implementation projection
+  - inspection_architecture_rendering is the deterministic current architecture projection in source checkouts and installed wheels
 verification_hooks:
   - Release Registry and generated architecture-report parity
   - single-registration-authority enforcement
@@ -211,8 +212,9 @@ Every Runtime-owned source file uses the same three-part semantic name:
 module_subject_nominalized_action
 ```
 
-The first term identifies the responsible Runtime module, the second identifies
-the subject being acted on, and the third names the action as a noun. Examples
+The first term identifies the owning logical responsibility, the second
+identifies the subject being acted on, and the third names the action as a
+noun. Examples
 include `registry_release_registration`, `execution_module_invocation`,
 `ledger_record_persistence`, `invocation_prompt_assembly`,
 `durability_temporal_coordination`, `registry_postgres_persistence`, and
@@ -220,11 +222,12 @@ include `registry_release_registration`, `execution_module_invocation`,
 
 The name must remain understandable when copied without its directory. Bare
 implementation-pattern or role names such as `service`, `manager`, `utils`,
-`helpers`, `store`, `api`, `adapter`, `ports`, `inspection`,
-`release_control`, or `persistence` are not valid Runtime filenames or product
-module names. A fully qualified three-part name may contain `persistence`,
-`inspection`, or `adaptation` as its action only when its module and subject
-make the behavior explicit.
+`helpers`, `store`, `api`, `adapter`, `ports`, `release_control`, or
+`persistence` are not valid Runtime filenames. A fully qualified three-part
+name may contain `persistence` or `adaptation` as its action only when its
+logical responsibility and subject make the behavior explicit. Logical
+responsibility identifiers are governed by the architecture registry instead
+of this filename guard.
 
 Runtime-owned canonical names use `snake_case`. This includes source and schema
 files, directories, variables, functions, fields, tables, columns, events,
@@ -249,10 +252,12 @@ Authorization and governed Data Access are external authorities consumed by
 Execution. Their Runtime clients carry exact execution context; they are not
 alternate Runtime control planes.
 
-PostgreSQL, Temporal, Claude Agent SDK, Claude CLI, Codex CLI, and HTML are
-implementation bindings. Each binding implements exactly one logical
-responsibility and cannot become a peer responsibility or record authority.
-Physical `contracts/` and `testing/` directories likewise do not become logical
+Database engines, durable backends, provider SDKs and CLIs, and renderers become
+implementation bindings only through the code-owned architecture registry.
+Each registered binding implements exactly one logical responsibility and
+cannot become a peer responsibility or record authority. The generated
+architecture projection enumerates the current binding set. Physical
+`contracts/` and `testing/` directories likewise do not become logical
 responsibilities.
 
 A domain plugin submits one dependency-closed `runtime_release_bundle` through a
@@ -602,7 +607,7 @@ Standalone conformance requires:
 - synthetic opaque-plugin execution and failure tests;
 - no built-in business role, graph, rubric, artifact meaning, or provider choice;
 - every shipped source file mapped by `registry_architecture_registration` to one
-  product module and one canonical Design Contract;
+  logical responsibility and one canonical Design Contract;
 - packaged Design Contract hashes equal the canonical Runtime-owned contract
   sources; and
 - the Workflow Inspector lists and renders authorized formal PostgreSQL records
@@ -669,8 +674,11 @@ maturity, or delivery status. Those facts belong to code-owned registries,
 generated architecture reports, deployment composition, and Software Delivery
 records. A manually edited inventory cannot override them.
 
-The current Runtime surface and implementation status are projected at
-[`designDoc/generated/agent_runtime_surface_status.md`](generated/agent_runtime_surface_status.md).
+`inspection_architecture_rendering.build_runtime_architecture_projection`
+projects the current architecture from the code-owned architecture registry.
+`inspection_release_rendering.build_runtime_release_inventory` projects the
+registered Runtime releases and their admission status from an explicit
+Release Registry.
 
 ## 13. References
 

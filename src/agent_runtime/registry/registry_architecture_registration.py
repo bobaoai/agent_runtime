@@ -18,6 +18,7 @@ from typing import ClassVar
 _SOURCE_NAME = re.compile(
     r"^[a-z][a-z0-9]*_[a-z][a-z0-9_]*_[a-z][a-z0-9]*$"
 )
+_ARCHITECTURE_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 _RUNTIME_SOURCE_ROOT = "src/agent_runtime"
 RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS = (
     "registry",
@@ -566,8 +567,8 @@ RUNTIME_MIGRATION_DEBT_PATHS = (
 )
 
 
-def validate_registry_architecture_registration(project_root: Path) -> tuple[str, ...]:
-    """Return deterministic repository architecture violations."""
+def validate_runtime_architecture_registration() -> tuple[str, ...]:
+    """Return registry-internal violations without reading a source checkout."""
 
     errors: list[str] = []
     responsibilities = {
@@ -598,7 +599,35 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
     ):
         errors.append("duplicate Runtime implementation binding")
 
+    for responsibility in RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS:
+        if not _ARCHITECTURE_ID.fullmatch(responsibility.responsibility_id):
+            errors.append(
+                f"invalid Runtime logical responsibility id: "
+                f"{responsibility.responsibility_id}"
+            )
+    for directory in RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS:
+        if not _ARCHITECTURE_ID.fullmatch(directory.source_directory_id):
+            errors.append(
+                f"invalid Runtime source directory id: "
+                f"{directory.source_directory_id}"
+            )
+
     for binding in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS:
+        if not _ARCHITECTURE_ID.fullmatch(binding.implementation_binding_id):
+            errors.append(
+                f"invalid Runtime implementation binding id: "
+                f"{binding.implementation_binding_id}"
+            )
+        if not _ARCHITECTURE_ID.fullmatch(binding.technology_id):
+            errors.append(
+                f"{binding.implementation_binding_id}: invalid technology id "
+                f"{binding.technology_id}"
+            )
+        if binding.technology_id in responsibilities:
+            errors.append(
+                f"{binding.implementation_binding_id}: technology id cannot be "
+                f"a logical responsibility: {binding.technology_id}"
+            )
         if binding.logical_responsibility_id not in responsibilities:
             errors.append(
                 f"{binding.implementation_binding_id}: unknown logical "
@@ -642,13 +671,6 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
         detached_file_names.add(source.expected_file_name)
         if not _SOURCE_NAME.fullmatch(Path(source.source_path).stem):
             errors.append(f"{source.source_path}: invalid three-part source name")
-        if not (project_root / source.source_path).is_file():
-            errors.append(f"registered Runtime source not found: {source.source_path}")
-        if not (project_root / source.owner_contract_ref).is_file():
-            errors.append(
-                f"{source.source_path}: owner contract not found: "
-                f"{source.owner_contract_ref}"
-            )
         if source.implementation_binding_id is not None:
             binding = implementation_bindings.get(
                 source.implementation_binding_id
@@ -687,6 +709,35 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
                     f"is not bound by its source registration: {source_path}"
                 )
 
+    overlaps = (
+        source_paths.intersection(RUNTIME_STRUCTURAL_SOURCE_PATHS)
+        | source_paths.intersection(RUNTIME_MIGRATION_DEBT_PATHS)
+        | set(RUNTIME_STRUCTURAL_SOURCE_PATHS).intersection(
+            RUNTIME_MIGRATION_DEBT_PATHS
+        )
+    )
+    for path in sorted(overlaps):
+        errors.append(f"Runtime source has duplicate disposition: {path}")
+    return tuple(errors)
+
+
+def validate_registry_architecture_registration(project_root: Path) -> tuple[str, ...]:
+    """Return registry and repository-checkout architecture violations."""
+
+    project_root = project_root.resolve()
+    errors = list(validate_runtime_architecture_registration())
+    source_paths = {
+        source.source_path for source in RUNTIME_SOURCE_FILE_REGISTRATIONS
+    }
+    for source in RUNTIME_SOURCE_FILE_REGISTRATIONS:
+        if not (project_root / source.source_path).is_file():
+            errors.append(f"registered Runtime source not found: {source.source_path}")
+        if not (project_root / source.owner_contract_ref).is_file():
+            errors.append(
+                f"{source.source_path}: owner contract not found: "
+                f"{source.owner_contract_ref}"
+            )
+
     declared_paths = (
         source_paths
         | set(RUNTIME_STRUCTURAL_SOURCE_PATHS)
@@ -702,15 +753,6 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
         errors.append(f"unregistered Runtime source file: {path}")
     for path in sorted(declared_paths - actual_paths):
         errors.append(f"declared Runtime source file not found: {path}")
-    overlaps = (
-        source_paths.intersection(RUNTIME_STRUCTURAL_SOURCE_PATHS)
-        | source_paths.intersection(RUNTIME_MIGRATION_DEBT_PATHS)
-        | set(RUNTIME_STRUCTURAL_SOURCE_PATHS).intersection(
-            RUNTIME_MIGRATION_DEBT_PATHS
-        )
-    )
-    for path in sorted(overlaps):
-        errors.append(f"Runtime source has duplicate disposition: {path}")
     return tuple(errors)
 
 
@@ -727,4 +769,5 @@ __all__ = [
     "RuntimeSourceDirectoryRegistration",
     "RuntimeSourceFileRegistration",
     "validate_registry_architecture_registration",
+    "validate_runtime_architecture_registration",
 ]

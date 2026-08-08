@@ -5,13 +5,19 @@ from pathlib import Path
 import shutil
 
 from agent_runtime.registry import registry_architecture_registration as architecture
+from agent_runtime.inspection.inspection_architecture_rendering import (
+    build_runtime_architecture_projection,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_runtime_architecture_registration_covers_every_python_source() -> None:
+    assert architecture.validate_runtime_architecture_registration() == ()
     assert architecture.validate_registry_architecture_registration(REPO_ROOT) == ()
+    projection = build_runtime_architecture_projection(REPO_ROOT)
+    assert projection["schema_version"] == "agent_runtime_architecture_projection_v3"
 
 
 def test_target_source_names_match_logical_owner_module() -> None:
@@ -111,6 +117,25 @@ def test_cross_responsibility_implementation_binding_fails_validation(
 
     assert any(
         "implementation binding crosses logical responsibility" in error
+        for error in errors
+    )
+
+
+def test_responsibility_id_cannot_be_used_as_a_technology_id(
+    monkeypatch,
+) -> None:
+    original = architecture.RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+    malformed = replace(original[0], technology_id="ledger")
+    monkeypatch.setattr(
+        architecture,
+        "RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS",
+        (malformed, *original[1:]),
+    )
+
+    errors = architecture.validate_runtime_architecture_registration()
+
+    assert any(
+        "technology id cannot be a logical responsibility" in error
         for error in errors
     )
 

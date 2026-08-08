@@ -64,9 +64,10 @@ outputs:
   - authorization-binding/fence/invalidation, context, telemetry, and recovery contracts
   - evaluation, testing, and Module-update contracts
 truth_surfaces:
-  - src/agent_runtime/contracts/module.py
-  - src/agent_runtime/release_registry.py
-  - src/agent_runtime/module_execution.py
+  - src/agent_runtime/contracts/execution_module_definition.py
+  - src/agent_runtime/contracts/registry_release_definition.py
+  - src/agent_runtime/registry/registry_release_registration.py
+  - src/agent_runtime/execution/execution_module_invocation.py
   - src/agent_runtime/testing/registry_migration_validation.py
 runtime_triggers: none
 downstream_consumers:

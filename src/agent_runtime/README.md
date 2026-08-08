@@ -35,6 +35,9 @@ flowchart LR
     INSPECTION["Inspection"] -. "implemented by" .-> HTML["HTML renderer"]
 ```
 
+This diagram shows the currently registered bindings. The generated
+architecture projection is the exhaustive current set.
+
 PostgreSQL, Temporal, provider SDKs, CLIs, and renderers are replaceable
 implementations. None is a peer logical responsibility or execution authority.
 

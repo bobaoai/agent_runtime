@@ -13,6 +13,7 @@ from ..registry.registry_architecture_registration import (
     RUNTIME_SOURCE_FILE_REGISTRATIONS,
     RUNTIME_STRUCTURAL_SOURCE_PATHS,
     validate_registry_architecture_registration,
+    validate_runtime_architecture_registration,
 )
 
 
@@ -24,10 +25,18 @@ ARCHITECTURE_PROJECTION_SCHEMA_VERSION = (
 def build_runtime_architecture_projection(
     project_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Return the validated target, structural, and migration-debt source map."""
+    """Return the architecture map from either a wheel or source checkout.
 
-    root = (project_root or Path(__file__).resolve().parents[3]).resolve()
-    errors = validate_registry_architecture_registration(root)
+    Registry-internal closure is always validated. Repository file and Design
+    Contract presence are additionally validated only when ``project_root`` is
+    supplied by a source-checkout audit.
+    """
+
+    errors = (
+        validate_registry_architecture_registration(project_root)
+        if project_root is not None
+        else validate_runtime_architecture_registration()
+    )
     if errors:
         raise RuntimeError(
             "invalid Runtime architecture registration: " + "; ".join(errors)

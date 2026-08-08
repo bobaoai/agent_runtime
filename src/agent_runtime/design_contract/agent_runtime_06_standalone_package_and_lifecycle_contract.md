@@ -74,7 +74,8 @@ truth_surfaces:
   - tests/test_agent_runtime_execution_records.py
   - tests/test_agent_runtime_inspection_interface.py
 generated_projection_surfaces:
-  - designDoc/generated/agent_runtime_surface_status.md
+  - agent_runtime.inspection.inspection_architecture_rendering:build_runtime_architecture_projection
+  - agent_runtime.inspection.inspection_architecture_rendering:render_runtime_architecture_markdown
 runtime_triggers: none
 open_decisions: []
 review_gate: contract review followed by clean-wheel and lifecycle conformance tests
@@ -107,8 +108,10 @@ from an in-memory process after failure.
 
 ## 2. Architecture Axes and Naming
 
-Architecture is registered through three independent axes. A name on one axis
-cannot be inferred from or promoted into another axis.
+Architecture is registered through three independent axes. Membership on one
+axis never implies membership on another. A logical responsibility and its
+primary source directory may share an identifier as a naming convention
+without merging the two axes.
 
 ### 2.1 Logical responsibilities
 
@@ -130,9 +133,10 @@ Physical directories are `contracts`, `registry`, `execution`, `invocation`,
 
 ### 2.3 Implementation bindings
 
-PostgreSQL, Temporal, Claude Agent SDK, Claude CLI, Codex CLI, and HTML are
+Database engines, durable backends, provider SDKs and CLIs, and renderers are
 concrete technologies. Each registered binding names exactly one logical
 responsibility, one technology, and the exact implementation source files.
+The generated architecture projection enumerates the current binding set.
 Technology names cannot appear in the logical-responsibility registry.
 
 Every source file uses:
@@ -188,10 +192,23 @@ Every node is a logical responsibility. Arrows mean Runtime calls or committed
 fact flow; they do not mean source imports, directory containment, or
 implementation selection.
 
+Import dependency topology is a separate source-architecture view. Until a
+dedicated code-owned import policy and AST validator are admitted, this
+three-axis registry does not claim or enforce a complete intra-Runtime import
+direction.
+
 Only `registry_release_compilation` may read editable Module authoring files.
 Production Execution reads admitted releases. Invocation and Durability
 implementations cannot choose releases or Workflow edges. Inspection reads
 registered and committed Runtime facts and cannot mutate them.
+
+### 2.4 Migration debt
+
+Every remaining predecessor source file is enumerated in
+`RUNTIME_MIGRATION_DEBT_PATHS` and excluded from target implementation.
+Structural package initializers may temporarily re-export predecessor symbols
+for existing callers. Those exports are compatibility-only, cannot be used by
+new integrations, and retire with the owning debt entry.
 
 ## 3. Published and Operated Interfaces
 
@@ -223,6 +240,9 @@ flowchart LR
     AUTH["Product content-read decision"] --> QUERY
     QUERY --> PAGE["Live Workflow Inspector"]
 ```
+
+This diagram is a production deployment data-flow view. Its nodes name bound
+record stores and retrieval services; its arrows mean authorized data flow.
 
 The Inspector lists every Workflow Execution allowed by the caller's current
 Product grant. Selecting an execution loads its exact registered Workflow graph

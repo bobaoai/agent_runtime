@@ -16,6 +16,7 @@ from typing import Any, Sequence
 from ..durability.durability_backend_registration import TEMPORAL_DESCRIPTOR
 from ..contracts.registry_release_definition import ReleaseSubjectKind
 from .inspection_architecture_rendering import (
+    ARCHITECTURE_PROJECTION_SCHEMA_VERSION,
     build_runtime_architecture_projection,
     render_runtime_architecture_markdown,
 )
@@ -25,7 +26,7 @@ from ..registry.registry_release_registration import RuntimeReleaseRegistry
 
 
 INVENTORY_SCHEMA_VERSION = "agent_runtime_inventory_v3"
-SURFACE_INVENTORY_SCHEMA_VERSION = "agent_runtime_architecture_projection_v1"
+SURFACE_INVENTORY_SCHEMA_VERSION = ARCHITECTURE_PROJECTION_SCHEMA_VERSION
 RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v1"
 
 

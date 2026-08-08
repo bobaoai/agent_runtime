@@ -202,6 +202,9 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         from agent_runtime.inspection.inspection_release_rendering import (
             build_runtime_inventory,
         )
+        from agent_runtime.inspection.inspection_architecture_rendering import (
+            build_runtime_architecture_projection,
+        )
         from agent_runtime.registry.registry_plugin_registration import DomainRuntimePlugin, register_runtime_plugin
         from agent_runtime.registry.registry_workflow_registration import WorkflowRuntimeRegistry
 
@@ -254,6 +257,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         driver_result = registry.resolve_driver("workflow_zeta")()
 
         inventory = build_runtime_inventory(registry=registry)
+        architecture = build_runtime_architecture_projection()
         domain_modules = sorted(
             name
             for name in sys.modules
@@ -279,6 +283,15 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
             "public_namespace": agent_runtime.__name__,
             "driver_result": driver_result,
             "workflow_ids": [row["workflow_id"] for row in inventory["workflows"]],
+            "architecture_schema_version": architecture["schema_version"],
+            "responsibility_ids": [
+                row["responsibility_id"]
+                for row in architecture["logical_responsibilities"]
+            ],
+            "technology_ids": sorted(
+                row["technology_id"]
+                for row in architecture["implementation_bindings"]
+            ),
         }))
         """,
         str(wheel_path),
@@ -292,6 +305,22 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         "public_namespace": "agent_runtime",
         "driver_result": {"status": "synthetic"},
         "workflow_ids": ["workflow_zeta"],
+        "architecture_schema_version": "agent_runtime_architecture_projection_v3",
+        "responsibility_ids": [
+            "registry",
+            "execution",
+            "invocation",
+            "durability",
+            "ledger",
+            "inspection",
+        ],
+        "technology_ids": [
+            "claude_agent_sdk",
+            "codex_cli",
+            "html",
+            "postgresql",
+            "temporal",
+        ],
     }
 
 
@@ -518,6 +547,26 @@ def test_generated_design_contract_bundle_matches_canonical_docs() -> None:
     assert [row["source_path"] for row in manifest["documents"]] == list(
         CANONICAL_DOCUMENTS
     )
+
+
+def test_canonical_runtime_truth_surface_paths_exist() -> None:
+    missing: list[str] = []
+    for document_name in CANONICAL_DOCUMENTS:
+        current_key: str | None = None
+        document_path = REPO_ROOT / document_name
+        for line in document_path.read_text(encoding="utf-8").splitlines():
+            if line and not line[0].isspace() and line.endswith(":"):
+                current_key = line[:-1]
+                continue
+            if current_key != "truth_surfaces":
+                continue
+            candidate = line.removeprefix("  - ").strip()
+            if not candidate.startswith("src/agent_runtime/"):
+                continue
+            if not (REPO_ROOT / candidate).exists():
+                missing.append(f"{document_name}: {candidate}")
+
+    assert missing == []
 
 
 def test_runtime_wheel_owns_product_host_execution_api_without_platform_or_backend_sdk(

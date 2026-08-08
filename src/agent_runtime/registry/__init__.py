@@ -18,6 +18,7 @@ from .registry_architecture_registration import (
     RuntimeSourceDirectoryRegistration,
     RuntimeSourceFileRegistration,
     validate_registry_architecture_registration,
+    validate_runtime_architecture_registration,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "WorkflowRuntimeRegistry",
     "resolve_registration_reference",
     "validate_registry_architecture_registration",
+    "validate_runtime_architecture_registration",
 ]

@@ -2,8 +2,8 @@
 
 The Runtime ledger stores refs and hashes only. This in-memory implementation
 stages the bytes behind those refs for execution and tests; formal recorded-
-content persistence belongs to the PostgreSQL product module. Domain host
-composition supplies schema-to-artifact-kind mappings for typed outputs.
+content persistence belongs to a registered PostgreSQL implementation. Domain
+host composition supplies schema-to-artifact-kind mappings for typed outputs.
 """
 
 from __future__ import annotations

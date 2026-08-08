@@ -59,11 +59,12 @@ truth_surfaces:
   - src/agent_runtime/durability/durability_backend_registration.py
   - src/agent_runtime/durability/durability_temporal_coordination.py
   - src/agent_runtime/testing/durability_temporal_conformance.py
-  - src/agent_runtime/graph_projection.py
-  - src/agent_runtime/release_registry.py
+  - src/agent_runtime/registry/registry_graph_projection.py
+  - src/agent_runtime/contracts/registry_release_definition.py
+  - src/agent_runtime/registry/registry_release_registration.py
   - src/agent_runtime/inspection/inspection_release_rendering.py
 generated_projection_surfaces:
-  - designDoc/generated/agent_runtime_surface_status.md
+  - agent_runtime.inspection.inspection_release_rendering:build_runtime_inventory
 verification_hooks:
   - public durable-contract tests
   - real Temporal two-Cell integration
@@ -361,8 +362,8 @@ the isolated shadow admission store. Production admission remains blocked on
 durable PostgreSQL Runtime trace and usage binding, production Evidence write
 binding, remaining failure-window tests, and independent engineering review.
 
-The deterministic current projection is
-[agent_runtime_surface_status.md](generated/agent_runtime_surface_status.md).
+`inspection_release_rendering.build_runtime_inventory` produces the
+deterministic current durable-backend and Workflow composition projection.
 
 Adjacent ownership:
 

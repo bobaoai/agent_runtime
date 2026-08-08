@@ -60,7 +60,7 @@ truth_surfaces:
   - src/agent_runtime/inspection/inspection_release_rendering.py
   - src/runtime_composition.py
 generated_projection_surfaces:
-  - designDoc/generated/agent_runtime_surface_status.md
+  - agent_runtime.inspection.inspection_release_rendering:build_runtime_inventory
 verification_hooks:
   - topology and dedicated-Cell isolation tests
   - backend catalog and generated-inspection parity
@@ -343,9 +343,10 @@ Code owns exact topology records, backend descriptors, active composition,
 current admission state, commands, and generated inspection. This document
 owns only target placement, isolation, and admission invariants.
 
-The deterministic current projection is
-[agent_runtime_surface_status.md](generated/agent_runtime_surface_status.md).
-Generated host inspection owns those mutable facts.
+`inspection_release_rendering.build_runtime_inventory` produces the
+deterministic current host-composition projection from an explicit Workflow
+Registry and Durable Backend Candidate Set. Generated host inspection owns
+those mutable facts.
 
 Adjacent ownership:
 
