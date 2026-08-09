@@ -24,6 +24,7 @@ agent-runtime-live-inspect = "agent_runtime.inspection.inspection_http_serving:m
 packages = [
   "agent_runtime",
   "agent_runtime.contracts",
+  "agent_runtime.design_contract",
   "agent_runtime.durability",
   "agent_runtime.execution",
   "agent_runtime.inspection",

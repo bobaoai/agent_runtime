@@ -123,6 +123,7 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
     assert configuration["tool"]["setuptools"]["packages"] == [
         "agent_runtime",
         "agent_runtime.contracts",
+        "agent_runtime.design_contract",
         "agent_runtime.durability",
         "agent_runtime.execution",
         "agent_runtime.inspection",
