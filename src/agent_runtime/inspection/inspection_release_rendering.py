@@ -16,7 +16,6 @@ from typing import Any, Sequence
 from ..durability.durability_backend_registration import TEMPORAL_DESCRIPTOR
 from ..contracts.registry_release_definition import ReleaseSubjectKind
 from .inspection_architecture_rendering import (
-    ARCHITECTURE_PROJECTION_SCHEMA_VERSION,
     build_runtime_architecture_projection,
     render_runtime_architecture_markdown,
 )
@@ -26,7 +25,6 @@ from ..registry.registry_release_registration import RuntimeReleaseRegistry
 
 
 INVENTORY_SCHEMA_VERSION = "agent_runtime_inventory_v3"
-SURFACE_INVENTORY_SCHEMA_VERSION = ARCHITECTURE_PROJECTION_SCHEMA_VERSION
 RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v1"
 
 
@@ -415,7 +413,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "INVENTORY_SCHEMA_VERSION",
     "RELEASE_INVENTORY_SCHEMA_VERSION",
-    "SURFACE_INVENTORY_SCHEMA_VERSION",
     "build_runtime_inventory",
     "build_runtime_release_inventory",
     "build_runtime_surface_inventory",

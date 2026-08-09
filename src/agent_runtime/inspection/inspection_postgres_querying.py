@@ -13,6 +13,7 @@ from ..ledger.ledger_postgres_persistence import (
     PostgresRuntimeExecutionQueryStore,
     RuntimeExecutionContent,
     RuntimeExecutionDescriptor,
+    RuntimeExecutionPageCursor,
 )
 from ..registry.registry_postgres_persistence import PostgresRuntimeReleaseQueryStore
 
@@ -42,11 +43,11 @@ class PostgresWorkflowInspectionRepository:
         self,
         *,
         limit: int = 100,
-        offset: int = 0,
+        before: RuntimeExecutionPageCursor | None = None,
     ) -> tuple[RuntimeExecutionDescriptor, ...]:
         return self._execution_queries.list_executions(
             limit=limit,
-            offset=offset,
+            before=before,
         )
 
     def get_execution_descriptor(

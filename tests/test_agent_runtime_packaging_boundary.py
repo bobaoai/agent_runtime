@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,11 @@ import tomllib
 import zipfile
 
 import pytest
+
+from agent_runtime.registry.registry_architecture_registration import (
+    RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS,
+    RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS,
+)
 
 from tools.build_agent_runtime_design_contract_bundle import (
     ADJACENT_DOCUMENT_AUTHORITIES,
@@ -319,24 +325,8 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         "driver_result": {"status": "synthetic"},
         "workflow_ids": ["workflow_zeta"],
         "architecture_schema_version": "agent_runtime_architecture_projection_v3",
-        "responsibility_ids": [
-            "registry",
-            "execution",
-            "invocation",
-            "durability",
-            "ledger",
-            "inspection",
-        ],
-        "technology_ids": [
-            "claude_agent_sdk",
-            "codex_cli",
-            "html",
-            "http",
-            "postgresql",
-            "postgresql",
-            "postgresql",
-            "temporal",
-        ],
+        "responsibility_ids": list(RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS),
+        "technology_ids": list(RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS),
     }
 
 
@@ -624,23 +614,56 @@ def test_design_contract_link_closure_rejects_undeclared_or_misrouted_links(
         )
 
 
-def test_canonical_runtime_truth_surface_paths_exist() -> None:
-    missing: list[str] = []
-    for document_name in CANONICAL_DOCUMENTS:
-        current_key: str | None = None
-        document_path = REPO_ROOT / document_name
-        for line in document_path.read_text(encoding="utf-8").splitlines():
-            if line and not line[0].isspace() and line.endswith(":"):
-                current_key = line[:-1]
-                continue
-            if current_key != "truth_surfaces":
-                continue
-            candidate = line.removeprefix("  - ").strip()
-            if not candidate.startswith("src/agent_runtime/"):
-                continue
-            if not (REPO_ROOT / candidate).exists():
-                missing.append(f"{document_name}: {candidate}")
+_CONTRACT_PATH_FIELDS = {
+    "implementation_surfaces",
+    "truth_surfaces",
+    "verification_hooks",
+}
+_REPOSITORY_PATH = re.compile(
+    r"(?:src|tests|tools|designDoc)/[A-Za-z0-9_.@/-]+"
+)
 
+
+def _contract_capsule_paths(document: str) -> tuple[str, ...]:
+    paths: list[str] = []
+    active_field: str | None = None
+    in_capsule = False
+    for raw_line in document.splitlines():
+        line = raw_line.strip()
+        if line == "```yaml":
+            in_capsule = True
+            active_field = None
+            continue
+        if in_capsule and line == "```":
+            break
+        if not in_capsule or not line:
+            continue
+        if not raw_line[:1].isspace():
+            key, separator, value = line.partition(":")
+            active_field = key.strip() if separator else None
+            if active_field in _CONTRACT_PATH_FIELDS and value.strip():
+                paths.extend(_REPOSITORY_PATH.findall(value))
+            continue
+        if active_field in _CONTRACT_PATH_FIELDS and line.startswith("-"):
+            paths.extend(_REPOSITORY_PATH.findall(line.removeprefix("-").strip()))
+    return tuple(paths)
+
+
+def test_canonical_runtime_truth_surface_paths_exist() -> None:
+    declared: list[tuple[str, str]] = []
+    for document_name in CANONICAL_DOCUMENTS:
+        document = (REPO_ROOT / document_name).read_text(encoding="utf-8")
+        declared.extend(
+            (document_name, path) for path in _contract_capsule_paths(document)
+        )
+
+    missing = [
+        f"{document_name}: {path}"
+        for document_name, path in declared
+        if not (REPO_ROOT / path).exists()
+    ]
+
+    assert len(declared) == 72
     assert missing == []
 
 

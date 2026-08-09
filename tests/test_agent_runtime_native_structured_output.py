@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import ast
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
 
-from agent_runtime.contracts.execution_module_definition import ModuleExecutorRequest
+import pytest
+
+from agent_runtime.contracts.execution_module_definition import (
+    ModuleExecutorFailure,
+    ModuleExecutorRequest,
+)
 from agent_runtime.execution.execution_content_staging import InMemoryCellArtifactStore
 from agent_runtime.invocation.invocation_codex_module_invocation import (
     CodexCliInvocationResult,
     CodexCliModuleExecutor,
 )
+from agent_runtime.invocation.invocation_workspace_preparation import (
+    AttemptWorkspaceConflictError,
+)
+from agent_runtime.invocation import invocation_codex_module_invocation as codex_module
 from agent_runtime.invocation.invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     OUTPUT_SCHEMA_MARKER,
@@ -139,6 +149,7 @@ def _compile_native_module(tmp_path: Path):
 
 def test_codex_native_structured_output_executes_end_to_end(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     compiled = _compile_native_module(tmp_path)
     registry = RuntimeReleaseRegistry()
@@ -168,6 +179,17 @@ def test_codex_native_structured_output_executes_end_to_end(
         idempotency_key="prompt_envelope_native",
     )
     captured: dict[str, object] = {}
+    lease_events: list[str] = []
+
+    @contextmanager
+    def tracked_lease(workspace: Path):
+        lease_events.append(f"enter:{workspace.name}")
+        try:
+            yield workspace
+        finally:
+            lease_events.append(f"exit:{workspace.name}")
+
+    monkeypatch.setattr(codex_module, "lease_attempt_workspace", tracked_lease)
 
     def invoker(
         *,
@@ -176,6 +198,7 @@ def test_codex_native_structured_output_executes_end_to_end(
         cwd: Path,
         timeout_seconds: int,
     ) -> CodexCliInvocationResult:
+        assert lease_events == ["enter:attempt_native_001"]
         captured["argv"] = list(argv)
         captured["prompt"] = prompt
         schema_path = Path(argv[argv.index("--output-schema") + 1])
@@ -234,6 +257,46 @@ def test_codex_native_structured_output_executes_end_to_end(
     assert result.outputs[0].output_sha256 == hashlib.sha256(
         canonical
     ).hexdigest()
+    assert lease_events == [
+        "enter:attempt_native_001",
+        "exit:attempt_native_001",
+    ]
+
+    @contextmanager
+    def conflicting_lease(_workspace: Path):
+        raise AttemptWorkspaceConflictError("live duplicate invocation")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(codex_module, "lease_attempt_workspace", conflicting_lease)
+    with pytest.raises(ModuleExecutorFailure) as raised:
+        executor.execute(
+            ModuleExecutorRequest(
+                module_run_id="module_run_native_001",
+                variant_id="variant_native_001",
+                attempt_id="attempt_native_001",
+                module=compiled.module,
+                execution_profile=compiled.execution_profile,
+                input_package_ref="artifact-ref:input-package-001",
+                input_package_sha256="2" * 64,
+                inputs=(),
+                prompt_envelope_ref=prompt_ref.artifact_ref,
+                prompt_envelope_sha256=prompt_ref.artifact_sha256,
+                isolated_scope_ref="scope-ref:native-001",
+                isolated_scope_sha256="3" * 64,
+            )
+        )
+    failure = raised.value
+    assert failure.failure_class == "workspace_initialization_failure"
+    assert failure.failure_code == "codex_attempt_workspace_unavailable"
+    assert failure.detail is not None
+    detail = json.loads(
+        artifact_host.read_bytes(
+            failure.detail.detail_ref,
+            failure.detail.detail_sha256,
+        )
+    )
+    assert detail["retryable"] is False
+    assert detail["failure_class"] == "workspace_initialization_failure"
 
 
 def test_adapters_no_longer_reference_the_removed_prompt_bundle_local() -> None:

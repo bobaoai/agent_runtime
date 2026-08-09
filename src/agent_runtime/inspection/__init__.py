@@ -1,6 +1,7 @@
 """Read-only Runtime inspection and generated architecture surfaces."""
 
 from .inspection_architecture_rendering import (
+    ARCHITECTURE_PROJECTION_SCHEMA_VERSION,
     build_runtime_architecture_projection,
     render_runtime_architecture_markdown,
 )
@@ -22,6 +23,7 @@ from .inspection_http_serving import (
 from .inspection_postgres_querying import PostgresWorkflowInspectionRepository
 
 __all__ = [
+    "ARCHITECTURE_PROJECTION_SCHEMA_VERSION",
     "build_runtime_architecture_projection",
     "build_workflow_review_bundle",
     "LiveInspectionAssembly",

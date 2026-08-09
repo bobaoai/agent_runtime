@@ -363,6 +363,16 @@ class _CodexCliExecutorBase:
                     cwd=workspace,
                     timeout_seconds=profile.timeout_seconds,
                 )
+        except AttemptWorkspaceConflictError as exc:
+            self._raise_failure(
+                request=request,
+                failure_class="workspace_initialization_failure",
+                failure_code="codex_attempt_workspace_unavailable",
+                message="Codex Attempt workspace is already leased",
+                provider_response="",
+                usage=ModuleUsageObservation(None, None, None, None),
+                cause=exc,
+            )
         except Exception as exc:
             self._raise_failure(
                 request=request,

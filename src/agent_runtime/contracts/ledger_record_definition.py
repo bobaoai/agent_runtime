@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping, TypeAlias, TypeVar
@@ -33,6 +34,7 @@ def canonical_json(value: Any) -> str:
 
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -143,8 +145,15 @@ class ModelUsageRecord:
             ("estimated_cost_usd", self.estimated_cost_usd),
             ("provider_charge_usd", self.provider_charge_usd),
         ):
-            if value is not None and float(value) < 0:
-                raise ValueError(f"{label} must be non-negative or null")
+            if value is not None and (
+                type(value) not in {int, float}
+                or type(value) is float
+                and not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(
+                    f"{label} must be a finite non-negative JSON number or null"
+                )
 
     def as_dict(self) -> dict[str, Any]:
         """Return a validated JSON-ready usage record."""

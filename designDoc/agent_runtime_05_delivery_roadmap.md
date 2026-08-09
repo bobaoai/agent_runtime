@@ -40,10 +40,9 @@ non_goals:
   - domain roles, graph meaning, content-quality rules, or business terminal decisions
   - product topology, user interface, entitlement policy, or data-placement policy
   - sprint history, staffing plan, or session handoff log
-governing_t0_portfolio: src/design_governance/t0_registry.py
-governing_t0_projection: designDoc/generated/t0_contract_index.md
+governing_t0_portfolio: host-supplied adjacent authority; not owned by this package
 inputs:
-  - current T0 authorities and explicitly labeled Gate R0 candidates resolved from src/design_governance/t0_registry.py
+  - adjacent authority references declared by designDoc/the_agent_runtime.md
   - Agent Runtime T1 specialization set resolved from designDoc/the_agent_runtime.md
 outputs:
   - stable gate order and exit criteria
@@ -75,10 +74,9 @@ complete execution, evaluation, recovery, and release lineage. An Agency
 Platform may compose the Runtime, but the standalone package does not import
 the host product or any business domain.
 
-The registered T0 portfolio is resolved from the code-owned T0 registry.
-`current` contracts constrain delivery; explicitly labeled `candidate`
-contracts define Gate R0 review scope but do not masquerade as admitted
-authority. Each peer T0 contributes only its owned system-wide constraint:
+The host supplies its admitted T0 portfolio. This standalone package records
+adjacent authority references without importing the host's registry or generated
+projections. Each peer T0 contributes only its owned system-wide constraint:
 
 | Peer T0 | Delivery constraint |
 | --- | --- |
@@ -93,9 +91,9 @@ authority. Each peer T0 contributes only its owned system-wide constraint:
 | Contract Audit | Owns external Independent Review evidence. |
 | Software Delivery | Owns software change and release admission. |
 
-Compatibility pointers carry no delivery authority. A T0 portfolio change is
-accepted only through the T0 registry and its generated projection, then
-evaluated as a change to the first gate in this roadmap.
+Compatibility pointers carry no delivery authority. A host T0 portfolio change
+is accepted through that host's authority process, then evaluated here as a
+change to the first affected Runtime gate.
 
 ## 2. Status and Evidence Ownership
 
@@ -123,12 +121,12 @@ versions, test commands, and current readiness belong to code-owned registries,
 immutable evidence, and generated inspection. Until the inspection can project
 a fact, the roadmap makes no positive implementation claim about it.
 
-The host-composed candidate Release Registry is inspectable without Prompt or
-tenant content through:
+The package-owned architecture and surface inventory is inspectable without
+Prompt or tenant content through:
 
 ```bash
-./.venv/bin/python -m src.runtime_composition --format release-json --pretty
-./.venv/bin/python -m src.runtime_composition --format release-markdown
+python -m agent_runtime.inspection.inspection_release_rendering --format surface-json --pretty
+python -m agent_runtime.inspection.inspection_release_rendering --format surface-markdown
 ```
 
 ## 3. Target Distribution Boundary
@@ -466,9 +464,8 @@ Delivery follows six acceleration rules:
 
 After context compaction or a maintainer handoff:
 
-1. Resolve the registered T0 portfolio and its lifecycle, admission, and
-   implementation states from `src/design_governance/t0_registry.py`, then read
-   its generated projection.
+1. Resolve adjacent T0 lifecycle and admission facts from the composing host's
+   authority surfaces; do not infer them from this package.
 2. Read `the_agent_runtime.md` and this roadmap for stable intent and gate
    definitions.
 3. Generate Runtime inspection from the code-owned registries and immutable

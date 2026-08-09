@@ -477,6 +477,23 @@ class _ClaudeAgentSdkExecutorBase:
                 asyncio.run(
                     asyncio.wait_for(consume(), timeout=profile.timeout_seconds)
                 )
+        except AttemptWorkspaceConflictError as exc:
+            self._raise_failure(
+                request=request,
+                failure_class="workspace_initialization_failure",
+                failure_code="claude_attempt_workspace_unavailable",
+                message="Claude Attempt draft workspace is already leased",
+                provider_response="",
+                usage=ModuleUsageObservation(
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_read_tokens=0,
+                    cache_creation_tokens=0,
+                ),
+                tool_calls=current_tool_calls(),
+                retryable=False,
+                cause=exc,
+            )
         except Exception as exc:
             partial_result = _result_message(messages)
             # Some Claude Code / Agent SDK versions yield a complete successful

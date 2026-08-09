@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
+import threading
 from typing import Any
 import uuid
 
@@ -19,9 +21,14 @@ from agent_runtime.ledger import (
     PostgresRuntimeExecutionQueryStore,
     PostgresRuntimeExecutionRecordStore,
     RuntimeExecutionContent,
+    RuntimeExecutionPageCursor,
     deserialize_runtime_batch,
     postgres_execution_ledger_ddl,
     serialize_runtime_batch,
+)
+from agent_runtime.ledger.ledger_postgres_persistence import (
+    _canonical_payload,
+    _json_bytes,
 )
 
 
@@ -139,6 +146,17 @@ def test_runtime_batch_codec_round_trips_nested_records_and_enums() -> None:
     assert restored.transaction_sha256 == batch.transaction_sha256
 
 
+def test_canonical_payload_bytes_survive_jsonb_numeric_rewriting() -> None:
+    payload = {"large": 1e30, "negative_zero": -0.0}
+    canonical = _json_bytes(payload)
+    rewritten = _json_bytes(
+        {"large": 10**30, "negative_zero": 0.0}
+    )
+
+    assert canonical != rewritten
+    assert _canonical_payload(memoryview(canonical)) == payload
+
+
 @pytest.mark.skipif(
     not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),
     reason="requires AGENT_RUNTIME_TEST_DATABASE_URL",
@@ -189,6 +207,9 @@ def test_postgres_execution_store_survives_reopen_and_verifies_content(
         schema=postgres_test_schema,
     )
     reopened.commit_content(content)
+    replayed_content = reopened.commit_content(
+        replace(content, recorded_at_utc="2026-08-08T12:00:01Z")
+    )
     second_execution_id = "execution_postgres_002"
     second_input = replace(
         input_record,
@@ -225,9 +246,13 @@ def test_postgres_execution_store_survives_reopen_and_verifies_content(
     first_page = queries.list_executions(limit=1)
     second_page = queries.list_executions(
         limit=1,
-        offset=1,
+        before=RuntimeExecutionPageCursor(
+            recorded_at_utc=first_page[0].recorded_at_utc,
+            workflow_execution_id=first_page[0].workflow_execution_id,
+        ),
     )
     assert second_page[0].workflow_execution_id == second_execution_id
+    assert replayed_content.body == body
 
     import psycopg
 
@@ -238,8 +263,8 @@ def test_postgres_execution_store_survives_reopen_and_verifies_content(
                 INSERT INTO {postgres_test_schema}.execution_record
                     (workflow_execution_id, transaction_id,
                      transaction_record_index, record_type, record_sha256,
-                     payload)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                     payload, payload_canonical)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
                 """,
                 (
                     EXECUTION_ID,
@@ -248,6 +273,7 @@ def test_postgres_execution_store_survives_reopen_and_verifies_content(
                     "CorruptRecord",
                     hashlib.sha256(b"{}").hexdigest(),
                     "{}",
+                    b"{}",
                 ),
             )
     with pytest.raises(RuntimeError, match="record count mismatch"):
@@ -370,7 +396,8 @@ def test_postgres_execution_store_initializes_schema_transactionally() -> None:
 
     store.initialize_schema()
 
-    assert tuple(cursor.statements) == postgres_execution_ledger_ddl()
+    assert "pg_advisory_xact_lock" in cursor.statements[0]
+    assert tuple(cursor.statements[1:]) == postgres_execution_ledger_ddl()
     assert connection.committed is True
     assert connection.rolled_back is False
     assert cursor.closed is True
@@ -383,6 +410,179 @@ def test_postgres_execution_query_store_marks_database_transaction_read_only() -
     queries = PostgresRuntimeExecutionQueryStore(lambda: connection)
 
     assert queries.list_executions() == ()
-    assert cursor.statements[0] == "SET TRANSACTION READ ONLY"
+    assert cursor.statements[0] == (
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+    )
     assert "SELECT workflow_execution_id" in cursor.statements[1]
     assert connection.committed is True
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),
+    reason="requires AGENT_RUNTIME_TEST_DATABASE_URL",
+)
+def test_postgres_execution_schema_initialization_is_concurrency_safe(
+    postgres_test_schema: str,
+) -> None:
+    database_url = os.environ["AGENT_RUNTIME_TEST_DATABASE_URL"]
+
+    def initialize(_: int) -> None:
+        PostgresRuntimeExecutionRecordStore.from_dsn(
+            database_url,
+            schema=postgres_test_schema,
+        ).initialize_schema()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(initialize, range(16)))
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),
+    reason="requires AGENT_RUNTIME_TEST_DATABASE_URL",
+)
+def test_postgres_trace_read_uses_one_snapshot_during_concurrent_commit(
+    postgres_test_schema: str,
+) -> None:
+    import psycopg
+
+    database_url = os.environ["AGENT_RUNTIME_TEST_DATABASE_URL"]
+    input_record = ExecutionInputRef(
+        execution_input_id="input_postgres_snapshot_001",
+        workflow_execution_id=EXECUTION_ID,
+        input_type_id="agent_input",
+        schema_version="v1",
+        input_ref="artifact-ref:postgres-snapshot-input-001",
+        input_sha256="0" * 64,
+        byte_size=0,
+        media_type="application/json",
+        recorded_at_utc=RECORDED_AT,
+    )
+    initial_batch = RuntimeRecordBatch(
+        workflow_execution_id=EXECUTION_ID,
+        transaction_id="transaction_postgres_snapshot_initial",
+        records=(_execution(input_record), input_record),
+    )
+    later_input = replace(
+        input_record,
+        execution_input_id="input_postgres_snapshot_002",
+        input_ref="artifact-ref:postgres-snapshot-input-002",
+    )
+    later_batch = RuntimeRecordBatch(
+        workflow_execution_id=EXECUTION_ID,
+        transaction_id="transaction_postgres_snapshot_later",
+        records=(later_input,),
+    )
+    writer = PostgresRuntimeExecutionRecordStore.from_dsn(
+        database_url,
+        schema=postgres_test_schema,
+    )
+    writer.initialize_schema()
+    writer.commit(initial_batch)
+    first_select_finished = threading.Event()
+    later_commit_finished = threading.Event()
+
+    class CoordinatedCursor:
+        def __init__(self, cursor: Any) -> None:
+            self._cursor = cursor
+
+        def execute(self, statement: str, parameters: Any = None):
+            result = self._cursor.execute(statement, parameters)
+            if (
+                "FROM " + postgres_test_schema + ".execution_transaction" in statement
+                and "JOIN" not in statement
+            ):
+                first_select_finished.set()
+                assert later_commit_finished.wait(10)
+            return result
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._cursor, name)
+
+    class CoordinatedConnection:
+        def __init__(self) -> None:
+            self._connection = psycopg.connect(database_url)
+
+        def cursor(self) -> CoordinatedCursor:
+            return CoordinatedCursor(self._connection.cursor())
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._connection, name)
+
+    coordinated_queries = PostgresRuntimeExecutionQueryStore(
+        CoordinatedConnection,
+        schema=postgres_test_schema,
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        read = executor.submit(coordinated_queries.load_trace, EXECUTION_ID)
+        assert first_select_finished.wait(10)
+        try:
+            writer.commit(later_batch)
+        finally:
+            later_commit_finished.set()
+        trace_during_commit = read.result(timeout=10)
+
+    assert trace_during_commit.records == initial_batch.records
+    final_trace = PostgresRuntimeExecutionQueryStore.from_dsn(
+        database_url,
+        schema=postgres_test_schema,
+    ).load_trace(EXECUTION_ID)
+    assert final_trace.records == initial_batch.records + later_batch.records
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),
+    reason="requires AGENT_RUNTIME_TEST_DATABASE_URL",
+)
+def test_postgres_mutations_reuse_the_validated_execution_prefix(
+    postgres_test_schema: str,
+    monkeypatch,
+) -> None:
+    database_url = os.environ["AGENT_RUNTIME_TEST_DATABASE_URL"]
+    first_input = ExecutionInputRef(
+        execution_input_id="input_postgres_cache_001",
+        workflow_execution_id=EXECUTION_ID,
+        input_type_id="agent_input",
+        schema_version="v1",
+        input_ref="artifact-ref:postgres-cache-input-001",
+        input_sha256="0" * 64,
+        byte_size=0,
+        media_type="application/json",
+        recorded_at_utc=RECORDED_AT,
+    )
+    first_batch = RuntimeRecordBatch(
+        workflow_execution_id=EXECUTION_ID,
+        transaction_id="transaction_postgres_cache_initial",
+        records=(_execution(first_input), first_input),
+    )
+    second_input = replace(
+        first_input,
+        execution_input_id="input_postgres_cache_002",
+        input_ref="artifact-ref:postgres-cache-input-002",
+    )
+    second_batch = RuntimeRecordBatch(
+        workflow_execution_id=EXECUTION_ID,
+        transaction_id="transaction_postgres_cache_later",
+        records=(second_input,),
+    )
+    store = PostgresRuntimeExecutionRecordStore.from_dsn(
+        database_url,
+        schema=postgres_test_schema,
+    )
+    store.initialize_schema()
+    load_calls = 0
+    original_load = store._load_committed_batches
+
+    def count_loads(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal load_calls
+        load_calls += 1
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(store, "_load_committed_batches", count_loads)
+
+    store.commit(first_batch)
+    store.commit(second_batch)
+
+    assert load_calls == 1
+    assert store.load_trace(EXECUTION_ID).records == (
+        first_batch.records + second_batch.records
+    )

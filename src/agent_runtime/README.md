@@ -72,7 +72,7 @@ Other frameworks optimize for different entry points:
 | --- | --- | --- |
 | LangGraph | Low-level graphs for long-running stateful agents | Registered immutable releases and an authoritative operational ledger are first-class Runtime contracts |
 | [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) | Lightweight agent loops, tools, handoffs, guardrails, sessions, and tracing | Provider-neutral execution facts, durable backend coordination, and host-supplied authorization boundaries |
-| [AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/core-concepts/architecture.html) | Message-driven single-process and distributed multi-agent runtimes | Version-pinned Workflow execution, transactional recovery, and formal inspection records |
+| [AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/index.html) | Message-driven single-process and distributed multi-agent runtimes | Version-pinned Workflow execution, transactional recovery, and formal inspection records |
 | [CrewAI](https://docs.crewai.com/) | High-level role-based crews plus structured Flows | Domain-neutral infrastructure that does not prescribe roles, goals, or collaboration metaphors |
 
 These are not mutually exclusive ideas. A host can adapt another framework's
@@ -384,3 +384,12 @@ deployment assembly. The shadow `ModuleExecutor` compatibility seam must also
 converge into the canonical `AuthorizedAgentExecutionAdapter` DTOs and
 normalized failure taxonomy before production admission. End-to-end consumer
 migration remains a release gate, not an implied capability.
+
+Two boundaries are intentionally still explicit integration gates. Runtime
+defines `AgentRuntimeProductHostApi`, but a concrete product-host controller
+belongs to the composing host rather than this domain-neutral package.
+`WorkflowExecutionProfileSelection` is a validated contract, while the current
+PostgreSQL authorities pin the effective profile in execution Variant and
+Attempt facts rather than persisting that pre-execution selection as a separate
+control-plane authority. A production host must close and test that selection
+handoff for its own start path.

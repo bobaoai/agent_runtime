@@ -162,8 +162,21 @@ class InMemoryRuntimeExecutionRecordStore:
         store = cls(
             execution_output_integrity_check=execution_output_integrity_check,
         )
-        for batch in batches:
-            store.commit(batch)
+        materialized = tuple(batches)
+        records_by_execution: dict[str, list[PersistedRuntimeRecord]] = {}
+        for batch in materialized:
+            batch.validate()
+            records_by_execution.setdefault(batch.workflow_execution_id, []).extend(
+                batch.records
+            )
+        # A restored prefix has already crossed an atomic persistence boundary.
+        # Validate its semantic closure once per execution, then rebuild the
+        # in-memory indexes without replaying every historical prefix through
+        # _validate_candidate (which made an n-batch restore quadratic).
+        for workflow_execution_id, records in records_by_execution.items():
+            store._validate_candidate(workflow_execution_id, tuple(records), ())
+        for batch in materialized:
+            store._record_validated_batch(batch)
         store._rebuild_active_claims()
         return store
 
@@ -191,14 +204,24 @@ class InMemoryRuntimeExecutionRecordStore:
                     continue
                 start = starts.get((workflow_execution_id, record.attempt_id))
                 if start is not None:
-                    self._active_claims.pop(
-                        (
-                            workflow_execution_id,
-                            start.dispatch_id,
-                            start.variant_id,
-                        ),
-                        None,
+                    claim_key = (
+                        workflow_execution_id,
+                        start.dispatch_id,
+                        start.variant_id,
                     )
+                    if self._active_claims.get(claim_key) == (
+                        start.attempt_id,
+                        start.claim_token_hash,
+                    ):
+                        self._active_claims.pop(claim_key)
+
+    def _set_execution_output_integrity_check(
+        self,
+        integrity_check: Callable[[ExecutionOutputRef], bool] | None,
+    ) -> None:
+        """Refresh the transaction-local integrity check on a cached prefix."""
+
+        self._execution_output_integrity_check = integrity_check
 
     def begin_attempt(self, batch: LegacyAttemptBeginBatch) -> AttemptBeginReceipt:
         """Commit the claim boundary before any external operation can start."""
@@ -419,32 +442,52 @@ class InMemoryRuntimeExecutionRecordStore:
             candidate = existing + batch.records
             self._validate_candidate(batch.workflow_execution_id, candidate, existing)
 
-            committed_outcomes = tuple(
-                record.outcome_ref
-                for record in batch.records
-                if isinstance(record, ModuleOutcome)
-            )
-            receipt = CommitReceipt(
-                workflow_execution_id=batch.workflow_execution_id,
-                transaction_id=batch.transaction_id,
-                transaction_sha256=transaction_sha256,
-                record_count=len(batch.records),
-                committed_outcome_refs=committed_outcomes,
-                replayed=False,
-            )
-            self._records[batch.workflow_execution_id] = candidate
-            self._transactions[transaction_key] = (transaction_sha256, receipt)
-            self._receipts[batch.workflow_execution_id] = (
-                self._receipts.get(batch.workflow_execution_id, ()) + (receipt,)
-            )
-            for record in batch.records:
-                if isinstance(record, ModuleOutcome):
-                    self._outcomes[(batch.workflow_execution_id, record.dispatch_id)] = record
-                elif isinstance(record, InvocationCommitRecord):
-                    self._invocations[
-                        (batch.workflow_execution_id, record.dispatch_id)
-                    ] = record
-            return receipt
+            return self._record_validated_batch(batch)
+
+    def _record_validated_batch(
+        self,
+        batch: RuntimeRecordBatch | LegacyRuntimeRecordBatch,
+    ) -> CommitReceipt:
+        """Index one batch whose complete execution closure was already validated."""
+
+        transaction_sha256 = batch.transaction_sha256
+        transaction_key = (batch.workflow_execution_id, batch.transaction_id)
+        prior = self._transactions.get(transaction_key)
+        if prior is not None:
+            prior_sha256, prior_receipt = prior
+            if prior_sha256 != transaction_sha256:
+                raise ValueError(
+                    "transaction_id reuse with different RuntimeRecordBatch"
+                )
+            return replace(prior_receipt, replayed=True)
+        committed_outcomes = tuple(
+            record.outcome_ref
+            for record in batch.records
+            if isinstance(record, ModuleOutcome)
+        )
+        receipt = CommitReceipt(
+            workflow_execution_id=batch.workflow_execution_id,
+            transaction_id=batch.transaction_id,
+            transaction_sha256=transaction_sha256,
+            record_count=len(batch.records),
+            committed_outcome_refs=committed_outcomes,
+            replayed=False,
+        )
+        self._records[batch.workflow_execution_id] = (
+            self._records.get(batch.workflow_execution_id, ()) + batch.records
+        )
+        self._transactions[transaction_key] = (transaction_sha256, receipt)
+        self._receipts[batch.workflow_execution_id] = (
+            self._receipts.get(batch.workflow_execution_id, ()) + (receipt,)
+        )
+        for record in batch.records:
+            if isinstance(record, ModuleOutcome):
+                self._outcomes[(batch.workflow_execution_id, record.dispatch_id)] = record
+            elif isinstance(record, InvocationCommitRecord):
+                self._invocations[
+                    (batch.workflow_execution_id, record.dispatch_id)
+                ] = record
+        return receipt
 
     def _started_attempt(self, claim: AttemptClaim) -> WorkflowAttemptStartedRecord:
         trace = self.load_trace(claim.workflow_execution_id)

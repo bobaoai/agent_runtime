@@ -24,6 +24,7 @@ from ..contracts.registry_release_definition import WorkflowRelease
 from ..ledger.ledger_postgres_persistence import (
     RuntimeExecutionContent,
     RuntimeExecutionDescriptor,
+    RuntimeExecutionPageCursor,
 )
 
 
@@ -34,7 +35,7 @@ class WorkflowInspectionRepository(Protocol):
         self,
         *,
         limit: int = 100,
-        offset: int = 0,
+        before: RuntimeExecutionPageCursor | None = None,
     ) -> tuple[RuntimeExecutionDescriptor, ...]: ...
 
     def get_execution_descriptor(
@@ -137,6 +138,22 @@ class LiveWorkflowInspectorApplication:
                 "text/html; charset=utf-8",
                 method=method,
             )
+        if path == "/assets/live-inspector.css":
+            return self._respond(
+                start_response,
+                "200 OK",
+                _LIVE_INSPECTOR_STYLE.encode("utf-8"),
+                "text/css; charset=utf-8",
+                method=method,
+            )
+        if path == "/assets/live-inspector.js":
+            return self._respond(
+                start_response,
+                "200 OK",
+                _LIVE_INSPECTOR_SCRIPT.encode("utf-8"),
+                "text/javascript; charset=utf-8",
+                method=method,
+            )
         if not path.startswith("/api/"):
             return self._json(start_response, "404 Not Found", {"error": "not_found"}, method)
         try:
@@ -185,7 +202,7 @@ class LiveWorkflowInspectorApplication:
             return self._json(start_response, "400 Bad Request", {"error": "invalid_limit"}, method)
         limit = min(max(requested_limit, 1), 1000)
         try:
-            scan_offset = _decode_execution_cursor(query.get("cursor", [None])[0])
+            scan_before = _decode_execution_cursor(query.get("cursor", [None])[0])
         except ValueError:
             return self._json(
                 start_response,
@@ -200,14 +217,17 @@ class LiveWorkflowInspectorApplication:
             scan_limit = min(1000, 5000 - examined)
             rows = self._repository.list_executions(
                 limit=scan_limit,
-                offset=scan_offset,
+                before=scan_before,
             )
             if not rows:
                 exhausted = True
                 break
             for row in rows:
                 examined += 1
-                scan_offset += 1
+                scan_before = RuntimeExecutionPageCursor(
+                    recorded_at_utc=row.recorded_at_utc,
+                    workflow_execution_id=row.workflow_execution_id,
+                )
                 if self._can_read_execution(request_context, row):
                     authorized.append(row)
                     if len(authorized) == limit:
@@ -220,7 +240,7 @@ class LiveWorkflowInspectorApplication:
         next_cursor = (
             None
             if exhausted
-            else _encode_execution_cursor(scan_offset)
+            else _encode_execution_cursor(scan_before)
         )
         return self._json(
             start_response,
@@ -306,12 +326,13 @@ class LiveWorkflowInspectorApplication:
             start_response,
             "200 OK",
             content.body,
-            content.media_type,
+            "application/octet-stream",
             method=method,
             extra_headers=(
                 ("X-Content-SHA256", content.content_sha256),
-                ("Content-Disposition", "inline"),
+                ("Content-Disposition", 'attachment; filename="execution-content.bin"'),
             ),
+            sandboxed_download=True,
         )
 
     def _can_read_execution(
@@ -375,11 +396,19 @@ class LiveWorkflowInspectorApplication:
         *,
         method: str,
         extra_headers: tuple[tuple[str, str], ...] = (),
+        sandboxed_download: bool = False,
     ) -> Iterable[bytes]:
         frame_headers = (
             (("X-Frame-Options", "DENY"),)
             if self._frame_ancestors == ("'none'",)
             else ()
+        )
+        content_security_policy = (
+            "sandbox; default-src 'none'; frame-ancestors 'none'"
+            if sandboxed_download
+            else "default-src 'none'; style-src 'self'; script-src 'self'; "
+            "connect-src 'self'; "
+            f"frame-ancestors {' '.join(self._frame_ancestors)}"
         )
         headers = (
             ("Content-Type", content_type),
@@ -389,10 +418,9 @@ class LiveWorkflowInspectorApplication:
             ("Referrer-Policy", "no-referrer"),
             (
                 "Content-Security-Policy",
-                "default-src 'none'; style-src 'unsafe-inline'; "
-                "script-src 'unsafe-inline'; connect-src 'self'; "
-                f"frame-ancestors {' '.join(self._frame_ancestors)}",
+                content_security_policy,
             ),
+            ("Cross-Origin-Resource-Policy", "same-origin"),
             *frame_headers,
             *extra_headers,
         )
@@ -419,14 +447,21 @@ def _receipt_dict(receipt: CommitReceipt) -> dict[str, Any]:
     }
 
 
-def _encode_execution_cursor(offset: int) -> str:
-    payload = str(offset).encode("ascii")
+def _encode_execution_cursor(cursor: RuntimeExecutionPageCursor | None) -> str:
+    if cursor is None:
+        raise ValueError("execution cursor requires an authorized row")
+    cursor.validate()
+    payload = json.dumps(
+        [cursor.recorded_at_utc, cursor.workflow_execution_id],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("ascii")
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def _decode_execution_cursor(value: str | None) -> int:
+def _decode_execution_cursor(value: str | None) -> RuntimeExecutionPageCursor | None:
     if value is None:
-        return 0
+        return None
     if type(value) is not str or not value or len(value) > 2048:
         raise ValueError("invalid execution cursor")
     try:
@@ -436,12 +471,21 @@ def _decode_execution_cursor(value: str | None) -> int:
             altchars=b"-_",
             validate=True,
         ).decode("ascii")
-        offset = int(decoded)
-    except (UnicodeDecodeError, ValueError) as exc:
+        payload = json.loads(decoded)
+        if (
+            type(payload) is not list
+            or len(payload) != 2
+            or any(type(item) is not str for item in payload)
+        ):
+            raise ValueError("invalid execution cursor")
+        cursor = RuntimeExecutionPageCursor(
+            recorded_at_utc=payload[0],
+            workflow_execution_id=payload[1],
+        )
+        cursor.validate()
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("invalid execution cursor") from exc
-    if offset < 0 or offset > 10_000_000:
-        raise ValueError("invalid execution cursor")
-    return offset
+    return cursor
 
 
 def _validate_frame_ancestors(value: tuple[str, ...]) -> tuple[str, ...]:
@@ -511,7 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-_LIVE_INSPECTOR_HTML = r'''<!doctype html>
+_LIVE_INSPECTOR_DOCUMENT = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Runtime Live Inspector</title>
 <style>:root{color-scheme:dark;--bg:#070b10;--panel:#101720;--line:#273442;--text:#e8eef5;--muted:#90a0b1;--cyan:#57ded2;--green:#7ee2a9;--amber:#efbd61;font-family:Inter,ui-sans-serif,system-ui,sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}button,input{font:inherit;color:inherit}.top{height:66px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;background:#070b10f2;z-index:4}.brand small,.eyebrow{color:var(--cyan);font-size:10px;font-weight:800;letter-spacing:.13em}.live{color:var(--green);font-size:11px}.shell{display:grid;grid-template-columns:300px minmax(0,1fr);min-height:calc(100vh - 66px)}aside{border-right:1px solid var(--line);padding:15px;overflow:auto}.search{width:100%;border:1px solid var(--line);background:#0b1118;border-radius:7px;padding:9px;margin:10px 0}.execution{width:100%;text-align:left;border:1px solid var(--line);background:#0c1219;border-radius:8px;padding:11px;margin-bottom:8px;cursor:pointer}.execution:hover,.execution.active{border-color:var(--cyan)}main{padding:18px;min-width:0}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:17px;margin-bottom:14px}.muted{color:var(--muted)}.mono{font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}h1,h2,h3,p{margin:0}.summary{display:flex;justify-content:space-between;gap:15px}.metrics{display:flex;gap:7px;flex-wrap:wrap}.metric{border:1px solid var(--line);border-radius:7px;padding:8px 10px;min-width:92px}.metric small{display:block;color:var(--muted)}nav{display:flex;gap:4px;border-bottom:1px solid var(--line);overflow:auto;margin-top:15px}nav button{border:0;border-bottom:2px solid transparent;background:none;padding:9px;cursor:pointer;white-space:nowrap}nav button.active{border-color:var(--cyan);color:var(--cyan)}.view{padding-top:14px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.card,details{border:1px solid var(--line);border-radius:7px;background:#0b1118;padding:11px}.wide{grid-column:1/-1}.card small{display:block;color:var(--muted);text-transform:uppercase}.graph{display:flex;gap:18px;overflow:auto;padding:8px}.node{min-width:165px;position:relative}.node:after{content:'→';position:absolute;right:-15px;top:26px;color:var(--muted)}.node:last-child:after{display:none}details{margin-bottom:8px}summary{cursor:pointer}pre{white-space:pre-wrap;overflow:auto;max-height:62vh;background:#070b10;border:1px solid var(--line);padding:12px;border-radius:7px;color:#cbd8e5}.content{display:flex;justify-content:space-between;gap:8px;align-items:center}.content button{border:1px solid var(--cyan);background:transparent;border-radius:5px;padding:5px 8px;cursor:pointer}.notice{color:var(--amber)}@media(max-width:850px){.shell{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr}}</style></head>
 <body><header class="top"><div class="brand"><small>AGENT RUNTIME · READ ONLY</small><h1>Live Inspector</h1></div><span class="live" id="live">● LIVE</span></header><div class="shell"><aside><p class="eyebrow">AUTHORIZED EXECUTIONS</p><input class="search" id="search" placeholder="Filter workflow or execution"><div id="executions"></div></aside><main><section class="panel" id="empty"><h2>Select an Agent Workflow execution</h2><p class="muted">Inspect its registered graph, module runs, attempts, model/tool calls, outputs, evaluations and recovery facts.</p></section><section id="workspace" hidden><section class="panel summary"><div><p class="eyebrow" id="workflow"></p><h2 id="execution"></h2><p class="mono muted" id="release"></p></div><div class="metrics" id="metrics"></div></section><section class="panel"><nav id="tabs"><button data-tab="graph" class="active">Agent graph</button><button data-tab="modules">Module runs</button><button data-tab="attempts">Attempts</button><button data-tab="operations">Model &amp; tools</button><button data-tab="decisions">Evaluation</button><button data-tab="recovery">Recovery</button><button data-tab="content">Content</button><button data-tab="records">All records</button></nav><div class="view" id="view"></div></section></section></main></div>
@@ -519,6 +563,26 @@ _LIVE_INSPECTOR_HTML = r'''<!doctype html>
 async function json(url){const response=await fetch(url,{credentials:"same-origin",headers:{Accept:"application/json"}});if(!response.ok)throw new Error(`${response.status}`);return response.json()}async function refreshList(){try{let rows=[],cursor=null,pages=0;do{const page=await json(`/api/executions?limit=250${cursor?`&cursor=${encodeURIComponent(cursor)}`:''}`);rows.push(...page.executions);cursor=page.next_cursor;pages+=1}while(cursor&&pages<100);executions=rows;renderList();el('live').textContent=cursor?'● PARTIAL':'● LIVE'}catch(error){el('live').textContent='● DISCONNECTED'}}function renderList(){const q=el('search').value.toLowerCase();el('executions').innerHTML=executions.filter(x=>`${x.workflow_id} ${x.workflow_execution_id}`.toLowerCase().includes(q)).map(x=>`<button class="execution ${selected===x.workflow_execution_id?'active':''}" data-id="${esc(x.workflow_execution_id)}"><strong>${esc(x.workflow_id)}</strong><div class="mono muted">${esc(x.workflow_execution_id)}</div></button>`).join('')||'<p class="muted">No authorized executions.</p>';document.querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>load(b.dataset.id))}
 async function load(id){selected=id;data=await json(`/api/executions/${encodeURIComponent(id)}`);renderList();render();el('empty').hidden=true;el('workspace').hidden=false}function render(){const x=data.execution,r=data.records,release=data.workflow_release;el('workflow').textContent=x.workflow_id;el('execution').textContent=x.workflow_execution_id;el('release').textContent=x.execution_release_ref;const counts=[['Module runs',types('WorkflowModuleRunRecord').length],['Attempts',types('WorkflowAttemptRecord').length],['Model calls',types('ModelCallRecord').length],['Tool calls',types('ToolCallRecord').length]];el('metrics').innerHTML=counts.map(([a,b])=>`<div class="metric"><small>${a}</small><strong>${b}</strong></div>`).join('');document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));const views={graph:()=>release?`<div class="graph">${release.nodes.map(n=>`<article class="card node"><small>${esc(n.node_kind)}</small><strong>${esc(n.node_id)}</strong><div class="mono muted">${esc(n.module_release_ref??'control')}</div></article>`).join('')}</div><pre>${pretty(release.edges)}</pre>`:'<p class="notice">The frozen Workflow release is not available from the configured release store.</p>',modules:()=>recordView(types('WorkflowModuleRunRecord','WorkflowModuleExecutionVariantRecord')),attempts:()=>recordView(types('WorkflowAttemptStartedRecord','WorkflowAttemptRecord','AttemptOrphanedRecord','StaleOutputRecord')),operations:()=>recordView(types('InvocationCommitRecord','ModelCallRecord','ToolCallRecord','UsageEvent','GatewayOperationEffectRecord','InvocationGatewayEffectBindingRecord')),decisions:()=>recordView(types('EvaluationRun','EvaluationResult','EvaluationSet','Selection','ModuleOutputResolutionRecord','ModuleOutcome')),recovery:()=>recordView(types('CheckpointRecord','BackendAcknowledgementRecord','ExternalEventApplicationRecord')),content:()=>contentView(),records:()=>recordView(r)};el('view').innerHTML=views[tab]()}
 function recordView(rows){return rows.map((r,i)=>`<details ${i===0?'open':''}><summary>${esc(r.record_type)}</summary><pre>${pretty(r.record)}</pre></details>`).join('')||'<p class="muted">No committed records in this category.</p>'}function contentView(){return data.contents.map(c=>`<div class="card content"><div><strong>${esc(c.content_ref)}</strong><div class="mono muted">${esc(c.media_type)} · ${esc(c.byte_size)} bytes · ${esc(c.content_sha256)}</div></div><button data-content="${esc(c.content_ref)}">Read authorized body</button></div>`).join('')||'<p class="muted">No content bodies were recorded.</p>'}document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render()});el('view').addEventListener('click',async event=>{const ref=event.target.dataset.content;if(!ref)return;const response=await fetch(`/api/executions/${encodeURIComponent(selected)}?content_ref=${encodeURIComponent(ref)}`,{credentials:'same-origin'});if(!response.ok){event.target.textContent='Not authorized';return}const body=await response.text();const pre=document.createElement('pre');pre.textContent=body;event.target.closest('.card').after(pre)});el('search').oninput=renderList;refreshList();setInterval(async()=>{await refreshList();if(selected)try{data=await json(`/api/executions/${encodeURIComponent(selected)}`);render()}catch(error){}},3000);</script></body></html>'''
+
+_HTML_BEFORE_STYLE, _, _HTML_AFTER_STYLE_START = _LIVE_INSPECTOR_DOCUMENT.partition(
+    "<style>"
+)
+_LIVE_INSPECTOR_STYLE, _, _HTML_AFTER_STYLE = _HTML_AFTER_STYLE_START.partition(
+    "</style>"
+)
+_HTML_BEFORE_SCRIPT, _, _HTML_AFTER_SCRIPT_START = _HTML_AFTER_STYLE.partition(
+    "<script>"
+)
+_LIVE_INSPECTOR_SCRIPT, _, _HTML_AFTER_SCRIPT = _HTML_AFTER_SCRIPT_START.partition(
+    "</script>"
+)
+_LIVE_INSPECTOR_HTML = (
+    _HTML_BEFORE_STYLE
+    + '<link rel="stylesheet" href="/assets/live-inspector.css">'
+    + _HTML_BEFORE_SCRIPT
+    + '<script src="/assets/live-inspector.js"></script>'
+    + _HTML_AFTER_SCRIPT
+)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by the console script

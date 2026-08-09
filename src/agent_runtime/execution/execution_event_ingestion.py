@@ -497,6 +497,23 @@ class InMemoryExternalEventIngress:
         snapshot.validate()
         snapshot_token.validate()
         validate_utc_timestamp("claim_at_utc", claim_at_utc)
+        existing = self._ingress_by_request.get(request.request_ref)
+        if existing is not None:
+            # Once the outbox intent has committed, an exact retry must converge
+            # even if admission, the execution fence, the wait snapshot, or the
+            # original authority window has since changed. Those live gates
+            # protect new work; they cannot invalidate an immutable committed
+            # intent that a crashed caller is trying to recover.
+            if existing.event.ingress_request_sha256 != request.request_sha256:
+                raise ValueError("external-event ingress idempotency conflict")
+            self._validate_replay_closure(
+                existing=existing,
+                request=request,
+                trusted_context=trusted_context,
+                authorization=authorization,
+                execution_binding=execution_binding,
+            )
+            return existing
         workflow = release_registry.get_workflow(
             workflow_release_ref,
             workflow_release_sha256,
@@ -509,12 +526,6 @@ class InMemoryExternalEventIngress:
             ReleaseAdmissionState.ACTIVE,
         }:
             raise PermissionError("Workflow Release is not admitted for ingress")
-        existing = self._ingress_by_request.get(request.request_ref)
-        if (
-            existing is not None
-            and existing.event.ingress_request_sha256 != request.request_sha256
-        ):
-            raise ValueError("external-event ingress idempotency conflict")
         self._validate_prepare_closure(
             request=request,
             trusted_context=trusted_context,
@@ -525,20 +536,8 @@ class InMemoryExternalEventIngress:
             snapshot_token=snapshot_token,
             workflow=workflow,
             claim_at_utc=claim_at_utc,
-            require_wait_match=existing is None,
+            require_wait_match=True,
         )
-        if existing is not None:
-            # The committed record answers an exact retry even after the
-            # execution has left its original wait. The caller must still
-            # present the same authority lineage and current effective fence.
-            self._validate_replay_closure(
-                existing=existing,
-                request=request,
-                authorization=authorization,
-                execution_binding=execution_binding,
-                workflow=workflow,
-            )
-            return existing
 
         routes = tuple(
             edge
@@ -823,19 +822,30 @@ class InMemoryExternalEventIngress:
         *,
         existing: ExternalEventIngressRecord,
         request: ExternalEventIngressRequest,
+        trusted_context: TrustedRequestContext,
         authorization: ExternalActionAuthorizationEvidence,
         execution_binding: ExecutionAuthorizationBinding,
-        workflow: WorkflowRelease,
     ) -> None:
         """Require a retry to reproduce the committed authority lineage."""
 
         event = existing.event
+        if authorization.effect is not AuthorizationEffect.ALLOW:
+            raise PermissionError("external action was denied")
+        if (
+            trusted_context.actor_principal_id != authorization.actor_principal_id
+            or trusted_context.tenant_id != authorization.tenant_id
+            or trusted_context.cell_id != authorization.cell_id
+            or trusted_context.tenant_id != execution_binding.tenant_id
+            or trusted_context.cell_id != execution_binding.cell_id
+        ):
+            raise ValueError("external-event trusted identity mismatch")
         if (
             event.ingress_request_ref != request.request_ref
             or event.ingress_request_sha256 != request.request_sha256
             or event.workflow_execution_id != request.workflow_execution_id
-            or event.workflow_release_ref != workflow.release_ref
-            or event.workflow_release_sha256 != workflow.release_sha256
+            or event.workflow_release_ref != execution_binding.workflow_release_ref
+            or event.workflow_release_sha256
+            != execution_binding.workflow_release_sha256
             or event.expected_snapshot_ref != request.expected_snapshot_ref
             or event.expected_snapshot_sha256 != request.expected_snapshot_sha256
             or event.expected_transition_sequence

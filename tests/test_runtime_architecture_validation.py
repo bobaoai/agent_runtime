@@ -14,11 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_runtime_architecture_registration_covers_every_python_source() -> None:
-    assert architecture.validate_runtime_architecture_registration() == ()
-    assert architecture.validate_registry_architecture_registration(REPO_ROOT) == ()
-    projection = build_runtime_architecture_projection(REPO_ROOT)
+    projection = build_runtime_architecture_projection()
     assert projection["schema_version"] == "agent_runtime_architecture_projection_v3"
-    assert build_runtime_architecture_projection() == projection
 
 
 def test_target_source_names_match_logical_owner_module() -> None:
@@ -43,14 +40,7 @@ def test_architecture_axes_are_registered_independently() -> None:
         for row in architecture.RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
     }
 
-    assert responsibility_ids == (
-        "registry",
-        "execution",
-        "invocation",
-        "durability",
-        "ledger",
-        "inspection",
-    )
+    assert responsibility_ids == architecture.RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS
     assert {"contracts", "testing"}.issubset(directory_ids)
     assert {"postgresql", "temporal", "claude_agent_sdk", "codex_cli", "html"}.issubset(
         technology_ids

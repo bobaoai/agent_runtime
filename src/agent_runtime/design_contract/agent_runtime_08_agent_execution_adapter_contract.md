@@ -76,8 +76,8 @@ runtime_surface_ledger:
   - "target model-execution authorization seam: src/agent_runtime/invocation/invocation_model_invocation.py"
 verification_hooks:
   - ./.venv/bin/python -m pytest tests/test_agent_runtime_public_adapter_contracts.py -q
-  - ./.venv/bin/python -m pytest tests/test_agent_runtime_codex_cli_executor.py -q
-  - ./.venv/bin/python -m pytest tests/test_agent_runtime_model_execution_gateway.py -q
+  - ./.venv/bin/python -m pytest tests/test_agent_runtime_native_structured_output.py -q
+  - ./.venv/bin/python -m pytest tests/test_agent_runtime_tool_session.py -q
 ```
 
 ## 1. Adapter Boundary

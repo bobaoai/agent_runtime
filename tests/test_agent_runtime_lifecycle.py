@@ -325,7 +325,7 @@ def _begin(store: InMemoryRuntimeExecutionRecordStore) -> AttemptClaim:
     return receipt.claim
 
 
-def test_committed_batch_rebuild_restores_active_attempt_claim() -> None:
+def test_committed_batch_rebuild_restores_active_attempt_claim(monkeypatch) -> None:
     committed_batches: list[RuntimeRecordBatch | LegacyRuntimeRecordBatch] = []
 
     class CapturingStore(InMemoryRuntimeExecutionRecordStore):
@@ -338,9 +338,23 @@ def test_committed_batch_rebuild_restores_active_attempt_claim() -> None:
     source = CapturingStore()
     _bootstrap(source)
     claim = _begin(source)
+    validation_calls = 0
+    original_validate = InMemoryRuntimeExecutionRecordStore._validate_candidate
+
+    def count_validation(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal validation_calls
+        validation_calls += 1
+        return original_validate(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        InMemoryRuntimeExecutionRecordStore,
+        "_validate_candidate",
+        count_validation,
+    )
     rebuilt = InMemoryRuntimeExecutionRecordStore.from_committed_batches(
         committed_batches
     )
+    assert validation_calls == 1
 
     receipt = rebuilt.authorize_operation(
         LegacyOperationGrantBatch(
@@ -647,6 +661,116 @@ def test_orphan_disposition_terminalizes_start_before_next_attempt() -> None:
     assert store.load_trace(EXECUTION_ID).records_of_type(AttemptOrphanedRecord) == (
         orphaned,
     )
+
+
+def test_late_orphan_record_does_not_erase_new_attempt_claim_on_rebuild() -> None:
+    committed_batches: list[RuntimeRecordBatch | LegacyRuntimeRecordBatch] = []
+
+    class CapturingStore(InMemoryRuntimeExecutionRecordStore):
+        def commit(self, batch):  # type: ignore[no-untyped-def]
+            receipt = super().commit(batch)
+            if not receipt.replayed:
+                committed_batches.append(batch)
+            return receipt
+
+    source = CapturingStore()
+    _bootstrap(source)
+    _begin(source)
+    orphaned_at = "2026-08-02T12:00:30Z"
+    terminal = WorkflowAttemptRecord(
+        workflow_execution_id=EXECUTION_ID,
+        module_run_id=STEP_ID,
+        variant_id=VARIANT_ID,
+        attempt_id=ATTEMPT_ID,
+        parent_attempt_id=None,
+        attempt_ordinal=1,
+        status="failed",
+        period_start_at_utc=START,
+        period_end_at_utc=orphaned_at,
+        recorded_at_utc=orphaned_at,
+        trace_id="trace_synthetic_001",
+        execution_output_refs=(),
+        failure_class="orphaned_attempt",
+    )
+    source.commit(
+        RuntimeRecordBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_terminal_before_orphan",
+            records=(terminal,),
+        )
+    )
+    second_claim = AttemptClaim(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id="attempt_synthetic_002",
+        claim_token="claim-token-abcdefghijklmnopqrstuvwxyz-002",
+    )
+    second_start = replace(
+        _start(second_claim),
+        attempt_id=second_claim.attempt_id,
+        parent_attempt_id=ATTEMPT_ID,
+        attempt_ordinal=2,
+        trace_id="trace_synthetic_002",
+        request_sha256="5" * 64,
+        recorded_at_utc=END,
+    )
+    second_begin = LegacyAttemptBeginBatch(
+        workflow_execution_id=EXECUTION_ID,
+        transaction_id="transaction_synthetic_retry_before_orphan",
+        start=second_start,
+        claim=second_claim,
+        grants=(
+            replace(
+                _grant(),
+                grant_id="grant_synthetic_model_002",
+                attempt_id=second_claim.attempt_id,
+                idempotency_key="operation_synthetic_model_002",
+                recorded_at_utc=END,
+            ),
+        ),
+    )
+    second_begin.validate()
+    committed_batches.append(second_begin.as_record_batch())
+    committed_batches.append(
+        RuntimeRecordBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_late_orphan_disposition",
+            records=(
+                AttemptOrphanedRecord(
+                    orphaned_record_id="attempt_orphaned_synthetic_001",
+                    workflow_execution_id=EXECUTION_ID,
+                    dispatch_id=DISPATCH_ID,
+                    module_run_id=STEP_ID,
+                    variant_id=VARIANT_ID,
+                    attempt_id=ATTEMPT_ID,
+                    reason_code="worker_lost",
+                    context_disposition_id="invalidate",
+                    recorded_at_utc=orphaned_at,
+                ),
+            ),
+        )
+    )
+
+    rebuilt = InMemoryRuntimeExecutionRecordStore.from_committed_batches(
+        committed_batches
+    )
+    receipt = rebuilt.authorize_operation(
+        LegacyOperationGrantBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_retry_live_grant",
+            claim=second_claim,
+            grants=(
+                replace(
+                    _grant(),
+                    grant_id="grant_synthetic_model_003",
+                    attempt_id=second_claim.attempt_id,
+                    idempotency_key="operation_synthetic_model_003",
+                    recorded_at_utc=END,
+                ),
+            ),
+        )
+    )
+
+    assert receipt.commit_receipt.replayed is False
 
 
 def test_stale_result_is_quarantined_without_normal_output_artifacts() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import subprocess
 import sys
@@ -164,3 +165,98 @@ def test_attempt_workspace_rejects_path_like_attempt_identity(tmp_path: Path) ->
         )
 
     assert not (tmp_path.parent / "outside").exists()
+
+
+def test_workspace_module_imports_and_leases_without_fcntl() -> None:
+    source = """
+import builtins
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path.cwd() / "src"))
+
+original_import = builtins.__import__
+def without_fcntl(name, *args, **kwargs):
+    if name == "fcntl":
+        raise ModuleNotFoundError("simulated Windows host")
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = without_fcntl
+
+from agent_runtime.invocation.invocation_workspace_preparation import (
+    AttemptWorkspaceConflictError,
+    lease_attempt_workspace,
+    prepare_attempt_workspace,
+)
+with tempfile.TemporaryDirectory() as directory:
+    workspace = prepare_attempt_workspace(
+        workspace_root=Path(directory),
+        attempt_identity={
+            "attempt_id": "attempt_windows_001",
+            "module_run_id": "module_run_windows_001",
+            "variant_id": "variant_windows_001",
+        },
+    )
+    with lease_attempt_workspace(workspace):
+        try:
+            with lease_attempt_workspace(workspace):
+                raise AssertionError("portable duplicate lease was admitted")
+        except AttemptWorkspaceConflictError:
+            pass
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_provider_adapters_hold_lease_around_provider_entry_and_classify_conflicts() -> None:
+    invocation_root = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "agent_runtime"
+        / "invocation"
+    )
+    expected_provider_entry = {
+        "invocation_codex_module_invocation.py": "_invoker",
+        "invocation_claude_module_invocation.py": "consume",
+    }
+    for file_name, provider_name in expected_provider_entry.items():
+        tree = ast.parse((invocation_root / file_name).read_text(encoding="utf-8"))
+        leased_blocks = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.With, ast.AsyncWith))
+            and any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "lease_attempt_workspace"
+                for call in ast.walk(node)
+            )
+        ]
+        assert len(leased_blocks) == 1, file_name
+        assert any(
+            isinstance(name, ast.Name)
+            and name.id == provider_name
+            or isinstance(name, ast.Attribute)
+            and name.attr == provider_name
+            for name in ast.walk(leased_blocks[0])
+        ), file_name
+        conflict_handlers = [
+            handler
+            for handler in ast.walk(tree)
+            if isinstance(handler, ast.ExceptHandler)
+            and isinstance(handler.type, ast.Name)
+            and handler.type.id == "AttemptWorkspaceConflictError"
+        ]
+        assert len(conflict_handlers) >= 1, file_name
+        assert any(
+            isinstance(value, ast.Constant)
+            and value.value == "workspace_initialization_failure"
+            for handler in conflict_handlers
+            for value in ast.walk(handler)
+        ), file_name

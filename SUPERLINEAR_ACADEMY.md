@@ -67,7 +67,7 @@ infrastructure-oriented than a graph-construction API.
 | --- | --- | --- |
 | [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) | Low-level stateful graphs, durable execution, persistence, streaming, and human oversight | Immutable Module/Workflow releases, exact execution closure, authoritative PostgreSQL facts, and authorized review |
 | [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) | A small set of accessible primitives for agent loops, tools, handoffs, guardrails, sessions, and tracing | Provider-neutral execution records, explicit durable-backend coordination, and host-owned authorization boundaries |
-| [AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/core-concepts/architecture.html) | Message-driven agent communication and lifecycle management in standalone or distributed runtimes | Version-pinned workflow state, atomic crash recovery, and formal ledger/inspection schemas |
+| [AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/index.html) | Message-driven agent communication and lifecycle management in standalone or distributed runtimes | Version-pinned workflow state, atomic crash recovery, and formal ledger/inspection schemas |
 | [CrewAI](https://docs.crewai.com/) | High-level role-based agent teams (“Crews”) and structured event-driven “Flows” | A domain-neutral runtime that intentionally does not prescribe roles, goals, backstories, or a collaboration metaphor |
 
 I do not view these projects as simple competitors. A host could adapt an agent
@@ -125,7 +125,9 @@ Ledger or Live Inspector is missing. It remains a development release because
 production admission still requires a real host's authentication and
 authorization assembly, deployment validation, downstream consumer migration,
 and removal of the documented compatibility seam around the older executor
-DTOs.
+DTOs. The package defines the product-host API rather than shipping one
+business host, and its validated execution-profile selection still needs to be
+bound into each host's formal PostgreSQL-backed start authority.
 
 ## Short submission version
 

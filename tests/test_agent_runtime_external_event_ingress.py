@@ -567,19 +567,18 @@ def test_ingress_replay_revalidates_authority_and_exact_lineage() -> None:
                 }
             )
         )
-    with pytest.raises(PermissionError, match="authority is unavailable"):
-        service.prepare_ingress(
-            **(
-                replay_arguments
-                | {
-                    "status_evidence": _status(
-                        binding,
-                        status=ExecutionAuthorizationStatus.INVALIDATED,
-                        fence=ExecutionControlFenceStatus.FENCED,
-                    )
-                }
-            )
+    closed_fence_replay = service.prepare_ingress(
+        **(
+            replay_arguments
+            | {
+                "status_evidence": _status(
+                    binding,
+                    status=ExecutionAuthorizationStatus.INVALIDATED,
+                    fence=ExecutionControlFenceStatus.FENCED,
+                )
+            }
         )
+    )
     with pytest.raises(ValueError, match="ingress idempotency conflict"):
         service.prepare_ingress(
             **(
@@ -595,13 +594,19 @@ def test_ingress_replay_revalidates_authority_and_exact_lineage() -> None:
                 }
             )
         )
-    with pytest.raises(PermissionError, match="outside validity"):
-        service.prepare_ingress(
-            **(
-                replay_arguments
-                | {"claim_at_utc": "2026-08-05T12:30:00Z"}
-            )
+    expired_window_replay = service.prepare_ingress(
+        **(
+            replay_arguments
+            | {"claim_at_utc": "2026-08-05T12:30:00Z"}
         )
+    )
+    unavailable_release_replay = service.prepare_ingress(
+        **(
+            replay_arguments
+            | {"release_registry": RuntimeReleaseRegistry()}
+        )
+    )
+    assert closed_fence_replay is expired_window_replay is unavailable_release_replay
 
 
 def test_application_replay_converges_after_wait_transition_applied() -> None:

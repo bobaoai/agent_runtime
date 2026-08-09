@@ -28,6 +28,16 @@ RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS = (
     "ledger",
     "inspection",
 )
+RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS = (
+    "claude_agent_sdk",
+    "codex_cli",
+    "html",
+    "http",
+    "postgresql",
+    "postgresql",
+    "postgresql",
+    "temporal",
+)
 
 
 @dataclass(frozen=True)
@@ -637,6 +647,12 @@ RUNTIME_MIGRATION_DEBT_PATHS = (
 )
 
 
+def _registered_source_paths() -> set[str]:
+    """Return source paths declared by the current registration tuple."""
+
+    return {source.source_path for source in RUNTIME_SOURCE_FILE_REGISTRATIONS}
+
+
 def validate_runtime_architecture_registration() -> tuple[str, ...]:
     """Return registry-internal violations without reading a source checkout."""
 
@@ -668,31 +684,37 @@ def validate_runtime_architecture_registration() -> tuple[str, ...]:
         RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
     ):
         errors.append("duplicate Runtime implementation binding")
+    if tuple(
+        sorted(
+            binding.technology_id
+            for binding in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+        )
+    ) != RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS:
+        errors.append("Runtime implementation technologies differ from the required set")
 
-    for responsibility in RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS:
-        if not _ARCHITECTURE_ID.fullmatch(responsibility.responsibility_id):
-            errors.append(
-                f"invalid Runtime logical responsibility id: "
-                f"{responsibility.responsibility_id}"
-            )
-    for directory in RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS:
-        if not _ARCHITECTURE_ID.fullmatch(directory.source_directory_id):
-            errors.append(
-                f"invalid Runtime source directory id: "
-                f"{directory.source_directory_id}"
-            )
+    architecture_ids = (
+        *(
+            ("logical responsibility", row.responsibility_id)
+            for row in RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS
+        ),
+        *(
+            ("source directory", row.source_directory_id)
+            for row in RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS
+        ),
+        *(
+            ("implementation binding", row.implementation_binding_id)
+            for row in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+        ),
+        *(
+            ("technology", row.technology_id)
+            for row in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+        ),
+    )
+    for identifier_kind, identifier in architecture_ids:
+        if not _ARCHITECTURE_ID.fullmatch(identifier):
+            errors.append(f"invalid Runtime {identifier_kind} id: {identifier}")
 
     for binding in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS:
-        if not _ARCHITECTURE_ID.fullmatch(binding.implementation_binding_id):
-            errors.append(
-                f"invalid Runtime implementation binding id: "
-                f"{binding.implementation_binding_id}"
-            )
-        if not _ARCHITECTURE_ID.fullmatch(binding.technology_id):
-            errors.append(
-                f"{binding.implementation_binding_id}: invalid technology id "
-                f"{binding.technology_id}"
-            )
         if binding.technology_id in responsibilities:
             errors.append(
                 f"{binding.implementation_binding_id}: technology id cannot be "
@@ -796,9 +818,7 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
 
     project_root = project_root.resolve()
     errors = list(validate_runtime_architecture_registration())
-    source_paths = {
-        source.source_path for source in RUNTIME_SOURCE_FILE_REGISTRATIONS
-    }
+    source_paths = _registered_source_paths()
     for source in RUNTIME_SOURCE_FILE_REGISTRATIONS:
         if not (project_root / source.source_path).is_file():
             errors.append(f"registered Runtime source not found: {source.source_path}")
@@ -830,6 +850,7 @@ __all__ = [
     "RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS",
     "RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS",
     "RUNTIME_MIGRATION_DEBT_PATHS",
+    "RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS",
     "RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS",
     "RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS",
     "RUNTIME_SOURCE_FILE_REGISTRATIONS",

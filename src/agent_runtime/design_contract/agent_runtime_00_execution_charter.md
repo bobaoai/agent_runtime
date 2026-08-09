@@ -82,7 +82,7 @@ runtime_surface_ledger:
   - "target design: Workflow Release -> Runtime Module Release -> Module Run -> Variant -> Attempt"
   - "implementation status comes only from generated Runtime inspection and deterministic cutover checks"
 verification_hooks:
-  - ./.venv/bin/python -m pytest tests/test_agent_runtime_registry.py tests/test_agent_runtime_product_topology.py -q
+  - ./.venv/bin/python -m pytest tests/test_agent_runtime_conformance.py tests/test_runtime_architecture_validation.py -q
 ```
 
 ## 1. Runtime Scope

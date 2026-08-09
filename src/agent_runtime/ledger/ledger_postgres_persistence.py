@@ -8,6 +8,7 @@ set of execution invariants.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -15,6 +16,7 @@ import hashlib
 import json
 import re
 from types import MappingProxyType, UnionType
+from threading import RLock
 from typing import Any, Callable, Mapping, Union, get_args, get_origin, get_type_hints
 
 from ..contracts.ledger_record_definition import (
@@ -27,7 +29,6 @@ from ..contracts.ledger_record_definition import (
     BackendAcknowledgementReceipt,
     BackendAcknowledgementRecord,
     CommitReceipt,
-    ExecutionInputRef,
     ExecutionOutputRef,
     InvocationCommitRecord,
     LegacyAttemptBeginBatch,
@@ -56,6 +57,8 @@ _MEDIA_TYPE_PATTERN = re.compile(
 _RECORD_TYPES = {
     record_type.__name__: record_type for record_type in get_args(PersistedRuntimeRecord)
 }
+_REFERENCE_CACHE_MAX_ENTRIES = 128
+_REFERENCE_CACHE_LOCK_STRIPES = 64
 
 
 def _validate_schema(schema: str) -> str:
@@ -83,6 +86,7 @@ def postgres_execution_ledger_ddl(
             recorded_at_utc TIMESTAMPTZ NOT NULL,
             record_sha256 CHAR(64) NOT NULL,
             payload JSONB NOT NULL,
+            payload_canonical BYTEA NOT NULL,
             CHECK (record_sha256 ~ '^[0-9a-f]{{64}}$')
         )
         """.strip(),
@@ -96,6 +100,7 @@ def postgres_execution_ledger_ddl(
             record_count INTEGER NOT NULL CHECK (record_count > 0),
             committed_outcome_refs JSONB NOT NULL,
             batch_payload JSONB NOT NULL,
+            batch_payload_canonical BYTEA NOT NULL,
             committed_at_utc TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (workflow_execution_id, transaction_id),
             CHECK (transaction_sha256 ~ '^[0-9a-f]{{64}}$')
@@ -111,6 +116,7 @@ def postgres_execution_ledger_ddl(
             record_type TEXT NOT NULL,
             record_sha256 CHAR(64) NOT NULL,
             payload JSONB NOT NULL,
+            payload_canonical BYTEA NOT NULL,
             UNIQUE (
                 workflow_execution_id,
                 transaction_id,
@@ -223,6 +229,24 @@ class RuntimeExecutionDescriptor:
 
 
 @dataclass(frozen=True)
+class RuntimeExecutionPageCursor:
+    """Stable keyset boundary for descending execution-time pagination."""
+
+    recorded_at_utc: str
+    workflow_execution_id: str
+
+    def validate(self) -> None:
+        if type(self.workflow_execution_id) is not str or not self.workflow_execution_id:
+            raise ValueError("pagination workflow_execution_id is required")
+        try:
+            timestamp = _timestamp(self.recorded_at_utc)
+        except (AttributeError, ValueError) as exc:
+            raise ValueError("pagination recorded_at_utc is invalid") from exc
+        if timestamp.tzinfo is None:
+            raise ValueError("pagination recorded_at_utc requires a timezone")
+
+
+@dataclass(frozen=True)
 class RuntimeExecutionContent:
     """One immutable content body referenced by an execution fact."""
 
@@ -283,6 +307,14 @@ class PostgresRuntimeExecutionRecordStore:
         self._connection_factory = connection_factory
         self._execution_output_integrity_check = execution_output_integrity_check
         self.schema = _validate_schema(schema)
+        self._reference_cache: OrderedDict[
+            str,
+            tuple[int, InMemoryRuntimeExecutionRecordStore],
+        ] = OrderedDict()
+        self._reference_cache_guard = RLock()
+        self._reference_cache_locks = tuple(
+            RLock() for _ in range(_REFERENCE_CACHE_LOCK_STRIPES)
+        )
 
     @classmethod
     def from_dsn(
@@ -312,12 +344,15 @@ class PostgresRuntimeExecutionRecordStore:
         )
 
     def initialize_schema(self) -> None:
-        self._transaction(
-            lambda cursor: [
+        def initialize(cursor: Any) -> None:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"agent-runtime:execution-schema:{self.schema}",),
+            )
+            for statement in postgres_execution_ledger_ddl(self.schema):
                 cursor.execute(statement)
-                for statement in postgres_execution_ledger_ddl(self.schema)
-            ]
-        )
+
+        self._transaction(initialize)
 
     def begin_attempt(self, batch: LegacyAttemptBeginBatch) -> AttemptBeginReceipt:
         return self._mutate(
@@ -399,7 +434,7 @@ class PostgresRuntimeExecutionRecordStore:
         workflow_execution_id: str,
         dispatch_id: str,
     ) -> ModuleOutcome | None:
-        return self._transaction(
+        return self._read_transaction(
             lambda cursor: self._load_reference(cursor, workflow_execution_id)
             .get_committed_outcome(workflow_execution_id, dispatch_id)
         )
@@ -409,13 +444,13 @@ class PostgresRuntimeExecutionRecordStore:
         workflow_execution_id: str,
         dispatch_id: str,
     ) -> InvocationCommitRecord | None:
-        return self._transaction(
+        return self._read_transaction(
             lambda cursor: self._load_reference(cursor, workflow_execution_id)
             .get_committed_invocation(workflow_execution_id, dispatch_id)
         )
 
     def load_trace(self, workflow_execution_id: str) -> RuntimeExecutionTrace:
-        return self._transaction(
+        return self._read_transaction(
             lambda cursor: self._load_reference(
                 cursor, workflow_execution_id
             ).load_trace(workflow_execution_id)
@@ -425,28 +460,43 @@ class PostgresRuntimeExecutionRecordStore:
         self,
         *,
         limit: int = 100,
-        offset: int = 0,
+        before: RuntimeExecutionPageCursor | None = None,
     ) -> tuple[RuntimeExecutionDescriptor, ...]:
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        if type(offset) is not int or offset < 0:
-            raise ValueError("offset must be a non-negative integer")
+        if before is not None:
+            if type(before) is not RuntimeExecutionPageCursor:
+                raise ValueError("before must be a RuntimeExecutionPageCursor")
+            before.validate()
 
         def load(cursor: Any) -> tuple[RuntimeExecutionDescriptor, ...]:
+            boundary = ""
+            parameters: tuple[Any, ...] = (limit,)
+            if before is not None:
+                boundary = (
+                    "WHERE (recorded_at_utc, workflow_execution_id) "
+                    "< (%s::timestamptz, %s)"
+                )
+                parameters = (
+                    before.recorded_at_utc,
+                    before.workflow_execution_id,
+                    limit,
+                )
             cursor.execute(
                 f"""
                 SELECT workflow_execution_id, workflow_id, tenant_id, cell_id,
                        principal_id, execution_release_ref,
                        recorded_at_utc
                 FROM {self.schema}.workflow_execution
+                {boundary}
                 ORDER BY recorded_at_utc DESC, workflow_execution_id DESC
-                LIMIT %s OFFSET %s
+                LIMIT %s
                 """,
-                (limit, offset),
+                parameters,
             )
             return tuple(_execution_descriptor(row) for row in cursor.fetchall())
 
-        return self._transaction(load)
+        return self._read_transaction(load)
 
     def get_execution_descriptor(
         self,
@@ -466,20 +516,15 @@ class PostgresRuntimeExecutionRecordStore:
             row = cursor.fetchone()
             return None if row is None else _execution_descriptor(row)
 
-        return self._transaction(load)
+        return self._read_transaction(load)
 
     def commit_content(
         self,
         content: RuntimeExecutionContent,
-        *,
-        declaration: ExecutionInputRef | ExecutionOutputRef | None = None,
     ) -> RuntimeExecutionContent:
-        """Stage immutable bytes before or after their ledger declaration."""
+        """Stage immutable bytes for a content ref the ledger already declared."""
 
         content.validate()
-        if declaration is not None:
-            declaration.validate()
-            _validate_content_declaration(content, declaration)
 
         def commit(cursor: Any) -> RuntimeExecutionContent:
             self._lock_execution(cursor, content.workflow_execution_id)
@@ -487,13 +532,12 @@ class PostgresRuntimeExecutionRecordStore:
             trace = reference.load_trace(content.workflow_execution_id)
             if not trace.records:
                 raise ValueError("content requires an existing Workflow Execution")
-            if declaration is None:
-                known_hashes = _referenced_content_hashes(trace)
-                if content.content_ref not in known_hashes:
-                    raise ValueError("content_ref is not declared by the execution ledger")
-                expected_hash = known_hashes[content.content_ref]
-                if expected_hash is not None and expected_hash != content.content_sha256:
-                    raise ValueError("content hash differs from the execution ledger")
+            known_hashes = _referenced_content_hashes(trace)
+            if content.content_ref not in known_hashes:
+                raise ValueError("content_ref is not declared by the execution ledger")
+            expected_hash = known_hashes[content.content_ref]
+            if expected_hash is not None and expected_hash != content.content_sha256:
+                raise ValueError("content hash differs from the execution ledger")
             cursor.execute(
                 f"""
                 INSERT INTO {self.schema}.execution_content
@@ -519,13 +563,15 @@ class PostgresRuntimeExecutionRecordStore:
                     content.workflow_execution_id,
                     content.content_ref,
                 )
+                # A byte-identical retry converges idempotently. recorded_at_utc
+                # is a clock-derived staging timestamp and never participates in
+                # content identity, so a later retry with a fresh timestamp is
+                # not a collision.
                 if (
                     existing is None
                     or existing.content_sha256 != content.content_sha256
                     or existing.media_type != content.media_type
                     or existing.body != content.body
-                    or _timestamp(existing.recorded_at_utc)
-                    != _timestamp(content.recorded_at_utc)
                 ):
                     raise ValueError("immutable execution content_ref collision")
             return content
@@ -560,14 +606,14 @@ class PostgresRuntimeExecutionRecordStore:
                 for row in cursor.fetchall()
             )
 
-        return self._transaction(load)
+        return self._read_transaction(load)
 
     def load_content(
         self,
         workflow_execution_id: str,
         content_ref: str,
     ) -> RuntimeExecutionContent | None:
-        return self._transaction(
+        return self._read_transaction(
             lambda cursor: self._load_content(cursor, workflow_execution_id, content_ref)
         )
 
@@ -612,20 +658,90 @@ class PostgresRuntimeExecutionRecordStore:
         batch: RuntimeRecordBatch | LegacyRuntimeRecordBatch,
         operation: Callable[[InMemoryRuntimeExecutionRecordStore], Any],
     ) -> Any:
-        def mutate(cursor: Any) -> Any:
-            self._lock_execution(cursor, workflow_execution_id)
-            reference = self._load_reference(cursor, workflow_execution_id)
-            result = operation(reference)
-            receipt = (
-                result
-                if isinstance(result, CommitReceipt)
-                else result.commit_receipt
-            )
-            if not receipt.replayed:
-                self._persist_batch(cursor, batch, receipt)
+        cache_lock = self._reference_cache_lock(workflow_execution_id)
+        with cache_lock:
+            def mutate(cursor: Any) -> tuple[
+                Any,
+                int,
+                InMemoryRuntimeExecutionRecordStore,
+            ]:
+                self._lock_execution(cursor, workflow_execution_id)
+                persisted_sequence = self._latest_commit_sequence(
+                    cursor,
+                    workflow_execution_id,
+                )
+                with self._reference_cache_guard:
+                    cached = self._reference_cache.get(workflow_execution_id)
+                    if cached is not None:
+                        self._reference_cache.move_to_end(workflow_execution_id)
+                if cached is not None and cached[0] == persisted_sequence:
+                    reference = cached[1]
+                    integrity_check = self._execution_output_integrity_check
+                    if integrity_check is None:
+                        integrity_check = lambda output: self._content_matches(
+                            cursor,
+                            output,
+                        )
+                    reference._set_execution_output_integrity_check(integrity_check)
+                else:
+                    reference = self._load_reference(cursor, workflow_execution_id)
+                result = operation(reference)
+                receipt = (
+                    result
+                    if isinstance(result, CommitReceipt)
+                    else result.commit_receipt
+                )
+                if not receipt.replayed:
+                    self._persist_batch(cursor, batch, receipt)
+                return (
+                    result,
+                    self._latest_commit_sequence(cursor, workflow_execution_id),
+                    reference,
+                )
+
+            try:
+                result, sequence, reference = self._transaction(mutate)
+            except Exception:
+                # The in-memory reference may already contain the rejected
+                # candidate when commit/serialization fails. Evict it so the
+                # next mutation rebuilds only from committed PostgreSQL facts.
+                with self._reference_cache_guard:
+                    self._reference_cache.pop(workflow_execution_id, None)
+                raise
+            with self._reference_cache_guard:
+                self._reference_cache[workflow_execution_id] = (
+                    sequence,
+                    reference,
+                )
+                self._reference_cache.move_to_end(workflow_execution_id)
+                while len(self._reference_cache) > _REFERENCE_CACHE_MAX_ENTRIES:
+                    self._reference_cache.popitem(last=False)
             return result
 
-        return self._transaction(mutate)
+    def _reference_cache_lock(self, workflow_execution_id: str) -> RLock:
+        digest = hashlib.sha256(workflow_execution_id.encode("utf-8")).digest()
+        stripe = int.from_bytes(digest[:4], "big") % len(
+            self._reference_cache_locks
+        )
+        return self._reference_cache_locks[stripe]
+
+    def _latest_commit_sequence(
+        self,
+        cursor: Any,
+        workflow_execution_id: str,
+    ) -> int:
+        cursor.execute(
+            f"""
+            SELECT COALESCE(MAX(commit_sequence), 0)
+            FROM {self.schema}.execution_transaction
+            WHERE workflow_execution_id = %s
+            """,
+            (workflow_execution_id,),
+        )
+        row = cursor.fetchone()
+        if row is None or type(row[0]) is not int:
+            raise RuntimeError("persisted execution commit sequence is invalid")
+        return row[0]
 
     def _lock_execution(self, cursor: Any, workflow_execution_id: str) -> None:
         cursor.execute(
@@ -655,7 +771,8 @@ class PostgresRuntimeExecutionRecordStore:
         cursor.execute(
             f"""
             SELECT transaction_id, transaction_sha256, record_count,
-                   committed_outcome_refs, batch_payload
+                   committed_outcome_refs, batch_payload,
+                   batch_payload_canonical
             FROM {self.schema}.execution_transaction
             WHERE workflow_execution_id = %s
             ORDER BY commit_sequence
@@ -666,7 +783,8 @@ class PostgresRuntimeExecutionRecordStore:
         cursor.execute(
             f"""
             SELECT record.transaction_id, record.transaction_record_index,
-                   record.record_type, record.record_sha256, record.payload
+                   record.record_type, record.record_sha256, record.payload,
+                   record.payload_canonical
             FROM {self.schema}.execution_record AS record
             JOIN {self.schema}.execution_transaction AS transaction
               ON transaction.workflow_execution_id = record.workflow_execution_id
@@ -684,7 +802,13 @@ class PostgresRuntimeExecutionRecordStore:
         batches: list[RuntimeRecordBatch | LegacyRuntimeRecordBatch] = []
         for row in transaction_rows:
             transaction_id, transaction_sha256, record_count = row[:3]
-            batch = deserialize_runtime_batch(_payload(row[4]))
+            canonical_batch_payload = _canonical_payload(row[5])
+            jsonb_batch_payload = _payload(row[4])
+            if dict(jsonb_batch_payload) != dict(canonical_batch_payload):
+                raise RuntimeError(
+                    "persisted execution transaction projection failed integrity check"
+                )
+            batch = deserialize_runtime_batch(canonical_batch_payload)
             if (
                 batch.workflow_execution_id != workflow_execution_id
                 or batch.transaction_id != transaction_id
@@ -706,14 +830,22 @@ class PostgresRuntimeExecutionRecordStore:
             for expected_index, (record, persisted) in enumerate(
                 zip(batch.records, persisted_records, strict=True)
             ):
-                index, record_type, record_sha256, record_payload = persisted
+                (
+                    index,
+                    record_type,
+                    record_sha256,
+                    record_payload,
+                    record_payload_canonical,
+                ) = persisted
                 expected = _persisted_record_as_dict(record)
-                decoded_payload = _payload(record_payload)
+                decoded_payload = _canonical_payload(record_payload_canonical)
+                jsonb_payload = _payload(record_payload)
                 if (
                     index != expected_index
                     or record_type != expected["record_type"]
                     or record_sha256 != _canonical_sha256(decoded_payload)
                     or dict(decoded_payload) != expected["record"]
+                    or dict(jsonb_payload) != dict(decoded_payload)
                 ):
                     raise RuntimeError("persisted execution record failed integrity check")
             batches.append(batch)
@@ -730,7 +862,7 @@ class PostgresRuntimeExecutionRecordStore:
     ) -> None:
         cursor.execute(
             f"""
-            SELECT record_sha256, payload
+            SELECT record_sha256, payload, payload_canonical
             FROM {self.schema}.workflow_execution
             WHERE workflow_execution_id = %s
             """,
@@ -752,10 +884,12 @@ class PostgresRuntimeExecutionRecordStore:
             return
         if row is None:
             raise RuntimeError("Workflow Execution projection is missing")
-        payload = _payload(row[1])
+        payload = _canonical_payload(row[2])
+        jsonb_payload = _payload(row[1])
         if (
             row[0] != _canonical_sha256(payload)
             or dict(payload) != execution.as_dict()
+            or dict(jsonb_payload) != dict(payload)
         ):
             raise RuntimeError("Workflow Execution projection failed integrity check")
 
@@ -785,8 +919,8 @@ class PostgresRuntimeExecutionRecordStore:
                 INSERT INTO {self.schema}.workflow_execution
                     (workflow_execution_id, workflow_id, tenant_id, cell_id,
                      principal_id, execution_release_ref, recorded_at_utc,
-                     record_sha256, payload)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                     record_sha256, payload, payload_canonical)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
                 ON CONFLICT (workflow_execution_id) DO NOTHING
                 RETURNING record_sha256
                 """,
@@ -800,6 +934,7 @@ class PostgresRuntimeExecutionRecordStore:
                     execution.recorded_at_utc,
                     record_hash,
                     _json(payload),
+                    _json_bytes(payload),
                 ),
             )
             if cursor.fetchone() is None:
@@ -808,8 +943,9 @@ class PostgresRuntimeExecutionRecordStore:
             f"""
             INSERT INTO {self.schema}.execution_transaction
                 (workflow_execution_id, transaction_id, transaction_sha256,
-                 record_count, committed_outcome_refs, batch_payload)
-            VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                 record_count, committed_outcome_refs, batch_payload,
+                 batch_payload_canonical)
+            VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
             ON CONFLICT (workflow_execution_id, transaction_id) DO NOTHING
             RETURNING transaction_sha256
             """,
@@ -820,6 +956,7 @@ class PostgresRuntimeExecutionRecordStore:
                 receipt.record_count,
                 _json(list(receipt.committed_outcome_refs)),
                 _json(batch.as_dict()),
+                _json_bytes(batch.as_dict()),
             ),
         )
         if cursor.fetchone() is None:
@@ -832,8 +969,8 @@ class PostgresRuntimeExecutionRecordStore:
                 INSERT INTO {self.schema}.execution_record
                     (workflow_execution_id, transaction_id,
                      transaction_record_index, record_type, record_sha256,
-                     payload)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                     payload, payload_canonical)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
                 """,
                 (
                     batch.workflow_execution_id,
@@ -842,6 +979,7 @@ class PostgresRuntimeExecutionRecordStore:
                     serialized["record_type"],
                     _canonical_sha256(payload),
                     _json(payload),
+                    _json_bytes(payload),
                 ),
             )
 
@@ -850,6 +988,25 @@ class PostgresRuntimeExecutionRecordStore:
         try:
             cursor = connection.cursor()
             try:
+                result = operation(cursor)
+            finally:
+                cursor.close()
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _read_transaction(self, operation: Callable[[Any], Any]) -> Any:
+        connection = self._connection_factory()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+                )
                 result = operation(cursor)
             finally:
                 cursor.close()
@@ -911,24 +1068,39 @@ class PostgresRuntimeExecutionQueryStore:
         self,
         *,
         limit: int = 100,
-        offset: int = 0,
+        before: RuntimeExecutionPageCursor | None = None,
     ) -> tuple[RuntimeExecutionDescriptor, ...]:
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        if type(offset) is not int or offset < 0:
-            raise ValueError("offset must be a non-negative integer")
+        if before is not None:
+            if type(before) is not RuntimeExecutionPageCursor:
+                raise ValueError("before must be a RuntimeExecutionPageCursor")
+            before.validate()
 
         def load(cursor: Any) -> tuple[RuntimeExecutionDescriptor, ...]:
+            boundary = ""
+            parameters: tuple[Any, ...] = (limit,)
+            if before is not None:
+                boundary = (
+                    "WHERE (recorded_at_utc, workflow_execution_id) "
+                    "< (%s::timestamptz, %s)"
+                )
+                parameters = (
+                    before.recorded_at_utc,
+                    before.workflow_execution_id,
+                    limit,
+                )
             cursor.execute(
                 f"""
                 SELECT workflow_execution_id, workflow_id, tenant_id, cell_id,
                        principal_id, execution_release_ref,
                        recorded_at_utc
                 FROM {self.schema}.workflow_execution
+                {boundary}
                 ORDER BY recorded_at_utc DESC, workflow_execution_id DESC
-                LIMIT %s OFFSET %s
+                LIMIT %s
                 """,
-                (limit, offset),
+                parameters,
             )
             return tuple(_execution_descriptor(row) for row in cursor.fetchall())
 
@@ -1010,7 +1182,9 @@ class PostgresRuntimeExecutionQueryStore:
         try:
             cursor = connection.cursor()
             try:
-                cursor.execute("SET TRANSACTION READ ONLY")
+                cursor.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+                )
                 result = operation(cursor)
             finally:
                 cursor.close()
@@ -1166,28 +1340,6 @@ def _referenced_content_hashes(
     return references
 
 
-def _validate_content_declaration(
-    content: RuntimeExecutionContent,
-    declaration: ExecutionInputRef | ExecutionOutputRef,
-) -> None:
-    if declaration.workflow_execution_id != content.workflow_execution_id:
-        raise ValueError("content declaration belongs to another execution")
-    if isinstance(declaration, ExecutionInputRef):
-        declared_ref = declaration.input_ref
-        declared_hash = declaration.input_sha256
-    else:
-        declared_ref = declaration.output_ref
-        declared_hash = declaration.output_sha256
-    if declared_ref != content.content_ref:
-        raise ValueError("content_ref differs from its execution declaration")
-    if declared_hash != content.content_sha256:
-        raise ValueError("content hash differs from its execution declaration")
-    if declaration.media_type != content.media_type:
-        raise ValueError("content media type differs from its execution declaration")
-    if declaration.byte_size != len(content.body):
-        raise ValueError("content byte size differs from its execution declaration")
-
-
 def _canonical_sha256(payload: Mapping[str, Any]) -> str:
     return sha256_text(_json(payload))
 
@@ -1223,7 +1375,28 @@ def _json_string_tuple(value: Any) -> tuple[str, ...]:
 
 
 def _json(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _json_bytes(payload: Any) -> bytes:
+    return _json(payload).encode("utf-8")
+
+
+def _canonical_payload(value: Any) -> Mapping[str, Any]:
+    try:
+        encoded = bytes(value)
+        decoded = json.loads(encoded.decode("utf-8"))
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("persisted canonical JSON bytes are invalid") from exc
+    if not isinstance(decoded, Mapping) or _json_bytes(decoded) != encoded:
+        raise RuntimeError("persisted canonical JSON bytes are not canonical")
+    return decoded
 
 
 def _payload(value: Any) -> Mapping[str, Any]:
@@ -1238,6 +1411,7 @@ __all__ = [
     "PostgresRuntimeExecutionRecordStore",
     "RuntimeExecutionContent",
     "RuntimeExecutionDescriptor",
+    "RuntimeExecutionPageCursor",
     "deserialize_runtime_batch",
     "deserialize_runtime_record",
     "postgres_execution_ledger_ddl",

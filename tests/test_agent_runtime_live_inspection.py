@@ -9,7 +9,11 @@ import pytest
 
 from agent_runtime.contracts.ledger_record_definition import RuntimeExecutionTrace
 from agent_runtime.inspection import LiveWorkflowInspectorApplication
-from agent_runtime.ledger import RuntimeExecutionContent, RuntimeExecutionDescriptor
+from agent_runtime.ledger import (
+    RuntimeExecutionContent,
+    RuntimeExecutionDescriptor,
+    RuntimeExecutionPageCursor,
+)
 
 
 EXECUTION = RuntimeExecutionDescriptor(
@@ -45,9 +49,21 @@ class _Repository:
     def __init__(self) -> None:
         self.trace_reads = 0
 
-    def list_executions(self, *, limit: int = 100, offset: int = 0):
+    def list_executions(
+        self,
+        *,
+        limit: int = 100,
+        before: RuntimeExecutionPageCursor | None = None,
+    ):
         rows = (EXECUTION, DENIED_EXECUTION)
-        return rows[offset : offset + limit]
+        if before is not None:
+            index = next(
+                index
+                for index, row in enumerate(rows)
+                if row.workflow_execution_id == before.workflow_execution_id
+            )
+            rows = rows[index + 1 :]
+        return rows[:limit]
 
     def get_execution_descriptor(self, workflow_execution_id: str):
         return next(
@@ -144,7 +160,9 @@ def test_live_inspector_shell_contains_no_execution_data_or_write_controls() -> 
 
     assert status == "200 OK"
     assert EXECUTION.workflow_execution_id not in html
-    assert "fetch(" in html
+    assert 'src="/assets/live-inspector.js"' in html
+    assert "<script>" not in html
+    assert "<style>" not in html
     assert "AGENT RUNTIME · READ ONLY" in html
     assert "start execution" not in html.lower()
     assert headers["Cache-Control"] == "no-store"
@@ -192,6 +210,10 @@ def test_live_inspector_requires_authentication_and_exact_content_authorization(
     assert status == "200 OK"
     assert body == BODY
     assert headers["X-Content-SHA256"] == CONTENT.content_sha256
+    assert headers["Content-Type"] == "application/octet-stream"
+    assert headers["Content-Disposition"].startswith("attachment;")
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Content-Security-Policy"].startswith("sandbox;")
     assert missing == "404 Not Found"
 
 
@@ -270,9 +292,125 @@ def test_live_inspector_execution_list_uses_opaque_pagination_cursor() -> None:
         EXECUTION.workflow_execution_id
     )
     assert first_page["next_cursor"] is not None
+    assert EXECUTION.workflow_execution_id not in first_page["next_cursor"]
     assert second_status == "200 OK"
     assert json.loads(second_body) == {"executions": [], "next_cursor": None}
     assert invalid_status == "400 Bad Request"
+
+
+def test_live_inspector_keyset_cursor_ignores_newer_concurrent_insert() -> None:
+    older = RuntimeExecutionDescriptor(
+        workflow_execution_id="execution_live_older_001",
+        workflow_id="agent_workflow_live",
+        tenant_id="tenant_allowed",
+        cell_id="cell_live",
+        principal_id="principal_live",
+        execution_release_ref="workflow-release:agent-live@v1",
+        recorded_at_utc="2026-08-08T10:00:00Z",
+    )
+    newer_insert = RuntimeExecutionDescriptor(
+        workflow_execution_id="execution_live_new_insert_001",
+        workflow_id="agent_workflow_live",
+        tenant_id="tenant_allowed",
+        cell_id="cell_live",
+        principal_id="principal_live",
+        execution_release_ref="workflow-release:agent-live@v1",
+        recorded_at_utc="2026-08-08T13:00:00Z",
+    )
+
+    class ConcurrentRepository(_Repository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rows = [EXECUTION, older]
+
+        def list_executions(self, *, limit=100, before=None):
+            rows = sorted(
+                self.rows,
+                key=lambda row: (row.recorded_at_utc, row.workflow_execution_id),
+                reverse=True,
+            )
+            if before is not None:
+                rows = [
+                    row
+                    for row in rows
+                    if (row.recorded_at_utc, row.workflow_execution_id)
+                    < (before.recorded_at_utc, before.workflow_execution_id)
+                ]
+            return tuple(rows[:limit])
+
+    repository = ConcurrentRepository()
+    application = _application(repository)
+    _, _, first_body = _request(
+        application,
+        "/api/executions",
+        query="limit=1",
+    )
+    first_page = json.loads(first_body)
+    repository.rows.insert(0, newer_insert)
+    _, _, second_body = _request(
+        application,
+        "/api/executions",
+        query=f"limit=1&cursor={first_page['next_cursor']}",
+    )
+
+    assert json.loads(second_body)["executions"][0][
+        "workflow_execution_id"
+    ] == older.workflow_execution_id
+
+
+def test_live_inspector_cursor_advances_past_a_full_unauthorized_scan() -> None:
+    allowed_older = RuntimeExecutionDescriptor(
+        workflow_execution_id="execution_allowed_after_scan_001",
+        workflow_id="agent_workflow_live",
+        tenant_id="tenant_allowed",
+        cell_id="cell_live",
+        principal_id="principal_live",
+        execution_release_ref="workflow-release:agent-live@v1",
+        recorded_at_utc="2026-08-08T10:00:00Z",
+    )
+    denied_rows = tuple(
+        RuntimeExecutionDescriptor(
+            workflow_execution_id=f"execution_denied_scan_{index:04d}",
+            workflow_id="agent_workflow_denied",
+            tenant_id="tenant_denied",
+            cell_id="cell_live",
+            principal_id="principal_live",
+            execution_release_ref="workflow-release:agent-denied@v1",
+            recorded_at_utc="2026-08-08T11:00:00Z",
+        )
+        for index in range(4999, -1, -1)
+    )
+
+    class SparseAuthorizedRepository(_Repository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rows = denied_rows + (allowed_older,)
+
+        def list_executions(self, *, limit=100, before=None):
+            rows = self.rows
+            if before is not None:
+                index = next(
+                    index
+                    for index, row in enumerate(rows)
+                    if row.workflow_execution_id == before.workflow_execution_id
+                )
+                rows = rows[index + 1 :]
+            return rows[:limit]
+
+    application = _application(SparseAuthorizedRepository())
+    _, _, first_body = _request(application, "/api/executions", query="limit=1")
+    first_page = json.loads(first_body)
+    _, _, second_body = _request(
+        application,
+        "/api/executions",
+        query=f"limit=1&cursor={first_page['next_cursor']}",
+    )
+
+    assert first_page["executions"] == []
+    assert first_page["next_cursor"] is not None
+    assert json.loads(second_body)["executions"][0][
+        "workflow_execution_id"
+    ] == allowed_older.workflow_execution_id
 
 
 def test_live_inspector_embedding_requires_explicit_trusted_origin() -> None:
