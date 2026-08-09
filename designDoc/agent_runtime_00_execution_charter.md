@@ -664,8 +664,9 @@ Runtime does not interpret content quality or finding prose. Domain contracts an
 The machine contract has four surfaces joined through immutable refs and
 hashes:
 
-1. **Runtime Release Registry**: Skill Package, Prompt Bundle, Execution
-   Profile, Runtime Module, Workflow, admission, and active-release records.
+1. **Runtime Release Registry**: Skill Package, Model Context Component, Prompt
+   Bundle, Execution Profile, Runtime Module, Workflow, admission, and
+   active-release records.
    `workflow_release` owns its graph; `runtime_module_release` owns its executable
    contract. No parallel stable registration table owns either identity.
 2. **Module Execution Ledger**: Module Run, Variant, Attempt, outputs,
@@ -679,7 +680,7 @@ hashes:
    retains bounded refs, hashes, status, time, and usage.
 
 For managed execution, Postgres is the system of record for admitted Skill
-Package, Prompt Bundle, Execution Profile, Module, and Workflow Release
+Package, Model Context Component, Prompt Bundle, Execution Profile, Module, and Workflow Release
 instances and their active pointers. Code owns their schemas, validators, compiler, seed
 manifests, and deterministic inspection. Repository Skill and prompt files are
 authoring or compatibility projections after managed cutover; Runtime does not

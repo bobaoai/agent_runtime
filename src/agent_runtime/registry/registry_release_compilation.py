@@ -15,6 +15,8 @@ from typing import Any
 
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
+    ModelContextComponentKind,
+    ModelContextComponentRelease,
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
@@ -124,6 +126,7 @@ class CompiledAgentModuleRelease:
 
     skill_package: SkillPackageRelease
     schema_assets: tuple[SchemaAssetRelease, ...]
+    model_context_components: tuple[ModelContextComponentRelease, ...]
     prompt_bundle: PromptBundleRelease
     execution_profile: ExecutionProfileRelease
     module: RuntimeModuleRelease
@@ -150,6 +153,54 @@ class ExecutionProfileReleaseSpec:
     timeout_seconds: int
     release_version: str = "candidate_v1"
     context_policy_ref: str = "context-policy:workflow_execution_isolated@v1"
+
+
+def compile_prompt_bundle_release(
+    *,
+    prompt_bundle_id: str,
+    prompt_bundle_version: str,
+    compiler_version: str,
+    components: tuple[ModelContextComponentRelease, ...],
+) -> PromptBundleRelease:
+    """Compile one ordered Prompt Bundle from persisted component releases."""
+
+    if type(components) is not tuple or not components:
+        raise ValueError("Prompt Bundle requires an immutable component tuple")
+    for component in components:
+        if type(component) is not ModelContextComponentRelease:
+            raise ValueError(
+                "Prompt Bundle components must be ModelContextComponentRelease values"
+            )
+        component.validate()
+    members = tuple(
+        ReleaseMember(
+            member_ref=component.release_ref,
+            member_sha256=component.release_sha256,
+            media_type=component.media_type,
+        )
+        for component in components
+    )
+    return PromptBundleRelease.build(
+        prompt_bundle_id=prompt_bundle_id,
+        prompt_bundle_version=prompt_bundle_version,
+        release_ref=f"prompt-bundle:{prompt_bundle_id}@{prompt_bundle_version}",
+        compiler_version=compiler_version,
+        members=members,
+        compiled_static_body="".join(
+            component.formatted_content for component in components
+        ),
+    )
+
+
+def project_prompt_bundle_markdown(
+    prompt_bundle: PromptBundleRelease,
+) -> str:
+    """Project the registered complete static Context for human review."""
+
+    if type(prompt_bundle) is not PromptBundleRelease:
+        raise ValueError("prompt_bundle must be a PromptBundleRelease")
+    prompt_bundle.validate()
+    return prompt_bundle.compiled_static_body
 
 
 def compile_execution_profile_release(
@@ -280,10 +331,22 @@ def compile_agent_module_release(
         schema_ref=spec.output_schema_ref,
         schema_path=spec.output_schema_path,
     )
-    prompt_members = (instruction_member, output_schema_member)
-    compiled_static_body = (
-        instructions
-        + "\n## Required Output Shape\n\n"
+    instruction_component = ModelContextComponentRelease.build(
+        context_component_id=f"{spec.module_id}_task_instruction",
+        context_component_version=spec.release_version,
+        release_ref=(
+            "model-context-component:"
+            f"{spec.module_id}_task_instruction@{spec.release_version}"
+        ),
+        component_kind=ModelContextComponentKind.TASK_INSTRUCTION,
+        media_type="text/markdown",
+        formatter_id="skill_instruction_formatter",
+        formatter_version="v1",
+        source_members=(instruction_member,),
+        formatted_content=instructions,
+    )
+    output_constraint_content = (
+        "\n## Required Output Shape\n\n"
         + json.dumps(
             task_plane_output_schema(output_schema_asset.schema_document()),
             ensure_ascii=False,
@@ -291,6 +354,24 @@ def compile_agent_module_release(
             indent=2,
         )
         + "\n"
+    )
+    output_constraint_component = ModelContextComponentRelease.build(
+        context_component_id=f"{spec.module_id}_output_constraint",
+        context_component_version=spec.release_version,
+        release_ref=(
+            "model-context-component:"
+            f"{spec.module_id}_output_constraint@{spec.release_version}"
+        ),
+        component_kind=ModelContextComponentKind.OUTPUT_CONSTRAINT,
+        media_type="text/markdown",
+        formatter_id="json_schema_output_formatter",
+        formatter_version="v1",
+        source_members=(output_schema_member,),
+        formatted_content=output_constraint_content,
+    )
+    model_context_components = (
+        instruction_component,
+        output_constraint_component,
     )
     schema_assets = (input_schema_asset, output_schema_asset)
     input_schema_sha256 = input_schema_asset.schema_sha256
@@ -355,13 +436,11 @@ def compile_agent_module_release(
         module_exports=module_exports,
     )
     prompt_id = f"{spec.module_id}_prompt_bundle"
-    prompt = PromptBundleRelease.build(
+    prompt = compile_prompt_bundle_release(
         prompt_bundle_id=prompt_id,
         prompt_bundle_version=spec.release_version,
-        release_ref=f"prompt-bundle:{prompt_id}@{spec.release_version}",
         compiler_version="task_plane_module_prompt_v3",
-        members=prompt_members,
-        compiled_static_body=compiled_static_body,
+        components=model_context_components,
     )
     context_sha256 = sha256_text(spec.context_policy_ref)
     profile = compile_execution_profile_release(
@@ -422,6 +501,7 @@ def compile_agent_module_release(
     return CompiledAgentModuleRelease(
         skill_package=package,
         schema_assets=schema_assets,
+        model_context_components=model_context_components,
         prompt_bundle=prompt,
         execution_profile=profile,
         module=module,
@@ -494,6 +574,9 @@ def candidate_admission_record(
     if isinstance(record, SkillPackageRelease):
         kind = ReleaseSubjectKind.SKILL_PACKAGE
         subject_id = record.skill_package_id
+    elif isinstance(record, ModelContextComponentRelease):
+        kind = ReleaseSubjectKind.MODEL_CONTEXT_COMPONENT
+        subject_id = record.context_component_id
     elif isinstance(record, PromptBundleRelease):
         kind = ReleaseSubjectKind.PROMPT_BUNDLE
         subject_id = record.prompt_bundle_id
@@ -533,7 +616,9 @@ __all__ = [
     "compile_agent_module_release",
     "compile_execution_profile_release",
     "compile_non_agent_module_release",
+    "compile_prompt_bundle_release",
     "managed_skill_projection",
+    "project_prompt_bundle_markdown",
     "task_plane_output_schema",
     "sha256_file",
     "sha256_text",

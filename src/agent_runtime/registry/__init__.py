@@ -7,6 +7,10 @@ from .registry_postgres_persistence import (
     postgres_release_ddl,
     serialize_registry_tables,
 )
+from .registry_release_compilation import (
+    compile_prompt_bundle_release,
+    project_prompt_bundle_markdown,
+)
 from .registry_workflow_registration import (
     WorkflowRuntimeRegistry,
     resolve_registration_reference,
@@ -44,7 +48,9 @@ __all__ = [
     "RuntimeSourceFileRegistration",
     "RuntimeSourceDirectoryRegistration",
     "WorkflowRuntimeRegistry",
+    "compile_prompt_bundle_release",
     "postgres_release_ddl",
+    "project_prompt_bundle_markdown",
     "resolve_registration_reference",
     "serialize_registry_tables",
     "validate_registry_architecture_registration",

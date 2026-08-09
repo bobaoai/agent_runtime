@@ -102,6 +102,7 @@ class ReleaseSubjectKind(StrEnum):
     """Persisted release family governed by an admission record."""
 
     SKILL_PACKAGE = "skill_package"
+    MODEL_CONTEXT_COMPONENT = "model_context_component"
     PROMPT_BUNDLE = "prompt_bundle"
     EXECUTION_PROFILE = "execution_profile"
     RUNTIME_MODULE = "runtime_module"
@@ -117,6 +118,14 @@ class ReleaseAdmissionState(StrEnum):
     ACTIVE = "active"
     SUPERSEDED = "superseded"
     RETIRED = "retired"
+
+
+class ModelContextComponentKind(StrEnum):
+    """Semantic position of one static component in a model Context."""
+
+    TASK_INSTRUCTION = "task_instruction"
+    DOMAIN_CONTEXT = "domain_context"
+    OUTPUT_CONSTRAINT = "output_constraint"
 
 
 @dataclass(frozen=True)
@@ -420,6 +429,131 @@ class SchemaAssetRelease:
             release_ref=payload["release_ref"],
             canonical_schema_json=payload["canonical_schema_json"],
             schema_sha256=payload["schema_sha256"],
+            release_sha256=payload["release_sha256"],
+        )
+
+
+@dataclass(frozen=True)
+class ModelContextComponentRelease:
+    """Immutable model-ready static Context with exact source lineage."""
+
+    record_type: ClassVar[str] = "model_context_component_release"
+
+    context_component_id: str
+    context_component_version: str
+    release_ref: str
+    component_kind: ModelContextComponentKind
+    media_type: str
+    formatter_id: str
+    formatter_version: str
+    source_members: tuple[ReleaseMember, ...]
+    formatted_content: str
+    formatted_content_sha256: str
+    release_sha256: str
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "context_component_id": self.context_component_id,
+            "context_component_version": self.context_component_version,
+            "release_ref": self.release_ref,
+            "component_kind": self.component_kind.value,
+            "media_type": self.media_type,
+            "formatter_id": self.formatter_id,
+            "formatter_version": self.formatter_version,
+            "source_members": [member.as_dict() for member in self.source_members],
+            "formatted_content": self.formatted_content,
+            "formatted_content_sha256": self.formatted_content_sha256,
+        }
+
+    def validate(self) -> None:
+        """Validate identity, formatted bytes, source closure, and hashes."""
+
+        validate_snake_case_name("context_component_id", self.context_component_id)
+        _validate_token("context_component_version", self.context_component_version)
+        expected_ref = (
+            "model-context-component:"
+            f"{self.context_component_id}@{self.context_component_version}"
+        )
+        if self.release_ref != expected_ref:
+            raise ValueError(
+                "Model Context Component release_ref must match ID and version"
+            )
+        if type(self.component_kind) is not ModelContextComponentKind:
+            raise ValueError("component_kind must be a ModelContextComponentKind")
+        if type(self.media_type) is not str or not _MEDIA_TYPE_PATTERN.fullmatch(
+            self.media_type
+        ):
+            raise ValueError("invalid media_type")
+        validate_snake_case_name("formatter_id", self.formatter_id)
+        _validate_token("formatter_version", self.formatter_version)
+        validate_exact_record_tuple(
+            "source_members",
+            self.source_members,
+            expected_type=ReleaseMember,
+            item_validator=lambda member: member.validate(),
+            unique_key=lambda member: member.member_ref,
+            unique_key_label="member_ref",
+            require_non_empty=True,
+        )
+        if type(self.formatted_content) is not str or not self.formatted_content:
+            raise ValueError("formatted_content is required")
+        if "\x00" in self.formatted_content:
+            raise ValueError("formatted_content contains a null byte")
+        validate_sha256("formatted_content_sha256", self.formatted_content_sha256)
+        observed_content_sha256 = hashlib.sha256(
+            self.formatted_content.encode("utf-8")
+        ).hexdigest()
+        if self.formatted_content_sha256 != observed_content_sha256:
+            raise ValueError("Model Context Component content hash mismatch")
+        validate_sha256("release_sha256", self.release_sha256)
+        if self.release_sha256 != _canonical_sha256(self._payload()):
+            raise ValueError("Model Context Component release hash mismatch")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the canonical JSON-compatible component release."""
+
+        self.validate()
+        return {**self._payload(), "release_sha256": self.release_sha256}
+
+    @classmethod
+    def build(cls, **fields: Any) -> "ModelContextComponentRelease":
+        """Build one hash-complete immutable component release."""
+
+        formatted_content_sha256 = hashlib.sha256(
+            fields["formatted_content"].encode("utf-8")
+        ).hexdigest()
+        prepared = {
+            **fields,
+            "formatted_content_sha256": formatted_content_sha256,
+        }
+        provisional = cls(**prepared, release_sha256="0" * 64)
+        record = cls(
+            **prepared,
+            release_sha256=_canonical_sha256(provisional._payload()),
+        )
+        record.validate()
+        return record
+
+    @classmethod
+    def from_dict(
+        cls, payload: Mapping[str, Any]
+    ) -> "ModelContextComponentRelease":
+        """Reconstruct one persisted component release."""
+
+        return cls(
+            context_component_id=payload["context_component_id"],
+            context_component_version=payload["context_component_version"],
+            release_ref=payload["release_ref"],
+            component_kind=ModelContextComponentKind(payload["component_kind"]),
+            media_type=payload["media_type"],
+            formatter_id=payload["formatter_id"],
+            formatter_version=payload["formatter_version"],
+            source_members=tuple(
+                ReleaseMember.from_dict(member)
+                for member in payload["source_members"]
+            ),
+            formatted_content=payload["formatted_content"],
+            formatted_content_sha256=payload["formatted_content_sha256"],
             release_sha256=payload["release_sha256"],
         )
 
@@ -1461,6 +1595,8 @@ __all__ = [
     "ModuleEntryPolicy",
     "ModuleExecutionPurpose",
     "ModuleKind",
+    "ModelContextComponentKind",
+    "ModelContextComponentRelease",
     "OutputResolutionPolicy",
     "PromptBundleRelease",
     "ReleaseAdmissionRecord",

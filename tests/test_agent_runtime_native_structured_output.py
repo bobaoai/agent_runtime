@@ -157,6 +157,7 @@ def test_codex_native_structured_output_executes_end_to_end(
         RuntimeReleaseBundle(
             skill_packages=(compiled.skill_package,),
             schema_assets=compiled.schema_assets,
+            model_context_components=compiled.model_context_components,
             prompt_bundles=(compiled.prompt_bundle,),
             execution_profiles=(compiled.execution_profile,),
             modules=(compiled.module,),

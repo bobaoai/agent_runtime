@@ -15,6 +15,7 @@ from typing import Any, ClassVar, Mapping, TypeVar
 
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
+    ModelContextComponentRelease,
     ModuleEntryPolicy,
     ModuleExecutionPurpose,
     PromptBundleRelease,
@@ -32,6 +33,7 @@ from ..contracts.registry_release_definition import (
 _ReleaseT = TypeVar(
     "_ReleaseT",
     SkillPackageRelease,
+    ModelContextComponentRelease,
     PromptBundleRelease,
     ExecutionProfileRelease,
     RuntimeModuleRelease,
@@ -82,6 +84,7 @@ class RuntimeReleaseBundle:
 
     skill_packages: tuple[SkillPackageRelease, ...] = ()
     schema_assets: tuple[SchemaAssetRelease, ...] = ()
+    model_context_components: tuple[ModelContextComponentRelease, ...] = ()
     prompt_bundles: tuple[PromptBundleRelease, ...] = ()
     execution_profiles: tuple[ExecutionProfileRelease, ...] = ()
     modules: tuple[RuntimeModuleRelease, ...] = ()
@@ -95,6 +98,7 @@ class RuntimeReleaseBundle:
             (
                 self.skill_packages,
                 self.schema_assets,
+                self.model_context_components,
                 self.prompt_bundles,
                 self.execution_profiles,
                 self.modules,
@@ -112,6 +116,7 @@ class RuntimeReleaseRegistrySnapshot:
 
     skill_packages: tuple[SkillPackageRelease, ...]
     schema_assets: tuple[SchemaAssetRelease, ...]
+    model_context_components: tuple[ModelContextComponentRelease, ...]
     prompt_bundles: tuple[PromptBundleRelease, ...]
     execution_profiles: tuple[ExecutionProfileRelease, ...]
     modules: tuple[RuntimeModuleRelease, ...]
@@ -130,6 +135,9 @@ class RuntimeReleaseRegistry:
         self._skill_packages: dict[str, SkillPackageRelease] = {}
         self._schema_assets: dict[str, SchemaAssetRelease] = {}
         self._schema_version_keys: dict[tuple[str, str], str] = {}
+        self._model_context_components: dict[
+            str, ModelContextComponentRelease
+        ] = {}
         self._prompt_bundles: dict[str, PromptBundleRelease] = {}
         self._execution_profiles: dict[str, ExecutionProfileRelease] = {}
         self._modules: dict[str, RuntimeModuleRelease] = {}
@@ -157,6 +165,7 @@ class RuntimeReleaseRegistry:
         for field_name in (
             "skill_packages",
             "schema_assets",
+            "model_context_components",
             "prompt_bundles",
             "execution_profiles",
             "modules",
@@ -177,7 +186,16 @@ class RuntimeReleaseRegistry:
                 version=record.skill_package_version,
                 target=staged._skill_packages,
             )
+        for record in bundle.model_context_components:
+            staged._register_release(
+                record,
+                kind=ReleaseSubjectKind.MODEL_CONTEXT_COMPONENT,
+                stable_id=record.context_component_id,
+                version=record.context_component_version,
+                target=staged._model_context_components,
+            )
         for record in bundle.prompt_bundles:
+            staged._validate_prompt_bundle_closure(record)
             staged._register_release(
                 record,
                 kind=ReleaseSubjectKind.PROMPT_BUNDLE,
@@ -238,6 +256,18 @@ class RuntimeReleaseRegistry:
             release_ref,
             release_sha256,
             "Prompt Bundle",
+        )
+
+    def get_model_context_component(
+        self, release_ref: str, release_sha256: str
+    ) -> ModelContextComponentRelease:
+        """Resolve one exact model-ready Context Component Release."""
+
+        return self._get_exact(
+            self._model_context_components,
+            release_ref,
+            release_sha256,
+            "Model Context Component",
         )
 
     def get_schema_asset(
@@ -395,6 +425,10 @@ class RuntimeReleaseRegistry:
                 schema_assets=tuple(
                     self._schema_assets[key] for key in sorted(self._schema_assets)
                 ),
+                model_context_components=tuple(
+                    self._model_context_components[key]
+                    for key in sorted(self._model_context_components)
+                ),
                 prompt_bundles=tuple(
                     self._prompt_bundles[key]
                     for key in sorted(self._prompt_bundles)
@@ -419,6 +453,9 @@ class RuntimeReleaseRegistry:
         staged._skill_packages = dict(self._skill_packages)
         staged._schema_assets = dict(self._schema_assets)
         staged._schema_version_keys = dict(self._schema_version_keys)
+        staged._model_context_components = dict(
+            self._model_context_components
+        )
         staged._prompt_bundles = dict(self._prompt_bundles)
         staged._execution_profiles = dict(self._execution_profiles)
         staged._modules = dict(self._modules)
@@ -435,6 +472,7 @@ class RuntimeReleaseRegistry:
         self._skill_packages = staged._skill_packages
         self._schema_assets = staged._schema_assets
         self._schema_version_keys = staged._schema_version_keys
+        self._model_context_components = staged._model_context_components
         self._prompt_bundles = staged._prompt_bundles
         self._execution_profiles = staged._execution_profiles
         self._modules = staged._modules
@@ -455,6 +493,7 @@ class RuntimeReleaseRegistry:
     ) -> None:
         if type(record) not in {
             SkillPackageRelease,
+            ModelContextComponentRelease,
             PromptBundleRelease,
             ExecutionProfileRelease,
             RuntimeModuleRelease,
@@ -496,6 +535,38 @@ class RuntimeReleaseRegistry:
             )
         self._schema_assets[record.release_ref] = record
         self._schema_version_keys[version_key] = record.release_ref
+
+    def _validate_prompt_bundle_closure(
+        self, prompt_bundle: PromptBundleRelease
+    ) -> None:
+        """Require exact closure for every registered Context Component member."""
+
+        prompt_bundle.validate()
+        resolved_components: list[ModelContextComponentRelease] = []
+        for member in prompt_bundle.members:
+            if member.member_ref.startswith("model-context-component:"):
+                component = self.get_model_context_component(
+                    member.member_ref,
+                    member.member_sha256,
+                )
+                if component.media_type != member.media_type:
+                    raise ValueError(
+                        "Prompt Bundle member media type differs from Context Component"
+                    )
+                resolved_components.append(component)
+        if resolved_components:
+            if len(resolved_components) != len(prompt_bundle.members):
+                raise ValueError(
+                    "Prompt Bundle cannot mix Context Components with legacy members"
+                )
+            expected_body = "".join(
+                component.formatted_content
+                for component in resolved_components
+            )
+            if prompt_bundle.compiled_static_body != expected_body:
+                raise ValueError(
+                    "Prompt Bundle body differs from its ordered Context Components"
+                )
 
     def _validate_module_closure(self, module: RuntimeModuleRelease) -> None:
         module.validate()
@@ -629,6 +700,8 @@ class RuntimeReleaseRegistry:
         table: Mapping[str, Any]
         if admission.subject_kind is ReleaseSubjectKind.SKILL_PACKAGE:
             table = self._skill_packages
+        elif admission.subject_kind is ReleaseSubjectKind.MODEL_CONTEXT_COMPONENT:
+            table = self._model_context_components
         elif admission.subject_kind is ReleaseSubjectKind.PROMPT_BUNDLE:
             table = self._prompt_bundles
         elif admission.subject_kind is ReleaseSubjectKind.EXECUTION_PROFILE:
@@ -650,6 +723,7 @@ class RuntimeReleaseRegistry:
     def _stable_id(record: Any) -> str:
         for field_name in (
             "skill_package_id",
+            "context_component_id",
             "prompt_bundle_id",
             "execution_profile_id",
             "module_id",

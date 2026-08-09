@@ -395,12 +395,20 @@ def _assert_module_dependencies_shadow_executable(
     if module.prompt_bundle_ref is not None:
         if module.prompt_bundle_sha256 is None:
             raise ValueError("Module Prompt Bundle hash is missing")
-        release_registry.get_prompt_bundle(
+        prompt_bundle = release_registry.get_prompt_bundle(
             module.prompt_bundle_ref,
             module.prompt_bundle_sha256,
         )
         dependencies.append(
             (ReleaseSubjectKind.PROMPT_BUNDLE, module.prompt_bundle_ref)
+        )
+        dependencies.extend(
+            (
+                ReleaseSubjectKind.MODEL_CONTEXT_COMPONENT,
+                member.member_ref,
+            )
+            for member in prompt_bundle.members
+            if member.member_ref.startswith("model-context-component:")
         )
     allowed = {
         ReleaseAdmissionState.CANDIDATE,

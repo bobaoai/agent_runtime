@@ -77,7 +77,7 @@ adjacent_contracts:
   - designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md
 outputs:
   - public Runtime contract and plugin seam
-  - registered Schema Asset, Skill Package, Prompt Bundle, Execution Profile, Module, and Workflow Releases
+  - registered Schema Asset, Skill Package, Model Context Component, Prompt Bundle, Execution Profile, Module, and Workflow Releases
   - immutable execution, output-reference, evaluation, resolution, context, telemetry, and recovery lineage
   - provider-neutral conformance and standalone-distribution requirements
 truth_surfaces:
@@ -262,7 +262,8 @@ responsibilities.
 
 A domain plugin submits one dependency-closed `runtime_release_bundle` through a
 `runtime_module_plugin`. The bundle may contain Schema Asset, Skill Package,
-Prompt Bundle, Execution Profile, Runtime Module, Workflow, and admission
+Model Context Component, Prompt Bundle, Execution Profile, Runtime Module,
+Workflow, and admission
 releases. Runtime
 validates identity, uniqueness, exact hash closure, declared operation closure,
 and release compatibility. It does not infer behavior from names, inspect
@@ -426,6 +427,15 @@ pooling, and deployment topology remain replaceable implementation choices;
 the persistence semantics and canonical schema do not. No implementation may
 choose a domain edge, reinterpret a domain verdict, mutate domain state
 directly, or redefine Runtime identity.
+
+An immutable `model_context_component_release` is the Runtime-owned storage
+unit for formatted static content that may enter a model Context. Its initial
+kinds are task instruction, domain context, and output constraint. It stores
+the exact model-ready content, content hash, producing Formatter version, and
+source-release refs and hashes. An ordered `prompt_bundle_release` references
+those component releases and stores the complete compiled static Context.
+Component and bundle rows are canonical after admission; Markdown is a
+generated inspection and recovery projection only.
 
 An Agent Execution Adapter receives one frozen Variant-bound request and
 returns a structured terminal result, immutable output reference, normalized

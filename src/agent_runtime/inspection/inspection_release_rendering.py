@@ -25,7 +25,7 @@ from ..registry.registry_release_registration import RuntimeReleaseRegistry
 
 
 INVENTORY_SCHEMA_VERSION = "agent_runtime_inventory_v3"
-RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v1"
+RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v2"
 
 
 def _latest_admission_state(
@@ -165,6 +165,25 @@ def build_runtime_release_inventory(
             }
             for release in snapshot.schema_assets
         ],
+        "model_context_components": [
+            {
+                "context_component_id": release.context_component_id,
+                "version": release.context_component_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "component_kind": release.component_kind.value,
+                "media_type": release.media_type,
+                "formatter_id": release.formatter_id,
+                "formatter_version": release.formatter_version,
+                "formatted_content_sha256": release.formatted_content_sha256,
+                "latest_admission_state": _latest_admission_state(
+                    release_registry,
+                    ReleaseSubjectKind.MODEL_CONTEXT_COMPONENT,
+                    release.release_ref,
+                ),
+            }
+            for release in snapshot.model_context_components
+        ],
         "prompt_bundles": [
             {
                 "prompt_bundle_id": release.prompt_bundle_id,
@@ -279,6 +298,7 @@ def render_runtime_release_markdown(
         "| --- | ---: |",
         f"| Skill Package | `{len(inventory['skill_packages'])}` |",
         f"| Schema Asset | `{len(inventory['schema_assets'])}` |",
+        f"| Model Context Component | `{len(inventory['model_context_components'])}` |",
         f"| Prompt Bundle | `{len(inventory['prompt_bundles'])}` |",
         f"| Execution Profile | `{len(inventory['execution_profiles'])}` |",
         f"| Runtime Module | `{len(inventory['modules'])}` |",
@@ -337,6 +357,26 @@ def render_runtime_release_markdown(
             f"`{schema_asset['version']}` | "
             f"`{schema_asset['release_ref']}` | "
             f"`{schema_asset['schema_sha256']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Model Context Components",
+            "",
+            (
+                "| Component | Version | Kind | Formatter | Content hash | "
+                "Admission |"
+            ),
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for component in inventory["model_context_components"]:
+        lines.append(
+            f"| `{component['context_component_id']}` | "
+            f"`{component['version']}` | `{component['component_kind']}` | "
+            f"`{component['formatter_id']}@{component['formatter_version']}` | "
+            f"`{component['formatted_content_sha256']}` | "
+            f"`{component['latest_admission_state']}` |"
         )
     lines.extend(
         [

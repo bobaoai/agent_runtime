@@ -149,16 +149,17 @@ fixed directory and one machine-readable manifest:
 ```text
 .claude/skills/<skill_id>/runtime_modules/<module_id>/
 ├── module_registration.json
-├── prompt.md
+├── prompt.md          # generated human-review projection
 └── tests/
 ```
 
 The Runtime registration builder discovers only
 `runtime_modules/*/module_registration.json`. The directory name, `export_id`,
-and `module_id` must be identical `snake_case` values. `prompt.md` is required,
-UTF-8, non-empty, and the only static prompt source for that export. Ambient
+and `module_id` must be identical `snake_case` values. `prompt.md` is a
+generated UTF-8 projection of the registered Prompt Bundle for human review
+and repository recovery. It is not imported as production authority. Ambient
 Markdown, sibling Module files, `SKILL.md` sections, and strings embedded in
-domain or Adapter code are not instruction members.
+Adapter code are not instruction members.
 
 The logical manifest shape is:
 
@@ -191,10 +192,10 @@ production read instructions and are never resolved by a Module Run.
 `export_id` is unique inside one Skill Package Release and equals `module_id`,
 so one global executable identity survives Skill packaging without an alias
 map. `module_id` is the stable identity carried by every release of that Module
-in the Runtime Release Registry. The prompt member path is fixed rather than
-declared in the manifest. Runtime rejects an alternate prompt filename,
-another root-level Markdown prompt, a path escaping the Module directory, or
-an ambient package file absent from the export closure.
+in the Runtime Release Registry. Prompt membership is the ordered set of exact
+Model Context Component Release refs and hashes. Runtime rejects an unregistered
+component, another root-level Markdown authority, a path escaping the Module
+directory, or an ambient package file absent from the export closure.
 
 Changing one Module export creates a new Skill Package Release. The admission
 compiler compares export closures independently. An unchanged export may keep
@@ -324,9 +325,9 @@ Managed execution uses the following authority split:
 | Product and architecture intent | Design Doc |
 | Schema authoring file, validator, compiler, and seed declaration | Code and Git |
 | Skill Package and Module instruction candidate | Skill Management authoring workflow |
-| Registered Schema Asset, Skill Package, Module, Prompt Bundle, Execution Profile, and Workflow release | Postgres control-plane registry |
+| Registered Schema Asset, Skill Package, Model Context Component, Module, Prompt Bundle, Execution Profile, and Workflow release | Postgres control-plane registry |
 | Active release pointer and admission state | Postgres control-plane registry |
-| Local `.claude/skills/<skill_id>/runtime_modules/<module_id>` files | Editable registration candidate and recovery copy; no post-registration authority |
+| Local `.claude/skills/<skill_id>/runtime_modules/<module_id>` files | Registration manifest plus generated human-review and recovery projections; no post-registration authority |
 | Local `.claude/skills/*/SKILL.md` files | Skill Package authoring candidate; never duplicate Module prompt text or override a registered release |
 | Local `.agents/skills/*/SKILL.md` files | Codex host-interface projections; never own Module registration or duplicate Module prompt text |
 | Authorized dynamic task input and final provider request | Cell-local execution store |
@@ -335,12 +336,13 @@ Managed execution uses the following authority split:
 Runtime never reads a mutable working-tree Skill, prompt, or schema file as
 production authority after the target Module enters `managed`.
 
-The Git Module directory is an editable candidate and recovery copy. The
-PostgreSQL Prompt Bundle and Schema Asset Releases are the immutable registered
-records and sole production execution authority. `SKILL.md`, domain code,
-Runtime code, and Adapter code contain no duplicate prompt or schema body. A
-registered hash mismatch requires a new release; Runtime never reconciles the
-database by rereading Git during execution.
+The Git Module directory is a registration manifest plus generated review and
+recovery projections. PostgreSQL Model Context Component, Prompt Bundle, and
+Schema Asset Releases are the immutable registered records and sole production
+execution authority. `SKILL.md`, Runtime code, and Adapter code contain no
+duplicate model-ready Context or schema body. A registered hash mismatch
+requires a new release; Runtime never reconciles the database by rereading Git
+during execution.
 
 Registration makes the PostgreSQL release canonical within its recorded
 lifecycle state. Admission controls where that release may execute; it does not
@@ -348,11 +350,11 @@ return authority to the Git candidate.
 
 Registration and update tooling reads the current Runtime Release Registry
 first. It resolves the registered Module, Prompt Bundle, Schema Assets, and
-Execution Profiles as the version baseline, then reads the Git Module folder
-as a proposed candidate and computes the change. A missing or stale local file
-cannot replace registered content. Tooling may reconstruct an editable
-candidate from the registered release, or fail closed when reconstruction would
-lose authoring information.
+Execution Profiles as the version baseline, then accepts a structured proposed
+change from the owning registration workflow and computes new immutable
+component and bundle releases. It regenerates the Git review projection from
+that result. A missing, stale, or edited local projection cannot replace
+registered content.
 
 The Primary Agent participates only in authoring, review, registration, and
 release update. A production execution resolves the immutable Module Release,
@@ -362,31 +364,36 @@ recheck its prose, or rebuild the Prompt for each run. A semantic instruction
 change returns to the authoring and registration path and creates new immutable
 release records before it can affect production.
 
-### 5.2 Prompt Bundle
+### 5.2 Model Context Components and Prompt Bundle
 
-A Prompt is managed as a compiled release rather than one mutable string.
+A Prompt is managed as ordered immutable component releases and one compiled
+bundle rather than one mutable string.
 
 ```mermaid
 flowchart LR
-    RP["Runtime Prefix Release"] --> C["Deterministic Prompt Compiler"]
-    SI["Selected Skill Export Instructions"] --> C
-    MI["Module Instruction Assets"] --> C
-    OS["Canonical Output Schema"] --> C
+    SI["Structured Task Instruction"] --> F["Registered Formatters"]
+    DC["Structured Domain Context"] --> F
+    OS["Canonical Output Schema"] --> F
+    F --> MC["Model Context Component Releases"]
+    MC --> C["Deterministic Prompt Compiler"]
     C --> PB["Prompt Bundle Release"]
+    PB --> MD["Generated Markdown Review Projection"]
 
     PB --> PE["Cell-local Prompt Envelope"]
     DI["Authorized Dynamic Input"] --> PE
     RV["Optional Revision Packet"] --> PE
 ```
 
-`prompt_bundle_release` contains one repository-independent logical instruction
-member ref, the exact imported `prompt.md` content hash,
-compiler version, compiled static body, media type, release hash, lifecycle,
-and source lineage. It contains no tenant data, user query, entitled search
-result, Source content, prior draft, credential, or provider session.
-The authoring path is registration input and is not the persisted instruction
-identity. Runtime inspection shows the registered body and logical member ref;
-it never reopens that path.
+`model_context_component_release` stores one exact model-ready static body,
+component kind, media type, Formatter identity and version, source-member refs
+and hashes, content hash, and release hash. The initial kinds are
+`task_instruction`, `domain_context`, and `output_constraint`.
+
+`prompt_bundle_release` stores the ordered component refs and release hashes,
+compiler version, complete compiled static body, body hash, and release hash.
+Neither record contains tenant data, user query, entitled search result,
+Source content, prior draft, credential, or provider session. Runtime
+inspection reads the registered rows; it never opens a Markdown path.
 
 `prompt_envelope` binds the exact Prompt Bundle, authorized dynamic inputs,
 revision packet when present, output-constraint mode, tool policy, and final

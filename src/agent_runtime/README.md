@@ -225,15 +225,21 @@ release; this wheel is not an in-place upgrade until that migration gate passes.
 
 ## Release registration
 
-A domain plugin keeps each Agent Module's editable source together: its
-instruction, input schema, output schema, execution profiles, and registration
-metadata. Registration compiles those files into one immutable candidate release.
-Admission and activation are explicit later decisions.
+A domain plugin submits one structured instruction and domain-context closure,
+its input and output schemas, execution profiles, and registration metadata.
+Registered Formatters create immutable Model Context Component Releases;
+Runtime orders them into one Prompt Bundle Release and persists both in
+PostgreSQL. Admission and activation are explicit later decisions. A generated
+Markdown file may project the complete bundle for review and recovery, but it
+is never the production read authority.
 
 ```mermaid
 flowchart LR
-    SOURCE["Editable Agent definition"] --> COMPILE["Compile and validate"]
+    SOURCE["Structured Agent definition"] --> FORMAT["Registered Formatters"]
+    FORMAT --> COMPONENTS["Model Context Component Releases"]
+    COMPONENTS --> COMPILE["Compile and validate Prompt Bundle"]
     COMPILE --> CANDIDATE["Immutable Agent Module candidate"]
+    COMPILE --> MD["Generated Markdown review projection"]
     CANDIDATE --> ADMIT["Admission"]
     ADMIT --> ACTIVE["Active Agent Module release"]
 ```

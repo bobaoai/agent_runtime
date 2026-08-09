@@ -134,6 +134,7 @@ def test_module_compiler_uses_only_fixed_module_export_files(tmp_path: Path) -> 
         RuntimeReleaseBundle(
             skill_packages=(compiled.skill_package,),
             schema_assets=compiled.schema_assets,
+            model_context_components=compiled.model_context_components,
             prompt_bundles=(compiled.prompt_bundle,),
             execution_profiles=(compiled.execution_profile,),
             modules=(compiled.module,),
