@@ -14,12 +14,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 import hashlib
 import json
-import math
 from pathlib import Path
 import re
 from typing import Any, Mapping, TypeAlias, TypeVar
 
 from .ledger_lineage_definition import ModuleOutputResolutionRecord
+from .registry_contract_validation import validate_usd_amount
 from .registry_workflow_definition import ModuleOutcome
 
 
@@ -127,8 +127,8 @@ class ModelUsageRecord:
     output_tokens: int | None
     cache_read_tokens: int | None
     cache_creation_tokens: int | None
-    estimated_cost_usd: float | None
-    provider_charge_usd: float | None = None
+    estimated_cost_usd: str | None
+    provider_charge_usd: str | None = None
 
     def validate(self) -> None:
         """Reject negative usage while preserving unknown values as null."""
@@ -145,15 +145,8 @@ class ModelUsageRecord:
             ("estimated_cost_usd", self.estimated_cost_usd),
             ("provider_charge_usd", self.provider_charge_usd),
         ):
-            if value is not None and (
-                type(value) not in {int, float}
-                or type(value) is float
-                and not math.isfinite(value)
-                or value < 0
-            ):
-                raise ValueError(
-                    f"{label} must be a finite non-negative JSON number or null"
-                )
+            if value is not None:
+                validate_usd_amount(label, value)
 
     def as_dict(self) -> dict[str, Any]:
         """Return a validated JSON-ready usage record."""
@@ -1534,8 +1527,8 @@ class UsageEvent:
     output_tokens: int | None
     cache_read_tokens: int | None
     cache_creation_tokens: int | None
-    estimated_cost_usd: float | None
-    provider_charge_usd: float | None
+    estimated_cost_usd: str | None
+    provider_charge_usd: str | None
     recorded_at_utc: str
 
     def validate(self) -> None:

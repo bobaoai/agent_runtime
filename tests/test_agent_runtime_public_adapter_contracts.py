@@ -72,7 +72,7 @@ def _provider_result() -> AgentExecutionResult:
         output_tokens=4,
         cache_read_tokens=0,
         cache_creation_tokens=None,
-        estimated_cost_usd=0.25,
+        estimated_cost_usd="0.250",
         provider_charge_usd=None,
         context=AdapterContextResult(
             disposition_id="context_closed",

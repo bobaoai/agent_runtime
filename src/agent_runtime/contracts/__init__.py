@@ -7,7 +7,8 @@ retire with the corresponding architecture-debt entries.
 """
 
 from .registry_contract_validation import (
-    validate_finite_json_number,
+    validate_usd_amount,
+    format_usd_amount,
     validate_id,
     validate_int,
     validate_opaque_ref,
@@ -246,7 +247,8 @@ __all__ = [
     "WorkflowRuntimeRegistration",
     "validate_capability_id",
     "validate_domain_runtime_manifest",
-    "validate_finite_json_number",
+    "validate_usd_amount",
+    "format_usd_amount",
     "validate_id",
     "validate_int",
     "validate_opaque_ref",

@@ -136,10 +136,17 @@ def test_unknown_usage_stays_null_and_negative_values_fail() -> None:
         ModelUsageRecord(-1, 0, 0, 0, None).validate()
 
 
-@pytest.mark.parametrize("value", (float("nan"), float("inf"), float("-inf")))
-def test_usage_rejects_non_finite_costs_before_json_persistence(value: float) -> None:
-    with pytest.raises(ValueError, match="finite non-negative JSON number"):
+@pytest.mark.parametrize(
+    "value",
+    (float("nan"), 1.5, "1.5", "1e30", "-0.001", "1.2500", "abc"),
+)
+def test_usage_rejects_non_canonical_cost_amounts(value: object) -> None:
+    with pytest.raises(ValueError, match="canonical USD amount"):
         ModelUsageRecord(0, 0, 0, 0, value).validate()
+
+
+def test_usage_accepts_canonical_cost_amounts() -> None:
+    ModelUsageRecord(1, 1, 0, 0, "0.000", "1.250").validate()
 
 
 def test_canonical_record_constructors_never_return_legacy_types() -> None:

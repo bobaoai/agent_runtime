@@ -13,7 +13,7 @@ from .registry_contract_validation import (
     validate_enum_string,
     validate_exact_record_instance,
     validate_exact_record_tuple,
-    validate_finite_json_number,
+    validate_usd_amount,
     validate_id,
     validate_int,
     validate_opaque_ref,
@@ -345,8 +345,8 @@ class AgentExecutionResult:
     output_tokens: int | None
     cache_read_tokens: int | None
     cache_creation_tokens: int | None
-    estimated_cost_usd: float | None
-    provider_charge_usd: float | None
+    estimated_cost_usd: str | None
+    provider_charge_usd: str | None
     context: AdapterContextResult
     failure: AgentExecutionFailure | None
     cell_local_trace_ref: str
@@ -401,7 +401,7 @@ class AgentExecutionResult:
             ("provider_charge_usd", self.provider_charge_usd),
         ):
             if value is not None:
-                validate_finite_json_number(label, value, minimum=0)
+                validate_usd_amount(label, value)
         validate_exact_record_instance(
             "result context",
             self.context,

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection
 from datetime import datetime
-import math
+from decimal import Decimal, ROUND_HALF_UP
 import re
 from typing import Any, Pattern, TypeVar
+
+
+_USD_AMOUNT = re.compile(r"^(0|[1-9][0-9]*)\.[0-9]{3}$")
 
 
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{2,159}$")
@@ -158,20 +161,32 @@ def validate_utc_timestamp(label: str, value: Any) -> None:
         raise ValueError(f"invalid {label}: UTC timestamp required")
 
 
-def validate_finite_json_number(
-    label: str,
-    value: Any,
-    *,
-    minimum: int | float | None = None,
-) -> None:
-    """Require an exact finite JSON number, excluding booleans and rich scalars."""
+def validate_usd_amount(label: str, value: Any) -> None:
+    """Require a canonical fixed-3-decimal USD string (non-negative, no exponent).
 
-    if type(value) not in {int, float}:
-        raise ValueError(f"{label} must be a finite JSON number")
-    if type(value) is float and not math.isfinite(value):
-        raise ValueError(f"{label} must be a finite JSON number")
-    if minimum is not None and value < minimum:
-        raise ValueError(f"{label} must be at least {minimum}")
+    Monetary amounts are recorded as text, never floats: a float round-trips
+    through jsonb ambiguously (exponent rewriting, -0.0, NaN), so cost is stored
+    as e.g. '0.000' or '1.250'.
+    """
+
+    if type(value) is not str or not _USD_AMOUNT.fullmatch(value):
+        raise ValueError(f"{label} must be a canonical USD amount like '0.000'")
+
+
+def format_usd_amount(value: int | float | str | Decimal) -> str:
+    """Format a non-negative amount as a canonical fixed-3-decimal USD string.
+
+    A positive amount below the 0.001 minimum floors to '0.001' so a paid call
+    is never recorded as free; exact zero stays '0.000'.
+    """
+
+    amount = Decimal(str(value))
+    if amount < 0:
+        raise ValueError("USD amount must be non-negative")
+    quantized = amount.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    if quantized == 0 and amount > 0:
+        quantized = Decimal("0.001")
+    return f"{quantized:.3f}"
 
 
 def validate_string_tuple(
@@ -233,7 +248,8 @@ __all__ = [
     "validate_enum_string",
     "validate_exact_record_instance",
     "validate_exact_record_tuple",
-    "validate_finite_json_number",
+    "validate_usd_amount",
+    "format_usd_amount",
     "validate_id",
     "validate_int",
     "validate_opaque_ref",
