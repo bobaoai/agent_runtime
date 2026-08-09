@@ -771,14 +771,20 @@ run_module(
     request: ModuleExecutionRequest,
     *,
     release_registry: RuntimeReleaseRegistry,
-    executors: ModuleExecutorRegistry,
+    adapters: AgentExecutionAdapterRegistry,
     ledger: ModuleExecutionLedger,
+    authority: ModuleExecutionAuthority | None,
 )
 ```
 
 These `PascalCase` names are Python projections. Their canonical contract IDs
 remain `module_execution_request`, `runtime_release_registry`,
-`module_executor_registry`, and `module_execution_ledger`.
+`agent_execution_adapter_registry`, `module_execution_ledger`, and
+`module_execution_authority`. `authority` carries the `agent_runtime_09`
+execution authorization controller, context binding, and Product operation
+authorization port; it is required whenever the Module declares a protected
+operation and admissible as absent only for the operation-free `in_process`
+Test/Evaluation conjunction defined in `agent_runtime_08`.
 
 The service performs these ordered safety operations because changing their
 order changes authority or replay behavior:

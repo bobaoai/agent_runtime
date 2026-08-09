@@ -61,7 +61,7 @@ outputs:
 truth_surfaces:
   - src/agent_runtime/contracts/invocation_adapter_definition.py
   - src/agent_runtime/invocation/invocation_codex_module_invocation.py
-  - src/agent_runtime/invocation/invocation_model_invocation.py
+  - src/agent_runtime/execution/execution_module_invocation.py
 runtime_triggers: none
 downstream_consumers:
   - Agent Runtime invocation and evaluation services
@@ -72,8 +72,8 @@ open_decisions: none
 review_gate: provider conformance, data-leakage, lifecycle-order, and clean-wheel tests
 runtime_surface_ledger:
   - "active DTO/protocol baseline: src/agent_runtime/contracts/invocation_adapter_definition.py"
-  - "shadow executable Codex CLI Module Executor: src/agent_runtime/invocation/invocation_codex_module_invocation.py"
-  - "target model-execution authorization seam: src/agent_runtime/invocation/invocation_model_invocation.py"
+  - "canonical Codex CLI execution adapter: src/agent_runtime/invocation/invocation_codex_module_invocation.py"
+  - "authorization-enforcing execution kernel: src/agent_runtime/execution/execution_module_invocation.py"
 verification_hooks:
   - ./.venv/bin/python -m pytest tests/test_agent_runtime_public_adapter_contracts.py -q
   - ./.venv/bin/python -m pytest tests/test_agent_runtime_native_structured_output.py -q
@@ -147,7 +147,8 @@ adapter_contract_version
 adapter_id
 adapter_revision
 provider_id
-transport_kind: sdk | api | cli
+transport_family: sdk | api | cli | in_process
+transport_kind: exact registered transport, e.g. claude_agent_sdk | codex_cli | in_process_test
 runtime_package_id
 runtime_package_version
 supported_context_modes
@@ -155,9 +156,16 @@ supported_read_isolation_modes
 supported_execution_modes
 supported_input_delivery_modes
 supported_network_policies
+supported_output_constraint_modes
 supports_dynamic_operation_authorization
 admission_state
 ```
+
+Transport identity is two layers used consistently across the repository:
+`transport_family` is the bounded mechanism class, and `transport_kind` is the
+exact registered transport that Execution Profiles and Module
+`compatible_transport_kinds` name. `in_process` exists so that a synthetic
+test double never claims an SDK, API, or CLI mechanism.
 
 Dependency discovery is an explicit probe. Discovery or import success never
 grants execution authority.
@@ -181,6 +189,43 @@ grants execution authority.
 - the Module Release's canonical output-schema ref/hash;
 - immutable input-closure hash, data-use purpose, request hash, and idempotency
   key.
+
+#### 2.2.1 Execution scope
+
+The request carries exactly one execution scope: the Workflow Execution ID
+when the invocation belongs to a durable Workflow Execution, or the isolated
+Module scope ref/hash for a direct `test`/`evaluation` Module Run. A caller
+never fabricates a Workflow Execution identity for an isolated run. Inside
+`agent_runtime_09` authority records, whose `workflow_execution_id` field
+predates this split, the field carries the execution scope identity: the
+Workflow Execution ID for workflow scopes, or the deterministic identity
+derived from the isolated scope ref for isolated scopes.
+
+#### 2.2.2 Authorization evidence closure
+
+Every authorization evidence field resolves to one committed
+`agent_runtime_09` authority record. The request transports references and
+hashes only; it never restates or reinterprets the authority content.
+
+| Request field group | Canonical authority owner |
+| --- | --- |
+| `execution_authorization_binding_ref`/`_sha256` | `ExecutionAuthorizationContextBinding` |
+| `protected_operation_intent_ref`/`_sha256` | `ProtectedOperationIntent` |
+| `product_operation_decision_ref`/`_sha256` | `ProductOperationDecision` |
+| `gateway_authorization_observation_ref`/`_sha256` | `GatewayAuthorizationObservation` binding the decision to the intent |
+| `operation_grant_ref`/`_sha256` + `grant_disposition_ref` | Product-issued `OperationGrant` and its Gateway disposition, present only for an operation classified high risk |
+
+Each group is present completely or not at all, and the groups form a
+dependency chain: a grant requires the operation-decision groups, and the
+operation-decision groups require the execution authorization binding. A
+Module that declares a model operation requires the binding and
+operation-decision groups under every purpose, including `test` and
+`evaluation`; a host-registered test authority changes where the evidence
+comes from, not whether it exists. Empty evidence is admissible only for the
+conjunction of `test`/`evaluation` purpose, `in_process` transport family,
+zero declared operations, and no provider, model, or tool callable. A provider
+adapter must refuse a model invocation request whose evidence groups are
+absent.
 
 Provider/model, execution mode, tool, timeout, sandbox, network, Context, and output-normalizer
 facts resolve from the pinned Execution Profile, Module Release, and Cell-local
@@ -489,6 +534,16 @@ and a Cell-local detail ref/hash. Raw provider exceptions, stdout, stderr,
 assistant excerpts, tool arguments, and source content do not enter the shared
 failure record.
 
+Failure delivery has a fixed boundary:
+
+| Condition | Delivery |
+| --- | --- |
+| Expected provider failure: timeout, quota, rate limit, auth, transport, provider error, cancellation | `AgentExecutionResult` with `failed`/`cancelled` status and a typed `AgentExecutionFailure`, preserving usage and the bounded Cell-local trace |
+| Provider returned an unparsable or schema-violating output | Same typed failed result; usage and trace preserved |
+| Adapter raised an exception or returned an invalid result type | Adapter conformance failure: the kernel records a bounded failed Attempt and no authoritative output exists |
+| Admission, authorization, or fence rejection | Kernel-owned fact recorded before or after the provider boundary; never disguised as a provider failure |
+| Runtime staging, ledger, or finalization failure | Kernel/ledger failure that propagates; an adapter must not swallow or reclassify it |
+
 Auth, authorization, quota, missing dependency, and systemic schema failures
 stop the affected runner or batch according to registered policy. A model
 failure never becomes a domain `blocked` or quality verdict inside the adapter.
@@ -514,15 +569,30 @@ preserved.
 
 ## 4. Runtime Authorization Host
 
-`AuthorizedAgentExecutionHost` exposes a narrow callback for operations discovered during
-an SDK session:
+`AuthorizedAgentExecutionHost` is the adapter's only Runtime surface: a
+request-bound input table, an output staging area whose contents become
+authoritative only through Runtime finalization, and a narrow callback for
+operations discovered during an SDK session:
 
 ```python
 class AuthorizedAgentExecutionHost(Protocol):
+    def read_authorized_input(self, local_handle: str) -> bytes: ...
+
+    def stage_output_bytes(
+        self, submission: OutputSubmission, content: bytes
+    ) -> None: ...
+
     def authorize_operation(
         self, request: ProviderOperationIntent
     ) -> AuthorizedOperationReceipt: ...
 ```
+
+Staged bytes are not outputs. Runtime validates, hashes, and commits them only
+inside the fenced finalization of section 10; an adapter that bypasses the
+host to write authoritative state is non-conformant. Until the Gateway
+capability slice is admitted, the kernel host fails `authorize_operation`
+closed; the callback's authority is independent of the model-invocation
+evidence already bound to the request.
 
 The host resolves the provider intent against the immutable execution
 authorization context, Module Run, Variant, Attempt, admitted Module
@@ -598,6 +668,12 @@ class AgentExecutionAdapterRegistry:
 Registration is explicit and duplicate-safe. Host composition loads provider
 packages. Domain plugins reference admitted execution-profile IDs and opaque
 Module Release refs; they do not import provider implementations.
+
+Resolution is exact on `(adapter_id, adapter_revision)` and validates, before
+any provider invocation, that the descriptor's transport kind and supported
+execution modes, input delivery modes, network policies, and output-constraint
+modes cover the exact Execution Profile. A missing adapter, wrong revision, or
+capability mismatch is a zero-invocation failure.
 
 Adapter selection inside the admitted Runtime registration resolves by
 `(module_release_ref, execution_profile_id)` and exact adapter revision. This is not
@@ -779,7 +855,12 @@ following stay Cell-local:
 
 Stale-output checks rerun immediately before finalization. A stale result cannot
 overwrite a newer Attempt, Variant, EvaluationSet, Selection,
-ModuleOutputResolutionRecord, or terminal dispatch.
+ModuleOutputResolutionRecord, or terminal dispatch. The re-check reads the
+committed execution-authorization fence inside the same atomic commit that
+would make outputs authoritative: an open fence commits outputs with the
+completed Attempt; a closed fence commits a failed Attempt that preserves
+usage evidence while staged outputs stay unreferenced and no resolution is
+recorded.
 
 ## 11. Admission Tests
 

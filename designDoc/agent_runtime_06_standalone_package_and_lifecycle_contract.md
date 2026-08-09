@@ -360,6 +360,29 @@ already-committed fact and is not re-compared field by field. Clock-derived and
 staging timestamps (`recorded_at_utc` and equivalents) never participate in
 idempotency identity.
 
+**Single execution kernel and purpose-scoped authority.** One canonical
+adapter contract — `AuthorizedAgentExecutionAdapter` consuming an
+`AuthorizedAgentExecutionRequest` and returning an `AgentExecutionResult` —
+carries every Module invocation, including in-process test doubles. Execution
+purpose selects the authority source, never a second code path. A Module that
+declares a model operation requires committed authorization evidence — the
+execution authorization context binding, protected-operation intent, Product
+operation decision, and Gateway authorization observation of
+`agent_runtime_09` — resolved and validated before the provider transport is
+entered, under `test` and `evaluation` purposes as much as under production
+purposes; a host-registered test authority changes where the evidence comes
+from, not whether it exists. Empty authorization evidence is admissible only
+for the conjunction of `test`/`evaluation` purpose, `in_process` transport
+family, zero declared operations, and no provider, model, or tool callable.
+Finalization of provider results follows section 7: the committed
+execution-authorization fence is re-read inside the same atomic commit that
+would make outputs authoritative — an open fence commits outputs with the
+completed Attempt; a closed fence commits a failed Attempt that preserves
+usage evidence while staged outputs stay unreferenced and no resolution is
+recorded. A request never fabricates a Workflow Execution identity: it carries
+either the Workflow Execution ID or the isolated Module scope, exactly one of
+the two.
+
 ### 5.2 Attempt records and active claim
 
 One provider, tool, or Gateway invocation has an immutable start record and at
