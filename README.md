@@ -19,29 +19,60 @@ meaning. Writer, Router, Verifier, Reviewer, or Expert are therefore possible
 Agent roles built on Runtime, not hard-coded concepts in Runtime itself. A
 Module may also wrap a deterministic function, human task, or external service.
 
-## Logical responsibility flow
+## Agent model
 
-Arrows in this diagram mean Runtime call or committed-fact flow. Every node is
-one peer logical responsibility.
+The Agency framework defines what an Agent means for a domain. Agent Runtime
+turns that definition into an immutable, executable Module and manages it as
+part of a stateful Workflow.
 
 ```mermaid
-flowchart LR
-    REGISTRY["Registry"] --> EXECUTION["Execution"]
-    EXECUTION --> INVOCATION["Invocation"]
-    EXECUTION <--> DURABILITY["Durability"]
-    EXECUTION --> LEDGER["Execution Ledger"]
-    LEDGER --> INSPECTION["Inspection"]
+flowchart TB
+    subgraph DEFINE["1. Define the Agent"]
+        direction LR
+        AGENCY["Agency framework<br/>or another host"] --> PLUGIN["Domain plugin"]
+        PLUGIN --> AGENT["Agent definition<br/>role, prompt, tools, policies"]
+    end
+    subgraph COMPOSE["2. Register and compose"]
+        direction LR
+        MODULE["Versioned Runtime Module<br/>immutable Agent capability"] --> WORKFLOW["Agent Workflow<br/>stateful graph of Modules"]
+    end
+    subgraph OPERATE["3. Execute and inspect"]
+        direction LR
+        EXECUTION["Durable Workflow Execution<br/>pinned Agent versions"] --> LEDGER["Execution Ledger and Inspector<br/>complete Agent run history"]
+    end
+    AGENT --> MODULE
+    WORKFLOW --> EXECUTION
+```
+
+The same Agent Module can be reused in multiple Workflows, and a Workflow can
+combine model-backed Agents with deterministic functions, human tasks, and
+external services. Runtime manages their execution contracts and lineage
+without owning their domain-specific meaning.
+
+## Agent execution responsibility flow
+
+Each Runtime responsibility owns one part of the Agent lifecycle. Arrows mean
+Runtime calls or committed execution facts.
+
+```mermaid
+flowchart TB
+    REGISTRY["Registry<br/>Agent Module and Workflow versions"] --> EXECUTION["Execution<br/>Agent state and Workflow routing"]
+    EXECUTION --> INVOCATION["Invocation<br/>model and tool providers"]
+    EXECUTION <--> DURABILITY["Durability<br/>waits, retries, replay, recovery"]
+    INVOCATION --> LEDGER["Execution Ledger<br/>Attempts, outputs, usage, failures"]
+    EXECUTION --> LEDGER
+    LEDGER --> INSPECTION["Inspection<br/>authorized Agent run review"]
 ```
 
 Concrete technologies are registered separately as implementation bindings:
 
 ```mermaid
 flowchart LR
-    REGISTRY["Registry"] -. "implemented by" .-> POSTGRES["PostgreSQL"]
-    INVOCATION["Invocation"] -. "implemented by" .-> CLAUDE["Claude Agent SDK"]
-    INVOCATION -. "implemented by" .-> CODEX["Codex CLI"]
-    DURABILITY["Durability"] -. "implemented by" .-> TEMPORAL["Temporal"]
-    INSPECTION["Inspection"] -. "implemented by" .-> HTML["HTML renderer"]
+    REGISTRY["Agent Registry"] -. "release persistence" .-> POSTGRES["PostgreSQL"]
+    INVOCATION["Agent Invocation"] -. "provider adapter" .-> CLAUDE["Claude Agent SDK"]
+    INVOCATION -. "provider adapter" .-> CODEX["Codex CLI"]
+    DURABILITY["Agent Workflow Durability"] -. "durable coordination" .-> TEMPORAL["Temporal"]
+    INSPECTION["Agent Run Inspection"] -. "read-only rendering" .-> HTML["HTML renderer"]
 ```
 
 This diagram shows the currently registered bindings. The generated
@@ -156,17 +187,17 @@ release; this wheel is not an in-place upgrade until that migration gate passes.
 
 ## Release registration
 
-A domain plugin keeps each Module's editable source together: its instruction,
-input schema, output schema, execution profiles, and registration metadata.
-Registration compiles those files into one immutable candidate release.
+A domain plugin keeps each Agent Module's editable source together: its
+instruction, input schema, output schema, execution profiles, and registration
+metadata. Registration compiles those files into one immutable candidate release.
 Admission and activation are explicit later decisions.
 
 ```mermaid
 flowchart LR
-    SOURCE["Editable Module source"] --> COMPILE["Compile and validate"]
-    COMPILE --> CANDIDATE["Candidate release"]
+    SOURCE["Editable Agent definition"] --> COMPILE["Compile and validate"]
+    COMPILE --> CANDIDATE["Immutable Agent Module candidate"]
     CANDIDATE --> ADMIT["Admission"]
-    ADMIT --> ACTIVE["Active PostgreSQL release"]
+    ADMIT --> ACTIVE["Active Agent Module release"]
 ```
 
 Production execution reads the admitted PostgreSQL release. It never rebuilds
@@ -179,7 +210,7 @@ the exact Workflow release, Module releases, authorized input closure, and
 execution profiles before the first invocation. Later release activation cannot
 change an execution already in progress.
 
-For each Module occurrence, Runtime:
+For each Agent Module occurrence, Runtime:
 
 1. creates one Module Run;
 2. creates one Variant for each selected model or configuration;
@@ -188,14 +219,20 @@ For each Module occurrence, Runtime:
 5. resolves the accepted output before advancing the Workflow.
 
 ```mermaid
-flowchart LR
-    START["Authorized start"] --> FREEZE["Freeze releases and inputs"]
-    FREEZE --> RUN["Module Run"]
-    RUN --> VARIANT["Variant"]
-    VARIANT --> ATTEMPT["Attempt"]
-    ATTEMPT --> RECORD["Commit result and usage"]
-    RECORD --> RESOLVE["Evaluate and resolve"]
-    RESOLVE --> NEXT["Next Module or terminal state"]
+flowchart TB
+    START["Start Agent Workflow"] --> FREEZE["Pin Agent, Workflow, tools, and inputs"]
+    FREEZE --> RUN
+    RUN["Agent Module Run"] --> VARIANT["Execution Variant<br/>model and configuration"]
+    VARIANT --> INVOKE["Invoke Agent<br/>model and allowed tools"]
+    INVOKE --> ATTEMPT["Attempt<br/>output, usage, failure, tool calls"]
+    ATTEMPT --> LEDGER
+    ATTEMPT --> RESOLVE
+    LEDGER["Commit to Execution Ledger"]
+    RESOLVE["Evaluate and resolve Agent output"] --> ROUTE["Advance Workflow state"]
+    ATTEMPT -- "retryable failure" --> RECOVER["Recover or retry"]
+    RECOVER --> INVOKE
+    ROUTE -- "next Agent Module" --> RUN
+    ROUTE -- "terminal state" --> COMPLETE["Complete Agent Workflow"]
 ```
 
 ## Workflow Inspector
