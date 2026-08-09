@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import functools
 from importlib import metadata
 from typing import Any, Mapping, Protocol
 
@@ -17,8 +18,13 @@ from ..contracts.invocation_adapter_definition import (
 )
 
 
+@functools.cache
 def runtime_package_version() -> str:
-    """Return the installed Runtime package version for adapter descriptors."""
+    """Return the installed Runtime package version for adapter descriptors.
+
+    Cached: the installed version cannot change within a process and the
+    metadata read sits on the per-attempt path.
+    """
 
     try:
         return metadata.version("agent-runtime-core")

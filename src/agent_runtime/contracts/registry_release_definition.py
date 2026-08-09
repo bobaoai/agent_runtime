@@ -31,6 +31,18 @@ _MEDIA_TYPE_PATTERN = re.compile(
     r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$"
 )
 
+# Shared capability vocabularies. The Execution Profile contract and the
+# adapter-descriptor contract must accept the same mode sets; each owning a
+# private copy is how the two drift apart.
+EXECUTION_MODES = frozenset({"tool_free", "agent"})
+SEMANTIC_INPUT_DELIVERY_MODES = frozenset(
+    {"inline", "gateway_read", "managed_attachment", "hybrid"}
+)
+NETWORK_POLICIES = frozenset({"denied", "gateway_only", "direct_sandboxed"})
+OUTPUT_CONSTRAINT_MODES = frozenset(
+    {"prompt_only_json", "native_structured_output"}
+)
+
 
 def _canonical_sha256(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(
@@ -125,6 +137,18 @@ class PromptComponentKind(StrEnum):
 
     TASK_INSTRUCTION = "task_instruction"
     OUTPUT_CONSTRAINT = "output_constraint"
+
+
+def is_prompt_component_member_ref(member_ref: str) -> bool:
+    """Report whether one bundle member ref names a Prompt Component release.
+
+    Every consumer must use this single predicate; per-call-site prefix
+    parsing is how a new member scheme silently falls through closure and
+    admission checks. A typed member kind on ``ReleaseMember`` replaces this
+    at the Module-model cutover.
+    """
+
+    return member_ref.startswith("prompt-component:")
 
 
 @dataclass(frozen=True)
@@ -716,14 +740,11 @@ class ExecutionProfileRelease:
         validate_snake_case_name("provider_id", self.provider_id)
         validate_id("model_id", self.model_id)
         _validate_token("reasoning_profile", self.reasoning_profile)
-        if self.execution_mode not in {"tool_free", "agent"}:
+        if self.execution_mode not in EXECUTION_MODES:
             raise ValueError("invalid Execution Profile execution_mode")
-        if self.semantic_input_delivery_mode not in {
-            "inline",
-            "gateway_read",
-            "managed_attachment",
-            "hybrid",
-        }:
+        if self.semantic_input_delivery_mode not in (
+            SEMANTIC_INPUT_DELIVERY_MODES
+        ):
             raise ValueError(
                 "invalid Execution Profile semantic_input_delivery_mode"
             )
@@ -759,10 +780,7 @@ class ExecutionProfileRelease:
             raise ValueError(
                 "Execution Profile gateway_access_reasons must be sorted and unique"
             )
-        if self.output_constraint_mode not in {
-            "prompt_only_json",
-            "native_structured_output",
-        }:
+        if self.output_constraint_mode not in OUTPUT_CONSTRAINT_MODES:
             raise ValueError("invalid Execution Profile output_constraint_mode")
         validate_string_tuple(
             "tool_policy",
@@ -772,11 +790,7 @@ class ExecutionProfileRelease:
         )
         if len(self.tool_policy) != len(set(self.tool_policy)):
             raise ValueError("Execution Profile tool_policy must be unique")
-        if self.network_policy not in {
-            "denied",
-            "gateway_only",
-            "direct_sandboxed",
-        }:
+        if self.network_policy not in NETWORK_POLICIES:
             raise ValueError("invalid Execution Profile network_policy")
         if self.execution_mode == "tool_free" and self.tool_policy:
             raise ValueError("tool_free Execution Profile cannot declare tools")
@@ -1127,6 +1141,10 @@ class RuntimeModuleRelease:
                 raise ValueError("Agent Module requires Skill export and Prompt Bundle")
             if any(value is not None for value in executable_binding):
                 raise ValueError("Agent Module cannot own a direct executable binding")
+            if not self.declared_operation_ids:
+                raise ValueError(
+                    "Agent Module must declare its protected operations"
+                )
         else:
             if any(value is not None for value in skill_binding + prompt_binding):
                 raise ValueError(
@@ -1590,10 +1608,15 @@ class ReleaseAdmissionRecord:
 
 
 __all__ = [
+    "EXECUTION_MODES",
+    "is_prompt_component_member_ref",
     "ExecutionProfileRelease",
     "ModuleEntryPolicy",
     "ModuleExecutionPurpose",
     "ModuleKind",
+    "NETWORK_POLICIES",
+    "OUTPUT_CONSTRAINT_MODES",
+    "SEMANTIC_INPUT_DELIVERY_MODES",
     "PromptComponentKind",
     "PromptComponentRelease",
     "OutputResolutionPolicy",

@@ -67,7 +67,6 @@ from .execution_authorization_resolution import ProductOperationAuthorizationCli
 
 
 _MODEL_INVOCATION_OPERATION_IDS = frozenset({"invoke_model", "model_execute"})
-_IN_PROCESS_TRANSPORT_KIND = "in_process_test"
 
 
 def _canonical_sha256(payload: Mapping[str, Any] | list[Any]) -> str:
@@ -184,7 +183,6 @@ class _AttemptAuthorizationEvidence:
     intent: ProtectedOperationIntent
     decision: ProductOperationDecision
     observation: GatewayAuthorizationObservation
-    allowed: bool
 
 
 class _AttemptExecutionHost:
@@ -311,6 +309,11 @@ def run_module(
             )
         authority.validate()
         _assert_authority_binding_closure(authority.binding, request)
+    elif authority is not None:
+        raise ValueError(
+            "a module execution authority was supplied for an operation-free "
+            "Module; nothing would consume or enforce it"
+        )
     if (
         module.output_resolution_policy is OutputResolutionPolicy.DIRECT_SINGLE
         and len(request.variants) != 1
@@ -346,20 +349,25 @@ def run_module(
         _assert_profile_shadow_executable(release_registry, profile)
         if profile.transport_kind not in module.compatible_transport_kinds:
             raise ValueError("Execution Profile transport is incompatible with Module")
+        if module.declared_operation_ids:
+            _assert_model_only_test_evaluation_profile(profile)
+        if profile.tool_policy:
+            raise NotImplementedError(
+                "model-visible tool profiles await the Gateway capability slice"
+            )
+        adapter = adapters.resolve(
+            profile.executor_adapter_id,
+            profile.executor_adapter_revision,
+        )
+        descriptor = adapter.descriptor
+        _assert_descriptor_covers_profile(descriptor, profile)
         if (
-            profile.transport_kind != _IN_PROCESS_TRANSPORT_KIND
+            descriptor.transport_family != "in_process"
             and not module.declared_operation_ids
         ):
             raise PermissionError(
                 "a provider transport requires a declared model invocation operation"
             )
-        if module.declared_operation_ids:
-            _assert_model_only_test_evaluation_profile(profile)
-        adapter = adapters.resolve(
-            profile.executor_adapter_id,
-            profile.executor_adapter_revision,
-        )
-        _assert_descriptor_covers_profile(adapter.descriptor, profile)
         if module.prompt_bundle_ref is not None and (
             variant_request.prompt_envelope_ref is None
         ):
@@ -427,9 +435,10 @@ def run_module(
             variant=variant,
             attempt_start=attempt_start,
             artifact_host=artifact_host,
-            authority=authority if module.declared_operation_ids else None,
+            authority=authority,
             ledger=ledger,
             clock=clock,
+            release_registry=release_registry,
         )
         attempts.append(attempt)
         outputs.extend(attempt_outputs)
@@ -466,41 +475,52 @@ def _execute_attempt(
     authority: ModuleExecutionAuthority | None,
     ledger: ModuleExecutionLedger,
     clock: Callable[[], str],
+    release_registry: RuntimeReleaseRegistry,
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Authorize, invoke, and atomically finalize one Attempt."""
 
     evidence: _AttemptAuthorizationEvidence | None = None
     if authority is not None:
-        evidence = _authorize_model_attempt(
-            authority=authority,
-            module=module,
-            profile=profile,
-            purpose=run_request.purpose,
-            module_run_id=variant.module_run_id,
-            attempt_id=attempt_start.attempt_id,
-            observed_at_utc=clock(),
-        )
-        if not evidence.allowed:
-            attempt = _failed_attempt(
+        try:
+            evidence = _authorize_model_attempt(
+                authority=authority,
+                module=module,
+                profile=profile,
+                purpose=run_request.purpose,
+                module_run_id=variant.module_run_id,
+                attempt_id=attempt_start.attempt_id,
+                observed_at_utc=clock(),
+            )
+        except (PermissionError, TypeError, ValueError) as exc:
+            return _record_failed_attempt(
                 variant=variant,
                 attempt_start=attempt_start,
                 failure_class="authorization",
                 usage=_empty_usage(),
                 ended_at=clock(),
-                detail=_commit_kernel_failure_detail(
-                    artifact_host,
-                    variant=variant,
-                    attempt_start=attempt_start,
-                    failure_class="authorization",
-                    payload={
-                        "disposition": "product_operation_denied",
-                        "reason_code": evidence.decision.reason_code,
-                        "decision_ref": evidence.decision.decision_ref,
-                    },
-                ),
+                payload={
+                    "disposition": "authorization_refused_at_dispatch",
+                    "exception_type": type(exc).__name__,
+                    "reason": str(exc),
+                },
+                artifact_host=artifact_host,
+                ledger=ledger,
             )
-            ledger.commit_attempt(attempt)
-            return attempt, ()
+        if evidence.decision.effect is not GatewayDecisionEffect.ALLOW:
+            return _record_failed_attempt(
+                variant=variant,
+                attempt_start=attempt_start,
+                failure_class="authorization",
+                usage=_empty_usage(),
+                ended_at=clock(),
+                payload={
+                    "disposition": "product_operation_denied",
+                    "reason_code": evidence.decision.reason_code,
+                    "decision_ref": evidence.decision.decision_ref,
+                },
+                artifact_host=artifact_host,
+                ledger=ledger,
+            )
 
     canonical_request = _build_canonical_request(
         run_request=run_request,
@@ -517,6 +537,7 @@ def _execute_attempt(
         artifact_host=artifact_host,
     )
 
+    staged: tuple[tuple[OutputSubmission, bytes], ...] = ()
     try:
         result = adapter.execute(canonical_request, host)
         if type(result) is not AgentExecutionResult:
@@ -527,27 +548,38 @@ def _execute_attempt(
             or result.model_id != profile.model_id
         ):
             raise ValueError("adapter result provider identity differs from profile")
+        _assert_result_lineage_resolvable(artifact_host, result)
+        if result.terminal_status == "completed":
+            if not result.outputs:
+                raise ValueError(
+                    "completed adapter result requires at least one output"
+                )
+            staged = tuple(
+                (submission, host.staged_output(submission.output_slot_id))
+                for submission in result.outputs
+            )
+            for submission, content in staged:
+                _assert_staged_output_conforms(
+                    release_registry,
+                    module=module,
+                    output_slot_id=submission.output_slot_id,
+                    content=content,
+                )
     except Exception as exc:
-        attempt = _failed_attempt(
+        return _record_failed_attempt(
             variant=variant,
             attempt_start=attempt_start,
             failure_class="unknown",
             usage=_empty_usage(),
             ended_at=clock(),
-            detail=_commit_kernel_failure_detail(
-                artifact_host,
-                variant=variant,
-                attempt_start=attempt_start,
-                failure_class="unknown",
-                payload={
-                    "disposition": "adapter_conformance_failure",
-                    "exception_type": type(exc).__name__,
-                    "message": str(exc),
-                },
-            ),
+            payload={
+                "disposition": "adapter_conformance_failure",
+                "exception_type": type(exc).__name__,
+                "message": str(exc),
+            },
+            artifact_host=artifact_host,
+            ledger=ledger,
         )
-        ledger.commit_attempt(attempt)
-        return attempt, ()
 
     usage = ModuleUsageObservation(
         input_tokens=result.input_tokens,
@@ -580,12 +612,31 @@ def _execute_attempt(
         ledger.commit_attempt(attempt)
         return attempt, ()
 
-    if not result.outputs:
-        raise ValueError("completed adapter result requires at least one output")
-    staged = tuple(
-        (submission, host.staged_output(submission.output_slot_id))
-        for submission in result.outputs
-    )
+    # Artifact bytes are committed before the fence critical section: staged
+    # content is not authoritative until the attempt record references it, and
+    # hashing large outputs must not serialize the authorization ledger.
+    committed: list[ModuleOutputBinding] = []
+    for submission, content in staged:
+        output = artifact_host.commit_output(
+            module_run_id=variant.module_run_id,
+            variant_id=variant.variant_id,
+            attempt_id=attempt_start.attempt_id,
+            logical_name=submission.output_slot_id,
+            content=content,
+            schema_ref=module.output_schema_ref,
+            schema_sha256=module.output_schema_sha256,
+            media_type="application/json",
+        )
+        output.validate()
+        if (
+            output.output_sha256 != hashlib.sha256(content).hexdigest()
+            or output.schema_ref != module.output_schema_ref
+            or output.schema_sha256 != module.output_schema_sha256
+        ):
+            raise ValueError(
+                "Module artifact host returned a mismatched output binding"
+            )
+        committed.append(output)
 
     def finalize(fence: ExecutionAuthorizationFence | None) -> tuple[
         ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]
@@ -593,48 +644,20 @@ def _execute_attempt(
         if fence is not None and fence.state is not (
             ExecutionAuthorizationFenceState.OPEN
         ):
-            quarantined = _failed_attempt(
+            return _record_failed_attempt(
                 variant=variant,
                 attempt_start=attempt_start,
                 failure_class="authorization",
                 usage=usage,
                 ended_at=ended_at,
-                detail=_commit_kernel_failure_detail(
-                    artifact_host,
-                    variant=variant,
-                    attempt_start=attempt_start,
-                    failure_class="authorization",
-                    payload={
-                        "disposition": "stale_result_quarantined",
-                        "fence_ref": fence.fence_ref,
-                        "reason_code": fence.reason_code,
-                    },
-                ),
+                payload={
+                    "disposition": "stale_result_quarantined",
+                    "fence_ref": fence.fence_ref,
+                    "reason_code": fence.reason_code,
+                },
+                artifact_host=artifact_host,
+                ledger=ledger,
             )
-            ledger.commit_attempt(quarantined)
-            return quarantined, ()
-        committed: list[ModuleOutputBinding] = []
-        for submission, content in staged:
-            output = artifact_host.commit_output(
-                module_run_id=variant.module_run_id,
-                variant_id=variant.variant_id,
-                attempt_id=attempt_start.attempt_id,
-                logical_name=submission.output_slot_id,
-                content=content,
-                schema_ref=module.output_schema_ref,
-                schema_sha256=module.output_schema_sha256,
-                media_type="application/json",
-            )
-            output.validate()
-            if (
-                output.output_sha256 != hashlib.sha256(content).hexdigest()
-                or output.schema_ref != module.output_schema_ref
-                or output.schema_sha256 != module.output_schema_sha256
-            ):
-                raise ValueError(
-                    "Module artifact host returned a mismatched output binding"
-                )
-            committed.append(output)
         completed = ModuleAttemptRecord(
             module_run_id=variant.module_run_id,
             variant_id=variant.variant_id,
@@ -675,17 +698,14 @@ def _authorize_model_attempt(
     attempt_id: str,
     observed_at_utc: str,
 ) -> _AttemptAuthorizationEvidence:
-    """Commit the AR09 intent and resolve the Product decision before dispatch."""
+    """Commit the AR09 intent and resolve the Product decision before dispatch.
+
+    The intent commit revalidates the execution authorization fence itself and
+    raises when the fence is closed; a second kernel-side revalidation here
+    would only double the Product round-trips.
+    """
 
     binding = authority.binding
-    fence = authority.controller.revalidate(
-        binding_ref=binding.binding_ref,
-        observed_at_utc=observed_at_utc,
-    )
-    if fence.state is not ExecutionAuthorizationFenceState.OPEN:
-        raise PermissionError(
-            f"execution authorization fence is closed: {fence.reason_code}"
-        )
     operation_id = module.declared_operation_ids[0]
     intent = authority.controller.commit_protected_operation_intent(
         binding_ref=binding.binding_ref,
@@ -739,7 +759,6 @@ def _authorize_model_attempt(
         intent=intent,
         decision=decision,
         observation=observation,
-        allowed=decision.effect is GatewayDecisionEffect.ALLOW,
     )
 
 
@@ -765,10 +784,11 @@ def _build_canonical_request(
     }
     authorized_inputs = tuple(
         AuthorizedExecutionInput(
-            execution_input_id=f"input_{binding.logical_name}",
+            execution_input_id=binding.logical_name,
             input_ref=binding.input_ref,
             input_sha256=binding.input_sha256,
-            schema_version=binding.schema_sha256,
+            schema_ref=binding.schema_ref,
+            schema_sha256=binding.schema_sha256,
             media_type=binding.media_type,
             logical_name=binding.logical_name,
             local_handle=f"inputs/{binding.logical_name}",
@@ -860,6 +880,7 @@ def _assert_descriptor_covers_profile(
         descriptor.adapter_id == profile.executor_adapter_id,
         descriptor.adapter_revision == profile.executor_adapter_revision,
         descriptor.transport_kind == profile.transport_kind,
+        descriptor.provider_id == profile.provider_id,
     )
     if not all(exact):
         raise PermissionError(
@@ -886,6 +907,108 @@ def _empty_usage() -> ModuleUsageObservation:
         cache_read_tokens=None,
         cache_creation_tokens=None,
     )
+
+
+def _record_failed_attempt(
+    *,
+    variant: ModuleExecutionVariantRecord,
+    attempt_start: ModuleAttemptStartedRecord,
+    failure_class: str,
+    usage: ModuleUsageObservation,
+    ended_at: str,
+    payload: Mapping[str, Any],
+    artifact_host: ModuleArtifactHost,
+    ledger: ModuleExecutionLedger,
+) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
+    """Commit one kernel-owned failed Attempt with its bounded diagnostic."""
+
+    attempt = _failed_attempt(
+        variant=variant,
+        attempt_start=attempt_start,
+        failure_class=failure_class,
+        usage=usage,
+        ended_at=ended_at,
+        detail=_commit_kernel_failure_detail(
+            artifact_host,
+            variant=variant,
+            attempt_start=attempt_start,
+            failure_class=failure_class,
+            payload=payload,
+        ),
+    )
+    ledger.commit_attempt(attempt)
+    return attempt, ()
+
+
+def _assert_result_lineage_resolvable(
+    artifact_host: ModuleArtifactHost,
+    result: AgentExecutionResult,
+) -> None:
+    """Require adapter-reported Cell refs to resolve through the kernel host.
+
+    An adapter composed against a different artifact store would otherwise
+    commit ledger records whose trace and failure-detail refs the Runtime's
+    own content boundary cannot serve.
+    """
+
+    artifact_host.read_bytes(
+        result.cell_local_trace_ref,
+        result.cell_local_trace_sha256,
+    )
+    if result.failure is not None and result.failure.detail_ref is not None:
+        artifact_host.read_bytes(
+            result.failure.detail_ref,
+            result.failure.detail_sha256,
+        )
+
+
+def _assert_staged_output_conforms(
+    release_registry: RuntimeReleaseRegistry,
+    *,
+    module: RuntimeModuleRelease,
+    output_slot_id: str,
+    content: bytes,
+) -> None:
+    """Validate staged bytes before finalization can make them authoritative.
+
+    Provider adapters validate before staging; the kernel re-checks because it
+    is the finalization authority and an in-process double bypasses adapter
+    validation entirely. The committed binding claims the registered output
+    schema, so the bytes must actually satisfy it.
+    """
+
+    try:
+        payload = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(
+            f"staged output {output_slot_id} is not canonical JSON"
+        ) from exc
+    try:
+        schema_asset = release_registry.get_schema_asset(
+            module.output_schema_ref,
+            module.output_schema_sha256,
+        )
+    except KeyError:
+        # Deterministic modules may reference an output schema that is not
+        # registered as a schema asset; the JSON media claim is still checked.
+        return
+    # Imported lazily so the dependency-free core namespace stays importable
+    # from a clean wheel without provider extras.
+    from jsonschema import Draft202012Validator
+
+    errors = sorted(
+        Draft202012Validator(schema_asset.schema_document()).iter_errors(
+            payload
+        ),
+        key=lambda error: tuple(str(item) for item in error.path),
+    )
+    if errors:
+        first = errors[0]
+        location = "/".join(str(item) for item in first.path) or "#"
+        raise ValueError(
+            f"staged output {output_slot_id} violates the registered Module "
+            f"schema at {location}: {first.message}"
+        )
 
 
 def _commit_kernel_failure_detail(
@@ -964,19 +1087,18 @@ def _assert_profile_shadow_executable(
 def _assert_model_only_test_evaluation_profile(
     profile: ExecutionProfileRelease,
 ) -> None:
-    """Admit only the first model-backed Test/Evaluation capability slice."""
+    """Admit only the first model-backed Test/Evaluation capability slice.
 
-    if (
-        profile.execution_mode != "tool_free"
-        or profile.semantic_input_delivery_mode != "inline"
-        or profile.attempt_workspace_policy != "none"
-        or profile.tool_policy
-        or profile.network_policy != "denied"
-    ):
+    Registration already guarantees that a ``tool_free`` profile carries no
+    tools, no writable Attempt workspace, inline delivery, and a denied
+    network; re-encoding those invariants here is how the gate and the
+    profile contract drift apart.
+    """
+
+    if profile.execution_mode != "tool_free":
         raise NotImplementedError(
-            "model-backed Test/Evaluation currently requires tool_free inline "
-            "execution with no Agent-writable Attempt workspace, model-visible "
-            "tools, or Agent-initiated network access"
+            "model-backed Test/Evaluation admits only tool_free Execution "
+            "Profiles"
         )
 
 

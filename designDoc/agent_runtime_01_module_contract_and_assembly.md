@@ -149,17 +149,20 @@ fixed directory and one machine-readable manifest:
 ```text
 .claude/skills/<skill_id>/runtime_modules/<module_id>/
 ├── module_registration.json
-├── prompt.md          # generated human-review projection
+├── prompt.md          # fixed prompt authoring source
 └── tests/
 ```
 
 The Runtime registration builder discovers only
 `runtime_modules/*/module_registration.json`. The directory name, `export_id`,
-and `module_id` must be identical `snake_case` values. `prompt.md` is a
-generated UTF-8 projection of the registered Prompt Bundle for human review
-and repository recovery. It is not imported as production authority. Ambient
-Markdown, sibling Module files, `SKILL.md` sections, and strings embedded in
-Adapter code are not instruction members.
+and `module_id` must be identical `snake_case` values. `prompt.md` is the
+fixed UTF-8 authoring source of the Module's task instruction: registration
+reads exactly this file, mints its content into an immutable Prompt Component
+release, and compiles the Prompt Bundle from registered components. After
+registration the immutable releases are the only production authority —
+execution resolves the registered Prompt Bundle and never reads the
+repository file. Ambient Markdown, sibling Module files, `SKILL.md` sections,
+and strings embedded in Adapter code are not instruction members.
 
 The logical manifest shape is:
 
@@ -352,9 +355,11 @@ Registration and update tooling reads the current Runtime Release Registry
 first. It resolves the registered Module, Prompt Bundle, Schema Assets, and
 Execution Profiles as the version baseline, then accepts a structured proposed
 change from the owning registration workflow and computes new immutable
-component and bundle releases. It regenerates the Git review projection from
-that result. A missing, stale, or edited local projection cannot replace
-registered content.
+component and bundle releases. Regenerating a Git review projection from the
+registered result is planned update tooling; today the repository file remains
+the authoring source that the next registration reads. A missing, stale, or
+edited local file cannot replace registered content, because execution
+resolves only registered releases.
 
 The Primary Agent participates only in authoring, review, registration, and
 release update. A production execution resolves the immutable Module Release,

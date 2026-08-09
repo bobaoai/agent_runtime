@@ -69,7 +69,10 @@ def prepare_registered_invocation_context(
     profile.validate()
     if module.module_kind is not ModuleKind.AGENT:
         raise ValueError("Agent Executor accepts only Agent Modules")
-    if module.declared_operation_ids and not request.has_operation_evidence:
+    if not request.has_operation_evidence:
+        # A provider adapter is a model invocation by construction; it must
+        # refuse every request without committed operation authorization
+        # evidence regardless of how the Module declared its operations.
         raise PermissionError(
             "model invocation requires committed operation authorization evidence"
         )

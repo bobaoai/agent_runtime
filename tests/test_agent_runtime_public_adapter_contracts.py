@@ -114,7 +114,8 @@ def _authorized_execution_input() -> AuthorizedExecutionInput:
         execution_input_id="execution_input_synthetic_001",
         input_ref="artifact-ref:input-001",
         input_sha256="2" * 64,
-        schema_version="v1",
+        schema_ref="schema:input_primary@v1",
+        schema_sha256="8" * 64,
         media_type="application/json",
         logical_name="input-primary",
         local_handle="workspace/input-primary.json",
@@ -227,7 +228,10 @@ def test_adapter_request_rejects_partial_high_risk_grant_binding() -> None:
     fields_without_hash = _request_fields_without_hash()
     fields_without_hash["grant_disposition_ref"] = None
 
-    with pytest.raises(ValueError, match="operation grant ref, hash"):
+    with pytest.raises(
+        ValueError,
+        match="operation grant evidence fields must be all set or all null",
+    ):
         AuthorizedAgentExecutionRequest.build(**fields_without_hash)
 
 
@@ -647,7 +651,8 @@ def test_provider_request_requires_exact_tuple_for_authorized_inputs(
             execution_input_id="execution_input_synthetic_002",
             input_ref="artifact-ref:input-002",
             input_sha256="c" * 64,
-            schema_version="v1",
+            schema_ref="schema:input_secondary@v1",
+            schema_sha256="9" * 64,
             media_type="application/json",
             logical_name="input-secondary",
             local_handle="workspace/input-secondary.json",
@@ -659,6 +664,21 @@ def test_provider_request_requires_exact_authorized_input_record_type(
 ) -> None:
     with pytest.raises(ValueError, match="exact AuthorizedExecutionInput records"):
         replace(_authorized_provider_request(), authorized_inputs=(invalid_item,)).validate()
+
+
+def test_provider_request_rejects_duplicate_input_local_handles() -> None:
+    first_input = _authorized_execution_input()
+    colliding_input = replace(
+        first_input,
+        execution_input_id="execution_input_synthetic_002",
+        input_ref="artifact-ref:input-002",
+    )
+
+    with pytest.raises(ValueError, match="unique local_handle"):
+        replace(
+            _authorized_provider_request(),
+            authorized_inputs=(first_input, colliding_input),
+        ).validate()
 
 
 def test_provider_request_rejects_duplicate_authorized_input_ids() -> None:

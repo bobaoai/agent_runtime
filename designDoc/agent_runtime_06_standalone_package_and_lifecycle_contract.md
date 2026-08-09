@@ -358,7 +358,11 @@ sanctioned way to serve variant comparison, not a second storage plane.
 hash of an operation's identity fields; a conflicting retry converges on the
 already-committed fact and is not re-compared field by field. Clock-derived and
 staging timestamps (`recorded_at_utc` and equivalents) never participate in
-idempotency identity.
+idempotency identity. Replay lookups sit above the authority gates by design:
+a replay reads the committed content-free result without re-authorizing the
+execution, because committed facts are read facts — access to the referenced
+content stays governed by the inspection authorization surface, and no replay
+can re-invoke a provider or mint new records.
 
 **Single execution kernel and purpose-scoped authority.** One canonical
 adapter contract — `AuthorizedAgentExecutionAdapter` consuming an

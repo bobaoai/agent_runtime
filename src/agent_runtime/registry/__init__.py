@@ -9,7 +9,6 @@ from .registry_postgres_persistence import (
 )
 from .registry_release_compilation import (
     compile_prompt_bundle_release,
-    project_prompt_bundle_markdown,
 )
 from .registry_workflow_registration import (
     WorkflowRuntimeRegistry,
@@ -50,7 +49,6 @@ __all__ = [
     "WorkflowRuntimeRegistry",
     "compile_prompt_bundle_release",
     "postgres_release_ddl",
-    "project_prompt_bundle_markdown",
     "resolve_registration_reference",
     "serialize_registry_tables",
     "validate_registry_architecture_registration",

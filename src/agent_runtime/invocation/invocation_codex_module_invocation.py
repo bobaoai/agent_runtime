@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from dataclasses import dataclass
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,19 +26,14 @@ from typing import Callable
 from jsonschema import Draft202012Validator
 
 from ..contracts.invocation_adapter_definition import (
-    AdapterContextResult,
     AgentExecutionAdapterDescriptor,
-    AgentExecutionFailure,
     AgentExecutionResult,
     AuthorizedAgentExecutionHost,
     AuthorizedAgentExecutionRequest,
     OutputSubmission,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
-from .invocation_tool_definition import (
-    ModuleArtifactHost,
-    runtime_package_version,
-)
+from .invocation_tool_definition import ModuleArtifactHost
 from .invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     codex_native_output_schema,
@@ -49,7 +43,14 @@ from .invocation_context_preparation import (
     InvocationExecutionExpectation,
     prepare_registered_invocation_context,
 )
-from .invocation_failure_recording import build_provider_failure_detail
+from .invocation_result_assembly import (
+    TerminalAdapterFailure,
+    bounded_trace_text,
+    commit_attempt_trace_json,
+    completed_adapter_result,
+    provider_adapter_descriptor,
+    raise_terminal_failure,
+)
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
     lease_attempt_workspace,
@@ -58,7 +59,6 @@ from .invocation_workspace_preparation import (
 
 
 _APP_BUNDLE_BIN = "/Applications/Codex.app/Contents/Resources/codex"
-_TRACE_SECTION_LIMIT = 65_536
 
 
 @dataclass(frozen=True)
@@ -71,14 +71,6 @@ class CodexCliInvocationResult:
 
 
 CodexCliInvoker = Callable[..., CodexCliInvocationResult]
-
-
-class _CodexTerminalFailure(Exception):
-    """Internal control flow carrying one typed failed provider result."""
-
-    def __init__(self, result: AgentExecutionResult) -> None:
-        super().__init__(result.failure.failure_class if result.failure else "")
-        self.result = result
 
 
 def _resolve_codex_bin() -> str:
@@ -115,16 +107,6 @@ def _default_invoke(
         stdout=process.stdout or "",
         stderr=process.stderr or "",
     )
-
-
-def _sha256(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
-
-
-def _bounded(text: str) -> str:
-    if len(text) <= _TRACE_SECTION_LIMIT:
-        return text
-    return text[:_TRACE_SECTION_LIMIT] + "\n[truncated]"
 
 
 def _parse_usage(stdout: str) -> dict[str, int | None]:
@@ -244,34 +226,23 @@ class _CodexCliExecutorBase:
         self._workspace_root = workspace_root.resolve()
         self._invoker = invoker
         self._codex_bin = codex_bin
-
-    @property
-    def descriptor(self) -> AgentExecutionAdapterDescriptor:
-        """Return immutable canonical adapter admission metadata."""
-
-        return AgentExecutionAdapterDescriptor(
-            adapter_contract_version="v1",
+        self._descriptor = provider_adapter_descriptor(
             adapter_id=self.executor_adapter_id,
             adapter_revision=self.executor_adapter_revision,
             provider_id="openai",
             transport_family="cli",
             transport_kind="codex_cli",
-            runtime_package_id="agent_runtime_core",
-            runtime_package_version=runtime_package_version(),
-            supported_context_modes=("stateless",),
-            supported_output_constraint_modes=(
-                "prompt_only_json",
-                "native_structured_output",
-            ),
-            supported_read_isolation_modes=("entitled_refs",),
-            supported_execution_modes=(self.expected_execution_mode,),
-            supported_input_delivery_modes=(
-                self.expected_semantic_input_delivery_mode,
-            ),
-            supported_network_policies=(self.expected_network_policy,),
-            supports_dynamic_operation_authorization=False,
+            execution_mode=self.expected_execution_mode,
+            input_delivery_mode=self.expected_semantic_input_delivery_mode,
+            network_policy=self.expected_network_policy,
             admission_state=self.descriptor_admission_state,
         )
+
+    @property
+    def descriptor(self) -> AgentExecutionAdapterDescriptor:
+        """Return immutable canonical adapter admission metadata."""
+
+        return self._descriptor
 
     def execute(
         self,
@@ -299,7 +270,7 @@ class _CodexCliExecutorBase:
         )
         try:
             return self._execute_prepared(request, host, prepared)
-        except _CodexTerminalFailure as failure:
+        except TerminalAdapterFailure as failure:
             return failure.result
 
     def _execute_prepared(
@@ -325,14 +296,14 @@ class _CodexCliExecutorBase:
                 },
             )
         except (OSError, AttemptWorkspaceConflictError) as exc:
-            self._raise_terminal_failure(
+            raise_terminal_failure(
+                artifact_host=self._artifact_host,
                 request=request,
                 profile=profile,
                 failure_class="dependency_unavailable",
                 failure_code="codex_attempt_workspace_unavailable",
                 message="Codex Attempt workspace could not be prepared",
                 provider_response="",
-                usage=_parse_usage(""),
                 retry_disposition_id="retry_denied",
                 trace={"stage": "workspace_preparation", "error": str(exc)},
                 cause=exc,
@@ -430,40 +401,40 @@ class _CodexCliExecutorBase:
                     timeout_seconds=profile.timeout_seconds,
                 )
         except AttemptWorkspaceConflictError as exc:
-            self._raise_terminal_failure(
+            raise_terminal_failure(
+                artifact_host=self._artifact_host,
                 request=request,
                 profile=profile,
                 failure_class="dependency_unavailable",
                 failure_code="codex_attempt_workspace_unavailable",
                 message="Codex Attempt workspace is already leased",
                 provider_response="",
-                usage=_parse_usage(""),
                 retry_disposition_id="retry_denied",
                 trace={"stage": "workspace_lease", "error": str(exc)},
                 cause=exc,
             )
         except subprocess.TimeoutExpired as exc:
-            self._raise_terminal_failure(
+            raise_terminal_failure(
+                artifact_host=self._artifact_host,
                 request=request,
                 profile=profile,
                 failure_class="timeout",
                 failure_code="codex_cli_timeout",
                 message="Codex CLI invocation timed out",
                 provider_response=str(exc),
-                usage=_parse_usage(""),
                 retry_disposition_id="retry_allowed",
                 trace={"stage": "provider_invocation", "error": str(exc)},
                 cause=exc,
             )
         except Exception as exc:
-            self._raise_terminal_failure(
+            raise_terminal_failure(
+                artifact_host=self._artifact_host,
                 request=request,
                 profile=profile,
                 failure_class="provider",
                 failure_code="codex_cli_invocation_error",
                 message="Codex CLI invocation failed",
                 provider_response=str(exc),
-                usage=_parse_usage(""),
                 retry_disposition_id="retry_allowed",
                 trace={"stage": "provider_invocation", "error": str(exc)},
                 cause=exc,
@@ -473,11 +444,12 @@ class _CodexCliExecutorBase:
         trace = {
             "transport": "codex_cli",
             "returncode": result.returncode,
-            "stdout": _bounded(result.stdout),
-            "stderr": _bounded(result.stderr),
+            "stdout": bounded_trace_text(result.stdout),
+            "stderr": bounded_trace_text(result.stderr),
         }
         if result.returncode != 0:
-            self._raise_terminal_failure(
+            raise_terminal_failure(
+                artifact_host=self._artifact_host,
                 request=request,
                 profile=profile,
                 failure_class="provider",
@@ -486,26 +458,27 @@ class _CodexCliExecutorBase:
                     f"Codex CLI failed with return code {result.returncode}"
                 ),
                 provider_response=_failed_process_response(result),
-                usage=_parse_usage(result.stdout),
                 retry_disposition_id="retry_allowed",
                 trace=trace,
                 transport_exit_code=result.returncode,
+                **_parse_usage(result.stdout),
             )
 
         try:
             canonical_output = _parse_final_agent_message(result.stdout)
         except ValueError as exc:
-            self._raise_terminal_failure(
+            raise_terminal_failure(
+                artifact_host=self._artifact_host,
                 request=request,
                 profile=profile,
                 failure_class="schema",
                 failure_code="codex_cli_output_json_invalid",
                 message=str(exc),
                 provider_response=result.stdout,
-                usage=_parse_usage(result.stdout),
                 retry_disposition_id="retry_allowed",
                 trace=trace,
                 cause=exc,
+                **_parse_usage(result.stdout),
             )
         canonical_payload = json.loads(canonical_output)
         if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT:
@@ -522,7 +495,8 @@ class _CodexCliExecutorBase:
         if validation_errors:
             first = validation_errors[0]
             location = "/".join(str(item) for item in first.path) or "#"
-            self._raise_terminal_failure(
+            raise_terminal_failure(
+                artifact_host=self._artifact_host,
                 request=request,
                 profile=profile,
                 failure_class="schema",
@@ -532,9 +506,9 @@ class _CodexCliExecutorBase:
                     f"{location}: {first.message}"
                 ),
                 provider_response=canonical_output.decode("utf-8"),
-                usage=_parse_usage(result.stdout),
                 retry_disposition_id="retry_allowed",
                 trace=trace,
+                **_parse_usage(result.stdout),
             )
         if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT:
             canonical_output = json.dumps(
@@ -548,129 +522,18 @@ class _CodexCliExecutorBase:
             local_handle="output/result.json",
         )
         host.stage_output_bytes(submission, canonical_output)
-        trace_ref, trace_sha256 = self._commit_trace(request, trace)
-        usage = _parse_usage(result.stdout)
-        completed = AgentExecutionResult(
-            terminal_status="completed",
-            provider_id=profile.provider_id,
-            model_id=profile.model_id,
-            runtime_version=runtime_package_version(),
+        trace_ref, trace_sha256 = commit_attempt_trace_json(
+            self._artifact_host, request, trace
+        )
+        return completed_adapter_result(
+            profile=profile,
+            request=request,
             outputs=(submission,),
-            model_operation_ref_ids=(),
             tool_operation_ref_ids=(),
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            cache_read_tokens=usage["cache_read_tokens"],
-            cache_creation_tokens=usage["cache_creation_tokens"],
-            estimated_cost_usd=None,
-            provider_charge_usd=None,
-            context=self._context_result(request),
-            failure=None,
-            cell_local_trace_ref=trace_ref,
-            cell_local_trace_sha256=trace_sha256,
+            trace_ref=trace_ref,
+            trace_sha256=trace_sha256,
+            **_parse_usage(result.stdout),
         )
-        completed.validate()
-        return completed
-
-    def _context_result(
-        self,
-        request: AuthorizedAgentExecutionRequest,
-    ) -> AdapterContextResult:
-        compatibility = hashlib.sha256(
-            "\x1f".join(
-                (
-                    request.module_release_sha256,
-                    request.execution_profile_sha256,
-                    request.prompt_envelope_sha256 or "none",
-                )
-            ).encode("utf-8")
-        ).hexdigest()
-        return AdapterContextResult(
-            disposition_id="stateless_closed",
-            context_ref=None,
-            compatibility_sha256=compatibility,
-        )
-
-    def _commit_trace(
-        self,
-        request: AuthorizedAgentExecutionRequest,
-        trace: dict,
-    ) -> tuple[str, str]:
-        return self._artifact_host.commit_attempt_trace(
-            module_run_id=request.module_run_id,
-            variant_id=request.variant_id,
-            attempt_id=request.attempt_id,
-            content=json.dumps(
-                trace,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8"),
-            media_type="application/json",
-        )
-
-    def _raise_terminal_failure(
-        self,
-        *,
-        request: AuthorizedAgentExecutionRequest,
-        profile,
-        failure_class: str,
-        failure_code: str,
-        message: str,
-        provider_response: str,
-        usage: dict[str, int | None],
-        retry_disposition_id: str,
-        trace: dict,
-        transport_exit_code: int | None = None,
-        cause: Exception | None = None,
-    ) -> None:
-        detail = self._artifact_host.commit_failure_detail(
-            module_run_id=request.module_run_id,
-            variant_id=request.variant_id,
-            attempt_id=request.attempt_id,
-            failure_class=failure_class,
-            content=build_provider_failure_detail(
-                failure_class=failure_class,
-                failure_code=failure_code,
-                message=message,
-                provider_response=provider_response,
-                provider_error_message=(
-                    str(cause) if cause is not None else None
-                ),
-                transport_exit_code=transport_exit_code,
-                retryable=retry_disposition_id == "retry_allowed",
-            ),
-            media_type="application/json",
-        )
-        trace_ref, trace_sha256 = self._commit_trace(request, trace)
-        failed = AgentExecutionResult(
-            terminal_status="failed",
-            provider_id=profile.provider_id,
-            model_id=profile.model_id,
-            runtime_version=runtime_package_version(),
-            outputs=(),
-            model_operation_ref_ids=(),
-            tool_operation_ref_ids=(),
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            cache_read_tokens=usage["cache_read_tokens"],
-            cache_creation_tokens=usage["cache_creation_tokens"],
-            estimated_cost_usd=None,
-            provider_charge_usd=None,
-            context=self._context_result(request),
-            failure=AgentExecutionFailure(
-                failure_class=failure_class,
-                retry_disposition_id=retry_disposition_id,
-                failure_scope_id="attempt_only",
-                retry_after_seconds=None,
-                detail_ref=detail.detail_ref,
-                detail_sha256=detail.detail_sha256,
-            ),
-            cell_local_trace_ref=trace_ref,
-            cell_local_trace_sha256=trace_sha256,
-        )
-        failed.validate()
-        raise _CodexTerminalFailure(failed)
 
 
 class CodexCliModuleExecutor(_CodexCliExecutorBase):

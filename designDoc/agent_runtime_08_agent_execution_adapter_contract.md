@@ -199,7 +199,14 @@ never fabricates a Workflow Execution identity for an isolated run. Inside
 `agent_runtime_09` authority records, whose `workflow_execution_id` field
 predates this split, the field carries the execution scope identity: the
 Workflow Execution ID for workflow scopes, or the deterministic identity
-derived from the isolated scope ref for isolated scopes.
+derived from the isolated scope ref for isolated scopes. Splitting the AR09
+record contracts themselves is scheduled with the Module-model cutover, before
+any authorization record persists beyond process memory.
+
+The `attempt_begin_receipt_ref` of a Test/Evaluation Module Run derives from
+the committed Attempt-start record: the ref names the Attempt and the hash is
+computed over that record's canonical content, so the receipt resolves to
+Runtime-committed evidence rather than a fabricated placeholder.
 
 #### 2.2.2 Authorization evidence closure
 

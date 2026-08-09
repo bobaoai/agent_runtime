@@ -16,7 +16,6 @@ from agent_runtime.registry.registry_postgres_persistence import (
 )
 from agent_runtime.registry.registry_release_compilation import (
     compile_prompt_bundle_release,
-    project_prompt_bundle_markdown,
 )
 from agent_runtime.registry.registry_release_registration import (
     RuntimeReleaseBundle,
@@ -76,7 +75,7 @@ def test_prompt_components_are_registered_before_their_prompt_bundle() -> None:
 
     snapshot = registry.snapshot()
     assert snapshot.prompt_components == (output, instruction)
-    assert project_prompt_bundle_markdown(bundle) == (
+    assert bundle.compiled_static_body == (
         "Do the task.\n## Output Constraint\n\nReturn one object.\n"
     )
     assert serialize_registry_tables(snapshot)[

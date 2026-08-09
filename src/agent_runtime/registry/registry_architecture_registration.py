@@ -482,6 +482,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "invocation",
+        "result",
+        "assembly",
+        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+    ),
+    _source(
+        "invocation",
         "schema",
         "projection",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",

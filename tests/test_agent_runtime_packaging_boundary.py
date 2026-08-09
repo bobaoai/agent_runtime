@@ -467,6 +467,8 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             )
         )
 
+        opaque_store = InMemoryCellArtifactStore()
+
         class OpaqueAdapter:
             @property
             def descriptor(self):
@@ -490,6 +492,13 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
                 )
 
             def execute(self, request, host):
+                trace_ref, trace_sha256 = opaque_store.commit_attempt_trace(
+                    module_run_id=request.module_run_id,
+                    variant_id=request.variant_id,
+                    attempt_id=request.attempt_id,
+                    content=b'{"transport": "in_process_test"}',
+                    media_type="application/json",
+                )
                 submission = OutputSubmission(
                     output_slot_id="result",
                     local_handle="output/result.json",
@@ -515,8 +524,8 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
                         compatibility_sha256=HASH,
                     ),
                     failure=None,
-                    cell_local_trace_ref="cell-trace:opaque-attempt",
-                    cell_local_trace_sha256=HASH,
+                    cell_local_trace_ref=trace_ref,
+                    cell_local_trace_sha256=trace_sha256,
                 )
 
         adapters = AgentExecutionAdapterRegistry()
@@ -547,7 +556,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             request,
             release_registry=release_registry,
             adapters=adapters,
-            artifact_host=InMemoryCellArtifactStore(),
+            artifact_host=opaque_store,
             ledger=InMemoryModuleExecutionLedger(),
             clock=lambda: TIME,
         )

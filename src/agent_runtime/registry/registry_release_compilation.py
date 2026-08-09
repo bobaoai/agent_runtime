@@ -192,17 +192,6 @@ def compile_prompt_bundle_release(
     )
 
 
-def project_prompt_bundle_markdown(
-    prompt_bundle: PromptBundleRelease,
-) -> str:
-    """Project the registered complete static Context for human review."""
-
-    if type(prompt_bundle) is not PromptBundleRelease:
-        raise ValueError("prompt_bundle must be a PromptBundleRelease")
-    prompt_bundle.validate()
-    return prompt_bundle.compiled_static_body
-
-
 def compile_execution_profile_release(
     spec: ExecutionProfileReleaseSpec,
 ) -> ExecutionProfileRelease:
@@ -618,7 +607,6 @@ __all__ = [
     "compile_non_agent_module_release",
     "compile_prompt_bundle_release",
     "managed_skill_projection",
-    "project_prompt_bundle_markdown",
     "task_plane_output_schema",
     "sha256_file",
     "sha256_text",

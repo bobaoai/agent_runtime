@@ -27,6 +27,7 @@ from ..contracts.registry_release_definition import (
     SkillPackageRelease,
     WorkflowNodeKind,
     WorkflowRelease,
+    is_prompt_component_member_ref,
 )
 
 
@@ -544,7 +545,7 @@ class RuntimeReleaseRegistry:
         prompt_bundle.validate()
         resolved_components: list[PromptComponentRelease] = []
         for member in prompt_bundle.members:
-            if member.member_ref.startswith("prompt-component:"):
+            if is_prompt_component_member_ref(member.member_ref):
                 component = self.get_prompt_component(
                     member.member_ref,
                     member.member_sha256,

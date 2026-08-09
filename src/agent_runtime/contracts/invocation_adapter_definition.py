@@ -20,16 +20,17 @@ from .registry_contract_validation import (
     validate_sha256,
     validate_string_tuple,
     validate_token,
+    validate_utc_timestamp,
+)
+from .registry_release_definition import (
+    EXECUTION_MODES,
+    NETWORK_POLICIES,
+    OUTPUT_CONSTRAINT_MODES,
+    SEMANTIC_INPUT_DELIVERY_MODES,
 )
 
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_.:/-]{1,255}$")
-
-_EXECUTION_MODES = frozenset({"tool_free", "agent"})
-_INPUT_DELIVERY_MODES = frozenset(
-    {"inline", "gateway_read", "managed_attachment", "hybrid"}
-)
-_NETWORK_POLICIES = frozenset({"denied", "gateway_only", "direct_sandboxed"})
 
 
 def _validate_token(label: str, value: Any) -> None:
@@ -140,24 +141,24 @@ class AgentExecutionAdapterDescriptor:
                 require_non_empty=True,
             )
         if not set(self.supported_output_constraint_modes).issubset(
-            {"prompt_only_json", "native_structured_output"}
+            OUTPUT_CONSTRAINT_MODES
         ):
             raise ValueError("invalid supported_output_constraint_modes")
         for label, values, allowed in (
             (
                 "supported_execution_modes",
                 self.supported_execution_modes,
-                _EXECUTION_MODES,
+                EXECUTION_MODES,
             ),
             (
                 "supported_input_delivery_modes",
                 self.supported_input_delivery_modes,
-                _INPUT_DELIVERY_MODES,
+                SEMANTIC_INPUT_DELIVERY_MODES,
             ),
             (
                 "supported_network_policies",
                 self.supported_network_policies,
-                _NETWORK_POLICIES,
+                NETWORK_POLICIES,
             ),
         ):
             if not set(values).issubset(allowed):
@@ -175,7 +176,8 @@ class AuthorizedExecutionInput:
     execution_input_id: str
     input_ref: str
     input_sha256: str
-    schema_version: str
+    schema_ref: str
+    schema_sha256: str
     media_type: str
     logical_name: str
     local_handle: str
@@ -192,8 +194,9 @@ class AuthorizedExecutionInput:
         validate_id("execution_input_id", self.execution_input_id)
         validate_opaque_ref("input_ref", self.input_ref)
         validate_sha256("input_sha256", self.input_sha256)
+        validate_opaque_ref("schema_ref", self.schema_ref)
+        validate_sha256("schema_sha256", self.schema_sha256)
         for label, value in (
-            ("schema_version", self.schema_version),
             ("media_type", self.media_type),
             ("logical_name", self.logical_name),
         ):
@@ -344,6 +347,7 @@ class AuthorizedOperationReceipt:
             validate_opaque_ref(
                 "grant_disposition_ref", self.grant_disposition_ref
             )
+        validate_utc_timestamp("recorded_at_utc", self.recorded_at_utc)
 
 
 @dataclass(frozen=True)
@@ -697,27 +701,17 @@ class AuthorizedAgentExecutionRequest:
                 }
             ),
         )
-        grant_values = (
-            self.operation_grant_ref,
-            self.operation_grant_sha256,
-            self.grant_disposition_ref,
+        has_grant = _validate_ref_hash_group(
+            "operation grant",
+            (
+                ("operation_grant_ref", self.operation_grant_ref),
+                ("operation_grant_sha256", self.operation_grant_sha256),
+                ("grant_disposition_ref", self.grant_disposition_ref),
+            ),
+            ref_labels=frozenset(
+                {"operation_grant_ref", "grant_disposition_ref"}
+            ),
         )
-        has_grant = any(value is not None for value in grant_values)
-        if has_grant:
-            if any(value is None for value in grant_values):
-                raise ValueError(
-                    "operation grant ref, hash, and disposition must be all "
-                    "set or all null"
-                )
-            validate_opaque_ref("operation_grant_ref", self.operation_grant_ref)
-            validate_sha256(
-                "operation_grant_sha256",
-                self.operation_grant_sha256 or "",
-            )
-            validate_opaque_ref(
-                "grant_disposition_ref",
-                self.grant_disposition_ref,
-            )
         if has_grant and not has_operation:
             raise ValueError(
                 "an operation grant requires the operation decision evidence"
@@ -737,6 +731,11 @@ class AuthorizedAgentExecutionRequest:
             unique_key_label="execution_input_id",
             require_non_empty=False,
         )
+        handles = tuple(item.local_handle for item in self.authorized_inputs)
+        if len(handles) != len(set(handles)):
+            raise ValueError(
+                "authorized_inputs must declare unique local_handle keys"
+            )
         expected_request_sha256 = hashlib.sha256(
             json.dumps(
                 self._identity_payload(),
