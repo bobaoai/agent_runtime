@@ -586,6 +586,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "inspection",
+        "record",
+        "schema_rendering",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+    ),
+    _source(
+        "inspection",
         "snapshot",
         "definition",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
