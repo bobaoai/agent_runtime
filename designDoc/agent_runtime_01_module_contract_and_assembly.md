@@ -193,7 +193,7 @@ production read instructions and are never resolved by a Module Run.
 so one global executable identity survives Skill packaging without an alias
 map. `module_id` is the stable identity carried by every release of that Module
 in the Runtime Release Registry. Prompt membership is the ordered set of exact
-Model Context Component Release refs and hashes. Runtime rejects an unregistered
+Prompt Component Release refs and hashes. Runtime rejects an unregistered
 component, another root-level Markdown authority, a path escaping the Module
 directory, or an ambient package file absent from the export closure.
 
@@ -325,7 +325,7 @@ Managed execution uses the following authority split:
 | Product and architecture intent | Design Doc |
 | Schema authoring file, validator, compiler, and seed declaration | Code and Git |
 | Skill Package and Module instruction candidate | Skill Management authoring workflow |
-| Registered Schema Asset, Skill Package, Model Context Component, Module, Prompt Bundle, Execution Profile, and Workflow release | Postgres control-plane registry |
+| Registered Schema Asset, Skill Package, Prompt Component, Module, Prompt Bundle, Execution Profile, and Workflow release | Postgres control-plane registry |
 | Active release pointer and admission state | Postgres control-plane registry |
 | Local `.claude/skills/<skill_id>/runtime_modules/<module_id>` files | Registration manifest plus generated human-review and recovery projections; no post-registration authority |
 | Local `.claude/skills/*/SKILL.md` files | Skill Package authoring candidate; never duplicate Module prompt text or override a registered release |
@@ -337,7 +337,7 @@ Runtime never reads a mutable working-tree Skill, prompt, or schema file as
 production authority after the target Module enters `managed`.
 
 The Git Module directory is a registration manifest plus generated review and
-recovery projections. PostgreSQL Model Context Component, Prompt Bundle, and
+recovery projections. PostgreSQL Prompt Component, Prompt Bundle, and
 Schema Asset Releases are the immutable registered records and sole production
 execution authority. `SKILL.md`, Runtime code, and Adapter code contain no
 duplicate model-ready Context or schema body. A registered hash mismatch
@@ -364,7 +364,7 @@ recheck its prose, or rebuild the Prompt for each run. A semantic instruction
 change returns to the authoring and registration path and creates new immutable
 release records before it can affect production.
 
-### 5.2 Model Context Components and Prompt Bundle
+### 5.2 Prompt Components and Prompt Bundle
 
 A Prompt is managed as ordered immutable component releases and one compiled
 bundle rather than one mutable string.
@@ -372,28 +372,35 @@ bundle rather than one mutable string.
 ```mermaid
 flowchart LR
     SI["Structured Task Instruction"] --> F["Registered Formatters"]
-    DC["Structured Domain Context"] --> F
     OS["Canonical Output Schema"] --> F
-    F --> MC["Model Context Component Releases"]
+    F --> MC["Prompt Component Releases"]
     MC --> C["Deterministic Prompt Compiler"]
     C --> PB["Prompt Bundle Release"]
     PB --> MD["Generated Markdown Review Projection"]
 
     PB --> PE["Cell-local Prompt Envelope"]
     DI["Authorized Dynamic Input"] --> PE
+    DC["Execution-selected Domain Context"] --> DI
     RV["Optional Revision Packet"] --> PE
 ```
 
-`model_context_component_release` stores one exact model-ready static body,
+`prompt_component_release` stores one exact model-ready static body,
 component kind, media type, Formatter identity and version, source-member refs
 and hashes, content hash, and release hash. The initial kinds are
-`task_instruction`, `domain_context`, and `output_constraint`.
+`task_instruction` and `output_constraint`.
 
 `prompt_bundle_release` stores the ordered component refs and release hashes,
 compiler version, complete compiled static body, body hash, and release hash.
 Neither record contains tenant data, user query, entitled search result,
 Source content, prior draft, credential, or provider session. Runtime
 inspection reads the registered rows; it never opens a Markdown path.
+
+An Expertise, Lens, tenant policy, retrieved knowledge selection, or other
+execution-selected domain context is not a Prompt Component. Its owning domain
+persists and versions it, then the authorized Runtime caller resolves the exact
+body and supplies it as a hashed `module_input_binding` after routing. It is
+frozen in the Module input closure and final Prompt Envelope for that Run. It
+does not require a specialized Module or Prompt Bundle release.
 
 `prompt_envelope` binds the exact Prompt Bundle, authorized dynamic inputs,
 revision packet when present, output-constraint mode, tool policy, and final

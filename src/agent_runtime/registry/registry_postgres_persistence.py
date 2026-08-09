@@ -16,7 +16,7 @@ from typing import Any, Callable, Mapping
 
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
-    ModelContextComponentRelease,
+    PromptComponentRelease,
     PromptBundleRelease,
     ReleaseAdmissionRecord,
     RuntimeModuleRelease,
@@ -35,7 +35,7 @@ _SCHEMA_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 _RELEASE_TABLES = (
     "skill_package_release",
     "schema_asset_release",
-    "model_context_component_release",
+    "prompt_component_release",
     "prompt_bundle_release",
     "execution_profile_release",
     "runtime_module_release",
@@ -171,13 +171,13 @@ def serialize_registry_tables(
             )
             for record in snapshot.schema_assets
         ),
-        "model_context_component_release": tuple(
+        "prompt_component_release": tuple(
             _release_row(
-                record.context_component_id,
-                record.context_component_version,
+                record.prompt_component_id,
+                record.prompt_component_version,
                 record,
             )
-            for record in snapshot.model_context_components
+            for record in snapshot.prompt_components
         ),
         "prompt_bundle_release": tuple(
             _release_row(
@@ -256,7 +256,7 @@ def serialize_registry_tables(
         record.release_ref: record.release_sha256
         for records in (
             snapshot.skill_packages,
-            snapshot.model_context_components,
+            snapshot.prompt_components,
             snapshot.prompt_bundles,
             snapshot.execution_profiles,
             snapshot.modules,
@@ -394,8 +394,8 @@ class PostgresRuntimeReleaseStore:
         decoders = {
             "skill_package_release": SkillPackageRelease.from_dict,
             "schema_asset_release": SchemaAssetRelease.from_dict,
-            "model_context_component_release": (
-                ModelContextComponentRelease.from_dict
+            "prompt_component_release": (
+                PromptComponentRelease.from_dict
             ),
             "prompt_bundle_release": PromptBundleRelease.from_dict,
             "execution_profile_release": ExecutionProfileRelease.from_dict,
@@ -422,8 +422,8 @@ class PostgresRuntimeReleaseStore:
         bundle = RuntimeReleaseBundle(
             skill_packages=tuple(records["skill_package_release"]),
             schema_assets=tuple(records["schema_asset_release"]),
-            model_context_components=tuple(
-                records["model_context_component_release"]
+            prompt_components=tuple(
+                records["prompt_component_release"]
             ),
             prompt_bundles=tuple(records["prompt_bundle_release"]),
             execution_profiles=tuple(records["execution_profile_release"]),

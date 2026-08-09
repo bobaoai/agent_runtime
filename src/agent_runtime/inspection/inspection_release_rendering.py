@@ -165,10 +165,10 @@ def build_runtime_release_inventory(
             }
             for release in snapshot.schema_assets
         ],
-        "model_context_components": [
+        "prompt_components": [
             {
-                "context_component_id": release.context_component_id,
-                "version": release.context_component_version,
+                "prompt_component_id": release.prompt_component_id,
+                "version": release.prompt_component_version,
                 "release_ref": release.release_ref,
                 "release_sha256": release.release_sha256,
                 "component_kind": release.component_kind.value,
@@ -178,11 +178,11 @@ def build_runtime_release_inventory(
                 "formatted_content_sha256": release.formatted_content_sha256,
                 "latest_admission_state": _latest_admission_state(
                     release_registry,
-                    ReleaseSubjectKind.MODEL_CONTEXT_COMPONENT,
+                    ReleaseSubjectKind.PROMPT_COMPONENT,
                     release.release_ref,
                 ),
             }
-            for release in snapshot.model_context_components
+            for release in snapshot.prompt_components
         ],
         "prompt_bundles": [
             {
@@ -298,7 +298,7 @@ def render_runtime_release_markdown(
         "| --- | ---: |",
         f"| Skill Package | `{len(inventory['skill_packages'])}` |",
         f"| Schema Asset | `{len(inventory['schema_assets'])}` |",
-        f"| Model Context Component | `{len(inventory['model_context_components'])}` |",
+        f"| Prompt Component | `{len(inventory['prompt_components'])}` |",
         f"| Prompt Bundle | `{len(inventory['prompt_bundles'])}` |",
         f"| Execution Profile | `{len(inventory['execution_profiles'])}` |",
         f"| Runtime Module | `{len(inventory['modules'])}` |",
@@ -361,7 +361,7 @@ def render_runtime_release_markdown(
     lines.extend(
         [
             "",
-            "## Model Context Components",
+            "## Prompt Components",
             "",
             (
                 "| Component | Version | Kind | Formatter | Content hash | "
@@ -370,9 +370,9 @@ def render_runtime_release_markdown(
             "| --- | --- | --- | --- | --- | --- |",
         ]
     )
-    for component in inventory["model_context_components"]:
+    for component in inventory["prompt_components"]:
         lines.append(
-            f"| `{component['context_component_id']}` | "
+            f"| `{component['prompt_component_id']}` | "
             f"`{component['version']}` | `{component['component_kind']}` | "
             f"`{component['formatter_id']}@{component['formatter_version']}` | "
             f"`{component['formatted_content_sha256']}` | "

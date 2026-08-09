@@ -103,8 +103,8 @@ from .execution_event_definition import (
 )
 from .registry_release_definition import (
     ExecutionProfileRelease,
-    ModelContextComponentKind,
-    ModelContextComponentRelease,
+    PromptComponentKind,
+    PromptComponentRelease,
     ModuleEntryPolicy,
     ModuleExecutionPurpose,
     ModuleKind,
@@ -211,8 +211,8 @@ __all__ = [
     "ModuleFailureDetailBinding",
     "ModuleInputBinding",
     "ModuleOutputBinding",
-    "ModelContextComponentKind",
-    "ModelContextComponentRelease",
+    "PromptComponentKind",
+    "PromptComponentRelease",
     "OperationAuthorizationRequest",
     "OperationAuthorizationResolution",
     "OperationAuthorizationResolutionRecord",

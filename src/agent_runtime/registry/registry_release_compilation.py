@@ -15,8 +15,8 @@ from typing import Any
 
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
-    ModelContextComponentKind,
-    ModelContextComponentRelease,
+    PromptComponentKind,
+    PromptComponentRelease,
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
@@ -126,7 +126,7 @@ class CompiledAgentModuleRelease:
 
     skill_package: SkillPackageRelease
     schema_assets: tuple[SchemaAssetRelease, ...]
-    model_context_components: tuple[ModelContextComponentRelease, ...]
+    prompt_components: tuple[PromptComponentRelease, ...]
     prompt_bundle: PromptBundleRelease
     execution_profile: ExecutionProfileRelease
     module: RuntimeModuleRelease
@@ -160,16 +160,16 @@ def compile_prompt_bundle_release(
     prompt_bundle_id: str,
     prompt_bundle_version: str,
     compiler_version: str,
-    components: tuple[ModelContextComponentRelease, ...],
+    components: tuple[PromptComponentRelease, ...],
 ) -> PromptBundleRelease:
     """Compile one ordered Prompt Bundle from persisted component releases."""
 
     if type(components) is not tuple or not components:
         raise ValueError("Prompt Bundle requires an immutable component tuple")
     for component in components:
-        if type(component) is not ModelContextComponentRelease:
+        if type(component) is not PromptComponentRelease:
             raise ValueError(
-                "Prompt Bundle components must be ModelContextComponentRelease values"
+                "Prompt Bundle components must be PromptComponentRelease values"
             )
         component.validate()
     members = tuple(
@@ -331,14 +331,14 @@ def compile_agent_module_release(
         schema_ref=spec.output_schema_ref,
         schema_path=spec.output_schema_path,
     )
-    instruction_component = ModelContextComponentRelease.build(
-        context_component_id=f"{spec.module_id}_task_instruction",
-        context_component_version=spec.release_version,
+    instruction_component = PromptComponentRelease.build(
+        prompt_component_id=f"{spec.module_id}_task_instruction",
+        prompt_component_version=spec.release_version,
         release_ref=(
-            "model-context-component:"
+            "prompt-component:"
             f"{spec.module_id}_task_instruction@{spec.release_version}"
         ),
-        component_kind=ModelContextComponentKind.TASK_INSTRUCTION,
+        component_kind=PromptComponentKind.TASK_INSTRUCTION,
         media_type="text/markdown",
         formatter_id="skill_instruction_formatter",
         formatter_version="v1",
@@ -355,21 +355,21 @@ def compile_agent_module_release(
         )
         + "\n"
     )
-    output_constraint_component = ModelContextComponentRelease.build(
-        context_component_id=f"{spec.module_id}_output_constraint",
-        context_component_version=spec.release_version,
+    output_constraint_component = PromptComponentRelease.build(
+        prompt_component_id=f"{spec.module_id}_output_constraint",
+        prompt_component_version=spec.release_version,
         release_ref=(
-            "model-context-component:"
+            "prompt-component:"
             f"{spec.module_id}_output_constraint@{spec.release_version}"
         ),
-        component_kind=ModelContextComponentKind.OUTPUT_CONSTRAINT,
+        component_kind=PromptComponentKind.OUTPUT_CONSTRAINT,
         media_type="text/markdown",
         formatter_id="json_schema_output_formatter",
         formatter_version="v1",
         source_members=(output_schema_member,),
         formatted_content=output_constraint_content,
     )
-    model_context_components = (
+    prompt_components = (
         instruction_component,
         output_constraint_component,
     )
@@ -440,7 +440,7 @@ def compile_agent_module_release(
         prompt_bundle_id=prompt_id,
         prompt_bundle_version=spec.release_version,
         compiler_version="task_plane_module_prompt_v3",
-        components=model_context_components,
+        components=prompt_components,
     )
     context_sha256 = sha256_text(spec.context_policy_ref)
     profile = compile_execution_profile_release(
@@ -501,7 +501,7 @@ def compile_agent_module_release(
     return CompiledAgentModuleRelease(
         skill_package=package,
         schema_assets=schema_assets,
-        model_context_components=model_context_components,
+        prompt_components=prompt_components,
         prompt_bundle=prompt,
         execution_profile=profile,
         module=module,
@@ -574,9 +574,9 @@ def candidate_admission_record(
     if isinstance(record, SkillPackageRelease):
         kind = ReleaseSubjectKind.SKILL_PACKAGE
         subject_id = record.skill_package_id
-    elif isinstance(record, ModelContextComponentRelease):
-        kind = ReleaseSubjectKind.MODEL_CONTEXT_COMPONENT
-        subject_id = record.context_component_id
+    elif isinstance(record, PromptComponentRelease):
+        kind = ReleaseSubjectKind.PROMPT_COMPONENT
+        subject_id = record.prompt_component_id
     elif isinstance(record, PromptBundleRelease):
         kind = ReleaseSubjectKind.PROMPT_BUNDLE
         subject_id = record.prompt_bundle_id

@@ -98,7 +98,7 @@ def test_postgres_projection_has_all_normalized_registry_tables() -> None:
     assert set(rows) == {
         "skill_package_release",
         "schema_asset_release",
-        "model_context_component_release",
+        "prompt_component_release",
         "prompt_bundle_release",
         "execution_profile_release",
         "runtime_module_release",

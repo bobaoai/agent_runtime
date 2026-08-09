@@ -404,11 +404,11 @@ def _assert_module_dependencies_shadow_executable(
         )
         dependencies.extend(
             (
-                ReleaseSubjectKind.MODEL_CONTEXT_COMPONENT,
+                ReleaseSubjectKind.PROMPT_COMPONENT,
                 member.member_ref,
             )
             for member in prompt_bundle.members
-            if member.member_ref.startswith("model-context-component:")
+            if member.member_ref.startswith("prompt-component:")
         )
     allowed = {
         ReleaseAdmissionState.CANDIDATE,

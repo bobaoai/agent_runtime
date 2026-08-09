@@ -102,7 +102,7 @@ class ReleaseSubjectKind(StrEnum):
     """Persisted release family governed by an admission record."""
 
     SKILL_PACKAGE = "skill_package"
-    MODEL_CONTEXT_COMPONENT = "model_context_component"
+    PROMPT_COMPONENT = "prompt_component"
     PROMPT_BUNDLE = "prompt_bundle"
     EXECUTION_PROFILE = "execution_profile"
     RUNTIME_MODULE = "runtime_module"
@@ -120,11 +120,10 @@ class ReleaseAdmissionState(StrEnum):
     RETIRED = "retired"
 
 
-class ModelContextComponentKind(StrEnum):
-    """Semantic position of one static component in a model Context."""
+class PromptComponentKind(StrEnum):
+    """Semantic position of one static component in a Module Prompt."""
 
     TASK_INSTRUCTION = "task_instruction"
-    DOMAIN_CONTEXT = "domain_context"
     OUTPUT_CONSTRAINT = "output_constraint"
 
 
@@ -434,15 +433,15 @@ class SchemaAssetRelease:
 
 
 @dataclass(frozen=True)
-class ModelContextComponentRelease:
-    """Immutable model-ready static Context with exact source lineage."""
+class PromptComponentRelease:
+    """Immutable model-ready static Prompt content with exact source lineage."""
 
-    record_type: ClassVar[str] = "model_context_component_release"
+    record_type: ClassVar[str] = "prompt_component_release"
 
-    context_component_id: str
-    context_component_version: str
+    prompt_component_id: str
+    prompt_component_version: str
     release_ref: str
-    component_kind: ModelContextComponentKind
+    component_kind: PromptComponentKind
     media_type: str
     formatter_id: str
     formatter_version: str
@@ -453,8 +452,8 @@ class ModelContextComponentRelease:
 
     def _payload(self) -> dict[str, Any]:
         return {
-            "context_component_id": self.context_component_id,
-            "context_component_version": self.context_component_version,
+            "prompt_component_id": self.prompt_component_id,
+            "prompt_component_version": self.prompt_component_version,
             "release_ref": self.release_ref,
             "component_kind": self.component_kind.value,
             "media_type": self.media_type,
@@ -468,18 +467,18 @@ class ModelContextComponentRelease:
     def validate(self) -> None:
         """Validate identity, formatted bytes, source closure, and hashes."""
 
-        validate_snake_case_name("context_component_id", self.context_component_id)
-        _validate_token("context_component_version", self.context_component_version)
+        validate_snake_case_name("prompt_component_id", self.prompt_component_id)
+        _validate_token("prompt_component_version", self.prompt_component_version)
         expected_ref = (
-            "model-context-component:"
-            f"{self.context_component_id}@{self.context_component_version}"
+            "prompt-component:"
+            f"{self.prompt_component_id}@{self.prompt_component_version}"
         )
         if self.release_ref != expected_ref:
             raise ValueError(
-                "Model Context Component release_ref must match ID and version"
+                "Prompt Component release_ref must match ID and version"
             )
-        if type(self.component_kind) is not ModelContextComponentKind:
-            raise ValueError("component_kind must be a ModelContextComponentKind")
+        if type(self.component_kind) is not PromptComponentKind:
+            raise ValueError("component_kind must be a PromptComponentKind")
         if type(self.media_type) is not str or not _MEDIA_TYPE_PATTERN.fullmatch(
             self.media_type
         ):
@@ -504,10 +503,10 @@ class ModelContextComponentRelease:
             self.formatted_content.encode("utf-8")
         ).hexdigest()
         if self.formatted_content_sha256 != observed_content_sha256:
-            raise ValueError("Model Context Component content hash mismatch")
+            raise ValueError("Prompt Component content hash mismatch")
         validate_sha256("release_sha256", self.release_sha256)
         if self.release_sha256 != _canonical_sha256(self._payload()):
-            raise ValueError("Model Context Component release hash mismatch")
+            raise ValueError("Prompt Component release hash mismatch")
 
     def as_dict(self) -> dict[str, Any]:
         """Return the canonical JSON-compatible component release."""
@@ -516,7 +515,7 @@ class ModelContextComponentRelease:
         return {**self._payload(), "release_sha256": self.release_sha256}
 
     @classmethod
-    def build(cls, **fields: Any) -> "ModelContextComponentRelease":
+    def build(cls, **fields: Any) -> "PromptComponentRelease":
         """Build one hash-complete immutable component release."""
 
         formatted_content_sha256 = hashlib.sha256(
@@ -537,14 +536,14 @@ class ModelContextComponentRelease:
     @classmethod
     def from_dict(
         cls, payload: Mapping[str, Any]
-    ) -> "ModelContextComponentRelease":
+    ) -> "PromptComponentRelease":
         """Reconstruct one persisted component release."""
 
         return cls(
-            context_component_id=payload["context_component_id"],
-            context_component_version=payload["context_component_version"],
+            prompt_component_id=payload["prompt_component_id"],
+            prompt_component_version=payload["prompt_component_version"],
             release_ref=payload["release_ref"],
-            component_kind=ModelContextComponentKind(payload["component_kind"]),
+            component_kind=PromptComponentKind(payload["component_kind"]),
             media_type=payload["media_type"],
             formatter_id=payload["formatter_id"],
             formatter_version=payload["formatter_version"],
@@ -1595,8 +1594,8 @@ __all__ = [
     "ModuleEntryPolicy",
     "ModuleExecutionPurpose",
     "ModuleKind",
-    "ModelContextComponentKind",
-    "ModelContextComponentRelease",
+    "PromptComponentKind",
+    "PromptComponentRelease",
     "OutputResolutionPolicy",
     "PromptBundleRelease",
     "ReleaseAdmissionRecord",
