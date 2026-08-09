@@ -536,7 +536,7 @@ def test_postgres_trace_read_uses_one_snapshot_during_concurrent_commit(
     not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),
     reason="requires AGENT_RUNTIME_TEST_DATABASE_URL",
 )
-def test_postgres_mutations_reuse_the_validated_execution_prefix(
+def test_postgres_mutations_reconstruct_from_committed_facts(
     postgres_test_schema: str,
     monkeypatch,
 ) -> None:
@@ -585,7 +585,10 @@ def test_postgres_mutations_reuse_the_validated_execution_prefix(
     store.commit(first_batch)
     store.commit(second_batch)
 
-    assert load_calls == 1
+    # The ledger holds no in-process reference cache: each mutation
+    # reconstructs the validated reference from that execution's own committed
+    # facts, so the second commit reloads rather than reusing a cached prefix.
+    assert load_calls >= 2
     assert store.load_trace(EXECUTION_ID).records == (
         first_batch.records + second_batch.records
     )

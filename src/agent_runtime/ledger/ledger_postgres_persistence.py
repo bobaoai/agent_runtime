@@ -8,7 +8,6 @@ set of execution invariants.
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -16,7 +15,6 @@ import hashlib
 import json
 import re
 from types import MappingProxyType, UnionType
-from threading import RLock
 from typing import Any, Callable, Mapping, Union, get_args, get_origin, get_type_hints
 
 from ..contracts.ledger_record_definition import (
@@ -57,8 +55,6 @@ _MEDIA_TYPE_PATTERN = re.compile(
 _RECORD_TYPES = {
     record_type.__name__: record_type for record_type in get_args(PersistedRuntimeRecord)
 }
-_REFERENCE_CACHE_MAX_ENTRIES = 128
-_REFERENCE_CACHE_LOCK_STRIPES = 64
 
 
 def _validate_schema(schema: str) -> str:
@@ -307,14 +303,6 @@ class PostgresRuntimeExecutionRecordStore:
         self._connection_factory = connection_factory
         self._execution_output_integrity_check = execution_output_integrity_check
         self.schema = _validate_schema(schema)
-        self._reference_cache: OrderedDict[
-            str,
-            tuple[int, InMemoryRuntimeExecutionRecordStore],
-        ] = OrderedDict()
-        self._reference_cache_guard = RLock()
-        self._reference_cache_locks = tuple(
-            RLock() for _ in range(_REFERENCE_CACHE_LOCK_STRIPES)
-        )
 
     @classmethod
     def from_dsn(
@@ -658,90 +646,25 @@ class PostgresRuntimeExecutionRecordStore:
         batch: RuntimeRecordBatch | LegacyRuntimeRecordBatch,
         operation: Callable[[InMemoryRuntimeExecutionRecordStore], Any],
     ) -> Any:
-        cache_lock = self._reference_cache_lock(workflow_execution_id)
-        with cache_lock:
-            def mutate(cursor: Any) -> tuple[
-                Any,
-                int,
-                InMemoryRuntimeExecutionRecordStore,
-            ]:
-                self._lock_execution(cursor, workflow_execution_id)
-                persisted_sequence = self._latest_commit_sequence(
-                    cursor,
-                    workflow_execution_id,
-                )
-                with self._reference_cache_guard:
-                    cached = self._reference_cache.get(workflow_execution_id)
-                    if cached is not None:
-                        self._reference_cache.move_to_end(workflow_execution_id)
-                if cached is not None and cached[0] == persisted_sequence:
-                    reference = cached[1]
-                    integrity_check = self._execution_output_integrity_check
-                    if integrity_check is None:
-                        integrity_check = lambda output: self._content_matches(
-                            cursor,
-                            output,
-                        )
-                    reference._set_execution_output_integrity_check(integrity_check)
-                else:
-                    reference = self._load_reference(cursor, workflow_execution_id)
-                result = operation(reference)
-                receipt = (
-                    result
-                    if isinstance(result, CommitReceipt)
-                    else result.commit_receipt
-                )
-                if not receipt.replayed:
-                    self._persist_batch(cursor, batch, receipt)
-                return (
-                    result,
-                    self._latest_commit_sequence(cursor, workflow_execution_id),
-                    reference,
-                )
-
-            try:
-                result, sequence, reference = self._transaction(mutate)
-            except Exception:
-                # The in-memory reference may already contain the rejected
-                # candidate when commit/serialization fails. Evict it so the
-                # next mutation rebuilds only from committed PostgreSQL facts.
-                with self._reference_cache_guard:
-                    self._reference_cache.pop(workflow_execution_id, None)
-                raise
-            with self._reference_cache_guard:
-                self._reference_cache[workflow_execution_id] = (
-                    sequence,
-                    reference,
-                )
-                self._reference_cache.move_to_end(workflow_execution_id)
-                while len(self._reference_cache) > _REFERENCE_CACHE_MAX_ENTRIES:
-                    self._reference_cache.popitem(last=False)
+        def mutate(cursor: Any) -> Any:
+            # The per-execution advisory lock serializes writers across the
+            # fleet. A Workflow Execution's control lineage is bounded (see the
+            # execution-model invariants in agent_runtime_06), so the reference
+            # is reconstructed from that execution's own committed facts on each
+            # mutation rather than cached.
+            self._lock_execution(cursor, workflow_execution_id)
+            reference = self._load_reference(cursor, workflow_execution_id)
+            result = operation(reference)
+            receipt = (
+                result
+                if isinstance(result, CommitReceipt)
+                else result.commit_receipt
+            )
+            if not receipt.replayed:
+                self._persist_batch(cursor, batch, receipt)
             return result
 
-    def _reference_cache_lock(self, workflow_execution_id: str) -> RLock:
-        digest = hashlib.sha256(workflow_execution_id.encode("utf-8")).digest()
-        stripe = int.from_bytes(digest[:4], "big") % len(
-            self._reference_cache_locks
-        )
-        return self._reference_cache_locks[stripe]
-
-    def _latest_commit_sequence(
-        self,
-        cursor: Any,
-        workflow_execution_id: str,
-    ) -> int:
-        cursor.execute(
-            f"""
-            SELECT COALESCE(MAX(commit_sequence), 0)
-            FROM {self.schema}.execution_transaction
-            WHERE workflow_execution_id = %s
-            """,
-            (workflow_execution_id,),
-        )
-        row = cursor.fetchone()
-        if row is None or type(row[0]) is not int:
-            raise RuntimeError("persisted execution commit sequence is invalid")
-        return row[0]
+        return self._transaction(mutate)
 
     def _lock_execution(self, cursor: Any, workflow_execution_id: str) -> None:
         cursor.execute(

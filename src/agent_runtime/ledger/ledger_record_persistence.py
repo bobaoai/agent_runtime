@@ -227,14 +227,6 @@ class InMemoryRuntimeExecutionRecordStore:
         ):
             self._active_claims.pop(claim_key, None)
 
-    def _set_execution_output_integrity_check(
-        self,
-        integrity_check: Callable[[ExecutionOutputRef], bool] | None,
-    ) -> None:
-        """Refresh the transaction-local integrity check on a cached prefix."""
-
-        self._execution_output_integrity_check = integrity_check
-
     def begin_attempt(self, batch: LegacyAttemptBeginBatch) -> AttemptBeginReceipt:
         """Commit the claim boundary before any external operation can start."""
 
