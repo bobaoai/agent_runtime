@@ -15,11 +15,11 @@ from .inspection_http_serving import (
     LiveInspectionAssembly,
     LiveInspectionAuthorizer,
     LiveWorkflowInspectorApplication,
-    PostgresWorkflowInspectionRepository,
     WorkflowInspectionRepository,
     load_live_inspection_application,
     serve_live_inspector,
 )
+from .inspection_postgres_querying import PostgresWorkflowInspectionRepository
 
 __all__ = [
     "build_runtime_architecture_projection",

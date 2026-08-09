@@ -2,6 +2,7 @@
 
 from .registry_release_registration import RuntimeReleaseBundle, RuntimeReleaseRegistry
 from .registry_postgres_persistence import (
+    PostgresRuntimeReleaseQueryStore,
     PostgresRuntimeReleaseStore,
     postgres_release_ddl,
     serialize_registry_tables,
@@ -37,6 +38,7 @@ __all__ = [
     "RuntimeImplementationBindingRegistration",
     "RuntimeLogicalResponsibilityRegistration",
     "PostgresRuntimeReleaseStore",
+    "PostgresRuntimeReleaseQueryStore",
     "RuntimeReleaseBundle",
     "RuntimeReleaseRegistry",
     "RuntimeSourceFileRegistration",

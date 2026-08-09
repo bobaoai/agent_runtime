@@ -5,6 +5,8 @@ import io
 import json
 from typing import Any, Mapping
 
+import pytest
+
 from agent_runtime.contracts.ledger_record_definition import RuntimeExecutionTrace
 from agent_runtime.inspection import LiveWorkflowInspectorApplication
 from agent_runtime.ledger import RuntimeExecutionContent, RuntimeExecutionDescriptor
@@ -43,8 +45,9 @@ class _Repository:
     def __init__(self) -> None:
         self.trace_reads = 0
 
-    def list_executions(self, *, limit: int = 100):
-        return (EXECUTION, DENIED_EXECUTION)[:limit]
+    def list_executions(self, *, limit: int = 100, offset: int = 0):
+        rows = (EXECUTION, DENIED_EXECUTION)
+        return rows[offset : offset + limit]
 
     def get_execution_descriptor(self, workflow_execution_id: str):
         return next(
@@ -210,3 +213,87 @@ def test_live_inspector_has_no_write_route_and_head_returns_no_body() -> None:
     assert write_headers["Allow"] == "GET, HEAD"
     assert head_status == "200 OK"
     assert head_body == b""
+
+
+def test_live_inspector_fails_closed_when_authorizer_errors() -> None:
+    class ExplodingAuthorizer:
+        def can_read_execution(self, request_context: Any, execution: Any) -> bool:
+            raise RuntimeError("authorization service unavailable")
+
+        def can_read_content(
+            self,
+            request_context: Any,
+            execution: Any,
+            content: Any,
+        ) -> bool:
+            raise RuntimeError("authorization service unavailable")
+
+    application = LiveWorkflowInspectorApplication(
+        repository=_Repository(),
+        authorizer=ExplodingAuthorizer(),
+        request_context_resolver=lambda environ: environ.get("reviewer"),
+    )
+
+    list_status, _, list_body = _request(application, "/api/executions")
+    trace_status, _, _ = _request(
+        application,
+        f"/api/executions/{EXECUTION.workflow_execution_id}",
+    )
+
+    assert list_status == "200 OK"
+    assert json.loads(list_body) == {"executions": [], "next_cursor": None}
+    assert trace_status == "404 Not Found"
+
+
+def test_live_inspector_execution_list_uses_opaque_pagination_cursor() -> None:
+    application = _application(_Repository())
+
+    first_status, _, first_body = _request(
+        application,
+        "/api/executions",
+        query="limit=1",
+    )
+    first_page = json.loads(first_body)
+    second_status, _, second_body = _request(
+        application,
+        "/api/executions",
+        query=f"limit=1&cursor={first_page['next_cursor']}",
+    )
+    invalid_status, _, _ = _request(
+        application,
+        "/api/executions",
+        query="cursor=not-a-valid-cursor",
+    )
+
+    assert first_status == "200 OK"
+    assert first_page["executions"][0]["workflow_execution_id"] == (
+        EXECUTION.workflow_execution_id
+    )
+    assert first_page["next_cursor"] is not None
+    assert second_status == "200 OK"
+    assert json.loads(second_body) == {"executions": [], "next_cursor": None}
+    assert invalid_status == "400 Bad Request"
+
+
+def test_live_inspector_embedding_requires_explicit_trusted_origin() -> None:
+    application = LiveWorkflowInspectorApplication(
+        repository=_Repository(),
+        authorizer=_Authorizer(),
+        request_context_resolver=lambda environ: environ.get("reviewer"),
+        frame_ancestors=("https://review.example.com",),
+    )
+
+    status, headers, _ = _request(application, "/")
+
+    assert status == "200 OK"
+    assert "frame-ancestors https://review.example.com" in (
+        headers["Content-Security-Policy"]
+    )
+    assert "X-Frame-Options" not in headers
+    with pytest.raises(ValueError, match="invalid origin"):
+        LiveWorkflowInspectorApplication(
+            repository=_Repository(),
+            authorizer=_Authorizer(),
+            request_context_resolver=lambda environ: environ.get("reviewer"),
+            frame_ancestors=("https://review.example.com\r\nInjected: true",),
+        )

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from agent_runtime.registry import (
+    PostgresRuntimeReleaseQueryStore,
     PostgresRuntimeReleaseStore,
     RuntimeReleaseRegistry,
     postgres_release_ddl,
@@ -25,6 +26,9 @@ class _RecordingCursor:
 
     def close(self) -> None:
         self.closed = True
+
+    def fetchone(self) -> Any:
+        return None
 
 
 class _ChildRowCursor:
@@ -136,3 +140,14 @@ def test_postgres_store_writes_required_workflow_node_columns() -> None:
 def test_postgres_store_rejects_unsafe_schema_identifiers(schema: str) -> None:
     with pytest.raises(ValueError, match="schema name"):
         PostgresRuntimeReleaseStore(lambda: object(), schema=schema)
+
+
+def test_postgres_release_query_store_marks_database_transaction_read_only() -> None:
+    cursor = _RecordingCursor()
+    connection = _RecordingConnection(cursor)
+    queries = PostgresRuntimeReleaseQueryStore(lambda: connection)
+
+    assert queries.load_workflow_release("workflow-release:missing@v1") is None
+    assert cursor.statements[0] == "SET TRANSACTION READ ONLY"
+    assert "FROM agent_runtime_control.workflow_release" in cursor.statements[1]
+    assert connection.committed is True

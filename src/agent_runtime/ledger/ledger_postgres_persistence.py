@@ -9,7 +9,7 @@ set of execution invariants.
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 import json
@@ -144,6 +144,16 @@ def postgres_execution_ledger_ddl(
             (tenant_id, cell_id, recorded_at_utc DESC, workflow_execution_id)
         """.strip(),
         f"""
+        CREATE INDEX IF NOT EXISTS workflow_execution_time_idx
+        ON {schema}.workflow_execution
+            (recorded_at_utc DESC, workflow_execution_id DESC)
+        """.strip(),
+        f"""
+        CREATE INDEX IF NOT EXISTS execution_transaction_trace_idx
+        ON {schema}.execution_transaction
+            (workflow_execution_id, commit_sequence)
+        """.strip(),
+        f"""
         CREATE INDEX IF NOT EXISTS execution_record_type_idx
         ON {schema}.execution_record
             (workflow_execution_id, record_type, record_sequence)
@@ -257,8 +267,6 @@ class RuntimeExecutionContent:
             "byte_size": len(self.body),
             "recorded_at_utc": self.recorded_at_utc,
         }
-
-
 class PostgresRuntimeExecutionRecordStore:
     """Atomic PostgreSQL implementation of the Runtime execution store."""
 
@@ -413,23 +421,30 @@ class PostgresRuntimeExecutionRecordStore:
             ).load_trace(workflow_execution_id)
         )
 
-    def list_executions(self, *, limit: int = 100) -> tuple[RuntimeExecutionDescriptor, ...]:
+    def list_executions(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[RuntimeExecutionDescriptor, ...]:
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
 
         def load(cursor: Any) -> tuple[RuntimeExecutionDescriptor, ...]:
             cursor.execute(
                 f"""
                 SELECT workflow_execution_id, workflow_id, tenant_id, cell_id,
                        principal_id, execution_release_ref,
-                       recorded_at_utc::text
+                       recorded_at_utc
                 FROM {self.schema}.workflow_execution
-                ORDER BY recorded_at_utc DESC, workflow_execution_id
-                LIMIT %s
+                ORDER BY recorded_at_utc DESC, workflow_execution_id DESC
+                LIMIT %s OFFSET %s
                 """,
-                (limit,),
+                (limit, offset),
             )
-            return tuple(RuntimeExecutionDescriptor(*row) for row in cursor.fetchall())
+            return tuple(_execution_descriptor(row) for row in cursor.fetchall())
 
         return self._transaction(load)
 
@@ -442,14 +457,14 @@ class PostgresRuntimeExecutionRecordStore:
                 f"""
                 SELECT workflow_execution_id, workflow_id, tenant_id, cell_id,
                        principal_id, execution_release_ref,
-                       recorded_at_utc::text
+                       recorded_at_utc
                 FROM {self.schema}.workflow_execution
                 WHERE workflow_execution_id = %s
                 """,
                 (workflow_execution_id,),
             )
             row = cursor.fetchone()
-            return None if row is None else RuntimeExecutionDescriptor(*row)
+            return None if row is None else _execution_descriptor(row)
 
         return self._transaction(load)
 
@@ -499,12 +514,18 @@ class PostgresRuntimeExecutionRecordStore:
                 ),
             )
             if cursor.fetchone() is None:
-                existing = self._load_content(cursor, content.workflow_execution_id, content.content_ref)
+                existing = self._load_content(
+                    cursor,
+                    content.workflow_execution_id,
+                    content.content_ref,
+                )
                 if (
                     existing is None
                     or existing.content_sha256 != content.content_sha256
                     or existing.media_type != content.media_type
                     or existing.body != content.body
+                    or _timestamp(existing.recorded_at_utc)
+                    != _timestamp(content.recorded_at_utc)
                 ):
                     raise ValueError("immutable execution content_ref collision")
             return content
@@ -519,7 +540,7 @@ class PostgresRuntimeExecutionRecordStore:
             cursor.execute(
                 f"""
                 SELECT content_ref, content_sha256, media_type, byte_size,
-                       recorded_at_utc::text
+                       recorded_at_utc
                 FROM {self.schema}.execution_content
                 WHERE workflow_execution_id = %s
                 ORDER BY content_ref
@@ -533,7 +554,7 @@ class PostgresRuntimeExecutionRecordStore:
                         "content_sha256": row[1],
                         "media_type": row[2],
                         "byte_size": row[3],
-                        "recorded_at_utc": row[4],
+                        "recorded_at_utc": _utc_text(row[4]),
                     }
                 )
                 for row in cursor.fetchall()
@@ -558,7 +579,8 @@ class PostgresRuntimeExecutionRecordStore:
     ) -> RuntimeExecutionContent | None:
         cursor.execute(
             f"""
-            SELECT content_sha256, media_type, body, recorded_at_utc::text
+            SELECT content_sha256, media_type, byte_size, body,
+                   recorded_at_utc
             FROM {self.schema}.execution_content
             WHERE workflow_execution_id = %s AND content_ref = %s
             """,
@@ -567,14 +589,16 @@ class PostgresRuntimeExecutionRecordStore:
         row = cursor.fetchone()
         if row is None:
             return None
-        body = bytes(row[2])
+        body = bytes(row[3])
+        if row[2] != len(body):
+            raise RuntimeError("persisted execution content byte size mismatch")
         content = RuntimeExecutionContent(
             workflow_execution_id=workflow_execution_id,
             content_ref=content_ref,
             content_sha256=row[0],
             media_type=row[1],
             body=body,
-            recorded_at_utc=row[3],
+            recorded_at_utc=_utc_text(row[4]),
         )
         try:
             content.validate()
@@ -614,18 +638,7 @@ class PostgresRuntimeExecutionRecordStore:
         cursor: Any,
         workflow_execution_id: str,
     ) -> InMemoryRuntimeExecutionRecordStore:
-        cursor.execute(
-            f"""
-            SELECT batch_payload
-            FROM {self.schema}.execution_transaction
-            WHERE workflow_execution_id = %s
-            ORDER BY commit_sequence
-            """,
-            (workflow_execution_id,),
-        )
-        batches = tuple(
-            deserialize_runtime_batch(_payload(row[0])) for row in cursor.fetchall()
-        )
+        batches = self._load_committed_batches(cursor, workflow_execution_id)
         integrity_check = self._execution_output_integrity_check
         if integrity_check is None:
             integrity_check = lambda output: self._content_matches(cursor, output)
@@ -633,6 +646,118 @@ class PostgresRuntimeExecutionRecordStore:
             batches,
             execution_output_integrity_check=integrity_check,
         )
+
+    def _load_committed_batches(
+        self,
+        cursor: Any,
+        workflow_execution_id: str,
+    ) -> tuple[RuntimeRecordBatch | LegacyRuntimeRecordBatch, ...]:
+        cursor.execute(
+            f"""
+            SELECT transaction_id, transaction_sha256, record_count,
+                   committed_outcome_refs, batch_payload
+            FROM {self.schema}.execution_transaction
+            WHERE workflow_execution_id = %s
+            ORDER BY commit_sequence
+            """,
+            (workflow_execution_id,),
+        )
+        transaction_rows = tuple(cursor.fetchall())
+        cursor.execute(
+            f"""
+            SELECT record.transaction_id, record.transaction_record_index,
+                   record.record_type, record.record_sha256, record.payload
+            FROM {self.schema}.execution_record AS record
+            JOIN {self.schema}.execution_transaction AS transaction
+              ON transaction.workflow_execution_id = record.workflow_execution_id
+             AND transaction.transaction_id = record.transaction_id
+            WHERE record.workflow_execution_id = %s
+            ORDER BY transaction.commit_sequence,
+                     record.transaction_record_index
+            """,
+            (workflow_execution_id,),
+        )
+        records_by_transaction: dict[str, list[tuple[Any, ...]]] = {}
+        for row in cursor.fetchall():
+            records_by_transaction.setdefault(row[0], []).append(row[1:])
+
+        batches: list[RuntimeRecordBatch | LegacyRuntimeRecordBatch] = []
+        for row in transaction_rows:
+            transaction_id, transaction_sha256, record_count = row[:3]
+            batch = deserialize_runtime_batch(_payload(row[4]))
+            if (
+                batch.workflow_execution_id != workflow_execution_id
+                or batch.transaction_id != transaction_id
+                or batch.transaction_sha256 != transaction_sha256
+                or len(batch.records) != record_count
+            ):
+                raise RuntimeError("persisted execution transaction failed integrity check")
+            committed_outcome_refs = _json_string_tuple(row[3])
+            expected_outcome_refs = tuple(
+                record.outcome_ref
+                for record in batch.records
+                if isinstance(record, ModuleOutcome)
+            )
+            if committed_outcome_refs != expected_outcome_refs:
+                raise RuntimeError("persisted execution outcome refs failed integrity check")
+            persisted_records = records_by_transaction.pop(transaction_id, [])
+            if len(persisted_records) != len(batch.records):
+                raise RuntimeError("persisted execution record count mismatch")
+            for expected_index, (record, persisted) in enumerate(
+                zip(batch.records, persisted_records, strict=True)
+            ):
+                index, record_type, record_sha256, record_payload = persisted
+                expected = _persisted_record_as_dict(record)
+                decoded_payload = _payload(record_payload)
+                if (
+                    index != expected_index
+                    or record_type != expected["record_type"]
+                    or record_sha256 != _canonical_sha256(decoded_payload)
+                    or dict(decoded_payload) != expected["record"]
+                ):
+                    raise RuntimeError("persisted execution record failed integrity check")
+            batches.append(batch)
+        if records_by_transaction:
+            raise RuntimeError("persisted execution records lack a transaction")
+        self._verify_execution_projection(cursor, workflow_execution_id, batches)
+        return tuple(batches)
+
+    def _verify_execution_projection(
+        self,
+        cursor: Any,
+        workflow_execution_id: str,
+        batches: list[RuntimeRecordBatch | LegacyRuntimeRecordBatch],
+    ) -> None:
+        cursor.execute(
+            f"""
+            SELECT record_sha256, payload
+            FROM {self.schema}.workflow_execution
+            WHERE workflow_execution_id = %s
+            """,
+            (workflow_execution_id,),
+        )
+        row = cursor.fetchone()
+        execution = next(
+            (
+                record
+                for batch in batches
+                for record in batch.records
+                if isinstance(record, WorkflowExecutionRecord)
+            ),
+            None,
+        )
+        if execution is None:
+            if row is not None:
+                raise RuntimeError("Workflow Execution projection lacks ledger facts")
+            return
+        if row is None:
+            raise RuntimeError("Workflow Execution projection is missing")
+        payload = _payload(row[1])
+        if (
+            row[0] != _canonical_sha256(payload)
+            or dict(payload) != execution.as_dict()
+        ):
+            raise RuntimeError("Workflow Execution projection failed integrity check")
 
     def _content_matches(self, cursor: Any, output: ExecutionOutputRef) -> bool:
         content = self._load_content(cursor, output.workflow_execution_id, output.output_ref)
@@ -737,6 +862,167 @@ class PostgresRuntimeExecutionRecordStore:
             connection.close()
 
 
+class PostgresRuntimeExecutionQueryStore:
+    """Read-only PostgreSQL execution and content query boundary."""
+
+    def __init__(
+        self,
+        connection_factory: Callable[[], Any],
+        *,
+        schema: str = "agent_runtime_execution",
+    ) -> None:
+        if not callable(connection_factory):
+            raise ValueError("connection_factory must be callable")
+        self._connection_factory = connection_factory
+        self.schema = _validate_schema(schema)
+        self._decoder = PostgresRuntimeExecutionRecordStore(
+            connection_factory,
+            schema=schema,
+        )
+
+    @classmethod
+    def from_dsn(
+        cls,
+        database_url: str,
+        *,
+        schema: str = "agent_runtime_execution",
+        connect_timeout: int = 8,
+    ) -> "PostgresRuntimeExecutionQueryStore":
+        if type(database_url) is not str or not database_url:
+            raise ValueError("database_url is required")
+        if type(connect_timeout) is not int or connect_timeout < 1:
+            raise ValueError("connect_timeout must be a positive integer")
+        try:
+            import psycopg
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "Postgres adapter requires agent-runtime-core[postgres]"
+            ) from exc
+        return cls(
+            lambda: psycopg.connect(
+                database_url,
+                connect_timeout=connect_timeout,
+                options="-c client_encoding=UTF8 -c timezone=UTC",
+            ),
+            schema=schema,
+        )
+
+    def list_executions(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[RuntimeExecutionDescriptor, ...]:
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+
+        def load(cursor: Any) -> tuple[RuntimeExecutionDescriptor, ...]:
+            cursor.execute(
+                f"""
+                SELECT workflow_execution_id, workflow_id, tenant_id, cell_id,
+                       principal_id, execution_release_ref,
+                       recorded_at_utc
+                FROM {self.schema}.workflow_execution
+                ORDER BY recorded_at_utc DESC, workflow_execution_id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset),
+            )
+            return tuple(_execution_descriptor(row) for row in cursor.fetchall())
+
+        return self._transaction(load)
+
+    def get_execution_descriptor(
+        self,
+        workflow_execution_id: str,
+    ) -> RuntimeExecutionDescriptor | None:
+        def load(cursor: Any) -> RuntimeExecutionDescriptor | None:
+            cursor.execute(
+                f"""
+                SELECT workflow_execution_id, workflow_id, tenant_id, cell_id,
+                       principal_id, execution_release_ref,
+                       recorded_at_utc
+                FROM {self.schema}.workflow_execution
+                WHERE workflow_execution_id = %s
+                """,
+                (workflow_execution_id,),
+            )
+            row = cursor.fetchone()
+            return None if row is None else _execution_descriptor(row)
+
+        return self._transaction(load)
+
+    def load_trace(self, workflow_execution_id: str) -> RuntimeExecutionTrace:
+        return self._transaction(
+            lambda cursor: self._decoder._load_reference(
+                cursor,
+                workflow_execution_id,
+            ).load_trace(workflow_execution_id)
+        )
+
+    def list_content_metadata(
+        self,
+        workflow_execution_id: str,
+    ) -> tuple[Mapping[str, Any], ...]:
+        def load(cursor: Any) -> tuple[Mapping[str, Any], ...]:
+            cursor.execute(
+                f"""
+                SELECT content_ref, content_sha256, media_type, byte_size,
+                       recorded_at_utc
+                FROM {self.schema}.execution_content
+                WHERE workflow_execution_id = %s
+                ORDER BY content_ref
+                """,
+                (workflow_execution_id,),
+            )
+            return tuple(
+                MappingProxyType(
+                    {
+                        "content_ref": row[0],
+                        "content_sha256": row[1],
+                        "media_type": row[2],
+                        "byte_size": row[3],
+                        "recorded_at_utc": _utc_text(row[4]),
+                    }
+                )
+                for row in cursor.fetchall()
+            )
+
+        return self._transaction(load)
+
+    def load_content(
+        self,
+        workflow_execution_id: str,
+        content_ref: str,
+    ) -> RuntimeExecutionContent | None:
+        return self._transaction(
+            lambda cursor: self._decoder._load_content(
+                cursor,
+                workflow_execution_id,
+                content_ref,
+            )
+        )
+
+    def _transaction(self, operation: Callable[[Any], Any]) -> Any:
+        connection = self._connection_factory()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute("SET TRANSACTION READ ONLY")
+                result = operation(cursor)
+            finally:
+                cursor.close()
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+
 def serialize_runtime_batch(
     batch: RuntimeRecordBatch | LegacyRuntimeRecordBatch,
 ) -> Mapping[str, Any]:
@@ -753,7 +1039,11 @@ def deserialize_runtime_batch(
     if not isinstance(records_payload, list):
         raise ValueError("persisted Runtime batch records must be a list")
     records = tuple(deserialize_runtime_record(item) for item in records_payload)
-    batch_type = LegacyRuntimeRecordBatch if payload.get("legacy_compatibility") is True else RuntimeRecordBatch
+    batch_type = (
+        LegacyRuntimeRecordBatch
+        if payload.get("legacy_compatibility") is True
+        else RuntimeRecordBatch
+    )
     batch = batch_type(
         workflow_execution_id=workflow_execution_id,
         transaction_id=transaction_id,
@@ -869,7 +1159,8 @@ def _referenced_content_hashes(
                 expected_hash = payload.get(hash_key)
                 references[value] = (
                     expected_hash
-                    if isinstance(expected_hash, str) and re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+                    if isinstance(expected_hash, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", expected_hash)
                     else None
                 )
     return references
@@ -901,6 +1192,36 @@ def _canonical_sha256(payload: Mapping[str, Any]) -> str:
     return sha256_text(_json(payload))
 
 
+def _timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _utc_text(value: Any) -> str:
+    timestamp = value if isinstance(value, datetime) else _timestamp(str(value))
+    if timestamp.tzinfo is None:
+        raise RuntimeError("persisted timestamp lacks a timezone")
+    return timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _execution_descriptor(row: tuple[Any, ...]) -> RuntimeExecutionDescriptor:
+    return RuntimeExecutionDescriptor(
+        workflow_execution_id=row[0],
+        workflow_id=row[1],
+        tenant_id=row[2],
+        cell_id=row[3],
+        principal_id=row[4],
+        execution_release_ref=row[5],
+        recorded_at_utc=_utc_text(row[6]),
+    )
+
+
+def _json_string_tuple(value: Any) -> tuple[str, ...]:
+    decoded = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(decoded, list) or any(type(item) is not str for item in decoded):
+        raise RuntimeError("persisted execution outcome refs must be a JSON array")
+    return tuple(decoded)
+
+
 def _json(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -913,6 +1234,7 @@ def _payload(value: Any) -> Mapping[str, Any]:
 
 
 __all__ = [
+    "PostgresRuntimeExecutionQueryStore",
     "PostgresRuntimeExecutionRecordStore",
     "RuntimeExecutionContent",
     "RuntimeExecutionDescriptor",

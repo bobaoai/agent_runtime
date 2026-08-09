@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import os
 from typing import Any
@@ -15,6 +16,7 @@ from agent_runtime.contracts.ledger_record_definition import (
     WorkflowExecutionRecord,
 )
 from agent_runtime.ledger import (
+    PostgresRuntimeExecutionQueryStore,
     PostgresRuntimeExecutionRecordStore,
     RuntimeExecutionContent,
     deserialize_runtime_batch,
@@ -77,6 +79,8 @@ def test_postgres_execution_ddl_has_immutable_records_content_and_query_indexes(
     assert "execution_content" in ddl
     assert "reject_execution_ledger_mutation" in ddl
     assert "workflow_execution_scope_time_idx" in ddl
+    assert "workflow_execution_time_idx" in ddl
+    assert "execution_transaction_trace_idx" in ddl
     assert "execution_record_type_idx" in ddl
 
 
@@ -185,12 +189,69 @@ def test_postgres_execution_store_survives_reopen_and_verifies_content(
         schema=postgres_test_schema,
     )
     reopened.commit_content(content)
+    second_execution_id = "execution_postgres_002"
+    second_input = replace(
+        input_record,
+        execution_input_id="input_postgres_002",
+        workflow_execution_id=second_execution_id,
+        input_ref="artifact-ref:postgres-input-002",
+    )
+    second_execution = replace(
+        _execution(second_input),
+        workflow_execution_id=second_execution_id,
+        recorded_at_utc="2026-08-08T11:00:00Z",
+    )
+    reopened.commit(
+        RuntimeRecordBatch(
+            workflow_execution_id=second_execution_id,
+            transaction_id="transaction_postgres_second",
+            records=(second_execution, second_input),
+        )
+    )
+    queries = PostgresRuntimeExecutionQueryStore.from_dsn(
+        database_url,
+        schema=postgres_test_schema,
+    )
 
     assert first.replayed is False
     assert replay.replayed is True
     assert reopened.load_trace(EXECUTION_ID).records == batch.records
     assert reopened.load_content(EXECUTION_ID, input_record.input_ref).body == body
     assert reopened.list_executions()[0].workflow_execution_id == EXECUTION_ID
+    assert queries.load_trace(EXECUTION_ID).records == batch.records
+    assert queries.load_content(EXECUTION_ID, input_record.input_ref).body == body
+    assert queries.list_executions()[0].workflow_execution_id == EXECUTION_ID
+    assert queries.list_executions()[0].recorded_at_utc.endswith("Z")
+    first_page = queries.list_executions(limit=1)
+    second_page = queries.list_executions(
+        limit=1,
+        offset=1,
+    )
+    assert second_page[0].workflow_execution_id == second_execution_id
+
+    import psycopg
+
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO {postgres_test_schema}.execution_record
+                    (workflow_execution_id, transaction_id,
+                     transaction_record_index, record_type, record_sha256,
+                     payload)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                """,
+                (
+                    EXECUTION_ID,
+                    batch.transaction_id,
+                    99,
+                    "CorruptRecord",
+                    hashlib.sha256(b"{}").hexdigest(),
+                    "{}",
+                ),
+            )
+    with pytest.raises(RuntimeError, match="record count mismatch"):
+        queries.load_trace(EXECUTION_ID)
 
 
 @pytest.mark.skipif(
@@ -206,8 +267,10 @@ def test_postgres_execution_store_survives_reopen_and_verifies_content(
         "execution_content",
     ),
 )
+@pytest.mark.parametrize("operation", ("update", "delete"))
 def test_postgres_execution_authority_rejects_update_and_delete(
     table_name: str,
+    operation: str,
     postgres_test_schema: str,
 ) -> None:
     import psycopg
@@ -254,12 +317,15 @@ def test_postgres_execution_authority_rejects_update_and_delete(
                 psycopg.errors.RaiseException,
                 match="execution records are immutable",
             ):
-                cursor.execute(
+                statement = (
                     f"UPDATE {postgres_test_schema}.{table_name} "
                     "SET workflow_execution_id = workflow_execution_id "
-                    "WHERE workflow_execution_id = %s",
-                    (EXECUTION_ID,),
+                    "WHERE workflow_execution_id = %s"
+                    if operation == "update"
+                    else f"DELETE FROM {postgres_test_schema}.{table_name} "
+                    "WHERE workflow_execution_id = %s"
                 )
+                cursor.execute(statement, (EXECUTION_ID,))
 
 
 class _RecordingCursor:
@@ -272,6 +338,9 @@ class _RecordingCursor:
 
     def close(self) -> None:
         self.closed = True
+
+    def fetchall(self) -> list[Any]:
+        return []
 
 
 class _RecordingConnection:
@@ -306,3 +375,14 @@ def test_postgres_execution_store_initializes_schema_transactionally() -> None:
     assert connection.rolled_back is False
     assert cursor.closed is True
     assert connection.closed is True
+
+
+def test_postgres_execution_query_store_marks_database_transaction_read_only() -> None:
+    cursor = _RecordingCursor()
+    connection = _RecordingConnection(cursor)
+    queries = PostgresRuntimeExecutionQueryStore(lambda: connection)
+
+    assert queries.list_executions() == ()
+    assert cursor.statements[0] == "SET TRANSACTION READ ONLY"
+    assert "SELECT workflow_execution_id" in cursor.statements[1]
+    assert connection.committed is True

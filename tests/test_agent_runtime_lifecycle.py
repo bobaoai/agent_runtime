@@ -325,6 +325,40 @@ def _begin(store: InMemoryRuntimeExecutionRecordStore) -> AttemptClaim:
     return receipt.claim
 
 
+def test_committed_batch_rebuild_restores_active_attempt_claim() -> None:
+    committed_batches: list[RuntimeRecordBatch | LegacyRuntimeRecordBatch] = []
+
+    class CapturingStore(InMemoryRuntimeExecutionRecordStore):
+        def commit(self, batch):  # type: ignore[no-untyped-def]
+            receipt = super().commit(batch)
+            if not receipt.replayed:
+                committed_batches.append(batch)
+            return receipt
+
+    source = CapturingStore()
+    _bootstrap(source)
+    claim = _begin(source)
+    rebuilt = InMemoryRuntimeExecutionRecordStore.from_committed_batches(
+        committed_batches
+    )
+
+    receipt = rebuilt.authorize_operation(
+        LegacyOperationGrantBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_rebuilt_grant",
+            claim=claim,
+            grants=(
+                _grant(
+                    grant_id="grant_synthetic_model_rebuilt",
+                    idempotency_key="operation_synthetic_model_rebuilt",
+                ),
+            ),
+        )
+    )
+
+    assert receipt.commit_receipt.replayed is False
+
+
 def test_typed_lifecycle_orders_begin_finalize_outcome_and_backend_ack() -> None:
     store = InMemoryRuntimeExecutionRecordStore(
         execution_output_integrity_check=lambda _: True

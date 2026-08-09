@@ -592,6 +592,83 @@ class PostgresRuntimeReleaseStore:
             connection.close()
 
 
+class PostgresRuntimeReleaseQueryStore:
+    """Least-authority PostgreSQL reader for immutable Workflow releases."""
+
+    def __init__(
+        self,
+        connection_factory: Callable[[], Any],
+        *,
+        schema: str = "agent_runtime_control",
+    ) -> None:
+        if not callable(connection_factory):
+            raise ValueError("connection_factory must be callable")
+        self._connection_factory = connection_factory
+        self.schema = _validate_schema(schema)
+
+    @classmethod
+    def from_dsn(
+        cls,
+        database_url: str,
+        *,
+        schema: str = "agent_runtime_control",
+        connect_timeout: int = 8,
+    ) -> "PostgresRuntimeReleaseQueryStore":
+        if type(database_url) is not str or not database_url:
+            raise ValueError("database_url is required")
+        if type(connect_timeout) is not int or connect_timeout < 1:
+            raise ValueError("connect_timeout must be a positive integer")
+        try:
+            import psycopg
+        except ImportError as exc:  # pragma: no cover - optional install
+            raise RuntimeError(
+                "Postgres adapter requires agent-runtime-core[postgres]"
+            ) from exc
+        return cls(
+            lambda: psycopg.connect(
+                database_url,
+                connect_timeout=connect_timeout,
+                options="-c client_encoding=UTF8 -c timezone=UTC",
+            ),
+            schema=schema,
+        )
+
+    def load_workflow_release(self, release_ref: str) -> WorkflowRelease | None:
+        if type(release_ref) is not str or not release_ref:
+            raise ValueError("release_ref is required")
+
+        def load(cursor: Any) -> WorkflowRelease | None:
+            cursor.execute(
+                f"""
+                SELECT payload
+                FROM {self.schema}.workflow_release
+                WHERE release_ref = %s
+                """,
+                (release_ref,),
+            )
+            row = cursor.fetchone()
+            return None if row is None else WorkflowRelease.from_dict(_payload(row[0]))
+
+        return self._transaction(load)
+
+    def _transaction(self, operation: Callable[[Any], Any]) -> Any:
+        connection = self._connection_factory()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute("SET TRANSACTION READ ONLY")
+                result = operation(cursor)
+            finally:
+                cursor.close()
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+
 def _json(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -607,6 +684,7 @@ def _payload(value: Any) -> Mapping[str, Any]:
 
 
 __all__ = [
+    "PostgresRuntimeReleaseQueryStore",
     "PostgresRuntimeReleaseStore",
     "postgres_release_ddl",
     "serialize_registry_tables",

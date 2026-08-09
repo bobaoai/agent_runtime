@@ -137,6 +137,12 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
     )
 
 
+def test_packaged_runtime_readme_matches_distribution_readme() -> None:
+    assert (RUNTIME_ROOT / "README.md").read_bytes() == (
+        REPO_ROOT / "README.md"
+    ).read_bytes()
+
+
 def test_runtime_source_imports_only_stdlib_or_runtime_owned_modules() -> None:
     violations: list[str] = []
 
@@ -326,6 +332,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
             "codex_cli",
             "html",
             "http",
+            "postgresql",
             "postgresql",
             "postgresql",
             "temporal",

@@ -6,6 +6,7 @@ from .ledger_record_persistence import (
     RuntimeExecutionRecordStore,
 )
 from .ledger_postgres_persistence import (
+    PostgresRuntimeExecutionQueryStore,
     PostgresRuntimeExecutionRecordStore,
     RuntimeExecutionContent,
     RuntimeExecutionDescriptor,
@@ -21,6 +22,7 @@ __all__ = [
     "InMemoryModuleExecutionLedger",
     "InMemoryRuntimeExecutionRecordStore",
     "PostgresRuntimeExecutionRecordStore",
+    "PostgresRuntimeExecutionQueryStore",
     "RuntimeExecutionContent",
     "RuntimeExecutionDescriptor",
     "RuntimeExecutionRecordStore",

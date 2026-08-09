@@ -197,6 +197,14 @@ RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
         ),
     ),
     RuntimeImplementationBindingRegistration(
+        implementation_binding_id="inspection_postgres_querying",
+        logical_responsibility_id="inspection",
+        technology_id="postgresql",
+        implementation_source_paths=(
+            "src/agent_runtime/inspection/inspection_postgres_querying.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
         implementation_binding_id="invocation_claude_agent_sdk",
         logical_responsibility_id="invocation",
         technology_id="claude_agent_sdk",
@@ -591,6 +599,13 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "serving",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
         implementation_binding_id="inspection_http_serving",
+    ),
+    _source(
+        "inspection",
+        "postgres",
+        "querying",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+        implementation_binding_id="inspection_postgres_querying",
     ),
 )
 

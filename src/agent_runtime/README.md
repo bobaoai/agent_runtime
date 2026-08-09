@@ -1,5 +1,11 @@
 # Agent Runtime
 
+Agent Runtime is a reusable management and execution layer for stateful AI
+agents. It is the part of an agent framework that answers operational
+questions: Which version of the agent ran? Which prompt, tools, model profile,
+and inputs were pinned? What happened on each retry? Can the run recover after
+a crash? What may the current reviewer inspect?
+
 Agent Runtime is the Agent execution and management runtime at the core of the
 broader Agency framework. It occupies a role similar to LangGraph's stateful
 Agent orchestration layer: applications register versioned Agent capabilities,
@@ -49,6 +55,33 @@ combine model-backed Agents with deterministic functions, human tasks, and
 external services. Runtime manages their execution contracts and lineage
 without owning their domain-specific meaning.
 
+## Relationship to other Agent frameworks
+
+Agent Runtime is closest to the orchestration-runtime layer of
+[LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), not to a
+high-level prompt or role library. LangGraph emphasizes stateful graphs,
+durable execution, streaming, persistence, and human-in-the-loop control.
+Agent Runtime focuses more narrowly on independently operated infrastructure:
+immutable Agent Module and Workflow releases, exact version pinning, atomic
+recovery records, a PostgreSQL Execution Ledger, and query-time-authorized
+inspection.
+
+Other frameworks optimize for different entry points:
+
+| Framework | Primary strength | Agent Runtime's different focus |
+| --- | --- | --- |
+| LangGraph | Low-level graphs for long-running stateful agents | Registered immutable releases and an authoritative operational ledger are first-class Runtime contracts |
+| [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) | Lightweight agent loops, tools, handoffs, guardrails, sessions, and tracing | Provider-neutral execution facts, durable backend coordination, and host-supplied authorization boundaries |
+| [AutoGen](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/core-concepts/architecture.html) | Message-driven single-process and distributed multi-agent runtimes | Version-pinned Workflow execution, transactional recovery, and formal inspection records |
+| [CrewAI](https://docs.crewai.com/) | High-level role-based crews plus structured Flows | Domain-neutral infrastructure that does not prescribe roles, goals, or collaboration metaphors |
+
+These are not mutually exclusive ideas. A host can adapt another framework's
+agent implementation behind a Runtime Module while using Agent Runtime for
+release authority, durable execution, ledgering, and review. The tradeoff is
+intentional: Runtime requires more explicit contracts and host integration, and
+it does not provide another framework's ecosystem of ready-made roles, tools,
+memory strategies, or managed deployment.
+
 ## Agent execution responsibility flow
 
 Each Runtime responsibility owns one part of the Agent lifecycle. Arrows mean
@@ -69,10 +102,12 @@ Concrete technologies are registered separately as implementation bindings:
 ```mermaid
 flowchart LR
     REGISTRY["Agent Registry"] -. "release persistence" .-> POSTGRES["PostgreSQL"]
+    LEDGER["Agent Execution Ledger"] -. "facts and content" .-> POSTGRES
     INVOCATION["Agent Invocation"] -. "provider adapter" .-> CLAUDE["Claude Agent SDK"]
     INVOCATION -. "provider adapter" .-> CODEX["Codex CLI"]
     DURABILITY["Agent Workflow Durability"] -. "durable coordination" .-> TEMPORAL["Temporal"]
-    INSPECTION["Agent Run Inspection"] -. "read-only rendering" .-> HTML["HTML renderer"]
+    POSTGRES -. "authorized read-only queries" .-> INSPECTION["Agent Run Inspection"]
+    INSPECTION -. "live application" .-> HTTP["HTTP and HTML"]
 ```
 
 This diagram shows the currently registered bindings. The generated
@@ -113,7 +148,10 @@ ledger_record_persistence.py
 invocation_prompt_assembly.py
 durability_temporal_coordination.py
 registry_postgres_persistence.py
+ledger_postgres_persistence.py
 inspection_release_rendering.py
+inspection_http_serving.py
+inspection_postgres_querying.py
 ```
 
 The first term identifies the responsible module, the second identifies the
@@ -177,6 +215,13 @@ downstream callers. Those re-exports are compatibility-only, must not be used
 by a new integration, and retire with the corresponding debt path; a
 structural `__init__.py` does not turn the imported predecessor into target
 implementation.
+
+`0.1.0.dev0` is the first standalone extraction and has no tagged public wheel
+predecessor. It intentionally does not recreate the former host repository's
+physical `postgres`, `provider`, or `review` packages. A host must migrate
+those vendored imports to the registered `registry`, `invocation`,
+`inspection`, and `ledger` surfaces before pinning the first standalone
+release; this wheel is not an in-place upgrade until that migration gate passes.
 
 ## Release registration
 
@@ -246,8 +291,68 @@ Prompt, input, output, and failure bodies are returned only after an exact
 content-read authorization decision. The Product host may embed or proxy the
 Inspector, but it does not define another execution schema.
 
-An offline snapshot may be added later as an explicit export operation. It is
-not the primary review interface and is not created automatically.
+The package also retains an explicit offline snapshot exporter for portable
+review artifacts. It is a secondary export path, not the primary interface or
+a second persisted source of truth, and it is never created automatically.
+
+## PostgreSQL and Live Inspector quick start
+
+Install the optional PostgreSQL client and initialize both Runtime-owned
+schemas:
+
+```bash
+pip install "agent-runtime-core[postgres]"
+```
+
+```python
+from agent_runtime.ledger import PostgresRuntimeExecutionRecordStore
+from agent_runtime.registry import PostgresRuntimeReleaseStore
+
+database_url = "postgresql://runtime@localhost/runtime"
+PostgresRuntimeReleaseStore.from_dsn(database_url).initialize_schema()
+PostgresRuntimeExecutionRecordStore.from_dsn(database_url).initialize_schema()
+```
+
+The live application deliberately has no allow-all mode and does not trust a
+request header by default. A host supplies its authenticated request context
+and current Product authorization checks, then assembles the read-only query
+stores:
+
+```python
+from agent_runtime.inspection import (
+    LiveInspectionAssembly,
+    PostgresWorkflowInspectionRepository,
+)
+from agent_runtime.ledger import PostgresRuntimeExecutionQueryStore
+from agent_runtime.registry import PostgresRuntimeReleaseQueryStore
+
+def build_inspector():
+    repository = PostgresWorkflowInspectionRepository(
+        PostgresRuntimeExecutionQueryStore.from_dsn(DATABASE_URL),
+        release_queries=PostgresRuntimeReleaseQueryStore.from_dsn(DATABASE_URL),
+    )
+    return LiveInspectionAssembly(
+        repository=repository,
+        authorizer=product_inspection_authorizer,
+        request_context_resolver=resolve_authenticated_request,
+        frame_ancestors=("https://product.example.com",),
+    )
+```
+
+```bash
+agent-runtime-live-inspect \
+  --application-factory host.inspector:build_inspector \
+  --host 127.0.0.1 \
+  --port 8080
+```
+
+The console command uses Python's reference WSGI server for a direct package
+entry point. A production deployment should load the same assembled WSGI
+application in its hardened process manager or application server.
+
+The query adapters execute PostgreSQL transactions in explicit read-only mode.
+Production deployments should additionally give the Inspector connection a
+database role with `SELECT` privileges only.
 
 ## Published release
 
@@ -256,7 +361,8 @@ Every published Runtime release contains:
 - this README;
 - a generated, hash-bound bundle of Runtime-owned Design Contracts;
 - the public Python API and JSON schemas;
-- PostgreSQL schema migrations;
+- deterministic PostgreSQL schema installers for releases, executions,
+  records, content, and query indexes;
 - the live Workflow Inspector assets; and
 - architecture, clean-wheel, execution, recovery, invocation, and inspection tests.
 
@@ -266,10 +372,15 @@ current executable truth.
 
 ## Current maturity
 
-The repository currently contains working release-registration, provider A/B,
-Temporal recovery, PostgreSQL trace projection, and execution-inspection
-slices. It does not yet contain the final PostgreSQL execution ledger or the
-final live Inspector described above. The shadow `ModuleExecutor` test seam
-must also converge into the canonical `AuthorizedAgentExecutionAdapter` DTOs
-and normalized failure taxonomy before production admission. Those are release
-gates, not implied capabilities.
+`0.1.0.dev0` now contains working PostgreSQL release registration, an
+append-only PostgreSQL Execution Ledger with restart recovery and immutable
+content verification, provider A/B adapters, Temporal recovery, and an
+authorized read-only Live Inspector over the formal records. These surfaces
+are implemented and tested; they are no longer listed as future work.
+
+The development version remains appropriate because a Product host must still
+supply and validate its authentication, authorization, governed-data, and
+deployment assembly. The shadow `ModuleExecutor` compatibility seam must also
+converge into the canonical `AuthorizedAgentExecutionAdapter` DTOs and
+normalized failure taxonomy before production admission. End-to-end consumer
+migration remains a release gate, not an implied capability.
