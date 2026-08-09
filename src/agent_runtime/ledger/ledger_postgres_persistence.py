@@ -694,8 +694,7 @@ class PostgresRuntimeExecutionRecordStore:
         cursor.execute(
             f"""
             SELECT transaction_id, transaction_sha256, record_count,
-                   committed_outcome_refs, batch_payload,
-                   batch_payload_canonical
+                   committed_outcome_refs, batch_payload_canonical
             FROM {self.schema}.execution_transaction
             WHERE workflow_execution_id = %s
             ORDER BY commit_sequence
@@ -706,7 +705,7 @@ class PostgresRuntimeExecutionRecordStore:
         cursor.execute(
             f"""
             SELECT record.transaction_id, record.transaction_record_index,
-                   record.record_type, record.record_sha256, record.payload,
+                   record.record_type, record.record_sha256,
                    record.payload_canonical
             FROM {self.schema}.execution_record AS record
             JOIN {self.schema}.execution_transaction AS transaction
@@ -725,13 +724,11 @@ class PostgresRuntimeExecutionRecordStore:
         batches: list[RuntimeRecordBatch | LegacyRuntimeRecordBatch] = []
         for row in transaction_rows:
             transaction_id, transaction_sha256, record_count = row[:3]
-            canonical_batch_payload = _canonical_payload(row[5])
-            jsonb_batch_payload = _payload(row[4])
-            if dict(jsonb_batch_payload) != dict(canonical_batch_payload):
-                raise RuntimeError(
-                    "persisted execution transaction projection failed integrity check"
-                )
-            batch = deserialize_runtime_batch(canonical_batch_payload)
+            # The canonical BYTEA is the sole integrity authority: it is
+            # self-validating on deserialize and the record/transaction sha256
+            # anchors it. The jsonb column is a query projection only and is
+            # never read back to cross-check a read.
+            batch = deserialize_runtime_batch(_canonical_payload(row[4]))
             if (
                 batch.workflow_execution_id != workflow_execution_id
                 or batch.transaction_id != transaction_id
@@ -757,18 +754,15 @@ class PostgresRuntimeExecutionRecordStore:
                     index,
                     record_type,
                     record_sha256,
-                    record_payload,
                     record_payload_canonical,
                 ) = persisted
                 expected = _persisted_record_as_dict(record)
                 decoded_payload = _canonical_payload(record_payload_canonical)
-                jsonb_payload = _payload(record_payload)
                 if (
                     index != expected_index
                     or record_type != expected["record_type"]
                     or record_sha256 != _canonical_sha256(decoded_payload)
                     or dict(decoded_payload) != expected["record"]
-                    or dict(jsonb_payload) != dict(decoded_payload)
                 ):
                     raise RuntimeError("persisted execution record failed integrity check")
             batches.append(batch)
@@ -785,7 +779,7 @@ class PostgresRuntimeExecutionRecordStore:
     ) -> None:
         cursor.execute(
             f"""
-            SELECT record_sha256, payload, payload_canonical
+            SELECT record_sha256, payload_canonical
             FROM {self.schema}.workflow_execution
             WHERE workflow_execution_id = %s
             """,
@@ -807,12 +801,10 @@ class PostgresRuntimeExecutionRecordStore:
             return
         if row is None:
             raise RuntimeError("Workflow Execution projection is missing")
-        payload = _canonical_payload(row[2])
-        jsonb_payload = _payload(row[1])
+        payload = _canonical_payload(row[1])
         if (
             row[0] != _canonical_sha256(payload)
             or dict(payload) != execution.as_dict()
-            or dict(jsonb_payload) != dict(payload)
         ):
             raise RuntimeError("Workflow Execution projection failed integrity check")
 
@@ -907,39 +899,14 @@ class PostgresRuntimeExecutionRecordStore:
             )
 
     def _transaction(self, operation: Callable[[Any], Any]) -> Any:
-        connection = self._connection_factory()
-        try:
-            cursor = connection.cursor()
-            try:
-                result = operation(cursor)
-            finally:
-                cursor.close()
-            connection.commit()
-            return result
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        return _run_in_transaction(
+            self._connection_factory, operation, read_only=False
+        )
 
     def _read_transaction(self, operation: Callable[[Any], Any]) -> Any:
-        connection = self._connection_factory()
-        try:
-            cursor = connection.cursor()
-            try:
-                cursor.execute(
-                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
-                )
-                result = operation(cursor)
-            finally:
-                cursor.close()
-            connection.commit()
-            return result
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        return _run_in_transaction(
+            self._connection_factory, operation, read_only=True
+        )
 
 
 class PostgresRuntimeExecutionQueryStore:
@@ -1101,23 +1068,45 @@ class PostgresRuntimeExecutionQueryStore:
         )
 
     def _transaction(self, operation: Callable[[Any], Any]) -> Any:
-        connection = self._connection_factory()
+        return _run_in_transaction(
+            self._connection_factory, operation, read_only=True
+        )
+
+
+def _run_in_transaction(
+    connection_factory: Callable[[], Any],
+    operation: Callable[[Any], Any],
+    *,
+    read_only: bool,
+) -> Any:
+    """Run one operation in a fresh transaction with enforced UTF-8 decoding.
+
+    Read paths use one REPEATABLE READ snapshot so a multi-statement read cannot
+    tear under a concurrent committer. Every transaction forces client_encoding
+    to UTF8 so TEXT columns decode as str regardless of the caller-supplied
+    connection factory; the ledger stores UTF-8 text and BYTEA and must not
+    depend on the connection's default encoding for correctness.
+    """
+
+    connection = connection_factory()
+    try:
+        cursor = connection.cursor()
         try:
-            cursor = connection.cursor()
-            try:
+            if read_only:
                 cursor.execute(
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
                 )
-                result = operation(cursor)
-            finally:
-                cursor.close()
-            connection.commit()
-            return result
-        except Exception:
-            connection.rollback()
-            raise
+            cursor.execute("SET client_encoding TO 'UTF8'")
+            result = operation(cursor)
         finally:
-            connection.close()
+            cursor.close()
+        connection.commit()
+        return result
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def serialize_runtime_batch(
@@ -1319,13 +1308,6 @@ def _canonical_payload(value: Any) -> Mapping[str, Any]:
         raise RuntimeError("persisted canonical JSON bytes are invalid") from exc
     if not isinstance(decoded, Mapping) or _json_bytes(decoded) != encoded:
         raise RuntimeError("persisted canonical JSON bytes are not canonical")
-    return decoded
-
-
-def _payload(value: Any) -> Mapping[str, Any]:
-    decoded = json.loads(value) if isinstance(value, str) else value
-    if not isinstance(decoded, Mapping):
-        raise ValueError("Postgres execution payload must decode to a mapping")
     return decoded
 
 

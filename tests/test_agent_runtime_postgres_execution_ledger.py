@@ -396,8 +396,9 @@ def test_postgres_execution_store_initializes_schema_transactionally() -> None:
 
     store.initialize_schema()
 
-    assert "pg_advisory_xact_lock" in cursor.statements[0]
-    assert tuple(cursor.statements[1:]) == postgres_execution_ledger_ddl()
+    assert cursor.statements[0] == "SET client_encoding TO 'UTF8'"
+    assert "pg_advisory_xact_lock" in cursor.statements[1]
+    assert tuple(cursor.statements[2:]) == postgres_execution_ledger_ddl()
     assert connection.committed is True
     assert connection.rolled_back is False
     assert cursor.closed is True
@@ -413,7 +414,8 @@ def test_postgres_execution_query_store_marks_database_transaction_read_only() -
     assert cursor.statements[0] == (
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
     )
-    assert "SELECT workflow_execution_id" in cursor.statements[1]
+    assert cursor.statements[1] == "SET client_encoding TO 'UTF8'"
+    assert "SELECT workflow_execution_id" in cursor.statements[2]
     assert connection.committed is True
 
 
