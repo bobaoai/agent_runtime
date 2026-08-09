@@ -219,6 +219,12 @@ scan and replace those vendored import paths with the registered `registry`,
 `invocation`, `inspection`, and `ledger` surfaces. The standalone wheel must
 not be presented as an in-place upgrade until that consumer migration passes.
 
+The Runtime defines no backward-compatibility or predecessor record variants as
+part of its contract. Any `Legacy*` record type is migration-debt scaffolding
+only, carries no contract obligation, and retires with its debt entry before the
+first standalone release; new integrations target the current record contract
+exclusively.
+
 ## 3. Published and Operated Interfaces
 
 Every Runtime release contains:
@@ -310,6 +316,49 @@ the same idempotent start or uses the adapter reconciliation operation. It does
 not create another backend identity.
 
 ## 5. Append-Only Attempt Lifecycle
+
+### 5.1 Execution model invariants
+
+The append-only lifecycle rests on a fixed model of what is deterministic and
+what is not.
+
+**Determinism boundary.** Only a Module's upstream inputs are deterministic and
+content-addressed — the input package and Prompt Envelope are pinned by SHA-256.
+Model output is non-deterministic: it is committed once and frozen as the
+authoritative Outcome. Every retry, recovery, and durable replay returns the
+committed Outcome and never re-invokes the model. Determinism holds over
+recorded facts and control flow, never over model re-execution.
+
+**Single-step variant comparison and single resolved Outcome.** Variant (A/B)
+comparison is scoped to one dispatch fanning out over a single pinned upstream
+input. A dispatch resolves to exactly one committed `ModuleOutcome` under its
+`output_resolution_policy` (`direct_single` or `evaluated_single`); non-selected
+variant outputs are recorded as stale. The control plane never branches on
+variant comparison — it carries one resolved Outcome per dispatch.
+
+**Bounded control plane.** Because each dispatch resolves to a single Outcome, a
+Workflow Execution's control lineage is bounded — on the order of tens of
+dispatches, not an unbounded loop. The execution ledger validates each appended
+batch by reconstructing the reference state from that one Execution's own
+committed control facts; reconstruction is linear in those facts. No
+cross-execution or in-process cache is part of this contract; any caching is a
+non-contractual optimization that must never change which committed facts are
+authoritative.
+
+**Two record planes.** Control facts — claims, admissions, `ModuleOutcome`s,
+external-event applications, and finalizations — are bounded per Execution,
+strictly idempotent, and replayed for validation. Observation facts — model-call,
+tool-call, and usage records, variant samples, and stale outputs — are
+high-volume, append-only, retained for variant comparison, and are not replayed
+into the control validator; their idempotency is limited to retry deduplication.
+
+**Idempotency identity.** Idempotent convergence is keyed on a stable content
+hash of an operation's identity fields; a conflicting retry converges on the
+already-committed fact and is not re-compared field by field. Clock-derived and
+staging timestamps (`recorded_at_utc` and equivalents) never participate in
+idempotency identity.
+
+### 5.2 Attempt records and active claim
 
 One provider, tool, or Gateway invocation has an immutable start record and at
 most one immutable terminal Attempt record.
