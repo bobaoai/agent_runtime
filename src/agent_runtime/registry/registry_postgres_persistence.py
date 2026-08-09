@@ -509,7 +509,7 @@ class PostgresRuntimeReleaseStore:
             table="workflow_node_binding",
             key_columns=("workflow_release_ref", "node_id"),
             row=row,
-            additional_columns=("module_release_ref",),
+            additional_columns=("node_kind", "module_release_ref"),
         )
 
     def _put_edge(self, cursor: Any, row: Mapping[str, Any]) -> None:

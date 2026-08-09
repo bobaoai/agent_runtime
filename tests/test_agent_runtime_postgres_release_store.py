@@ -27,6 +27,19 @@ class _RecordingCursor:
         self.closed = True
 
 
+class _ChildRowCursor:
+    def __init__(self) -> None:
+        self.statement = ""
+        self.parameters: tuple[Any, ...] = ()
+
+    def execute(self, statement: str, parameters: tuple[Any, ...]) -> None:
+        self.statement = statement
+        self.parameters = parameters
+
+    def fetchone(self) -> tuple[str]:
+        return ("a" * 64,)
+
+
 class _RecordingConnection:
     def __init__(self, cursor: _RecordingCursor) -> None:
         self._cursor = cursor
@@ -92,6 +105,31 @@ def test_postgres_projection_has_all_normalized_registry_tables() -> None:
         "active_release_pointer",
     }
     assert all(value == () for value in rows.values())
+
+
+def test_postgres_store_writes_required_workflow_node_columns() -> None:
+    cursor = _ChildRowCursor()
+    store = PostgresRuntimeReleaseStore(lambda: object())
+
+    store._put_node(  # noqa: SLF001 - focused persistence regression
+        cursor,
+        {
+            "workflow_release_ref": "workflow:example@v1",
+            "node_id": "route",
+            "node_kind": "module",
+            "module_release_ref": "runtime-module:route@v1",
+            "row_sha256": "a" * 64,
+            "payload": {"node_id": "route", "node_kind": "module"},
+        },
+    )
+
+    assert "node_kind" in cursor.statement
+    assert cursor.parameters[:4] == (
+        "workflow:example@v1",
+        "route",
+        "module",
+        "runtime-module:route@v1",
+    )
 
 
 @pytest.mark.parametrize("schema", ("Public", "bad-name", "a" * 64))
