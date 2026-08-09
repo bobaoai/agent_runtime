@@ -663,6 +663,97 @@ def test_orphan_disposition_terminalizes_start_before_next_attempt() -> None:
     )
 
 
+def test_duplicate_live_orphan_does_not_evict_a_newer_retry_claim() -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    claim = _begin(store)
+    orphaned_at = "2026-08-02T12:00:30Z"
+    terminal = WorkflowAttemptRecord(
+        workflow_execution_id=EXECUTION_ID,
+        module_run_id=STEP_ID,
+        variant_id=VARIANT_ID,
+        attempt_id=ATTEMPT_ID,
+        parent_attempt_id=None,
+        attempt_ordinal=1,
+        status="failed",
+        period_start_at_utc=START,
+        period_end_at_utc=orphaned_at,
+        recorded_at_utc=orphaned_at,
+        trace_id="trace_synthetic_001",
+        execution_output_refs=(),
+        failure_class="orphaned_attempt",
+    )
+    orphaned = AttemptOrphanedRecord(
+        orphaned_record_id="attempt_orphaned_synthetic_001",
+        workflow_execution_id=EXECUTION_ID,
+        dispatch_id=DISPATCH_ID,
+        module_run_id=STEP_ID,
+        variant_id=VARIANT_ID,
+        attempt_id=ATTEMPT_ID,
+        reason_code="worker_lost",
+        context_disposition_id="invalidate",
+        recorded_at_utc=orphaned_at,
+    )
+    batch = AttemptOrphaningBatch(
+        workflow_execution_id=EXECUTION_ID,
+        transaction_id="transaction_synthetic_orphan",
+        terminal_attempt=terminal,
+        orphaned=orphaned,
+    )
+    assert store.orphan_attempt(claim, batch).commit_receipt.replayed is False
+
+    # A newer retry attempt B re-claims the same logical dispatch.
+    second_claim = AttemptClaim(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id="attempt_synthetic_002",
+        claim_token="claim-token-abcdefghijklmnopqrstuvwxyz-002",
+    )
+    second_start = WorkflowAttemptStartedRecord(
+        workflow_execution_id=EXECUTION_ID,
+        dispatch_id=DISPATCH_ID,
+        module_run_id=STEP_ID,
+        variant_id=VARIANT_ID,
+        attempt_id=second_claim.attempt_id,
+        parent_attempt_id=ATTEMPT_ID,
+        attempt_ordinal=2,
+        trace_id="trace_synthetic_002",
+        request_sha256="5" * 64,
+        claim_token_hash=sha256_text(second_claim.claim_token),
+        input_closure_sha256=sha256_json(["artifact-ref:synthetic-input-001"]),
+        execution_profile_sha256="2" * 64,
+        entitlement_snapshot_hash=ENTITLEMENT_HASH,
+        timeout_seconds=120,
+        recorded_at_utc=END,
+    )
+    store.begin_attempt(
+        LegacyAttemptBeginBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_retry_begin",
+            start=second_start,
+            claim=second_claim,
+            grants=(
+                replace(
+                    _grant(),
+                    grant_id="grant_synthetic_model_002",
+                    attempt_id=second_claim.attempt_id,
+                    idempotency_key="operation_synthetic_model_002",
+                    recorded_at_utc=END,
+                ),
+            ),
+        )
+    )
+
+    # An at-least-once DUPLICATE of the dead attempt's orphan arrives AFTER B
+    # re-claimed the dispatch. It is a valid idempotent replay but must not
+    # evict B's live claim.
+    assert store.orphan_attempt(claim, batch).commit_receipt.replayed is True
+
+    assert store._active_claims[(EXECUTION_ID, DISPATCH_ID, VARIANT_ID)] == (
+        second_claim.attempt_id,
+        second_start.claim_token_hash,
+    )
+
+
 def test_late_orphan_record_does_not_erase_new_attempt_claim_on_rebuild() -> None:
     committed_batches: list[RuntimeRecordBatch | LegacyRuntimeRecordBatch] = []
 

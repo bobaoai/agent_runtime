@@ -500,7 +500,10 @@ def test_postgres_trace_read_uses_one_snapshot_during_concurrent_commit(
 
     class CoordinatedConnection:
         def __init__(self) -> None:
-            self._connection = psycopg.connect(database_url)
+            self._connection = psycopg.connect(
+                database_url,
+                options="-c client_encoding=UTF8 -c timezone=UTC",
+            )
 
         def cursor(self) -> CoordinatedCursor:
             return CoordinatedCursor(self._connection.cursor())

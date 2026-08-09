@@ -50,16 +50,13 @@ def lease_attempt_workspace(workspace: Path) -> Iterator[Path]:
 
     lease_path = lease_directory / f"{workspace.name}.lock"
     if _fcntl is None:
-        lease_fd = _acquire_portable_lease(lease_path)
-        try:
-            yield workspace
-        finally:
-            os.close(lease_fd)
-            try:
-                lease_path.unlink()
-            except FileNotFoundError:
-                pass
-        return
+        # The Runtime targets POSIX hosts. Crash-safe duplicate-dispatch
+        # fencing relies on kernel-released flock; there is no correct
+        # non-POSIX substitute here, so fail closed rather than fence open.
+        raise AttemptWorkspaceConflictError(
+            "Attempt workspace leasing requires a POSIX host (fcntl); "
+            "duplicate-dispatch fencing is unsupported on this platform"
+        )
 
     try:
         handle = open(lease_path, "a+", encoding="utf-8")
@@ -88,62 +85,6 @@ def lease_attempt_workspace(workspace: Path) -> Iterator[Path]:
             _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
     finally:
         handle.close()
-
-
-def _acquire_portable_lease(lease_path: Path) -> int:
-    """Acquire a Windows-compatible lease with atomic creation and PID recovery."""
-
-    for _ in range(3):
-        try:
-            descriptor = os.open(
-                lease_path,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                0o600,
-            )
-        except FileExistsError as exc:
-            try:
-                owner_text = lease_path.read_text(encoding="ascii").strip()
-                owner_pid = int(owner_text)
-            except (OSError, ValueError):
-                owner_pid = None
-            if owner_pid is not None and _pid_is_alive(owner_pid):
-                raise AttemptWorkspaceConflictError(
-                    "Attempt workspace is leased by a live duplicate invocation"
-                ) from exc
-            try:
-                lease_path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError as unlink_error:
-                raise AttemptWorkspaceConflictError(
-                    "Attempt workspace stale lease cannot be recovered"
-                ) from unlink_error
-            continue
-        try:
-            os.write(descriptor, str(os.getpid()).encode("ascii"))
-        except OSError:
-            os.close(descriptor)
-            try:
-                lease_path.unlink()
-            except OSError:
-                pass
-            raise
-        return descriptor
-    raise AttemptWorkspaceConflictError("Attempt workspace lease cannot be acquired")
-
-
-def _pid_is_alive(process_id: int) -> bool:
-    if process_id <= 0:
-        return False
-    try:
-        os.kill(process_id, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
 
 
 def prepare_attempt_workspace(

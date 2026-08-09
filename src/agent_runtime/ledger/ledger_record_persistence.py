@@ -204,16 +204,28 @@ class InMemoryRuntimeExecutionRecordStore:
                     continue
                 start = starts.get((workflow_execution_id, record.attempt_id))
                 if start is not None:
-                    claim_key = (
-                        workflow_execution_id,
-                        start.dispatch_id,
-                        start.variant_id,
-                    )
-                    if self._active_claims.get(claim_key) == (
-                        start.attempt_id,
-                        start.claim_token_hash,
-                    ):
-                        self._active_claims.pop(claim_key)
+                    self._release_claim_if_owned(workflow_execution_id, start)
+
+    def _release_claim_if_owned(self, workflow_execution_id, start) -> None:
+        """Release the active claim only while it still belongs to this Attempt.
+
+        A duplicate or late terminal for an already-dead Attempt is a valid
+        idempotent replay, but it must never evict a newer retry Attempt that
+        has re-claimed the same logical dispatch. The pop is therefore guarded
+        by exact claim ownership, identically on the live finalize/orphan paths
+        and on reference reconstruction.
+        """
+
+        claim_key = (
+            workflow_execution_id,
+            start.dispatch_id,
+            start.variant_id,
+        )
+        if self._active_claims.get(claim_key) == (
+            start.attempt_id,
+            start.claim_token_hash,
+        ):
+            self._active_claims.pop(claim_key, None)
 
     def _set_execution_output_integrity_check(
         self,
@@ -317,14 +329,7 @@ class InMemoryRuntimeExecutionRecordStore:
                             f"verified execution-output bytes are missing: {output_ref}"
                         )
             receipt = self.commit(batch.as_record_batch())
-            self._active_claims.pop(
-                (
-                    batch.workflow_execution_id,
-                    start.dispatch_id,
-                    start.variant_id,
-                ),
-                None,
-            )
+            self._release_claim_if_owned(batch.workflow_execution_id, start)
             return AttemptFinalizationReceipt(
                 commit_receipt=receipt,
                 invocation_commit_id=batch.invocation_commit.invocation_commit_id,
@@ -373,14 +378,7 @@ class InMemoryRuntimeExecutionRecordStore:
             ):
                 raise ValueError("Attempt already has a different orphan disposition")
             receipt = self.commit(batch.as_record_batch())
-            self._active_claims.pop(
-                (
-                    batch.workflow_execution_id,
-                    start.dispatch_id,
-                    start.variant_id,
-                ),
-                None,
-            )
+            self._release_claim_if_owned(batch.workflow_execution_id, start)
             return AttemptOrphaningReceipt(
                 commit_receipt=receipt,
                 orphaned_record_id=batch.orphaned.orphaned_record_id,

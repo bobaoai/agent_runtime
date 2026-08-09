@@ -167,7 +167,7 @@ def test_attempt_workspace_rejects_path_like_attempt_identity(tmp_path: Path) ->
     assert not (tmp_path.parent / "outside").exists()
 
 
-def test_workspace_module_imports_and_leases_without_fcntl() -> None:
+def test_workspace_module_imports_without_fcntl_but_leasing_requires_posix() -> None:
     source = """
 import builtins
 import sys
@@ -197,12 +197,11 @@ with tempfile.TemporaryDirectory() as directory:
             "variant_id": "variant_windows_001",
         },
     )
-    with lease_attempt_workspace(workspace):
-        try:
-            with lease_attempt_workspace(workspace):
-                raise AssertionError("portable duplicate lease was admitted")
-        except AttemptWorkspaceConflictError:
-            pass
+    try:
+        with lease_attempt_workspace(workspace):
+            raise AssertionError("lease admitted without a POSIX lock")
+    except AttemptWorkspaceConflictError as exc:
+        assert "POSIX" in str(exc), str(exc)
 """
     completed = subprocess.run(
         [sys.executable, "-c", source],
