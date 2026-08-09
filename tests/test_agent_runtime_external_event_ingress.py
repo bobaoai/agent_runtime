@@ -513,6 +513,97 @@ def test_ingress_replay_converges_after_execution_leaves_waiting() -> None:
         )
 
 
+def test_ingress_replay_revalidates_authority_and_exact_lineage() -> None:
+    catalog, workflow = _catalog()
+    binding = _binding(workflow)
+    snapshot = _snapshot()
+    token = _token()
+    request = _request(token)
+    authorization = _authorization(request, binding)
+    service = InMemoryExternalEventIngress()
+    _prepare(
+        service,
+        release_registry=catalog,
+        workflow=workflow,
+        binding=binding,
+        snapshot=snapshot,
+        token=token,
+        request=request,
+        authorization=authorization,
+    )
+    replay_arguments = {
+        "request": request,
+        "trusted_context": _context(),
+        "authorization": authorization,
+        "execution_binding": binding,
+        "status_evidence": _status(binding),
+        "snapshot": snapshot,
+        "snapshot_token": token,
+        "release_registry": catalog,
+        "workflow_release_ref": workflow.release_ref,
+        "workflow_release_sha256": workflow.release_sha256,
+        "claim_at_utc": NOW,
+    }
+
+    with pytest.raises(ValueError, match="trusted identity mismatch"):
+        service.prepare_ingress(
+            **(
+                replay_arguments
+                | {
+                    "trusted_context": replace(
+                        _context(), tenant_id="tenant_other_001"
+                    )
+                }
+            )
+        )
+    with pytest.raises(PermissionError, match="denied"):
+        service.prepare_ingress(
+            **(
+                replay_arguments
+                | {
+                    "authorization": replace(
+                        authorization, effect=AuthorizationEffect.DENY
+                    )
+                }
+            )
+        )
+    with pytest.raises(PermissionError, match="authority is unavailable"):
+        service.prepare_ingress(
+            **(
+                replay_arguments
+                | {
+                    "status_evidence": _status(
+                        binding,
+                        status=ExecutionAuthorizationStatus.INVALIDATED,
+                        fence=ExecutionControlFenceStatus.FENCED,
+                    )
+                }
+            )
+        )
+    with pytest.raises(ValueError, match="ingress idempotency conflict"):
+        service.prepare_ingress(
+            **(
+                replay_arguments
+                | {
+                    "authorization": replace(
+                        authorization,
+                        decision_ref=(
+                            "product-authorization:external-decision-002"
+                        ),
+                        decision_sha256="8" * 64,
+                    )
+                }
+            )
+        )
+    with pytest.raises(PermissionError, match="outside validity"):
+        service.prepare_ingress(
+            **(
+                replay_arguments
+                | {"claim_at_utc": "2026-08-05T12:30:00Z"}
+            )
+        )
+
+
 def test_application_replay_converges_after_wait_transition_applied() -> None:
     catalog, workflow = _catalog()
     binding = _binding(workflow)

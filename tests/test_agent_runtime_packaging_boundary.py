@@ -576,8 +576,16 @@ def test_design_contract_manifest_separates_owned_and_adjacent_authority() -> No
         assert set(row["external_references"]) <= EXTERNAL_AUTHORITY_LINK_TARGETS
 
 
-def test_design_contract_link_closure_rejects_undeclared_dead_links(
+@pytest.mark.parametrize(
+    "target",
+    (
+        "nonexistent_contract.md",
+        "wrong/agent_runtime_00_execution_charter.md",
+    ),
+)
+def test_design_contract_link_closure_rejects_undeclared_or_misrouted_links(
     tmp_path: Path,
+    target: str,
 ) -> None:
     (tmp_path / "designDoc").mkdir()
     (tmp_path / "pyproject.toml").write_text(
@@ -591,7 +599,7 @@ def test_design_contract_link_closure_rejects_undeclared_dead_links(
     first_doc = tmp_path / CANONICAL_DOCUMENTS[0]
     first_doc.write_text(
         first_doc.read_text(encoding="utf-8")
-        + "\nSee [ghost](nonexistent_contract.md).\n",
+        + f"\nSee [broken contract]({target}).\n",
         encoding="utf-8",
     )
 

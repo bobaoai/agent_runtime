@@ -46,6 +46,7 @@ from .invocation_context_preparation import (
 from .invocation_failure_recording import build_provider_failure_detail
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
+    lease_attempt_workspace,
     prepare_attempt_workspace,
 )
 
@@ -333,6 +334,7 @@ class _CodexCliExecutorBase:
         )
         try:
             with ExitStack() as stack:
+                stack.enter_context(lease_attempt_workspace(workspace))
                 if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT:
                     schema_directory = Path(
                         stack.enter_context(

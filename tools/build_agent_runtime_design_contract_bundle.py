@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import posixpath
 import re
 import tomllib
 
@@ -103,11 +104,11 @@ def _document_external_references(
         target = match.group(1)
         if target.startswith(("http://", "https://")):
             continue
-        target_name = Path(target).name
-        if target_name in packaged_names:
+        normalized_target = posixpath.normpath(target)
+        if normalized_target in packaged_names:
             continue
-        if target_name in EXTERNAL_AUTHORITY_LINK_TARGETS:
-            external.add(target_name)
+        if normalized_target in EXTERNAL_AUTHORITY_LINK_TARGETS:
+            external.add(normalized_target)
             continue
         raise RuntimeError(
             f"unresolvable Design Contract link in {source_name}: {target}"

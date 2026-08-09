@@ -490,13 +490,6 @@ class InMemoryExternalEventIngress:
         """Validate authority and graph closure, then commit one outbox intent."""
 
         request.validate()
-        existing = self._ingress_by_request.get(request.request_ref)
-        if existing is not None:
-            # The committed record answers a byte-identical retry even after
-            # the execution has left the waiting state it was prepared in.
-            if existing.event.ingress_request_sha256 != request.request_sha256:
-                raise ValueError("external-event ingress idempotency conflict")
-            return existing
         trusted_context.validate()
         authorization.validate()
         execution_binding.validate()
@@ -516,6 +509,12 @@ class InMemoryExternalEventIngress:
             ReleaseAdmissionState.ACTIVE,
         }:
             raise PermissionError("Workflow Release is not admitted for ingress")
+        existing = self._ingress_by_request.get(request.request_ref)
+        if (
+            existing is not None
+            and existing.event.ingress_request_sha256 != request.request_sha256
+        ):
+            raise ValueError("external-event ingress idempotency conflict")
         self._validate_prepare_closure(
             request=request,
             trusted_context=trusted_context,
@@ -526,7 +525,20 @@ class InMemoryExternalEventIngress:
             snapshot_token=snapshot_token,
             workflow=workflow,
             claim_at_utc=claim_at_utc,
+            require_wait_match=existing is None,
         )
+        if existing is not None:
+            # The committed record answers an exact retry even after the
+            # execution has left its original wait. The caller must still
+            # present the same authority lineage and current effective fence.
+            self._validate_replay_closure(
+                existing=existing,
+                request=request,
+                authorization=authorization,
+                execution_binding=execution_binding,
+                workflow=workflow,
+            )
+            return existing
 
         routes = tuple(
             edge
@@ -728,6 +740,7 @@ class InMemoryExternalEventIngress:
         snapshot_token: ExecutionSnapshotToken,
         workflow: WorkflowRelease,
         claim_at_utc: str,
+        require_wait_match: bool,
     ) -> None:
         if authorization.effect is not AuthorizationEffect.ALLOW:
             raise PermissionError("external action was denied")
@@ -774,20 +787,26 @@ class InMemoryExternalEventIngress:
             or snapshot.workflow_id != workflow.workflow_id
         ):
             raise ValueError("external-event Workflow Release mismatch")
-        if snapshot.terminal or snapshot.runtime_status_id != "waiting":
-            raise PermissionError("Workflow Execution is not waiting")
-        if snapshot.wait_policy_ref is None:
-            raise ValueError("waiting snapshot requires wait_policy_ref")
         if (
-            request.expected_snapshot_ref != snapshot_token.snapshot_ref
-            or request.expected_snapshot_sha256 != snapshot_token.snapshot_sha256
-            or request.expected_transition_sequence
-            != snapshot_token.transition_sequence
-            or request.expected_domain_state != snapshot.domain_state_id
-            or snapshot_token.domain_state_id != snapshot.domain_state_id
+            snapshot_token.domain_state_id != snapshot.domain_state_id
             or snapshot_token.runtime_status_id != snapshot.runtime_status_id
+            or snapshot_token.transition_sequence != snapshot.transition_sequence
         ):
             raise PermissionError("stale_external_action")
+        if require_wait_match:
+            if snapshot.terminal or snapshot.runtime_status_id != "waiting":
+                raise PermissionError("Workflow Execution is not waiting")
+            if snapshot.wait_policy_ref is None:
+                raise ValueError("waiting snapshot requires wait_policy_ref")
+            if (
+                request.expected_snapshot_ref != snapshot_token.snapshot_ref
+                or request.expected_snapshot_sha256
+                != snapshot_token.snapshot_sha256
+                or request.expected_transition_sequence
+                != snapshot_token.transition_sequence
+                or request.expected_domain_state != snapshot.domain_state_id
+            ):
+                raise PermissionError("stale_external_action")
         claim_time = _as_datetime(claim_at_utc)
         if not (
             _as_datetime(authorization.effective_at_utc)
@@ -798,6 +817,48 @@ class InMemoryExternalEventIngress:
             < _as_datetime(execution_binding.expiry_at_utc)
         ):
             raise PermissionError("external-event authority is outside validity")
+
+    @staticmethod
+    def _validate_replay_closure(
+        *,
+        existing: ExternalEventIngressRecord,
+        request: ExternalEventIngressRequest,
+        authorization: ExternalActionAuthorizationEvidence,
+        execution_binding: ExecutionAuthorizationBinding,
+        workflow: WorkflowRelease,
+    ) -> None:
+        """Require a retry to reproduce the committed authority lineage."""
+
+        event = existing.event
+        if (
+            event.ingress_request_ref != request.request_ref
+            or event.ingress_request_sha256 != request.request_sha256
+            or event.workflow_execution_id != request.workflow_execution_id
+            or event.workflow_release_ref != workflow.release_ref
+            or event.workflow_release_sha256 != workflow.release_sha256
+            or event.expected_snapshot_ref != request.expected_snapshot_ref
+            or event.expected_snapshot_sha256 != request.expected_snapshot_sha256
+            or event.expected_transition_sequence
+            != request.expected_transition_sequence
+            or event.expected_domain_state != request.expected_domain_state
+            or event.event_type != request.requested_event_type
+            or event.decision_artifact_ref != request.decision_artifact_ref
+            or event.decision_artifact_sha256
+            != request.decision_artifact_sha256
+            or event.product_authorization_request_ref
+            != authorization.request_ref
+            or event.product_authorization_request_sha256
+            != authorization.request_sha256
+            or event.product_authorization_decision_ref
+            != authorization.decision_ref
+            or event.product_authorization_decision_sha256
+            != authorization.decision_sha256
+            or event.execution_authorization_binding_ref
+            != execution_binding.binding_ref
+            or event.execution_authorization_binding_sha256
+            != execution_binding.binding_sha256
+        ):
+            raise ValueError("external-event ingress idempotency conflict")
 
 
 __all__ = [

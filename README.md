@@ -1,14 +1,20 @@
 # Agent Runtime
 
-Agent Runtime is an independently publishable infrastructure product for
-registering AI Modules, executing durable Workflows, recording every execution,
-and inspecting those executions from an authoritative Execution Ledger.
+Agent Runtime is an extensible, domain-neutral Python package for building
+reliable AI task-execution systems. It can support research pipelines, content
+workflows, support automation, operational agents, evaluation systems, or any
+other application that needs repeatable multi-step work. A host application or
+plugin supplies the task-specific Modules, Workflow graph, tools, policies, and
+business meaning; the Runtime core stays reusable across domains.
 
-Business roles such as Writer, Router, Verifier, Reviewer, or Expert come from
-domain plugins. Runtime does not define their business meaning. It guarantees
-that the exact registered version is executed, every invocation is recorded,
-failed work can be recovered, and an authorized reviewer can inspect what
-happened.
+Runtime provides the shared infrastructure: immutable Module and Workflow
+registration, provider-neutral invocation, durable execution and recovery, an
+authoritative Execution Ledger, and authorized inspection. A Module can be a
+model-backed agent, deterministic function, human task, or external service.
+Roles such as Writer, Router, Verifier, Reviewer, or Expert are examples a
+domain plugin may define, not concepts built into the package. Runtime instead
+guarantees that the exact registered version runs, every attempt is recorded,
+failed work can be recovered, and authorized users can inspect what happened.
 
 ## Logical responsibility flow
 

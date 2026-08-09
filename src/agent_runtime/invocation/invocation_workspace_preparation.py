@@ -2,87 +2,76 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import errno
+import fcntl
 import json
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from ..contracts.registry_contract_validation import validate_id
 
 
 _MARKER_NAME = ".agent_runtime_attempt.json"
-_LEASE_NAME = ".agent_runtime_attempt.lock"
-_LEASE_ACQUIRE_ATTEMPTS = 5
+_LEASE_DIRECTORY_NAME = ".agent_runtime_attempt_leases"
 
 
 class AttemptWorkspaceConflictError(RuntimeError):
     """Raised when a deterministic Attempt path belongs to another identity."""
 
 
-def _pid_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+@contextmanager
+def lease_attempt_workspace(workspace: Path) -> Iterator[Path]:
+    """Hold an OS-backed exclusive lock for one provider invocation.
 
-
-def _acquire_workspace_lease(workspace: Path) -> None:
-    """Fence one live OS process per Attempt workspace on this host.
-
-    A lease held by this process allows sequential replay; a lease held by a
-    live foreign process is a concurrent duplicate dispatch and fails loudly;
-    a lease left by a dead process is crash residue and is reclaimed.
+    The persistent lock file lives beside the provider-writable Attempt
+    directory, not inside it. The kernel releases the lock if the worker exits,
+    including after a crash; a same-process duplicate using a separate open
+    file description is fenced just like a duplicate in another process.
     """
 
-    lease = workspace / _LEASE_NAME
-    own_pid = os.getpid()
-    for _ in range(_LEASE_ACQUIRE_ATTEMPTS):
+    workspace = workspace.resolve()
+    lease_directory = workspace.parent / _LEASE_DIRECTORY_NAME
+    try:
+        lease_directory.mkdir(mode=0o700, exist_ok=True)
+    except OSError as exc:
+        raise AttemptWorkspaceConflictError(
+            "Attempt workspace lease directory cannot be prepared"
+        ) from exc
+    if lease_directory.is_symlink() or not lease_directory.is_dir():
+        raise AttemptWorkspaceConflictError(
+            "Attempt workspace lease path is not a Runtime directory"
+        )
+
+    lease_path = lease_directory / f"{workspace.name}.lock"
+    try:
+        handle = open(lease_path, "a+", encoding="utf-8")
+    except OSError as exc:
+        raise AttemptWorkspaceConflictError(
+            "Attempt workspace lease cannot be opened"
+        ) from exc
+    try:
         try:
-            with open(lease, "x", encoding="utf-8") as handle:
-                handle.write(str(own_pid))
-            return
-        except FileExistsError:
-            pass
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
+            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                raise AttemptWorkspaceConflictError(
+                    "Attempt workspace is leased by a live duplicate invocation"
+                ) from exc
             raise AttemptWorkspaceConflictError(
-                "Attempt workspace lease cannot be committed"
+                "Attempt workspace lease cannot be acquired"
             ) from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(os.getpid()))
+        handle.flush()
         try:
-            holder_text = lease.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            raise AttemptWorkspaceConflictError(
-                "Attempt workspace lease cannot be read"
-            ) from exc
-        try:
-            holder_pid = int(holder_text.strip())
-        except ValueError:
-            holder_pid = -1
-        if holder_pid == own_pid:
-            return
-        if _pid_is_alive(holder_pid):
-            raise AttemptWorkspaceConflictError(
-                "Attempt workspace is leased by a live duplicate invocation"
-            )
-        try:
-            lease.unlink()
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            raise AttemptWorkspaceConflictError(
-                "stale Attempt workspace lease cannot be replaced"
-            ) from exc
-    raise AttemptWorkspaceConflictError(
-        "Attempt workspace lease could not be acquired"
-    )
+            yield workspace
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
 
 
 def prepare_attempt_workspace(
@@ -136,7 +125,6 @@ def prepare_attempt_workspace(
             raise AttemptWorkspaceConflictError(
                 "Attempt workspace belongs to a different execution identity"
             )
-        _acquire_workspace_lease(workspace)
         return workspace
 
     if any(workspace.iterdir()):
@@ -149,11 +137,11 @@ def prepare_attempt_workspace(
         raise AttemptWorkspaceConflictError(
             "Attempt workspace marker cannot be committed"
         ) from exc
-    _acquire_workspace_lease(workspace)
     return workspace
 
 
 __all__ = [
     "AttemptWorkspaceConflictError",
+    "lease_attempt_workspace",
     "prepare_attempt_workspace",
 ]

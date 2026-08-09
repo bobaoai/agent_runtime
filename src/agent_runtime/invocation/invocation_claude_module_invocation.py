@@ -54,6 +54,7 @@ from .invocation_failure_recording import build_provider_failure_detail
 from .invocation_schema_projection import transform_json_schema_nodes
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
+    lease_attempt_workspace,
     prepare_attempt_workspace,
 )
 
@@ -472,9 +473,10 @@ class _ClaudeAgentSdkExecutorBase:
                 "synchronous Claude SDK Executor cannot run inside an event loop"
             )
         try:
-            asyncio.run(
-                asyncio.wait_for(consume(), timeout=profile.timeout_seconds)
-            )
+            with lease_attempt_workspace(workspace):
+                asyncio.run(
+                    asyncio.wait_for(consume(), timeout=profile.timeout_seconds)
+                )
         except Exception as exc:
             partial_result = _result_message(messages)
             # Some Claude Code / Agent SDK versions yield a complete successful

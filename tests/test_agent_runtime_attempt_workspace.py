@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -9,11 +8,12 @@ import pytest
 
 from agent_runtime.invocation.invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
+    lease_attempt_workspace,
     prepare_attempt_workspace,
 )
 
 
-_LEASE_NAME = ".agent_runtime_attempt.lock"
+_LEASE_DIRECTORY_NAME = ".agent_runtime_attempt_leases"
 
 
 def _identity(**overrides: str) -> dict[str, str]:
@@ -73,39 +73,87 @@ def test_empty_directory_from_interrupted_initialization_is_recoverable(
     assert recovered == workspace
 
 
-def test_duplicate_dispatch_with_live_foreign_lease_fails_loudly(
+def test_same_process_duplicate_dispatch_is_fenced_for_full_lease_scope(
     tmp_path: Path,
 ) -> None:
-    first = prepare_attempt_workspace(
+    workspace = prepare_attempt_workspace(
         workspace_root=tmp_path,
         attempt_identity=_identity(),
     )
-    (first / _LEASE_NAME).write_text("1", encoding="utf-8")
 
-    with pytest.raises(AttemptWorkspaceConflictError, match="live duplicate"):
-        prepare_attempt_workspace(
-            workspace_root=tmp_path,
-            attempt_identity=_identity(),
+    with lease_attempt_workspace(workspace):
+        with pytest.raises(AttemptWorkspaceConflictError, match="live duplicate"):
+            with lease_attempt_workspace(workspace):
+                pytest.fail("duplicate invocation acquired the Attempt workspace")
+
+    with lease_attempt_workspace(workspace) as reacquired:
+        assert reacquired == workspace
+
+
+def test_workspace_lock_is_outside_provider_writable_directory(
+    tmp_path: Path,
+) -> None:
+    workspace = prepare_attempt_workspace(
+        workspace_root=tmp_path,
+        attempt_identity=_identity(),
+    )
+
+    with lease_attempt_workspace(workspace):
+        lease = (
+            tmp_path
+            / _LEASE_DIRECTORY_NAME
+            / f"{workspace.name}.lock"
+        )
+        assert lease.is_file()
+        assert workspace not in lease.parents
+
+    assert not list(workspace.glob("*.lock"))
+
+
+def test_workspace_lock_is_released_when_holder_process_crashes(
+    tmp_path: Path,
+) -> None:
+    workspace = prepare_attempt_workspace(
+        workspace_root=tmp_path,
+        attempt_identity=_identity(),
+    )
+    with lease_attempt_workspace(workspace):
+        lease = (
+            tmp_path
+            / _LEASE_DIRECTORY_NAME
+            / f"{workspace.name}.lock"
         )
 
-
-def test_stale_lease_from_dead_process_is_reclaimed(tmp_path: Path) -> None:
-    first = prepare_attempt_workspace(
-        workspace_root=tmp_path,
-        attempt_identity=_identity(),
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl,sys; "
+                "handle=open(sys.argv[1], 'a+'); "
+                "fcntl.flock(handle.fileno(), fcntl.LOCK_EX); "
+                "print('locked', flush=True); sys.stdin.read()"
+            ),
+            str(lease),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
     )
-    dead = subprocess.Popen([sys.executable, "-c", "pass"])
-    dead.wait()
-    lease = first / _LEASE_NAME
-    lease.write_text(str(dead.pid), encoding="utf-8")
-
-    replay = prepare_attempt_workspace(
-        workspace_root=tmp_path,
-        attempt_identity=_identity(),
-    )
-
-    assert replay == first
-    assert lease.read_text(encoding="utf-8") == str(os.getpid())
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "locked"
+        with pytest.raises(AttemptWorkspaceConflictError, match="live duplicate"):
+            with lease_attempt_workspace(workspace):
+                pytest.fail("duplicate invocation acquired the Attempt workspace")
+        holder.kill()
+        holder.wait()
+        with lease_attempt_workspace(workspace) as recovered:
+            assert recovered == workspace
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait()
 
 
 def test_attempt_workspace_rejects_path_like_attempt_identity(tmp_path: Path) -> None:
