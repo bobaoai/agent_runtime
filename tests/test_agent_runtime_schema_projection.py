@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from agent_runtime.invocation.invocation_prompt_assembly import (
-    OUTPUT_SCHEMA_MARKER,
     codex_native_output_schema,
     normalize_codex_native_output,
 )
@@ -44,15 +41,6 @@ def _schema_with_keyword_named_properties() -> dict[str, object]:
     }
 
 
-def _compiled_prompt(schema: dict[str, object]) -> str:
-    return (
-        "Produce one result."
-        + OUTPUT_SCHEMA_MARKER
-        + "\n"
-        + json.dumps(schema, ensure_ascii=False, sort_keys=True)
-    )
-
-
 def test_task_projection_preserves_user_names_inside_schema_maps() -> None:
     projected = task_plane_output_schema(_schema_with_keyword_named_properties())
 
@@ -69,7 +57,7 @@ def test_task_projection_preserves_user_names_inside_schema_maps() -> None:
 
 def test_codex_projection_does_not_treat_property_maps_as_schema_nodes() -> None:
     projected = codex_native_output_schema(
-        _compiled_prompt(task_plane_output_schema(_schema_with_keyword_named_properties()))
+        task_plane_output_schema(_schema_with_keyword_named_properties())
     )
 
     assert list(projected["properties"]) == [
@@ -91,7 +79,7 @@ def test_claude_projection_does_not_treat_property_maps_as_schema_nodes() -> Non
     )
 
     projected = _structured_output_format(
-        _compiled_prompt(task_plane_output_schema(_schema_with_keyword_named_properties()))
+        task_plane_output_schema(_schema_with_keyword_named_properties())
     )["schema"]
 
     assert list(projected["properties"]) == [
@@ -128,3 +116,33 @@ def test_codex_normalization_resolves_local_ref_before_removing_nulls() -> None:
     )
 
     assert normalized == {"result": {"score": None, "note": "fine"}}
+
+
+def _recursive_tree_schema(leaf: dict[str, object]) -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {"tree": {"$ref": "#/$defs/node"}},
+        "required": [],
+        "additionalProperties": False,
+        "$defs": {
+            "node": {"anyOf": [{"$ref": "#/$defs/node"}, leaf]},
+        },
+    }
+
+
+def test_codex_normalization_terminates_on_recursive_ref_cycle() -> None:
+    normalized = normalize_codex_native_output(
+        payload={"tree": None},
+        canonical_schema=_recursive_tree_schema({"type": "string"}),
+    )
+
+    assert normalized == {}
+
+
+def test_codex_normalization_keeps_null_on_nullable_recursive_ref() -> None:
+    normalized = normalize_codex_native_output(
+        payload={"tree": None},
+        canonical_schema=_recursive_tree_schema({"type": "null"}),
+    )
+
+    assert normalized == {"tree": None}

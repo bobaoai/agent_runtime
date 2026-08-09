@@ -327,10 +327,15 @@ def test_durable_start_and_snapshot_are_exact_ref_only_contracts() -> None:
     assert snapshot.current_state == "state_waiting"
 
 
-def test_public_external_event_is_the_durable_backend_event() -> None:
-    from agent_runtime.contracts import ExternalEvent as PublicExternalEvent
+def test_cursor_event_export_is_explicit_and_bare_name_is_absent() -> None:
+    import agent_runtime
+    import agent_runtime.contracts as contracts
 
-    assert PublicExternalEvent is ExternalEvent
+    assert contracts.DurableCursorExternalEvent is ExternalEvent
+    assert agent_runtime.DurableCursorExternalEvent is ExternalEvent
+    assert agent_runtime.AuthorizedExternalEvent is not ExternalEvent
+    assert not hasattr(contracts, "ExternalEvent")
+    assert not hasattr(agent_runtime, "ExternalEvent")
 
 
 def test_module_attempt_rejects_reversed_period() -> None:

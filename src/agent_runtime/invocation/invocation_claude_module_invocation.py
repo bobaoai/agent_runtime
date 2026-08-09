@@ -45,10 +45,7 @@ from .invocation_tool_definition import (
     ProviderToolDefinition,
     validate_provider_tool_set,
 )
-from .invocation_prompt_assembly import (
-    NATIVE_STRUCTURED_OUTPUT,
-    provider_output_schema,
-)
+from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
 from .invocation_context_preparation import (
     InvocationExecutionExpectation,
     prepare_registered_invocation_context,
@@ -198,14 +195,14 @@ def _canonical_output(
     ).encode("utf-8")
 
 
-def _structured_output_format(compiled_static_body: str) -> dict[str, Any]:
-    """Recover a provider-compatible structural schema from the Prompt Bundle.
+def _structured_output_format(
+    registered_output_schema: dict[str, object],
+) -> dict[str, Any]:
+    """Project the registered schema for provider structured output framing.
 
     Provider structured output is only a framing aid. Runtime still validates
     the committed object against the exact registered Module output schema.
     """
-
-    schema = provider_output_schema(compiled_static_body)
 
     unsupported_composition = {
         "allOf",
@@ -217,7 +214,7 @@ def _structured_output_format(compiled_static_body: str) -> dict[str, Any]:
     }
 
     provider_schema = transform_json_schema_nodes(
-        schema,
+        registered_output_schema,
         lambda node: {
             key: value
             for key, value in node.items()
@@ -442,7 +439,7 @@ class _ClaudeAgentSdkExecutorBase:
             strict_mcp_config=True,
             sandbox=_sandbox_options(),
             output_format=(
-                _structured_output_format(prompt_bundle.compiled_static_body)
+                _structured_output_format(registered_output_schema)
                 if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT
                 else None
             ),

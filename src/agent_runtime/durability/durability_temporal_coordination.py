@@ -172,6 +172,8 @@ class TemporalDurableCursorWorkflow:
             if prior != event.to_backend_payload():
                 raise ValueError("Temporal event id was reused with different content")
             return event
+        if self._runtime_status_id == "cancelled":
+            raise ValueError("cancelled Temporal execution cannot advance")
         if self._current_state in self._terminal_states:
             raise ValueError("terminal Temporal execution cannot advance")
         if event.expected_state != self._current_state:

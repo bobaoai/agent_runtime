@@ -52,7 +52,7 @@ from .durability_backend_definition import (
     BackendExecutionRef,
     DurableBackendAdapter,
     ExecutionSnapshot,
-    ExternalEvent,
+    ExternalEvent as DurableCursorExternalEvent,
 )
 from .execution_host_definition import (
     RuntimeCancellationRequest,
@@ -179,7 +179,7 @@ __all__ = [
     "ExecutionControlFenceStatus",
     "ExecutionOutputRegistrationRequest",
     "ExecutionOutputRegistrationResult",
-    "ExternalEvent",
+    "DurableCursorExternalEvent",
     "PredecessorWorkflowExternalEvent",
     "ExternalEventAcknowledgement",
     "ExternalEventIngressRequest",

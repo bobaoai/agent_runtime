@@ -441,6 +441,125 @@ def test_ingress_replay_returns_committed_record_across_retry_timestamps() -> No
     assert replay.recorded_at_utc == NOW
 
 
+def test_ingress_replay_converges_after_execution_leaves_waiting() -> None:
+    catalog, workflow = _catalog()
+    binding = _binding(workflow)
+    token = _token()
+    request = _request(token)
+    authorization = _authorization(request, binding)
+    service = InMemoryExternalEventIngress()
+
+    first = _prepare(
+        service,
+        release_registry=catalog,
+        workflow=workflow,
+        binding=binding,
+        snapshot=_snapshot(),
+        token=token,
+        request=request,
+        authorization=authorization,
+    )
+    replay = service.prepare_ingress(
+        request=request,
+        trusted_context=_context(),
+        authorization=authorization,
+        execution_binding=binding,
+        status_evidence=_status(binding),
+        snapshot=replace(
+            _snapshot(),
+            domain_state_id="next_state",
+            runtime_status_id="running",
+            transition_sequence=1,
+        ),
+        snapshot_token=_token(
+            transition_sequence=1,
+            domain_state_id="next_state",
+            runtime_status_id="running",
+        ),
+        release_registry=catalog,
+        workflow_release_ref=workflow.release_ref,
+        workflow_release_sha256=workflow.release_sha256,
+        claim_at_utc="2026-08-05T12:00:02Z",
+    )
+
+    assert replay is first
+
+    mutated_request = ExternalEventIngressRequest.build(
+        ingress_request_id="event_ingress_request_001",
+        request_ref="runtime-event-request:request-001",
+        idempotency_key="event_idempotency_001",
+        workflow_execution_id="workflow_execution_001",
+        expected_snapshot_ref=token.snapshot_ref,
+        expected_snapshot_sha256=token.snapshot_sha256,
+        expected_transition_sequence=token.transition_sequence,
+        expected_domain_state=token.domain_state_id,
+        requested_event_type="approval_received",
+        decision_artifact_ref="artifact:approval-decision-002",
+        decision_artifact_sha256="2" * 64,
+    )
+    with pytest.raises(ValueError, match="ingress idempotency conflict"):
+        service.prepare_ingress(
+            request=mutated_request,
+            trusted_context=_context(),
+            authorization=authorization,
+            execution_binding=binding,
+            status_evidence=_status(binding),
+            snapshot=_snapshot(),
+            snapshot_token=token,
+            release_registry=catalog,
+            workflow_release_ref=workflow.release_ref,
+            workflow_release_sha256=workflow.release_sha256,
+            claim_at_utc="2026-08-05T12:00:03Z",
+        )
+
+
+def test_application_replay_converges_after_wait_transition_applied() -> None:
+    catalog, workflow = _catalog()
+    binding = _binding(workflow)
+    snapshot = _snapshot()
+    token = _token()
+    request = _request(token)
+    authorization = _authorization(request, binding)
+    service = InMemoryExternalEventIngress()
+
+    ingress_record = _prepare(
+        service,
+        release_registry=catalog,
+        workflow=workflow,
+        binding=binding,
+        snapshot=snapshot,
+        token=token,
+        request=request,
+        authorization=authorization,
+    )
+    committed = service.apply(
+        ingress=ingress_record,
+        current_snapshot=snapshot,
+        current_snapshot_token=token,
+        current_status_evidence=_status(binding),
+        claim_at_utc=NOW,
+    )
+
+    replay = service.apply(
+        ingress=ingress_record,
+        current_snapshot=replace(
+            snapshot,
+            domain_state_id="next_state",
+            runtime_status_id="running",
+            transition_sequence=1,
+        ),
+        current_snapshot_token=_token(
+            transition_sequence=1,
+            domain_state_id="next_state",
+            runtime_status_id="running",
+        ),
+        current_status_evidence=_status(binding),
+        claim_at_utc="2026-08-05T12:00:03Z",
+    )
+
+    assert replay is committed
+
+
 def test_terminal_external_event_targets_runtime_completed_state() -> None:
     catalog, workflow = _catalog(approval_is_terminal=True)
     binding = _binding(workflow)

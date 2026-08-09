@@ -10,8 +10,13 @@ import textwrap
 import tomllib
 import zipfile
 
+import pytest
+
 from tools.build_agent_runtime_design_contract_bundle import (
+    ADJACENT_DOCUMENT_AUTHORITIES,
     CANONICAL_DOCUMENTS,
+    EXTERNAL_AUTHORITY_LINK_TARGETS,
+    RUNTIME_OWNED_AUTHORITY,
     build_design_contract_bundle,
 )
 
@@ -547,6 +552,57 @@ def test_generated_design_contract_bundle_matches_canonical_docs() -> None:
     assert [row["source_path"] for row in manifest["documents"]] == list(
         CANONICAL_DOCUMENTS
     )
+
+
+def test_design_contract_manifest_separates_owned_and_adjacent_authority() -> None:
+    manifest = build_design_contract_bundle(check=True)
+    authority_by_source = {
+        row["source_path"]: row["authority"] for row in manifest["documents"]
+    }
+
+    assert authority_by_source == {
+        source_name: ADJACENT_DOCUMENT_AUTHORITIES.get(
+            source_name,
+            RUNTIME_OWNED_AUTHORITY,
+        )
+        for source_name in CANONICAL_DOCUMENTS
+    }
+    assert set(ADJACENT_DOCUMENT_AUTHORITIES.values()) == {
+        "agency_platform",
+        "software_delivery",
+    }
+    for row in manifest["documents"]:
+        assert row["external_references"] == sorted(row["external_references"])
+        assert set(row["external_references"]) <= EXTERNAL_AUTHORITY_LINK_TARGETS
+
+
+def test_design_contract_link_closure_rejects_undeclared_dead_links(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "designDoc").mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "probe"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+    for source_name in CANONICAL_DOCUMENTS:
+        (tmp_path / source_name).write_bytes(
+            (REPO_ROOT / source_name).read_bytes()
+        )
+    first_doc = tmp_path / CANONICAL_DOCUMENTS[0]
+    first_doc.write_text(
+        first_doc.read_text(encoding="utf-8")
+        + "\nSee [ghost](nonexistent_contract.md).\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="unresolvable Design Contract link",
+    ):
+        build_design_contract_bundle(
+            project_root=tmp_path,
+            output_root=tmp_path / "generated",
+        )
 
 
 def test_canonical_runtime_truth_surface_paths_exist() -> None:

@@ -134,7 +134,6 @@ def _controller(
             client=client,
             ledger=InMemoryExecutionAuthorizationLedger(),
             module_release_client=_ModuleReleaseClient(registered_module),
-            clock=lambda: NOW,
         ),
         client,
     )
@@ -191,19 +190,11 @@ def test_binding_and_fence_replay_ignore_host_clock_progress() -> None:
                 observed_at_utc=observed_at_utc,
             )
 
-    ticks = iter(
-        (
-            "2026-08-05T12:00:01Z",
-            "2026-08-05T12:00:02Z",
-            "2026-08-05T12:00:03Z",
-        )
-    )
     client = _StableClient(envelope)
     controller = ExecutionAuthorizationController(
         client=client,
         ledger=InMemoryExecutionAuthorizationLedger(),
         module_release_client=_ModuleReleaseClient(_module()),
-        clock=lambda: next(ticks),
     )
 
     first = _admit(controller)
@@ -288,11 +279,59 @@ def test_standard_operation_records_intent_without_grant() -> None:
         effect=GatewayDecisionEffect.ALLOW,
         effect_evidence_ref=None,
         grant_disposition_ref=None,
+        observed_at_utc=NOW,
     )
 
     assert intent.requires_grant is False
     assert intent.operation_grant_ref is None
     assert observation.grant_disposition_ref is None
+
+
+def test_protected_operation_replay_converges_across_retries() -> None:
+    controller, _ = _controller()
+    admission = _admit(controller)
+    module = _module()
+    intent_kwargs = dict(
+        binding_ref=admission.binding.binding_ref,
+        module_run_id="module_run_replay_001",
+        module_release_ref=module.release_ref,
+        module_release_sha256=module.release_sha256,
+        operation_id="knowledge_search",
+        resource_ref="knowledge-corpus:research-001",
+        enforcing_gateway_id="knowledge_gateway",
+        idempotency_key="knowledge_search_replay_001",
+        requires_grant=False,
+        operation_grant_ref=None,
+        observed_at_utc=NOW,
+    )
+
+    first_intent = controller.commit_protected_operation_intent(**intent_kwargs)
+    replayed_intent = controller.commit_protected_operation_intent(
+        **intent_kwargs
+    )
+
+    assert replayed_intent is first_intent
+    assert first_intent.recorded_at_utc == NOW
+
+    observation_kwargs = dict(
+        intent_ref=first_intent.intent_ref,
+        decision_ref="product-authorization:decision-replay-001",
+        decision_sha256="b" * 64,
+        effect=GatewayDecisionEffect.ALLOW,
+        effect_evidence_ref=None,
+        grant_disposition_ref=None,
+        observed_at_utc=NOW,
+    )
+
+    first_observation = controller.record_gateway_observation(
+        **observation_kwargs
+    )
+    replayed_observation = controller.record_gateway_observation(
+        **observation_kwargs
+    )
+
+    assert replayed_observation is first_observation
+    assert first_observation.recorded_at_utc == NOW
 
 
 def test_high_risk_operation_requires_grant_and_terminal_disposition() -> None:
@@ -330,6 +369,7 @@ def test_high_risk_operation_requires_grant_and_terminal_disposition() -> None:
             effect=GatewayDecisionEffect.ALLOW,
             effect_evidence_ref="publication:effect-001",
             grant_disposition_ref=None,
+            observed_at_utc=NOW,
         )
 
 

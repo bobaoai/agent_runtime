@@ -346,7 +346,7 @@ class _CodexCliExecutorBase:
                     schema_path.write_text(
                         json.dumps(
                             codex_native_output_schema(
-                                prompt_bundle.compiled_static_body
+                                registered_output_schema
                             ),
                             ensure_ascii=False,
                             sort_keys=True,

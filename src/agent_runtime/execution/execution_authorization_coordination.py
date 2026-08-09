@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 import hashlib
 from threading import RLock
-from typing import Callable
 
 from ..contracts.execution_authorization_definition import (
     ExecutionAuthorizationContextBinding,
@@ -24,10 +23,6 @@ from ..contracts.registry_contract_validation import validate_utc_timestamp
 from ..registry.registry_release_retrieval import RuntimeModuleReleaseClient
 from .execution_authorization_resolution import ProductAuthorizationContextClient
 from .execution_operation_resolution import RuntimeProtectedOperationClient
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _as_datetime(value: str) -> datetime:
@@ -237,12 +232,10 @@ class ExecutionAuthorizationController:
         client: ProductAuthorizationContextClient,
         ledger: InMemoryExecutionAuthorizationLedger,
         module_release_client: RuntimeModuleReleaseClient | None = None,
-        clock: Callable[[], str] = _utc_now,
     ) -> None:
         self._client = client
         self._ledger = ledger
         self._module_release_client = module_release_client
-        self._clock = clock
 
     @property
     def protected_operation_client(self) -> RuntimeProtectedOperationClient:
@@ -450,7 +443,7 @@ class ExecutionAuthorizationController:
             idempotency_key=idempotency_key,
             requires_grant=requires_grant,
             operation_grant_ref=operation_grant_ref,
-            recorded_at_utc=self._clock(),
+            recorded_at_utc=observed_at_utc,
         )
         return self._ledger.commit_intent(intent)
 
@@ -463,6 +456,7 @@ class ExecutionAuthorizationController:
         effect: GatewayDecisionEffect,
         effect_evidence_ref: str | None,
         grant_disposition_ref: str | None,
+        observed_at_utc: str,
     ) -> GatewayAuthorizationObservation:
         """Record terminal Gateway refs without treating them as Runtime authority."""
 
@@ -490,7 +484,7 @@ class ExecutionAuthorizationController:
             effect=effect,
             effect_evidence_ref=effect_evidence_ref,
             grant_disposition_ref=grant_disposition_ref,
-            recorded_at_utc=self._clock(),
+            recorded_at_utc=observed_at_utc,
         )
         return self._ledger.commit_observation(observation)
 

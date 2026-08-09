@@ -2,7 +2,10 @@
 
 The contract deliberately reuses the target host request and topology records.
 It does not define or alias a parallel family of start, execution, event, or
-snapshot DTOs.
+snapshot DTOs.  The one sanctioned derived view is the ingress-plane read
+model ExternalEventExecutionSnapshot in execution_event_definition, which
+projects this cursor state for wait authorization and must not grow into a
+second cursor contract.
 """
 
 from __future__ import annotations

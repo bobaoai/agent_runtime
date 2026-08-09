@@ -490,6 +490,13 @@ class InMemoryExternalEventIngress:
         """Validate authority and graph closure, then commit one outbox intent."""
 
         request.validate()
+        existing = self._ingress_by_request.get(request.request_ref)
+        if existing is not None:
+            # The committed record answers a byte-identical retry even after
+            # the execution has left the waiting state it was prepared in.
+            if existing.event.ingress_request_sha256 != request.request_sha256:
+                raise ValueError("external-event ingress idempotency conflict")
+            return existing
         trusted_context.validate()
         authorization.validate()
         execution_binding.validate()
@@ -564,12 +571,6 @@ class InMemoryExternalEventIngress:
             execution_authorization_binding_ref=execution_binding.binding_ref,
             execution_authorization_binding_sha256=execution_binding.binding_sha256,
         )
-        existing = self._ingress_by_request.get(request.request_ref)
-        if existing is not None:
-            if existing.event != event:
-                raise ValueError("external-event ingress idempotency conflict")
-            return existing
-
         record_id = _stable_id(
             "external_event_ingress",
             request.request_sha256,
@@ -601,6 +602,21 @@ class InMemoryExternalEventIngress:
         current_status_evidence.validate()
         validate_utc_timestamp("claim_at_utc", claim_at_utc)
         event = ingress.event
+        existing = self._application_by_event.get(event.event_ref)
+        if existing is not None:
+            # At-least-once delivery: once the application record committed,
+            # the same lineage converges on it even though the wait transition
+            # has already advanced the snapshot past the staleness gate below.
+            if (
+                existing.ingress_record_ref != ingress.ingress_record_ref
+                or existing.ingress_record_sha256
+                != ingress.ingress_record_sha256
+                or existing.event != event
+            ):
+                raise ValueError(
+                    "external-event application idempotency conflict"
+                )
+            return existing
         if (
             current_snapshot.workflow_execution_id
             != current_snapshot_token.workflow_execution_id
@@ -637,9 +653,6 @@ class InMemoryExternalEventIngress:
         ):
             raise PermissionError("external-event authority is no longer effective")
 
-        existing = self._application_by_event.get(event.event_ref)
-        if existing is not None:
-            return existing
         application_id = _stable_id(
             "external_event_application",
             ingress.ingress_record_sha256,

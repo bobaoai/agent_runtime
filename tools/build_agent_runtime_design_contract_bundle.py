@@ -4,6 +4,12 @@ Canonical contracts stay in ``designDoc``.  This build tool copies their exact
 bytes into the standalone distribution and writes a deterministic manifest.
 The generated directory is a release artifact and must never be edited by
 hand.
+
+The manifest separates Runtime-owned contracts from adjacent-authority
+contracts (owned by Agency Platform or Software Delivery per the ownership
+table in ``designDoc/the_agent_runtime.md``) and records, per document, every
+relative Markdown link that leaves the bundle toward a declared external
+authority document.  Any other unresolvable relative link fails the build.
 """
 
 from __future__ import annotations
@@ -12,12 +18,14 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import tomllib
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "src" / "agent_runtime" / "design_contract"
-BUNDLE_SCHEMA_VERSION = "agent_runtime_design_contract_bundle_v1"
+BUNDLE_SCHEMA_VERSION = "agent_runtime_design_contract_bundle_v2"
+RUNTIME_OWNED_AUTHORITY = "agent_runtime"
 CANONICAL_DOCUMENTS = (
     "designDoc/the_agent_runtime.md",
     "designDoc/agent_runtime_00_execution_charter.md",
@@ -32,6 +40,32 @@ CANONICAL_DOCUMENTS = (
     "designDoc/agent_runtime_09_authorization_integration_contract.md",
     "designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md",
 )
+ADJACENT_DOCUMENT_AUTHORITIES = {
+    "designDoc/agent_runtime_02_product_target_topology.md": "agency_platform",
+    "designDoc/agent_runtime_05_delivery_roadmap.md": "software_delivery",
+    "designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md": (
+        "agency_platform"
+    ),
+}
+EXTERNAL_AUTHORITY_LINK_TARGETS = frozenset(
+    {
+        "agency_platform_13_execution_visibility_contract.md",
+        "data_governance_10_data_access_gateway_contract.md",
+        "product_authorization_00_service_and_persistence_contract.md",
+        "research_18_theme_report_agent_runtime_binding.md",
+        "the_agency_platform.md",
+        "the_artifact_graph.md",
+        "the_charter.md",
+        "the_contract_audit.md",
+        "the_data_governance.md",
+        "the_product_authorization.md",
+        "the_skill_management.md",
+        "the_software_delivery.md",
+        "the_task_routing.md",
+        "the_timestamp_semantic.md",
+    }
+)
+_MARKDOWN_LINK = re.compile(r"\]\(([^)#\s]+?\.md)(?:#[^)]*)?\)")
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -57,6 +91,30 @@ def _runtime_release_version(project_root: Path) -> str:
     return str(configuration["project"]["version"])
 
 
+def _document_external_references(
+    source_name: str,
+    body_text: str,
+    packaged_names: frozenset[str],
+) -> list[str]:
+    """Validate link closure and return declared out-of-bundle references."""
+
+    external: set[str] = set()
+    for match in _MARKDOWN_LINK.finditer(body_text):
+        target = match.group(1)
+        if target.startswith(("http://", "https://")):
+            continue
+        target_name = Path(target).name
+        if target_name in packaged_names:
+            continue
+        if target_name in EXTERNAL_AUTHORITY_LINK_TARGETS:
+            external.add(target_name)
+            continue
+        raise RuntimeError(
+            f"unresolvable Design Contract link in {source_name}: {target}"
+        )
+    return sorted(external)
+
+
 def build_design_contract_bundle(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -65,7 +123,10 @@ def build_design_contract_bundle(
 ) -> dict[str, object]:
     """Generate or verify the deterministic standalone contract bundle."""
 
-    documents: list[dict[str, str]] = []
+    packaged_names = frozenset(
+        Path(source_name).name for source_name in CANONICAL_DOCUMENTS
+    )
+    documents: list[dict[str, object]] = []
     expected_files: dict[Path, bytes] = {}
     for source_name in CANONICAL_DOCUMENTS:
         source_path = project_root / source_name
@@ -80,6 +141,15 @@ def build_design_contract_bundle(
                 "source_path": source_name,
                 "package_path": f"agent_runtime/design_contract/{package_name}",
                 "sha256": _sha256_bytes(body),
+                "authority": ADJACENT_DOCUMENT_AUTHORITIES.get(
+                    source_name,
+                    RUNTIME_OWNED_AUTHORITY,
+                ),
+                "external_references": _document_external_references(
+                    source_name,
+                    body.decode("utf-8"),
+                    packaged_names,
+                ),
             }
         )
 

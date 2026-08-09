@@ -213,6 +213,57 @@ def test_target_temporal_cancellation_is_typed_and_acknowledged() -> None:
     assert events[-1].payload_ref == "cancellation-reason:alpha"
 
 
+def test_cancelled_cursor_rejects_new_events_and_stays_snapshot_valid() -> None:
+    cursor = TemporalDurableCursorWorkflow()
+    cursor._workflow_id = "workflow-alpha"
+    cursor._workflow_execution_id = "wf-exec-001"
+    cursor._graph_sha256 = HASH
+    cursor._start_request_sha256 = "b" * 64
+    cursor._current_state = "waiting-review"
+    cursor._terminal_states = {"completed"}
+    cursor._allowed_targets = {
+        "waiting-review": ("completed",),
+        "completed": (),
+    }
+    cancellation = RuntimeCancellationRequest(
+        cancellation_request_id="cancellation-alpha",
+        workflow_execution_id="wf-exec-001",
+        expected_snapshot_ref="runtime-snapshot:alpha",
+        expected_snapshot_sha256=HASH,
+        reason_code="operator-requested",
+        reason_artifact_ref="cancellation-reason:alpha",
+        reason_artifact_sha256=HASH,
+        authorization_decision_ref="authorization-decision:alpha",
+        authorization_decision_sha256=HASH,
+        idempotency_key="cancel-alpha",
+        recorded_at_utc=NOW,
+    )
+    cursor._validate_cancellation(cancellation.as_dict())
+    cursor._cancellation_by_id = cancellation.as_dict()
+    cursor._runtime_status_id = "cancelled"
+
+    with pytest.raises(
+        ValueError,
+        match="cancelled Temporal execution cannot advance",
+    ):
+        cursor._validate_event(
+            {
+                "event_id": "event-approve-001",
+                "event_type": "review_approved",
+                "workflow_execution_id": "wf-exec-001",
+                "expected_state": "waiting-review",
+                "target_state": "completed",
+                "evidence_ref": "evidence:approve-001",
+            }
+        )
+
+    snapshot = cursor.execution_snapshot()
+    assert snapshot["current_state"] == "waiting-review"
+    assert snapshot["runtime_status_id"] == "cancelled"
+    assert snapshot["terminal"] is True
+    assert snapshot["acknowledged_cancellation_id"] == "cancellation-alpha"
+
+
 async def _run_target_temporal_cancellation_integration() -> None:
     environment = await WorkflowEnvironment.start_local(ui=False)
     try:

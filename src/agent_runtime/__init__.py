@@ -36,7 +36,7 @@ from .contracts import (
     WorkflowNodeBinding,
     WorkflowNodeExecutionProfileBinding,
     WorkflowRelease,
-    ExternalEvent,
+    DurableCursorExternalEvent,
     AuthorizationEffect,
     ExecutionAuthorizationBinding,
     ExecutionAuthorizationContextBinding,
@@ -76,7 +76,6 @@ from .durability.durability_workflow_coordination import (
     DurableExecutionCoordinator,
     DurableExecutionProgress,
     DurableExecutionStopReason,
-    DurableWorkflowCursor,
 )
 from .execution.execution_authorization_resolution import (
     ProductAuthorizationContextClient,
@@ -156,7 +155,6 @@ __all__ = [
     "DurableExecutionCoordinator",
     "DurableExecutionProgress",
     "DurableExecutionStopReason",
-    "DurableWorkflowCursor",
     "ExecutionProfileRelease",
     "ExecutionAuthorizationBinding",
     "ExecutionAuthorizationAdmissionResult",
@@ -172,7 +170,7 @@ __all__ = [
     "ExecutionSnapshotToken",
     "ExternalActionAuthorizationEvidence",
     "AuthorizedExternalEvent",
-    "ExternalEvent",
+    "DurableCursorExternalEvent",
     "GatewayAuthorizationObservation",
     "GatewayDecisionEffect",
     "ExternalEventAcknowledgement",

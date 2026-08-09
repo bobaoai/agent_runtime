@@ -40,11 +40,6 @@ class DurableExecutionStopReason(StrEnum):
     DISPATCH_LIMIT = "dispatch_limit"
 
 
-# Temporary import compatibility; the coordinator consumes the full canonical
-# backend contract and no longer defines a second cursor protocol.
-DurableWorkflowCursor = DurableBackendAdapter
-
-
 @runtime_checkable
 class CellModuleActivityBridge(Protocol):
     """Cell-local bridge from a ref-only dispatch to one committed outcome."""
@@ -132,12 +127,12 @@ class DurableExecutionCoordinator:
     def __init__(
         self,
         *,
-        cursor: DurableWorkflowCursor,
+        cursor: DurableBackendAdapter,
         release_registry: RuntimeReleaseRegistry,
         activity_bridge: CellModuleActivityBridge,
     ) -> None:
-        if not isinstance(cursor, DurableWorkflowCursor):
-            raise TypeError("cursor does not implement DurableWorkflowCursor")
+        if not isinstance(cursor, DurableBackendAdapter):
+            raise TypeError("cursor does not implement DurableBackendAdapter")
         if type(release_registry) is not RuntimeReleaseRegistry:
             raise TypeError("release_registry must be RuntimeReleaseRegistry")
         if not isinstance(activity_bridge, CellModuleActivityBridge):
@@ -390,5 +385,4 @@ __all__ = [
     "DurableExecutionCoordinator",
     "DurableExecutionProgress",
     "DurableExecutionStopReason",
-    "DurableWorkflowCursor",
 ]

@@ -119,9 +119,9 @@ def provider_output_schema(
 
 
 def codex_native_output_schema(
-    compiled_static_body: str,
+    registered_output_schema: dict[str, object],
 ) -> dict[str, object]:
-    """Project the task schema onto Codex native Structured Outputs.
+    """Project the registered task schema onto Codex native Structured Outputs.
 
     OpenAI accepts only a JSON Schema subset for strict Structured Outputs.
     Runtime keeps the complete registered task schema authoritative and
@@ -175,7 +175,7 @@ def codex_native_output_schema(
         return projected
 
     projected = transform_json_schema_nodes(
-        provider_output_schema(compiled_static_body),
+        registered_output_schema,
         project_node,
     )
     if not isinstance(projected, dict) or projected.get("type") != "object":
@@ -251,11 +251,18 @@ def normalize_codex_native_output(
     ) -> bool:
         """Return whether null is meaningful in the registered task schema."""
 
-        schema = resolve_local_schema_reference(
-            schema,
-            canonical_schema,
-            seen_refs=seen_refs,
-        )
+        if isinstance(schema, dict):
+            reference = schema.get("$ref")
+            if isinstance(reference, str):
+                if reference in seen_refs:
+                    # A reference cycle cannot introduce a new null allowance.
+                    return False
+                schema = resolve_local_schema_reference(
+                    schema,
+                    canonical_schema,
+                    seen_refs=seen_refs,
+                )
+                seen_refs = seen_refs | {reference}
         if not isinstance(schema, dict):
             return False
         declared_type = schema.get("type")

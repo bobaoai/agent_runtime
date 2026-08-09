@@ -24,7 +24,19 @@ _TOKEN = re.compile(r"^[A-Za-z0-9_.-]{1,255}$")
 
 @dataclass(frozen=True)
 class ExternalEventExecutionSnapshot:
-    """Cell Runtime snapshot used to authorize one external wait transition."""
+    """Ingress-plane read model of one durable execution at wait authorization.
+
+    This record projects the canonical cursor state
+    (durability_topology_definition.ExecutionSnapshot) for external-event
+    ingress and is not a second durability contract: backend_id,
+    backend_execution_id, workflow_execution_id, workflow_id, graph_sha256,
+    and terminal mirror the canonical snapshot, and domain_state_id mirrors
+    its current_state.  The remaining fields carry the host wait vocabulary
+    (runtime_status_id such as "waiting", transition and retry sequences,
+    release refs, wait_policy_ref).  Ingress admits only the "waiting"
+    status, so the cursor's cancellation-acknowledgement fields have no
+    representation here by design.
+    """
 
     record_type: ClassVar[str] = "external_event_execution_snapshot"
 
