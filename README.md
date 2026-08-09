@@ -273,10 +273,12 @@ current executable truth.
 
 ## Current maturity
 
-The repository currently contains working release-registration, provider A/B,
-Temporal recovery, PostgreSQL trace projection, and execution-inspection
-slices. It does not yet contain the final PostgreSQL execution ledger or the
-final live Inspector described above. The shadow `ModuleExecutor` test seam
-must also converge into the canonical `AuthorizedAgentExecutionAdapter` DTOs
-and normalized failure taxonomy before production admission. Those are release
-gates, not implied capabilities.
+The repository currently contains working PostgreSQL release registration and
+execution-ledger implementations, provider A/B, Temporal recovery, and an
+authorized read-only live Inspector over formal Runtime records. A Product host
+must still supply its authentication and authorization assembly; the Runtime
+does not infer those decisions. The shadow `ModuleExecutor` test seam must also
+converge into the canonical `AuthorizedAgentExecutionAdapter` DTOs and
+normalized failure taxonomy before production admission. End-to-end host
+composition and consumer migration remain release gates, not implied
+capabilities.

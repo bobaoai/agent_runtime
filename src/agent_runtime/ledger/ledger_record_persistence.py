@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from threading import RLock
-from typing import Callable, Protocol, runtime_checkable
+from typing import Callable, Iterable, Protocol, runtime_checkable
 
 from ..contracts.registry_workflow_definition import ModuleOutcome
 from ..contracts.ledger_record_definition import (
@@ -148,6 +148,57 @@ class InMemoryRuntimeExecutionRecordStore:
         self._outcomes: dict[tuple[str, str], ModuleOutcome] = {}
         self._invocations: dict[tuple[str, str], InvocationCommitRecord] = {}
         self._active_claims: dict[tuple[str, str, str], tuple[str, str]] = {}
+
+    @classmethod
+    def from_committed_batches(
+        cls,
+        batches: Iterable[RuntimeRecordBatch | LegacyRuntimeRecordBatch],
+        *,
+        execution_output_integrity_check: Callable[[ExecutionOutputRef], bool]
+        | None = None,
+    ) -> "InMemoryRuntimeExecutionRecordStore":
+        """Rebuild validated state and active claims from committed batches."""
+
+        store = cls(
+            execution_output_integrity_check=execution_output_integrity_check,
+        )
+        for batch in batches:
+            store.commit(batch)
+        store._rebuild_active_claims()
+        return store
+
+    def _rebuild_active_claims(self) -> None:
+        """Derive live claim state from append-only start and terminal facts."""
+
+        self._active_claims.clear()
+        starts: dict[tuple[str, str], WorkflowAttemptStartedRecord] = {}
+        for workflow_execution_id, records in self._records.items():
+            for record in records:
+                if isinstance(record, WorkflowAttemptStartedRecord):
+                    starts[(workflow_execution_id, record.attempt_id)] = record
+                    self._active_claims[
+                        (
+                            workflow_execution_id,
+                            record.dispatch_id,
+                            record.variant_id,
+                        )
+                    ] = (record.attempt_id, record.claim_token_hash)
+                    continue
+                if not isinstance(
+                    record,
+                    (WorkflowAttemptRecord, AttemptOrphanedRecord),
+                ):
+                    continue
+                start = starts.get((workflow_execution_id, record.attempt_id))
+                if start is not None:
+                    self._active_claims.pop(
+                        (
+                            workflow_execution_id,
+                            start.dispatch_id,
+                            start.variant_id,
+                        ),
+                        None,
+                    )
 
     def begin_attempt(self, batch: LegacyAttemptBeginBatch) -> AttemptBeginReceipt:
         """Commit the claim boundary before any external operation can start."""

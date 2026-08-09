@@ -18,6 +18,7 @@ test = ["pytest>=8"]
 
 [project.scripts]
 agent-runtime-inspect = "agent_runtime.inspection.inspection_snapshot_exporting:main"
+agent-runtime-live-inspect = "agent_runtime.inspection.inspection_http_serving:main"
 
 [tool.setuptools]
 packages = [

@@ -173,11 +173,27 @@ RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS = (
 
 RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
     RuntimeImplementationBindingRegistration(
+        implementation_binding_id="ledger_postgres_persistence",
+        logical_responsibility_id="ledger",
+        technology_id="postgresql",
+        implementation_source_paths=(
+            "src/agent_runtime/ledger/ledger_postgres_persistence.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
         implementation_binding_id="registry_postgres_persistence",
         logical_responsibility_id="registry",
         technology_id="postgresql",
         implementation_source_paths=(
             "src/agent_runtime/registry/registry_postgres_persistence.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
+        implementation_binding_id="inspection_http_serving",
+        logical_responsibility_id="inspection",
+        technology_id="http",
+        implementation_source_paths=(
+            "src/agent_runtime/inspection/inspection_http_serving.py",
         ),
     ),
     RuntimeImplementationBindingRegistration(
@@ -393,6 +409,13 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "ledger",
+        "postgres",
+        "persistence",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+        implementation_binding_id="ledger_postgres_persistence",
+    ),
+    _source(
+        "ledger",
         "usage",
         "aggregation",
         "designDoc/agent_runtime_00_execution_charter.md",
@@ -561,6 +584,13 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "snapshot",
         "exporting",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+    ),
+    _source(
+        "inspection",
+        "http",
+        "serving",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+        implementation_binding_id="inspection_http_serving",
     ),
 )
 

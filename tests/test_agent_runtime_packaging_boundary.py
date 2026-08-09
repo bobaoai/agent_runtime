@@ -118,6 +118,7 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
     }
     assert configuration["project"]["scripts"] == {
         "agent-runtime-inspect": "agent_runtime.inspection.inspection_snapshot_exporting:main",
+        "agent-runtime-live-inspect": "agent_runtime.inspection.inspection_http_serving:main",
     }
     assert configuration["tool"]["setuptools"]["packages"] == [
         "agent_runtime",
@@ -323,6 +324,8 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
             "claude_agent_sdk",
             "codex_cli",
             "html",
+            "http",
+            "postgresql",
             "postgresql",
             "temporal",
         ],
