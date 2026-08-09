@@ -336,21 +336,23 @@ input. A dispatch resolves to exactly one committed `ModuleOutcome` under its
 variant outputs are recorded as stale. The control plane never branches on
 variant comparison — it carries one resolved Outcome per dispatch.
 
-**Bounded control plane.** Because each dispatch resolves to a single Outcome, a
-Workflow Execution's control lineage is bounded — on the order of tens of
-dispatches, not an unbounded loop. The execution ledger validates each appended
-batch by reconstructing the reference state from that one Execution's own
-committed control facts; reconstruction is linear in those facts. No
-cross-execution or in-process cache is part of this contract; any caching is a
-non-contractual optimization that must never change which committed facts are
-authoritative.
+**Bounded execution and single-source reconstruction.** A Workflow Execution's
+whole committed history — its control facts plus the modest per-call observation
+records — is bounded, on the order of tens of records, because dispatches are
+bounded and each resolves to one Outcome. The execution ledger validates each
+appended batch by reconstructing the reference state from all of that one
+Execution's own committed facts; reconstruction is linear and needs no in-process
+or cross-execution cache. Any caching or storage plane split is a non-contractual
+optimization, unnecessary at this scale, and must never change which committed
+facts are authoritative.
 
-**Two record planes.** Control facts — claims, admissions, `ModuleOutcome`s,
-external-event applications, and finalizations — are bounded per Execution,
-strictly idempotent, and replayed for validation. Observation facts — model-call,
-tool-call, and usage records, variant samples, and stale outputs — are
-high-volume, append-only, retained for variant comparison, and are not replayed
-into the control validator; their idempotency is limited to retry deduplication.
+**Authority versus evidence.** Control facts (claims, admissions,
+`ModuleOutcome`s, external-event applications, finalizations) are authoritative:
+they determine the execution's state. Observation facts (model-call, tool-call,
+and usage records) are evidence — the per-run, per-variant payload for
+evaluation, recorded immutably and read back through the same trace. Both are
+normalized atomic records in one ledger; a denormalized read view is the
+sanctioned way to serve variant comparison, not a second storage plane.
 
 **Idempotency identity.** Idempotent convergence is keyed on a stable content
 hash of an operation's identity fields; a conflicting retry converges on the
