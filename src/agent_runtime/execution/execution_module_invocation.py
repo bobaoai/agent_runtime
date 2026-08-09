@@ -1,9 +1,9 @@
-"""Shadow/test execution path for independently registered Runtime Modules.
+"""Test and Evaluation execution path for registered Runtime Modules.
 
 The service proves the new Module Run, Execution Variant, and Attempt lineage
 without reusing predecessor Module records.  Production and protected-operation
-execution intentionally fail closed until the AR09 authorization coordinator
-and target provider adapters implement the same target-model DTOs.
+paths intentionally fail closed until the AR09 authorization coordinator and
+provider adapters converge on the same target-model DTOs.
 """
 
 from __future__ import annotations
@@ -44,6 +44,9 @@ from ..contracts.ledger_lineage_definition import (
     ModuleUsageObservation,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
+
+
+_MODEL_INVOCATION_OPERATION_IDS = frozenset({"invoke_model", "model_execute"})
 
 
 def _canonical_sha256(payload: Mapping[str, Any] | list[Any]) -> str:
@@ -116,11 +119,17 @@ def run_module(
     ledger: ModuleExecutionLedger,
     clock: Callable[[], str] = _utc_now,
 ) -> ModuleRunResult:
-    """Run one registered Module through the additive shadow/test execution path.
+    """Run one registered Module through the Test/Evaluation execution path.
 
-    The first implementation accepts only isolated ``test`` and ``evaluation``
-    purposes, operation-free Modules, and ``in_process_test`` profiles.  Every
-    production or protected path fails before Executor invocation.
+    The implementation accepts only isolated ``test`` and ``evaluation``
+    purposes. A host may explicitly register an in-process test double or a
+    provider-backed Executor for any transport that the exact Module and
+    Execution Profile both admit. The currently admitted model-backed
+    Test/Evaluation slice is limited to a tool-free, inline, workspace-free,
+    model-tool-free, agent-network-denied invocation. Every other protected
+    operation and every production path still fails before Executor
+    invocation. Provider control-plane connectivity used by the registered
+    transport is not an Agent-visible network capability.
     """
 
     if type(request) is not ModuleExecutionRequest:
@@ -143,9 +152,13 @@ def run_module(
     )
     release_registry.assert_module_execution_allowed(module, request.purpose)
     _assert_module_dependencies_shadow_executable(release_registry, module)
-    if module.declared_operation_ids:
+    unsupported_operation_ids = (
+        set(module.declared_operation_ids) - _MODEL_INVOCATION_OPERATION_IDS
+    )
+    if unsupported_operation_ids:
         raise NotImplementedError(
-            "protected Module operations await AR09 request and grant binding"
+            "protected Module operations await AR09 request and grant binding: "
+            + ", ".join(sorted(unsupported_operation_ids))
         )
     if (
         module.output_resolution_policy is OutputResolutionPolicy.DIRECT_SINGLE
@@ -180,12 +193,10 @@ def run_module(
             variant_request.execution_profile_sha256,
         )
         _assert_profile_shadow_executable(release_registry, profile)
-        if profile.transport_kind != "in_process_test":
-            raise NotImplementedError(
-                "first Module slice admits only in_process_test Executor profiles"
-            )
         if profile.transport_kind not in module.compatible_transport_kinds:
             raise ValueError("Execution Profile transport is incompatible with Module")
+        if module.declared_operation_ids:
+            _assert_model_only_test_evaluation_profile(profile)
         executor = executors.resolve(profile.executor_adapter_id)
         if module.prompt_bundle_ref is not None and (
             variant_request.prompt_envelope_ref is None
@@ -375,6 +386,25 @@ def _assert_profile_shadow_executable(
         ReleaseAdmissionState.ACTIVE,
     }:
         raise PermissionError(f"Execution Profile is not shadow-executable: {state.value}")
+
+
+def _assert_model_only_test_evaluation_profile(
+    profile: ExecutionProfileRelease,
+) -> None:
+    """Admit only the first model-backed Test/Evaluation capability slice."""
+
+    if (
+        profile.execution_mode != "tool_free"
+        or profile.semantic_input_delivery_mode != "inline"
+        or profile.attempt_workspace_policy != "none"
+        or profile.tool_policy
+        or profile.network_policy != "denied"
+    ):
+        raise NotImplementedError(
+            "model-backed Test/Evaluation currently requires tool_free inline "
+            "execution with no Agent-writable Attempt workspace, model-visible "
+            "tools, or Agent-initiated network access"
+        )
 
 
 def _assert_module_dependencies_shadow_executable(

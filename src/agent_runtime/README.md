@@ -388,6 +388,63 @@ content verification, provider A/B adapters, Temporal recovery, and an
 authorized read-only Live Inspector over the formal records. These surfaces
 are implemented and tested; they are no longer listed as future work.
 
+The public `run_module()` Test/Evaluation path now admits explicitly registered
+provider-backed Executors as well as in-process test doubles. The following
+terms describe separate dimensions and must not be used interchangeably:
+
+| Dimension | Question answered | Current values or examples |
+| --- | --- | --- |
+| Execution purpose | Why is this run being performed? | `test`, `evaluation`, `workflow`, `standalone`, `replay` |
+| Provider transport | How is the Executor reached? | `in_process_test`, `claude_agent_sdk`, `codex_cli` |
+| Capability profile | What may the model do and receive? | `execution_mode`, semantic input delivery, Attempt workspace, Gateway tools, and network policy |
+| Runtime admission | May this exact request execute now? | Purpose gate, release state, Module operations, exact profile, and registered Executor must all pass |
+
+`production` is not a `ModuleExecutionPurpose` value. It describes a lifecycle
+and admission scope normally entered through `workflow` or `standalone`; those
+purposes are not admitted by the current public entry point.
+
+### Current `run_module()` admission matrix
+
+| Purpose and Module shape | Capability profile | Registered transport | Current result |
+| --- | --- | --- | --- |
+| `test` or `evaluation`, no protected operation | Exact registered profile | Compatible in-process or Provider transport | Admitted, subject to release and Executor checks |
+| `test` or `evaluation`, model-only operation (`invoke_model` or `model_execute`) | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible, explicitly registered Provider transport | Admitted; live Claude Agent SDK and Codex CLI smoke tests use this row |
+| `test` or `evaluation`, model-only operation | `agent`, writable draft workspace, Gateway tools, or broader network capability | Any | Rejected before Provider invocation by the current first-slice gate |
+| `test` or `evaluation`, any other protected operation | Any | Any | Rejected before Provider invocation pending request/grant binding |
+| `workflow`, `standalone`, or `replay` | Any | Any | Rejected at the current purpose gate before transport resolution or Provider invocation |
+
+The restrictive second row defines only the **currently admitted model-backed
+Test/Evaluation slice**; it is not the general definition of `evaluation` and
+does not mean every future Evaluation must be tool-free. Agent-capable adapters
+already exist for Claude and Codex inline draft workspaces, and for Claude
+Gateway reads, but `run_module()` does not yet admit those profiles for a
+Module that declares model invocation. Adapter implementation and public-entry
+admission are separate facts.
+
+| Capability profile | Semantic input | Attempt workspace | Model-visible tools | Agent network | Adapter status | Model-backed `run_module()` admission |
+| --- | --- | --- | --- | --- | --- | --- |
+| Tool-free inline | `inline` | `none` | None | `denied` | Claude SDK and Codex CLI implemented | `test` / `evaluation` admitted |
+| Agent with private drafts | `inline` | `own_draft_read_write` | Draft-only local capabilities | `denied` | Claude SDK and Codex CLI implemented | Not yet admitted |
+| Agent with governed reads | `gateway_read` | `none` unless separately declared | Registered Runtime Gateway tools | `gateway_only` | Claude SDK implemented | Not yet admitted |
+| Agent with direct sandboxed egress | Profile-specific | Profile-specific | Profile-specific | `direct_sandboxed` | No current public-entry slice | Not admitted |
+
+In that restricted profile, workspace `none` means the model receives no
+writable Attempt draft capability; the Runtime may still create an isolated
+Attempt directory as an execution boundary. An empty tool policy means no
+model-visible tools. Network `denied` means no Agent-initiated general outbound
+or tool network access; the registered SDK/CLI transport may still connect to
+its model Provider control plane. Transport connectivity is not an Agent
+capability.
+
+Opt-in live smoke tests exercise both Claude Agent SDK and Codex CLI through
+this exact entry point.
+
+```bash
+RUN_PROVIDER_INTEGRATION=1 python -m pytest \
+  tests/test_agent_runtime_native_structured_output.py \
+  -k 'live_codex or live_claude'
+```
+
 The development version remains appropriate because a Product host must still
 supply and validate its authentication, authorization, governed-data, and
 deployment assembly. The shadow `ModuleExecutor` compatibility seam must also
