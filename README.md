@@ -1,20 +1,23 @@
 # Agent Runtime
 
-Agent Runtime is an extensible, domain-neutral Python package for building
-reliable AI task-execution systems. It can support research pipelines, content
-workflows, support automation, operational agents, evaluation systems, or any
-other application that needs repeatable multi-step work. A host application or
-plugin supplies the task-specific Modules, Workflow graph, tools, policies, and
-business meaning; the Runtime core stays reusable across domains.
+Agent Runtime is the Agent execution and management runtime at the core of the
+broader Agency framework. It occupies a role similar to LangGraph's stateful
+Agent orchestration layer: applications register versioned Agent capabilities,
+connect them into durable Workflows, execute them through model and tool
+providers, and inspect every run from an authoritative Execution Ledger.
 
-Runtime provides the shared infrastructure: immutable Module and Workflow
-registration, provider-neutral invocation, durable execution and recovery, an
-authoritative Execution Ledger, and authorized inspection. A Module can be a
-model-backed agent, deterministic function, human task, or external service.
-Roles such as Writer, Router, Verifier, Reviewer, or Expert are examples a
-domain plugin may define, not concepts built into the package. Runtime instead
-guarantees that the exact registered version runs, every attempt is recorded,
-failed work can be recovered, and authorized users can inspect what happened.
+In Runtime terminology, an Agent capability is registered as a Module, a graph
+of Modules is a Workflow, and each provider invocation or retry is an Attempt.
+Runtime pins the exact registered versions used by an execution, coordinates
+state transitions and recovery, records complete lineage, and exposes
+authorized inspection of what happened.
+
+Agent Runtime is also an independently installable, domain-neutral Python
+package. The Agency framework—or another host application—extends it with
+domain plugins that supply roles, prompts, tools, policies, and business
+meaning. Writer, Router, Verifier, Reviewer, or Expert are therefore possible
+Agent roles built on Runtime, not hard-coded concepts in Runtime itself. A
+Module may also wrap a deterministic function, human task, or external service.
 
 ## Logical responsibility flow
 
