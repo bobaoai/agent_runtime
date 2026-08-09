@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +18,9 @@ from agent_runtime.registry.registry_release_registration import (
     RuntimeReleaseBundle,
     RuntimeReleaseRegistry,
 )
-from agent_runtime.contracts.execution_module_definition import ModuleExecutorRequest
+from agent_runtime.contracts.invocation_adapter_definition import (
+    AuthorizedAgentExecutionRequest,
+)
 from agent_runtime.execution.execution_content_staging import InMemoryCellArtifactStore
 from agent_runtime.invocation.invocation_context_preparation import (
     InvocationExecutionExpectation,
@@ -152,19 +155,46 @@ def test_module_compiler_uses_only_fixed_module_export_files(tmp_path: Path) -> 
         idempotency_key="prompt_envelope_synthetic",
     )
     prepared = prepare_registered_invocation_context(
-        request=ModuleExecutorRequest(
+        request=AuthorizedAgentExecutionRequest.build(
+            workflow_execution_id=None,
+            isolated_scope_ref="scope-ref:synthetic-001",
+            isolated_scope_sha256="3" * 64,
             module_run_id="module_run_synthetic_001",
             variant_id="variant_synthetic_001",
             attempt_id="attempt_synthetic_001",
-            module=compiled.module,
-            execution_profile=compiled.execution_profile,
-            input_package_ref="artifact-ref:input-package-001",
-            input_package_sha256="2" * 64,
-            inputs=(),
+            module_id=compiled.module.module_id,
+            module_release_ref=compiled.module.release_ref,
+            module_release_sha256=compiled.module.release_sha256,
+            execution_profile_id=compiled.execution_profile.execution_profile_id,
+            execution_profile_ref=compiled.execution_profile.release_ref,
+            execution_profile_sha256=compiled.execution_profile.release_sha256,
+            attempt_begin_receipt_ref="attempt-begin:attempt_synthetic_001",
+            attempt_begin_receipt_sha256="4" * 64,
             prompt_envelope_ref=prompt_ref.artifact_ref,
             prompt_envelope_sha256=prompt_ref.artifact_sha256,
-            isolated_scope_ref="scope-ref:synthetic-001",
-            isolated_scope_sha256="3" * 64,
+            output_schema_ref=compiled.module.output_schema_ref,
+            output_schema_sha256=compiled.module.output_schema_sha256,
+            execution_authorization_binding_ref=(
+                "runtime-authorization:binding_synthetic_001"
+            ),
+            execution_authorization_binding_sha256="5" * 64,
+            protected_operation_intent_ref=(
+                "runtime-authorization:intent_synthetic_001"
+            ),
+            protected_operation_intent_sha256="6" * 64,
+            product_operation_decision_ref="product-decision:synthetic_001",
+            product_operation_decision_sha256="7" * 64,
+            gateway_authorization_observation_ref=(
+                "runtime-authorization:observation_synthetic_001"
+            ),
+            gateway_authorization_observation_sha256="8" * 64,
+            operation_grant_ref=None,
+            operation_grant_sha256=None,
+            grant_disposition_ref=None,
+            input_closure_sha256=hashlib.sha256(b"[]").hexdigest(),
+            data_use_purpose_id="module_test_execution",
+            authorized_inputs=(),
+            idempotency_key="idempotency_synthetic_001",
         ),
         release_registry=registry,
         artifact_host=artifact_host,

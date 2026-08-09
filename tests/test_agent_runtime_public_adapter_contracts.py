@@ -91,7 +91,8 @@ def _provider_descriptor() -> AgentExecutionAdapterDescriptor:
         adapter_id="adapter_synthetic",
         adapter_revision="revision-v1",
         provider_id="provider_synthetic",
-        transport_kind="sdk",
+        transport_family="sdk",
+        transport_kind="synthetic_sdk",
         runtime_package_id="runtime_provider_synthetic",
         runtime_package_version="0.1.0",
         supported_context_modes=("stateless", "resume"),
@@ -100,6 +101,9 @@ def _provider_descriptor() -> AgentExecutionAdapterDescriptor:
             "native_structured_output",
         ),
         supported_read_isolation_modes=("entitled_refs",),
+        supported_execution_modes=("tool_free", "agent"),
+        supported_input_delivery_modes=("inline",),
+        supported_network_policies=("denied",),
         supports_dynamic_operation_authorization=True,
         admission_state="conformance_tested",
     )
@@ -146,6 +150,8 @@ def _provider_failure() -> AgentExecutionFailure:
 def _authorized_provider_request() -> AuthorizedAgentExecutionRequest:
     return AuthorizedAgentExecutionRequest.build(
         workflow_execution_id="execution_synthetic_001",
+        isolated_scope_ref=None,
+        isolated_scope_sha256=None,
         module_run_id="module_synthetic_001",
         variant_id="variant_synthetic_001",
         attempt_id="attempt_synthetic_001",
@@ -163,16 +169,17 @@ def _authorized_provider_request() -> AuthorizedAgentExecutionRequest:
         output_schema_sha256="e" * 64,
         execution_authorization_binding_ref="execution-authorization-binding:binding_001",
         execution_authorization_binding_sha256="1" * 64,
-        operation_authorization_request_ref="operation-authorization-request:request_001",
-        operation_authorization_request_sha256="2" * 64,
-        product_authorization_result_ref="product-authorization-result:result_001",
-        product_authorization_result_sha256="3" * 64,
-        operation_authorization_binding_ref="operation-authorization-binding:binding_001",
-        operation_authorization_binding_sha256="4" * 64,
+        protected_operation_intent_ref="protected-operation-intent:intent_001",
+        protected_operation_intent_sha256="2" * 64,
+        product_operation_decision_ref="product-operation-decision:decision_001",
+        product_operation_decision_sha256="3" * 64,
+        gateway_authorization_observation_ref=(
+            "gateway-authorization-observation:observation_001"
+        ),
+        gateway_authorization_observation_sha256="4" * 64,
         operation_grant_ref="operation-grant:grant_001",
         operation_grant_sha256="5" * 64,
-        operation_grant_binding_ref="operation-grant-binding:binding_001",
-        operation_grant_binding_sha256="6" * 64,
+        grant_disposition_ref="operation-grant-disposition:disposition_001",
         input_closure_sha256="7" * 64,
         data_use_purpose_id="synthetic_invoke",
         authorized_inputs=(_authorized_execution_input(),),
@@ -192,38 +199,145 @@ def test_canonical_adapter_request_binds_product_and_runtime_authority() -> None
     )
 
 
-def test_ordinary_adapter_request_validates_without_single_use_grant() -> None:
+def _request_fields_without_hash() -> dict[str, object]:
     granted = _authorized_provider_request()
-    fields_without_hash = {
+    return {
         field.name: getattr(granted, field.name)
         for field in fields(type(granted))
         if field.name != "request_sha256"
     }
+
+
+def test_ordinary_adapter_request_validates_without_single_use_grant() -> None:
+    fields_without_hash = _request_fields_without_hash()
     fields_without_hash.update(
         operation_grant_ref=None,
         operation_grant_sha256=None,
-        operation_grant_binding_ref=None,
-        operation_grant_binding_sha256=None,
+        grant_disposition_ref=None,
     )
 
     ordinary = AuthorizedAgentExecutionRequest.build(**fields_without_hash)
 
     ordinary.validate()
     assert ordinary.operation_grant_ref is None
-    assert ordinary.operation_grant_binding_ref is None
+    assert ordinary.grant_disposition_ref is None
 
 
 def test_adapter_request_rejects_partial_high_risk_grant_binding() -> None:
-    granted = _authorized_provider_request()
-    fields_without_hash = {
-        field.name: getattr(granted, field.name)
-        for field in fields(type(granted))
-        if field.name != "request_sha256"
-    }
-    fields_without_hash["operation_grant_binding_sha256"] = None
+    fields_without_hash = _request_fields_without_hash()
+    fields_without_hash["grant_disposition_ref"] = None
 
     with pytest.raises(ValueError, match="operation grant ref, hash"):
         AuthorizedAgentExecutionRequest.build(**fields_without_hash)
+
+
+def test_operation_free_request_validates_with_empty_evidence_groups() -> None:
+    fields_without_hash = _request_fields_without_hash()
+    fields_without_hash.update(
+        workflow_execution_id=None,
+        isolated_scope_ref="scope-ref:isolated-001",
+        isolated_scope_sha256="9" * 64,
+        execution_authorization_binding_ref=None,
+        execution_authorization_binding_sha256=None,
+        protected_operation_intent_ref=None,
+        protected_operation_intent_sha256=None,
+        product_operation_decision_ref=None,
+        product_operation_decision_sha256=None,
+        gateway_authorization_observation_ref=None,
+        gateway_authorization_observation_sha256=None,
+        operation_grant_ref=None,
+        operation_grant_sha256=None,
+        grant_disposition_ref=None,
+    )
+
+    request = AuthorizedAgentExecutionRequest.build(**fields_without_hash)
+
+    assert request.has_operation_evidence is False
+    assert request.workflow_execution_id is None
+    assert request.isolated_scope_ref == "scope-ref:isolated-001"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    (
+        (
+            {"execution_authorization_binding_sha256": None},
+            "execution authorization binding evidence",
+        ),
+        (
+            {"protected_operation_intent_sha256": None},
+            "operation decision evidence",
+        ),
+        (
+            {"gateway_authorization_observation_ref": None},
+            "operation decision evidence",
+        ),
+        (
+            {
+                "execution_authorization_binding_ref": None,
+                "execution_authorization_binding_sha256": None,
+            },
+            "requires the execution",
+        ),
+        (
+            {
+                "protected_operation_intent_ref": None,
+                "protected_operation_intent_sha256": None,
+                "product_operation_decision_ref": None,
+                "product_operation_decision_sha256": None,
+                "gateway_authorization_observation_ref": None,
+                "gateway_authorization_observation_sha256": None,
+            },
+            "grant requires the operation decision",
+        ),
+    ),
+)
+def test_adapter_request_rejects_incoherent_evidence_chains(
+    overrides: dict[str, object],
+    match: str,
+) -> None:
+    fields_without_hash = _request_fields_without_hash()
+    fields_without_hash.update(overrides)
+
+    with pytest.raises(ValueError, match=match):
+        AuthorizedAgentExecutionRequest.build(**fields_without_hash)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {
+            "isolated_scope_ref": "scope-ref:isolated-001",
+            "isolated_scope_sha256": "9" * 64,
+        },
+        {"workflow_execution_id": None},
+        {"isolated_scope_ref": "scope-ref:isolated-001"},
+    ),
+)
+def test_adapter_request_requires_exactly_one_execution_scope(
+    overrides: dict[str, object],
+) -> None:
+    fields_without_hash = _request_fields_without_hash()
+    fields_without_hash.update(overrides)
+
+    with pytest.raises(ValueError, match="scope"):
+        AuthorizedAgentExecutionRequest.build(**fields_without_hash)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_values"),
+    (
+        ("supported_execution_modes", ("shell_everything",)),
+        ("supported_input_delivery_modes", ("ambient_filesystem",)),
+        ("supported_network_policies", ("unrestricted",)),
+    ),
+)
+def test_descriptor_rejects_capability_values_outside_the_contract(
+    field_name: str,
+    invalid_values: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match=field_name):
+        replace(_provider_descriptor(), **{field_name: invalid_values}).validate()
 
 
 @pytest.mark.parametrize("local_handle", ("../secret", "workspace/../secret", "/secret"))
@@ -394,26 +508,10 @@ def test_cancellation_requires_authorized_artifact_and_hash() -> None:
 
 
 def test_provider_descriptor_and_context_reject_implicit_authority() -> None:
-    descriptor = AgentExecutionAdapterDescriptor(
-        adapter_contract_version="v1",
-        adapter_id="adapter_synthetic",
-        adapter_revision="revision-v1",
-        provider_id="provider_synthetic",
-        transport_kind="sdk",
-        runtime_package_id="runtime_provider_synthetic",
-        runtime_package_version="0.1.0",
-        supported_context_modes=("stateless", "resume"),
-        supported_output_constraint_modes=(
-            "prompt_only_json",
-            "native_structured_output",
-        ),
-        supported_read_isolation_modes=("entitled_refs",),
-        supports_dynamic_operation_authorization=True,
-        admission_state="conformance_tested",
-    )
+    descriptor = _provider_descriptor()
     descriptor.validate()
-    with pytest.raises(ValueError, match="transport_kind"):
-        replace(descriptor, transport_kind="shell_string").validate()
+    with pytest.raises(ValueError, match="transport_family"):
+        replace(descriptor, transport_family="shell_string").validate()
 
     context = AdapterContextRequest(
         mode="resume",
@@ -837,11 +935,10 @@ def test_provider_result_ignores_shadowed_nested_validators(
         "prompt_envelope_sha256",
         "output_schema_sha256",
         "execution_authorization_binding_sha256",
-        "operation_authorization_request_sha256",
-        "product_authorization_result_sha256",
-        "operation_authorization_binding_sha256",
+        "protected_operation_intent_sha256",
+        "product_operation_decision_sha256",
+        "gateway_authorization_observation_sha256",
         "operation_grant_sha256",
-        "operation_grant_binding_sha256",
         "input_closure_sha256",
         "request_sha256",
     ),

@@ -83,12 +83,15 @@ from .execution.execution_authorization_resolution import (
     ProductAuthorizationContextClient,
     ProductOperationAuthorizationClient,
 )
-from .invocation.invocation_model_invocation import (
-    ModelExecutionAuthorization,
-    ModelExecutionDenied,
-    ModelExecutionGateway,
-    ModelExecutionGatewayRequest,
-    ModelExecutionGatewayResult,
+from .contracts.invocation_adapter_definition import (
+    AuthorizedAgentExecutionAdapter,
+    AuthorizedAgentExecutionHost,
+    AuthorizedAgentExecutionRequest,
+    AuthorizedOperationReceipt,
+    AgentExecutionAdapterDescriptor,
+    AgentExecutionFailure,
+    AgentExecutionResult,
+    OutputSubmission,
 )
 from .execution.execution_operation_resolution import RuntimeProtectedOperationClient
 from .execution.execution_event_ingestion import (
@@ -107,14 +110,15 @@ from .contracts.execution_event_definition import (
 from .ledger.ledger_lineage_recording import InMemoryModuleExecutionLedger
 from .contracts.execution_module_definition import (
     ModuleExecutionRequest,
-    ModuleExecutorResult,
     ModuleInputBinding,
     ModuleOutputBinding,
     ModuleRunResult,
     ModuleVariantRequest,
 )
 from .execution.execution_module_invocation import (
-    ModuleExecutorRegistry,
+    AgentExecutionAdapterRegistry,
+    ModuleExecutionAuthority,
+    isolated_execution_scope_id,
     run_module,
 )
 from .contracts.ledger_lineage_definition import ModuleUsageObservation
@@ -143,9 +147,17 @@ from .ledger.ledger_usage_aggregation import aggregate_model_usage
 
 __all__ = [
     "AgenticWorkflowConformancePackage",
+    "AgentExecutionAdapterDescriptor",
+    "AgentExecutionAdapterRegistry",
+    "AgentExecutionFailure",
+    "AgentExecutionResult",
     "AgentRuntimeProductHostApi",
     "AuthorizationAdapter",
     "AuthorizationEffect",
+    "AuthorizedAgentExecutionAdapter",
+    "AuthorizedAgentExecutionHost",
+    "AuthorizedAgentExecutionRequest",
+    "AuthorizedOperationReceipt",
     "BoundOperationAuthorization",
     "ModuleInputProjection",
     "ModuleInputProjectionContract",
@@ -184,10 +196,9 @@ __all__ = [
     "InMemoryExecutionAuthorizationLedger",
     "InMemoryExternalEventIngress",
     "ModuleEntryPolicy",
+    "ModuleExecutionAuthority",
     "ModuleExecutionPurpose",
     "ModuleExecutionRequest",
-    "ModuleExecutorRegistry",
-    "ModuleExecutorResult",
     "ModuleInputBinding",
     "ModuleKind",
     "PromptComponentKind",
@@ -197,12 +208,8 @@ __all__ = [
     "ModuleRunResult",
     "ModuleUsageObservation",
     "ModuleVariantRequest",
-    "ModelExecutionAuthorization",
-    "ModelExecutionDenied",
-    "ModelExecutionGateway",
-    "ModelExecutionGatewayRequest",
-    "ModelExecutionGatewayResult",
     "OutputResolutionPolicy",
+    "OutputSubmission",
     "OperationAuthorizationRequest",
     "OperationAuthorizationQuery",
     "OperationAuthorizationResolution",
@@ -247,6 +254,7 @@ __all__ = [
     "WorkflowRelease",
     "WorkflowRuntimeRegistry",
     "aggregate_model_usage",
+    "isolated_execution_scope_id",
     "register_runtime_plugin",
     "register_runtime_module_plugin",
     "run_module",

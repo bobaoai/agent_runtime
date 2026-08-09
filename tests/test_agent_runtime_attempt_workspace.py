@@ -255,7 +255,7 @@ def test_provider_adapters_hold_lease_around_provider_entry_and_classify_conflic
         assert len(conflict_handlers) >= 1, file_name
         assert any(
             isinstance(value, ast.Constant)
-            and value.value == "workspace_initialization_failure"
+            and value.value == "dependency_unavailable"
             for handler in conflict_handlers
             for value in ast.walk(handler)
         ), file_name

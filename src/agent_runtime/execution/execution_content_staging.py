@@ -256,6 +256,35 @@ class InMemoryCellArtifactStore:
         detail.validate()
         return detail
 
+    def commit_attempt_trace(
+        self,
+        *,
+        module_run_id: str,
+        variant_id: str,
+        attempt_id: str,
+        content: bytes,
+        media_type: str,
+    ) -> tuple[str, str]:
+        """Commit one bounded Cell-local provider trace for an Attempt."""
+
+        schema_ref = "schema:module_attempt_trace@v1"
+        resolved = self.put_bytes(
+            artifact_kind_id="module_attempt_trace",
+            schema_version="module_attempt_trace_v1",
+            schema_ref=schema_ref,
+            schema_sha256=_sha256(schema_ref.encode("utf-8")),
+            media_type=media_type,
+            content=content,
+            idempotency_key=_stable_id(
+                "module_attempt_trace_commit",
+                module_run_id,
+                variant_id,
+                attempt_id,
+            ),
+            logical_name="attempt_trace",
+        )
+        return (resolved.artifact_ref, resolved.artifact_sha256)
+
 
 __all__ = [
     "InMemoryCellArtifactStore",

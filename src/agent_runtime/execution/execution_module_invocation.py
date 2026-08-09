@@ -1,31 +1,48 @@
-"""Test and Evaluation execution path for registered Runtime Modules.
+"""Authorization-enforcing Test and Evaluation execution kernel.
 
-The service proves the new Module Run, Execution Variant, and Attempt lineage
-without reusing predecessor Module records.  Production and protected-operation
-paths intentionally fail closed until the AR09 authorization coordinator and
-provider adapters converge on the same target-model DTOs.
+One canonical adapter contract carries every Module invocation. A Module that
+declares a model operation requires committed AR09 authorization evidence
+resolved before the provider transport is entered; the committed
+execution-authorization fence is re-read inside the same atomic commit that
+makes outputs authoritative. Production purposes still fail closed before any
+adapter resolution.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
 from typing import Any, Callable, Mapping
 
 from ..contracts.registry_contract_validation import validate_id
+from ..contracts.execution_authorization_definition import (
+    ExecutionAuthorizationContextBinding,
+    ExecutionAuthorizationFence,
+    ExecutionAuthorizationFenceState,
+    GatewayAuthorizationObservation,
+    GatewayDecisionEffect,
+    OperationAuthorizationQuery,
+    ProductOperationDecision,
+    ProtectedOperationIntent,
+)
 from ..contracts.execution_module_definition import (
     ModuleExecutionLedger,
     ModuleExecutionRequest,
-    ModuleExecutor,
-    ModuleExecutorFailure,
-    ModuleExecutorRequest,
-    ModuleExecutorResult,
-    ModuleFailureDetailBinding,
-    ModuleInputBinding,
     ModuleOutputBinding,
     ModuleRunResult,
     ModuleVariantRequest,
+)
+from ..contracts.invocation_adapter_definition import (
+    AgentExecutionAdapterDescriptor,
+    AgentExecutionResult,
+    AuthorizedAgentExecutionAdapter,
+    AuthorizedAgentExecutionRequest,
+    AuthorizedExecutionInput,
+    AuthorizedOperationReceipt,
+    OutputSubmission,
+    ProviderOperationIntent,
 )
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
@@ -43,10 +60,14 @@ from ..contracts.ledger_lineage_definition import (
     ModuleRunRecord,
     ModuleUsageObservation,
 )
+from ..invocation.invocation_tool_definition import ModuleArtifactHost
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
+from .execution_authorization_coordination import ExecutionAuthorizationController
+from .execution_authorization_resolution import ProductOperationAuthorizationClient
 
 
 _MODEL_INVOCATION_OPERATION_IDS = frozenset({"invoke_model", "model_execute"})
+_IN_PROCESS_TRANSPORT_KIND = "in_process_test"
 
 
 def _canonical_sha256(payload: Mapping[str, Any] | list[Any]) -> str:
@@ -64,72 +85,190 @@ def _stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_{digest}"
 
 
-def _runtime_failure_class(exc: Exception) -> str:
-    """Normalize Python exceptions into bounded Runtime failure taxonomy."""
-
-    if isinstance(exc, TimeoutError):
-        return "timeout"
-    if isinstance(exc, PermissionError):
-        return "permission_denied"
-    if isinstance(exc, ValueError):
-        return "validation_error"
-    if isinstance(exc, TypeError):
-        return "type_error"
-    if isinstance(exc, RuntimeError):
-        return "runtime_error"
-    return "executor_failure"
-
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
         "+00:00", "Z"
     )
 
 
-class ModuleExecutorRegistry:
-    """Duplicate-safe registry keyed by exact adapter ID."""
+def isolated_execution_scope_id(
+    isolated_scope_ref: str,
+    isolated_scope_sha256: str,
+) -> str:
+    """Derive the deterministic execution scope identity of one isolated run.
+
+    AR09 authority records carry this identity in their pre-split
+    ``workflow_execution_id`` field; a caller never fabricates a Workflow
+    Execution for an isolated Module Run.
+    """
+
+    return _stable_id("isolated_scope", isolated_scope_ref, isolated_scope_sha256)
+
+
+def _data_use_purpose_id(purpose: ModuleExecutionPurpose) -> str:
+    return f"module_{purpose.value}_execution"
+
+
+class AgentExecutionAdapterRegistry:
+    """Duplicate-safe registry keyed by exact adapter ID and revision."""
 
     def __init__(self) -> None:
-        self._executors: dict[str, ModuleExecutor] = {}
+        self._adapters: dict[tuple[str, str], AuthorizedAgentExecutionAdapter] = {}
 
-    def register(self, executor_adapter_id: str, executor: ModuleExecutor) -> None:
-        """Register one exact adapter ID and reject duplicate ownership."""
+    def register(self, adapter: AuthorizedAgentExecutionAdapter) -> None:
+        """Register one adapter under its exact descriptor identity."""
 
-        validate_id("executor_adapter_id", executor_adapter_id)
-        if executor_adapter_id in self._executors:
-            raise ValueError(f"Executor already registered: {executor_adapter_id}")
-        if not callable(getattr(executor, "execute", None)):
-            raise ValueError("Executor must implement execute(request)")
-        self._executors[executor_adapter_id] = executor
+        descriptor = getattr(adapter, "descriptor", None)
+        if type(descriptor) is not AgentExecutionAdapterDescriptor:
+            raise ValueError("adapter must expose an exact descriptor")
+        descriptor.validate()
+        if not callable(getattr(adapter, "execute", None)):
+            raise ValueError("adapter must implement execute(request, host)")
+        key = (descriptor.adapter_id, descriptor.adapter_revision)
+        if key in self._adapters:
+            raise ValueError(
+                f"adapter already registered: {key[0]}@{key[1]}"
+            )
+        self._adapters[key] = adapter
 
-    def resolve(self, executor_adapter_id: str) -> ModuleExecutor:
-        """Resolve a previously registered Executor by exact adapter ID."""
+    def resolve(
+        self,
+        adapter_id: str,
+        adapter_revision: str,
+    ) -> AuthorizedAgentExecutionAdapter:
+        """Resolve one registered adapter by exact ID and revision."""
 
+        validate_id("adapter_id", adapter_id)
         try:
-            return self._executors[executor_adapter_id]
+            return self._adapters[(adapter_id, adapter_revision)]
         except KeyError as exc:
-            raise KeyError(f"unknown Module Executor: {executor_adapter_id}") from exc
+            raise KeyError(
+                f"unknown Agent execution adapter: {adapter_id}@{adapter_revision}"
+            ) from exc
+
+
+@dataclass(frozen=True)
+class ModuleExecutionAuthority:
+    """AR09 authority surface required for protected Module execution."""
+
+    controller: ExecutionAuthorizationController
+    binding: ExecutionAuthorizationContextBinding
+    authorization_client: ProductOperationAuthorizationClient
+    enforcing_gateway_id: str
+    environment_id: str
+
+    def validate(self) -> None:
+        """Validate the authority closure without calling the Product port."""
+
+        if type(self.controller) is not ExecutionAuthorizationController:
+            raise ValueError(
+                "controller must be an exact ExecutionAuthorizationController"
+            )
+        if type(self.binding) is not ExecutionAuthorizationContextBinding:
+            raise ValueError(
+                "binding must be an exact ExecutionAuthorizationContextBinding"
+            )
+        self.binding.validate()
+        if not callable(
+            getattr(self.authorization_client, "authorize_operation", None)
+        ):
+            raise ValueError(
+                "authorization_client must implement authorize_operation"
+            )
+
+
+@dataclass(frozen=True)
+class _AttemptAuthorizationEvidence:
+    """Committed AR09 evidence resolved before one provider invocation."""
+
+    intent: ProtectedOperationIntent
+    decision: ProductOperationDecision
+    observation: GatewayAuthorizationObservation
+    allowed: bool
+
+
+class _AttemptExecutionHost:
+    """Request-bound host: authorized reads in, staged non-authoritative bytes out."""
+
+    def __init__(
+        self,
+        *,
+        request: AuthorizedAgentExecutionRequest,
+        artifact_host: ModuleArtifactHost,
+    ) -> None:
+        self._artifact_host = artifact_host
+        self._inputs_by_handle = {
+            item.local_handle: item for item in request.authorized_inputs
+        }
+        self._staged: dict[str, tuple[OutputSubmission, bytes]] = {}
+
+    def read_authorized_input(self, local_handle: str) -> bytes:
+        entry = self._inputs_by_handle.get(local_handle)
+        if entry is None:
+            raise PermissionError(
+                f"input handle is outside the authorized request table: {local_handle}"
+            )
+        content = self._artifact_host.read_bytes(entry.input_ref, entry.input_sha256)
+        if hashlib.sha256(content).hexdigest() != entry.input_sha256:
+            raise ValueError("authorized input content hash mismatch")
+        return content
+
+    def stage_output_bytes(
+        self,
+        submission: OutputSubmission,
+        content: bytes,
+    ) -> None:
+        if type(submission) is not OutputSubmission:
+            raise ValueError("submission must be an exact OutputSubmission")
+        submission.validate()
+        if type(content) is not bytes:
+            raise ValueError("staged output content must be bytes")
+        if submission.output_slot_id in self._staged:
+            raise ValueError(
+                f"output slot already staged: {submission.output_slot_id}"
+            )
+        self._staged[submission.output_slot_id] = (submission, content)
+
+    def authorize_operation(
+        self,
+        request: ProviderOperationIntent,
+    ) -> AuthorizedOperationReceipt:
+        if type(request) is not ProviderOperationIntent:
+            raise ValueError("request must be an exact ProviderOperationIntent")
+        request.validate()
+        raise PermissionError(
+            "dynamic operation authorization awaits the Gateway capability slice"
+        )
+
+    def staged_output(self, output_slot_id: str) -> bytes:
+        try:
+            return self._staged[output_slot_id][1]
+        except KeyError as exc:
+            raise ValueError(
+                f"adapter reported an unstaged output slot: {output_slot_id}"
+            ) from exc
 
 
 def run_module(
     request: ModuleExecutionRequest,
     *,
     release_registry: RuntimeReleaseRegistry,
-    executors: ModuleExecutorRegistry,
+    adapters: AgentExecutionAdapterRegistry,
+    artifact_host: ModuleArtifactHost,
     ledger: ModuleExecutionLedger,
+    authority: ModuleExecutionAuthority | None = None,
     clock: Callable[[], str] = _utc_now,
 ) -> ModuleRunResult:
-    """Run one registered Module through the Test/Evaluation execution path.
+    """Run one registered Module through the Test/Evaluation execution kernel.
 
-    The implementation accepts only isolated ``test`` and ``evaluation``
-    purposes. A host may explicitly register an in-process test double or a
-    provider-backed Executor for any transport that the exact Module and
-    Execution Profile both admit. The currently admitted model-backed
-    Test/Evaluation slice is limited to a tool-free, inline, workspace-free,
-    model-tool-free, agent-network-denied invocation. Every other protected
-    operation and every production path still fails before Executor
-    invocation. Provider control-plane connectivity used by the registered
-    transport is not an Agent-visible network capability.
+    The kernel accepts only isolated ``test`` and ``evaluation`` purposes. A
+    Module that declares a model operation requires ``authority``; its AR09
+    binding, fence, protected-operation intent, and Product operation decision
+    are resolved and validated before any provider transport is entered, and
+    the committed fence is re-read inside the atomic finalization that makes
+    outputs authoritative. Empty authorization evidence is admissible only for
+    the operation-free ``in_process`` conjunction. Every other protected
+    operation and every production purpose fails before adapter resolution.
     """
 
     if type(request) is not ModuleExecutionRequest:
@@ -160,6 +299,18 @@ def run_module(
             "protected Module operations await AR09 request and grant binding: "
             + ", ".join(sorted(unsupported_operation_ids))
         )
+    if len(module.declared_operation_ids) > 1:
+        raise ValueError(
+            "the model-backed slice admits exactly one declared model operation"
+        )
+    if module.declared_operation_ids:
+        if authority is None:
+            raise PermissionError(
+                "a Module that declares a model operation requires a "
+                "module execution authority"
+            )
+        authority.validate()
+        _assert_authority_binding_closure(authority.binding, request)
     if (
         module.output_resolution_policy is OutputResolutionPolicy.DIRECT_SINGLE
         and len(request.variants) != 1
@@ -184,7 +335,7 @@ def run_module(
     )
 
     resolved_profiles: list[ExecutionProfileRelease] = []
-    resolved_executors: list[ModuleExecutor] = []
+    resolved_adapters: list[AuthorizedAgentExecutionAdapter] = []
     variant_records: list[ModuleExecutionVariantRecord] = []
     attempt_starts: list[ModuleAttemptStartedRecord] = []
     for variant_request in request.variants:
@@ -195,9 +346,20 @@ def run_module(
         _assert_profile_shadow_executable(release_registry, profile)
         if profile.transport_kind not in module.compatible_transport_kinds:
             raise ValueError("Execution Profile transport is incompatible with Module")
+        if (
+            profile.transport_kind != _IN_PROCESS_TRANSPORT_KIND
+            and not module.declared_operation_ids
+        ):
+            raise PermissionError(
+                "a provider transport requires a declared model invocation operation"
+            )
         if module.declared_operation_ids:
             _assert_model_only_test_evaluation_profile(profile)
-        executor = executors.resolve(profile.executor_adapter_id)
+        adapter = adapters.resolve(
+            profile.executor_adapter_id,
+            profile.executor_adapter_revision,
+        )
+        _assert_descriptor_covers_profile(adapter.descriptor, profile)
         if module.prompt_bundle_ref is not None and (
             variant_request.prompt_envelope_ref is None
         ):
@@ -212,7 +374,7 @@ def run_module(
         )
         attempt_id = _stable_id("module_attempt", variant_id, "1")
         resolved_profiles.append(profile)
-        resolved_executors.append(executor)
+        resolved_adapters.append(adapter)
         variant_records.append(
             ModuleExecutionVariantRecord(
                 module_run_id=module_run_id,
@@ -248,109 +410,29 @@ def run_module(
 
     attempts: list[ModuleAttemptRecord] = []
     outputs: list[ModuleOutputBinding] = []
-    for variant_request, profile, executor, variant, attempt_start in zip(
+    for variant_request, profile, adapter, variant, attempt_start in zip(
         request.variants,
         resolved_profiles,
-        resolved_executors,
+        resolved_adapters,
         variant_records,
         attempt_starts,
         strict=True,
     ):
-        try:
-            executor_result = executor.execute(
-                ModuleExecutorRequest(
-                    module_run_id=module_run_id,
-                    variant_id=variant.variant_id,
-                    attempt_id=attempt_start.attempt_id,
-                    module=module,
-                    execution_profile=profile,
-                    input_package_ref=request.input_package_ref,
-                    input_package_sha256=request.input_package_sha256,
-                    inputs=request.inputs,
-                    prompt_envelope_ref=variant_request.prompt_envelope_ref,
-                    prompt_envelope_sha256=variant_request.prompt_envelope_sha256,
-                    isolated_scope_ref=request.isolated_scope_ref,
-                    isolated_scope_sha256=request.isolated_scope_sha256,
-                )
-            )
-            if type(executor_result) is not ModuleExecutorResult:
-                raise TypeError("Module Executor returned an invalid result type")
-            executor_result.validate()
-            for output in executor_result.outputs:
-                if (
-                    output.schema_ref != module.output_schema_ref
-                    or output.schema_sha256 != module.output_schema_sha256
-                ):
-                    raise ValueError("Module Executor output schema mismatch")
-            ended_at = clock()
-            attempt = ModuleAttemptRecord(
-                module_run_id=module_run_id,
-                variant_id=variant.variant_id,
-                attempt_id=attempt_start.attempt_id,
-                status="completed",
-                output_refs=tuple(output.output_ref for output in executor_result.outputs),
-                usage=executor_result.usage,
-                failure_class=None,
-                period_start_at_utc=attempt_start.recorded_at_utc,
-                period_end_at_utc=ended_at,
-                recorded_at_utc=ended_at,
-                tool_calls=executor_result.tool_calls,
-                prompt_envelope_ref=variant.prompt_envelope_ref,
-                prompt_envelope_sha256=variant.prompt_envelope_sha256,
-            )
-            attempts.append(attempt)
-            outputs.extend(executor_result.outputs)
-            ledger.commit_attempt(attempt)
-        except Exception as exc:
-            ended_at = clock()
-            executor_failure = (
-                exc if isinstance(exc, ModuleExecutorFailure) else None
-            )
-            detail = (
-                executor_failure.detail
-                if executor_failure is not None
-                else None
-            )
-            attempt = ModuleAttemptRecord(
-                module_run_id=module_run_id,
-                variant_id=variant.variant_id,
-                attempt_id=attempt_start.attempt_id,
-                status="failed",
-                output_refs=(),
-                usage=(
-                    executor_failure.usage
-                    if executor_failure is not None
-                    else ModuleUsageObservation(
-                        input_tokens=None,
-                        output_tokens=None,
-                        cache_read_tokens=None,
-                        cache_creation_tokens=None,
-                    )
-                ),
-                failure_class=(
-                    executor_failure.failure_class
-                    if executor_failure is not None
-                    else _runtime_failure_class(exc)
-                ),
-                period_start_at_utc=attempt_start.recorded_at_utc,
-                period_end_at_utc=ended_at,
-                recorded_at_utc=ended_at,
-                tool_calls=(
-                    executor_failure.tool_calls
-                    if executor_failure is not None
-                    else ()
-                ),
-                prompt_envelope_ref=variant.prompt_envelope_ref,
-                prompt_envelope_sha256=variant.prompt_envelope_sha256,
-                failure_detail_ref=(
-                    detail.detail_ref if detail is not None else None
-                ),
-                failure_detail_sha256=(
-                    detail.detail_sha256 if detail is not None else None
-                ),
-            )
-            attempts.append(attempt)
-            ledger.commit_attempt(attempt)
+        attempt, attempt_outputs = _execute_attempt(
+            run_request=request,
+            module=module,
+            profile=profile,
+            adapter=adapter,
+            variant_request=variant_request,
+            variant=variant,
+            attempt_start=attempt_start,
+            artifact_host=artifact_host,
+            authority=authority if module.declared_operation_ids else None,
+            ledger=ledger,
+            clock=clock,
+        )
+        attempts.append(attempt)
+        outputs.extend(attempt_outputs)
 
     resolution = _resolve_shadow_outputs(
         module,
@@ -369,6 +451,497 @@ def run_module(
     )
     ledger.commit_result(request.request_id, result)
     return result
+
+
+def _execute_attempt(
+    *,
+    run_request: ModuleExecutionRequest,
+    module: RuntimeModuleRelease,
+    profile: ExecutionProfileRelease,
+    adapter: AuthorizedAgentExecutionAdapter,
+    variant_request: ModuleVariantRequest,
+    variant: ModuleExecutionVariantRecord,
+    attempt_start: ModuleAttemptStartedRecord,
+    artifact_host: ModuleArtifactHost,
+    authority: ModuleExecutionAuthority | None,
+    ledger: ModuleExecutionLedger,
+    clock: Callable[[], str],
+) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
+    """Authorize, invoke, and atomically finalize one Attempt."""
+
+    evidence: _AttemptAuthorizationEvidence | None = None
+    if authority is not None:
+        evidence = _authorize_model_attempt(
+            authority=authority,
+            module=module,
+            profile=profile,
+            purpose=run_request.purpose,
+            module_run_id=variant.module_run_id,
+            attempt_id=attempt_start.attempt_id,
+            observed_at_utc=clock(),
+        )
+        if not evidence.allowed:
+            attempt = _failed_attempt(
+                variant=variant,
+                attempt_start=attempt_start,
+                failure_class="authorization",
+                usage=_empty_usage(),
+                ended_at=clock(),
+                detail=_commit_kernel_failure_detail(
+                    artifact_host,
+                    variant=variant,
+                    attempt_start=attempt_start,
+                    failure_class="authorization",
+                    payload={
+                        "disposition": "product_operation_denied",
+                        "reason_code": evidence.decision.reason_code,
+                        "decision_ref": evidence.decision.decision_ref,
+                    },
+                ),
+            )
+            ledger.commit_attempt(attempt)
+            return attempt, ()
+
+    canonical_request = _build_canonical_request(
+        run_request=run_request,
+        module=module,
+        profile=profile,
+        variant_request=variant_request,
+        variant=variant,
+        attempt_start=attempt_start,
+        evidence=evidence,
+        authority=authority,
+    )
+    host = _AttemptExecutionHost(
+        request=canonical_request,
+        artifact_host=artifact_host,
+    )
+
+    try:
+        result = adapter.execute(canonical_request, host)
+        if type(result) is not AgentExecutionResult:
+            raise TypeError("adapter returned an invalid result type")
+        result.validate()
+        if (
+            result.provider_id != profile.provider_id
+            or result.model_id != profile.model_id
+        ):
+            raise ValueError("adapter result provider identity differs from profile")
+    except Exception as exc:
+        attempt = _failed_attempt(
+            variant=variant,
+            attempt_start=attempt_start,
+            failure_class="unknown",
+            usage=_empty_usage(),
+            ended_at=clock(),
+            detail=_commit_kernel_failure_detail(
+                artifact_host,
+                variant=variant,
+                attempt_start=attempt_start,
+                failure_class="unknown",
+                payload={
+                    "disposition": "adapter_conformance_failure",
+                    "exception_type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            ),
+        )
+        ledger.commit_attempt(attempt)
+        return attempt, ()
+
+    usage = ModuleUsageObservation(
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cache_read_tokens=result.cache_read_tokens,
+        cache_creation_tokens=result.cache_creation_tokens,
+    )
+    ended_at = clock()
+
+    if result.terminal_status != "completed":
+        assert result.failure is not None
+        attempt = _failed_attempt(
+            variant=variant,
+            attempt_start=attempt_start,
+            failure_class=result.failure.failure_class,
+            usage=usage,
+            ended_at=ended_at,
+            status=(
+                "cancelled"
+                if result.terminal_status == "cancelled"
+                else "failed"
+            ),
+            detail=(
+                (result.failure.detail_ref, result.failure.detail_sha256)
+                if result.failure.detail_ref is not None
+                and result.failure.detail_sha256 is not None
+                else None
+            ),
+        )
+        ledger.commit_attempt(attempt)
+        return attempt, ()
+
+    if not result.outputs:
+        raise ValueError("completed adapter result requires at least one output")
+    staged = tuple(
+        (submission, host.staged_output(submission.output_slot_id))
+        for submission in result.outputs
+    )
+
+    def finalize(fence: ExecutionAuthorizationFence | None) -> tuple[
+        ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]
+    ]:
+        if fence is not None and fence.state is not (
+            ExecutionAuthorizationFenceState.OPEN
+        ):
+            quarantined = _failed_attempt(
+                variant=variant,
+                attempt_start=attempt_start,
+                failure_class="authorization",
+                usage=usage,
+                ended_at=ended_at,
+                detail=_commit_kernel_failure_detail(
+                    artifact_host,
+                    variant=variant,
+                    attempt_start=attempt_start,
+                    failure_class="authorization",
+                    payload={
+                        "disposition": "stale_result_quarantined",
+                        "fence_ref": fence.fence_ref,
+                        "reason_code": fence.reason_code,
+                    },
+                ),
+            )
+            ledger.commit_attempt(quarantined)
+            return quarantined, ()
+        committed: list[ModuleOutputBinding] = []
+        for submission, content in staged:
+            output = artifact_host.commit_output(
+                module_run_id=variant.module_run_id,
+                variant_id=variant.variant_id,
+                attempt_id=attempt_start.attempt_id,
+                logical_name=submission.output_slot_id,
+                content=content,
+                schema_ref=module.output_schema_ref,
+                schema_sha256=module.output_schema_sha256,
+                media_type="application/json",
+            )
+            output.validate()
+            if (
+                output.output_sha256 != hashlib.sha256(content).hexdigest()
+                or output.schema_ref != module.output_schema_ref
+                or output.schema_sha256 != module.output_schema_sha256
+            ):
+                raise ValueError(
+                    "Module artifact host returned a mismatched output binding"
+                )
+            committed.append(output)
+        completed = ModuleAttemptRecord(
+            module_run_id=variant.module_run_id,
+            variant_id=variant.variant_id,
+            attempt_id=attempt_start.attempt_id,
+            status="completed",
+            output_refs=tuple(output.output_ref for output in committed),
+            usage=usage,
+            failure_class=None,
+            period_start_at_utc=attempt_start.recorded_at_utc,
+            period_end_at_utc=ended_at,
+            recorded_at_utc=ended_at,
+            tool_calls=(),
+            prompt_envelope_ref=variant.prompt_envelope_ref,
+            prompt_envelope_sha256=variant.prompt_envelope_sha256,
+        )
+        ledger.commit_attempt(completed)
+        return completed, tuple(committed)
+
+    if authority is not None:
+        authority.controller.revalidate(
+            binding_ref=authority.binding.binding_ref,
+            observed_at_utc=clock(),
+        )
+        return authority.controller.finalize_under_current_fence(
+            authority.binding.binding_ref,
+            finalize,
+        )
+    return finalize(None)
+
+
+def _authorize_model_attempt(
+    *,
+    authority: ModuleExecutionAuthority,
+    module: RuntimeModuleRelease,
+    profile: ExecutionProfileRelease,
+    purpose: ModuleExecutionPurpose,
+    module_run_id: str,
+    attempt_id: str,
+    observed_at_utc: str,
+) -> _AttemptAuthorizationEvidence:
+    """Commit the AR09 intent and resolve the Product decision before dispatch."""
+
+    binding = authority.binding
+    fence = authority.controller.revalidate(
+        binding_ref=binding.binding_ref,
+        observed_at_utc=observed_at_utc,
+    )
+    if fence.state is not ExecutionAuthorizationFenceState.OPEN:
+        raise PermissionError(
+            f"execution authorization fence is closed: {fence.reason_code}"
+        )
+    operation_id = module.declared_operation_ids[0]
+    intent = authority.controller.commit_protected_operation_intent(
+        binding_ref=binding.binding_ref,
+        module_run_id=module_run_id,
+        module_release_ref=module.release_ref,
+        module_release_sha256=module.release_sha256,
+        operation_id=operation_id,
+        resource_ref=profile.release_ref,
+        enforcing_gateway_id=authority.enforcing_gateway_id,
+        idempotency_key=attempt_id,
+        requires_grant=False,
+        operation_grant_ref=None,
+        observed_at_utc=observed_at_utc,
+    )
+    query = OperationAuthorizationQuery.build(
+        query_id=_stable_id("operation_query", intent.intent_sha256),
+        idempotency_key=attempt_id,
+        principal_id=binding.principal_id,
+        actor_workload_id=binding.actor_workload_id,
+        operation_id=operation_id,
+        resource_type="execution_profile",
+        resource_ref=profile.release_ref,
+        tenant_id=binding.tenant_id,
+        cell_id=binding.cell_id,
+        purpose_id=_data_use_purpose_id(purpose),
+        environment_id=authority.environment_id,
+        workflow_release_id=binding.workflow_release_id,
+        execution_context_id=binding.context_id,
+        enforcing_gateway_id=authority.enforcing_gateway_id,
+        observed_at_utc=observed_at_utc,
+    )
+    decision = authority.authorization_client.authorize_operation(query)
+    if type(decision) is not ProductOperationDecision:
+        raise TypeError("Product Authorization returned an invalid decision")
+    decision.validate()
+    if (
+        decision.query_id != query.query_id
+        or decision.query_sha256 != query.query_sha256
+    ):
+        raise PermissionError("Product Authorization decision closure mismatch")
+    observation = authority.controller.record_gateway_observation(
+        intent_ref=intent.intent_ref,
+        decision_ref=decision.decision_ref,
+        decision_sha256=decision.decision_sha256,
+        effect=decision.effect,
+        effect_evidence_ref=None,
+        grant_disposition_ref=None,
+        observed_at_utc=observed_at_utc,
+    )
+    return _AttemptAuthorizationEvidence(
+        intent=intent,
+        decision=decision,
+        observation=observation,
+        allowed=decision.effect is GatewayDecisionEffect.ALLOW,
+    )
+
+
+def _build_canonical_request(
+    *,
+    run_request: ModuleExecutionRequest,
+    module: RuntimeModuleRelease,
+    profile: ExecutionProfileRelease,
+    variant_request: ModuleVariantRequest,
+    variant: ModuleExecutionVariantRecord,
+    attempt_start: ModuleAttemptStartedRecord,
+    evidence: _AttemptAuthorizationEvidence | None,
+    authority: ModuleExecutionAuthority | None,
+) -> AuthorizedAgentExecutionRequest:
+    """Freeze one canonical adapter request from committed kernel facts."""
+
+    receipt_payload = {
+        "module_run_id": attempt_start.module_run_id,
+        "variant_id": attempt_start.variant_id,
+        "attempt_id": attempt_start.attempt_id,
+        "attempt_ordinal": attempt_start.attempt_ordinal,
+        "recorded_at_utc": attempt_start.recorded_at_utc,
+    }
+    authorized_inputs = tuple(
+        AuthorizedExecutionInput(
+            execution_input_id=f"input_{binding.logical_name}",
+            input_ref=binding.input_ref,
+            input_sha256=binding.input_sha256,
+            schema_version=binding.schema_sha256,
+            media_type=binding.media_type,
+            logical_name=binding.logical_name,
+            local_handle=f"inputs/{binding.logical_name}",
+        )
+        for binding in run_request.inputs
+    )
+    return AuthorizedAgentExecutionRequest.build(
+        workflow_execution_id=None,
+        isolated_scope_ref=run_request.isolated_scope_ref,
+        isolated_scope_sha256=run_request.isolated_scope_sha256,
+        module_run_id=variant.module_run_id,
+        variant_id=variant.variant_id,
+        attempt_id=attempt_start.attempt_id,
+        module_id=module.module_id,
+        module_release_ref=module.release_ref,
+        module_release_sha256=module.release_sha256,
+        execution_profile_id=profile.execution_profile_id,
+        execution_profile_ref=profile.release_ref,
+        execution_profile_sha256=profile.release_sha256,
+        attempt_begin_receipt_ref=f"attempt-begin:{attempt_start.attempt_id}",
+        attempt_begin_receipt_sha256=_canonical_sha256(receipt_payload),
+        prompt_envelope_ref=variant_request.prompt_envelope_ref,
+        prompt_envelope_sha256=variant_request.prompt_envelope_sha256,
+        output_schema_ref=module.output_schema_ref,
+        output_schema_sha256=module.output_schema_sha256,
+        execution_authorization_binding_ref=(
+            authority.binding.binding_ref if authority is not None else None
+        ),
+        execution_authorization_binding_sha256=(
+            authority.binding.binding_sha256 if authority is not None else None
+        ),
+        protected_operation_intent_ref=(
+            evidence.intent.intent_ref if evidence is not None else None
+        ),
+        protected_operation_intent_sha256=(
+            evidence.intent.intent_sha256 if evidence is not None else None
+        ),
+        product_operation_decision_ref=(
+            evidence.decision.decision_ref if evidence is not None else None
+        ),
+        product_operation_decision_sha256=(
+            evidence.decision.decision_sha256 if evidence is not None else None
+        ),
+        gateway_authorization_observation_ref=(
+            evidence.observation.observation_ref if evidence is not None else None
+        ),
+        gateway_authorization_observation_sha256=(
+            evidence.observation.observation_sha256 if evidence is not None else None
+        ),
+        operation_grant_ref=None,
+        operation_grant_sha256=None,
+        grant_disposition_ref=None,
+        input_closure_sha256=run_request.input_closure_sha256,
+        data_use_purpose_id=_data_use_purpose_id(run_request.purpose),
+        authorized_inputs=authorized_inputs,
+        idempotency_key=attempt_start.attempt_id,
+    )
+
+
+def _assert_authority_binding_closure(
+    binding: ExecutionAuthorizationContextBinding,
+    request: ModuleExecutionRequest,
+) -> None:
+    """Bind the caller-supplied authority to this exact isolated run."""
+
+    expected_scope_id = isolated_execution_scope_id(
+        request.isolated_scope_ref,
+        request.isolated_scope_sha256,
+    )
+    exact = (
+        binding.workflow_execution_id == expected_scope_id,
+        binding.execution_input_package_ref == request.input_package_ref,
+        binding.execution_input_package_sha256 == request.input_package_sha256,
+    )
+    if not all(exact):
+        raise PermissionError("module execution authority closure mismatch")
+
+
+def _assert_descriptor_covers_profile(
+    descriptor: AgentExecutionAdapterDescriptor,
+    profile: ExecutionProfileRelease,
+) -> None:
+    """Reject an adapter whose advertised capability cannot carry the profile."""
+
+    if type(descriptor) is not AgentExecutionAdapterDescriptor:
+        raise ValueError("adapter must expose an exact descriptor")
+    descriptor.validate()
+    exact = (
+        descriptor.adapter_id == profile.executor_adapter_id,
+        descriptor.adapter_revision == profile.executor_adapter_revision,
+        descriptor.transport_kind == profile.transport_kind,
+    )
+    if not all(exact):
+        raise PermissionError(
+            "adapter descriptor identity differs from the Execution Profile"
+        )
+    covers = (
+        profile.execution_mode in descriptor.supported_execution_modes,
+        profile.semantic_input_delivery_mode
+        in descriptor.supported_input_delivery_modes,
+        profile.network_policy in descriptor.supported_network_policies,
+        profile.output_constraint_mode
+        in descriptor.supported_output_constraint_modes,
+    )
+    if not all(covers):
+        raise PermissionError(
+            "adapter descriptor capability does not cover the Execution Profile"
+        )
+
+
+def _empty_usage() -> ModuleUsageObservation:
+    return ModuleUsageObservation(
+        input_tokens=None,
+        output_tokens=None,
+        cache_read_tokens=None,
+        cache_creation_tokens=None,
+    )
+
+
+def _commit_kernel_failure_detail(
+    artifact_host: ModuleArtifactHost,
+    *,
+    variant: ModuleExecutionVariantRecord,
+    attempt_start: ModuleAttemptStartedRecord,
+    failure_class: str,
+    payload: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Commit one bounded Cell-local kernel diagnostic for a failed Attempt."""
+
+    detail = artifact_host.commit_failure_detail(
+        module_run_id=variant.module_run_id,
+        variant_id=variant.variant_id,
+        attempt_id=attempt_start.attempt_id,
+        failure_class=failure_class,
+        content=json.dumps(
+            dict(payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        media_type="application/json",
+    )
+    detail.validate()
+    return (detail.detail_ref, detail.detail_sha256)
+
+
+def _failed_attempt(
+    *,
+    variant: ModuleExecutionVariantRecord,
+    attempt_start: ModuleAttemptStartedRecord,
+    failure_class: str,
+    usage: ModuleUsageObservation,
+    ended_at: str,
+    status: str = "failed",
+    detail: tuple[str, str] | None = None,
+) -> ModuleAttemptRecord:
+    return ModuleAttemptRecord(
+        module_run_id=variant.module_run_id,
+        variant_id=variant.variant_id,
+        attempt_id=attempt_start.attempt_id,
+        status=status,
+        output_refs=(),
+        usage=usage,
+        failure_class=failure_class,
+        period_start_at_utc=attempt_start.recorded_at_utc,
+        period_end_at_utc=ended_at,
+        recorded_at_utc=ended_at,
+        tool_calls=(),
+        prompt_envelope_ref=variant.prompt_envelope_ref,
+        prompt_envelope_sha256=variant.prompt_envelope_sha256,
+        failure_detail_ref=detail[0] if detail is not None else None,
+        failure_detail_sha256=detail[1] if detail is not None else None,
+    )
 
 
 def _assert_profile_shadow_executable(
@@ -491,16 +1064,11 @@ def _resolve_shadow_outputs(
 
 
 __all__ = [
+    "AgentExecutionAdapterRegistry",
+    "ModuleExecutionAuthority",
     "ModuleExecutionRequest",
-    "ModuleExecutor",
-    "ModuleExecutorFailure",
-    "ModuleExecutorRegistry",
-    "ModuleExecutorRequest",
-    "ModuleExecutorResult",
-    "ModuleFailureDetailBinding",
-    "ModuleInputBinding",
-    "ModuleOutputBinding",
     "ModuleRunResult",
     "ModuleVariantRequest",
+    "isolated_execution_scope_id",
     "run_module",
 ]

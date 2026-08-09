@@ -25,6 +25,12 @@ from .registry_contract_validation import (
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_.:/-]{1,255}$")
 
+_EXECUTION_MODES = frozenset({"tool_free", "agent"})
+_INPUT_DELIVERY_MODES = frozenset(
+    {"inline", "gateway_read", "managed_attachment", "hybrid"}
+)
+_NETWORK_POLICIES = frozenset({"denied", "gateway_only", "direct_sandboxed"})
+
 
 def _validate_token(label: str, value: Any) -> None:
     validate_token(label, value, pattern=_TOKEN)
@@ -40,6 +46,27 @@ def _validate_local_handle(label: str, value: Any) -> None:
         raise ValueError(f"{label} must be an opaque Cell-local lookup key")
 
 
+def _validate_ref_hash_group(
+    group_label: str,
+    pairs: tuple[tuple[str, Any], ...],
+    *,
+    ref_labels: frozenset[str],
+) -> bool:
+    """Validate one all-or-nothing evidence group; return True when present."""
+
+    values = tuple(value for _, value in pairs)
+    if all(value is None for value in values):
+        return False
+    if any(value is None for value in values):
+        raise ValueError(f"{group_label} evidence fields must be all set or all null")
+    for label, value in pairs:
+        if label in ref_labels:
+            validate_opaque_ref(label, value)
+        else:
+            validate_sha256(label, value)
+    return True
+
+
 @dataclass(frozen=True)
 class AgentExecutionAdapterDescriptor:
     """Versioned discovery and admission metadata for one provider adapter."""
@@ -48,12 +75,16 @@ class AgentExecutionAdapterDescriptor:
     adapter_id: str
     adapter_revision: str
     provider_id: str
+    transport_family: str
     transport_kind: str
     runtime_package_id: str
     runtime_package_version: str
     supported_context_modes: tuple[str, ...]
     supported_output_constraint_modes: tuple[str, ...]
     supported_read_isolation_modes: tuple[str, ...]
+    supported_execution_modes: tuple[str, ...]
+    supported_input_delivery_modes: tuple[str, ...]
+    supported_network_policies: tuple[str, ...]
     supports_dynamic_operation_authorization: bool
     admission_state: str
 
@@ -69,6 +100,7 @@ class AgentExecutionAdapterDescriptor:
         for label, value in (
             ("adapter_id", self.adapter_id),
             ("provider_id", self.provider_id),
+            ("transport_kind", self.transport_kind),
             ("runtime_package_id", self.runtime_package_id),
             ("admission_state", self.admission_state),
         ):
@@ -80,7 +112,9 @@ class AgentExecutionAdapterDescriptor:
         ):
             _validate_token(label, value)
         validate_enum_string(
-            "transport_kind", self.transport_kind, allowed={"sdk", "api", "cli"}
+            "transport_family",
+            self.transport_family,
+            allowed={"sdk", "api", "cli", "in_process"},
         )
         for label, values in (
             ("supported_context_modes", self.supported_context_modes),
@@ -92,6 +126,12 @@ class AgentExecutionAdapterDescriptor:
                 "supported_read_isolation_modes",
                 self.supported_read_isolation_modes,
             ),
+            ("supported_execution_modes", self.supported_execution_modes),
+            (
+                "supported_input_delivery_modes",
+                self.supported_input_delivery_modes,
+            ),
+            ("supported_network_policies", self.supported_network_policies),
         ):
             validate_string_tuple(
                 label,
@@ -103,6 +143,25 @@ class AgentExecutionAdapterDescriptor:
             {"prompt_only_json", "native_structured_output"}
         ):
             raise ValueError("invalid supported_output_constraint_modes")
+        for label, values, allowed in (
+            (
+                "supported_execution_modes",
+                self.supported_execution_modes,
+                _EXECUTION_MODES,
+            ),
+            (
+                "supported_input_delivery_modes",
+                self.supported_input_delivery_modes,
+                _INPUT_DELIVERY_MODES,
+            ),
+            (
+                "supported_network_policies",
+                self.supported_network_policies,
+                _NETWORK_POLICIES,
+            ),
+        ):
+            if not set(values).issubset(allowed):
+                raise ValueError(f"invalid {label}")
         validate_bool(
             "supports_dynamic_operation_authorization",
             self.supports_dynamic_operation_authorization,
@@ -257,6 +316,34 @@ class ProviderOperationIntent:
             minimum=1,
             maximum=86_400,
         )
+
+
+@dataclass(frozen=True)
+class AuthorizedOperationReceipt:
+    """Bounded proof that one dynamic provider operation was authorized."""
+
+    receipt_id: str
+    decision_ref: str
+    decision_sha256: str
+    grant_disposition_ref: str | None
+    recorded_at_utc: str
+
+    def validate(self) -> None:
+        """Validate the bounded authorization receipt references."""
+
+        validate_exact_record_instance(
+            "authorized operation receipt",
+            self,
+            expected_type=AuthorizedOperationReceipt,
+        )
+
+        validate_id("receipt_id", self.receipt_id)
+        validate_opaque_ref("decision_ref", self.decision_ref)
+        validate_sha256("decision_sha256", self.decision_sha256)
+        if self.grant_disposition_ref is not None:
+            validate_opaque_ref(
+                "grant_disposition_ref", self.grant_disposition_ref
+            )
 
 
 @dataclass(frozen=True)
@@ -429,9 +516,20 @@ class AgentExecutionResult:
 
 @dataclass(frozen=True)
 class AuthorizedAgentExecutionRequest:
-    """Canonical AR09 request bound to Product decision and Runtime claim evidence."""
+    """Canonical AR09 request bound to Product decision and Runtime claim evidence.
 
-    workflow_execution_id: str
+    Authorization evidence fields resolve to the Stack-A authority records of
+    ``agent_runtime_09``: the execution authorization context binding, the
+    protected-operation intent, the Product operation decision, and the Gateway
+    authorization observation binding decision to intent. Each evidence group
+    is present completely or not at all; empty evidence is admissible only for
+    the operation-free ``in_process`` Test/Evaluation conjunction defined in
+    ``agent_runtime_08``.
+    """
+
+    workflow_execution_id: str | None
+    isolated_scope_ref: str | None
+    isolated_scope_sha256: str | None
     module_run_id: str
     variant_id: str
     attempt_id: str
@@ -443,22 +541,21 @@ class AuthorizedAgentExecutionRequest:
     execution_profile_sha256: str
     attempt_begin_receipt_ref: str
     attempt_begin_receipt_sha256: str
-    prompt_envelope_ref: str
-    prompt_envelope_sha256: str
+    prompt_envelope_ref: str | None
+    prompt_envelope_sha256: str | None
     output_schema_ref: str
     output_schema_sha256: str
-    execution_authorization_binding_ref: str
-    execution_authorization_binding_sha256: str
-    operation_authorization_request_ref: str
-    operation_authorization_request_sha256: str
-    product_authorization_result_ref: str
-    product_authorization_result_sha256: str
-    operation_authorization_binding_ref: str
-    operation_authorization_binding_sha256: str
+    execution_authorization_binding_ref: str | None
+    execution_authorization_binding_sha256: str | None
+    protected_operation_intent_ref: str | None
+    protected_operation_intent_sha256: str | None
+    product_operation_decision_ref: str | None
+    product_operation_decision_sha256: str | None
+    gateway_authorization_observation_ref: str | None
+    gateway_authorization_observation_sha256: str | None
     operation_grant_ref: str | None
     operation_grant_sha256: str | None
-    operation_grant_binding_ref: str | None
-    operation_grant_binding_sha256: str | None
+    grant_disposition_ref: str | None
     input_closure_sha256: str
     data_use_purpose_id: str
     authorized_inputs: tuple[AuthorizedExecutionInput, ...]
@@ -491,7 +588,7 @@ class AuthorizedAgentExecutionRequest:
         return record
 
     def validate(self) -> None:
-        """Validate Product decision, optional high-risk grant, and input bindings."""
+        """Validate scope, authority evidence chain, and input bindings."""
 
         validate_exact_record_instance(
             "authorized Agent execution request",
@@ -499,8 +596,23 @@ class AuthorizedAgentExecutionRequest:
             expected_type=AuthorizedAgentExecutionRequest,
         )
 
+        has_isolated_scope = _validate_ref_hash_group(
+            "isolated scope",
+            (
+                ("isolated_scope_ref", self.isolated_scope_ref),
+                ("isolated_scope_sha256", self.isolated_scope_sha256),
+            ),
+            ref_labels=frozenset({"isolated_scope_ref"}),
+        )
+        if (self.workflow_execution_id is None) == (not has_isolated_scope):
+            raise ValueError(
+                "request requires exactly one execution scope: a Workflow "
+                "Execution ID or an isolated Module scope"
+            )
+        if self.workflow_execution_id is not None:
+            validate_id("workflow_execution_id", self.workflow_execution_id)
+
         for label, value in (
-            ("workflow_execution_id", self.workflow_execution_id),
             ("module_run_id", self.module_run_id),
             ("variant_id", self.variant_id),
             ("attempt_id", self.attempt_id),
@@ -514,78 +626,108 @@ class AuthorizedAgentExecutionRequest:
             ("module_release_ref", self.module_release_ref),
             ("execution_profile_ref", self.execution_profile_ref),
             ("attempt_begin_receipt_ref", self.attempt_begin_receipt_ref),
-            ("prompt_envelope_ref", self.prompt_envelope_ref),
             ("output_schema_ref", self.output_schema_ref),
-            (
-                "execution_authorization_binding_ref",
-                self.execution_authorization_binding_ref,
-            ),
-            (
-                "operation_authorization_request_ref",
-                self.operation_authorization_request_ref,
-            ),
-            (
-                "product_authorization_result_ref",
-                self.product_authorization_result_ref,
-            ),
-            (
-                "operation_authorization_binding_ref",
-                self.operation_authorization_binding_ref,
-            ),
         ):
             validate_opaque_ref(label, value)
         for label, value in (
             ("module_release_sha256", self.module_release_sha256),
             ("execution_profile_sha256", self.execution_profile_sha256),
             ("attempt_begin_receipt_sha256", self.attempt_begin_receipt_sha256),
-            ("prompt_envelope_sha256", self.prompt_envelope_sha256),
             ("output_schema_sha256", self.output_schema_sha256),
-            (
-                "execution_authorization_binding_sha256",
-                self.execution_authorization_binding_sha256,
-            ),
-            (
-                "operation_authorization_request_sha256",
-                self.operation_authorization_request_sha256,
-            ),
-            (
-                "product_authorization_result_sha256",
-                self.product_authorization_result_sha256,
-            ),
-            (
-                "operation_authorization_binding_sha256",
-                self.operation_authorization_binding_sha256,
-            ),
             ("input_closure_sha256", self.input_closure_sha256),
             ("request_sha256", self.request_sha256),
         ):
             validate_sha256(label, value)
-        grant_fields = (
+        _validate_ref_hash_group(
+            "prompt envelope",
+            (
+                ("prompt_envelope_ref", self.prompt_envelope_ref),
+                ("prompt_envelope_sha256", self.prompt_envelope_sha256),
+            ),
+            ref_labels=frozenset({"prompt_envelope_ref"}),
+        )
+
+        has_binding = _validate_ref_hash_group(
+            "execution authorization binding",
+            (
+                (
+                    "execution_authorization_binding_ref",
+                    self.execution_authorization_binding_ref,
+                ),
+                (
+                    "execution_authorization_binding_sha256",
+                    self.execution_authorization_binding_sha256,
+                ),
+            ),
+            ref_labels=frozenset({"execution_authorization_binding_ref"}),
+        )
+        has_operation = _validate_ref_hash_group(
+            "operation decision",
+            (
+                (
+                    "protected_operation_intent_ref",
+                    self.protected_operation_intent_ref,
+                ),
+                (
+                    "protected_operation_intent_sha256",
+                    self.protected_operation_intent_sha256,
+                ),
+                (
+                    "product_operation_decision_ref",
+                    self.product_operation_decision_ref,
+                ),
+                (
+                    "product_operation_decision_sha256",
+                    self.product_operation_decision_sha256,
+                ),
+                (
+                    "gateway_authorization_observation_ref",
+                    self.gateway_authorization_observation_ref,
+                ),
+                (
+                    "gateway_authorization_observation_sha256",
+                    self.gateway_authorization_observation_sha256,
+                ),
+            ),
+            ref_labels=frozenset(
+                {
+                    "protected_operation_intent_ref",
+                    "product_operation_decision_ref",
+                    "gateway_authorization_observation_ref",
+                }
+            ),
+        )
+        grant_values = (
             self.operation_grant_ref,
             self.operation_grant_sha256,
-            self.operation_grant_binding_ref,
-            self.operation_grant_binding_sha256,
+            self.grant_disposition_ref,
         )
-        if any(value is not None for value in grant_fields) and not all(
-            value is not None for value in grant_fields
-        ):
-            raise ValueError(
-                "operation grant ref, hash, binding ref, and binding hash must be paired"
-            )
-        if self.operation_grant_ref is not None:
+        has_grant = any(value is not None for value in grant_values)
+        if has_grant:
+            if any(value is None for value in grant_values):
+                raise ValueError(
+                    "operation grant ref, hash, and disposition must be all "
+                    "set or all null"
+                )
             validate_opaque_ref("operation_grant_ref", self.operation_grant_ref)
             validate_sha256(
                 "operation_grant_sha256",
                 self.operation_grant_sha256 or "",
             )
             validate_opaque_ref(
-                "operation_grant_binding_ref",
-                self.operation_grant_binding_ref,
+                "grant_disposition_ref",
+                self.grant_disposition_ref,
             )
-            validate_sha256(
-                "operation_grant_binding_sha256",
-                self.operation_grant_binding_sha256 or "",
+        if has_grant and not has_operation:
+            raise ValueError(
+                "an operation grant requires the operation decision evidence"
             )
+        if has_operation and not has_binding:
+            raise ValueError(
+                "operation decision evidence requires the execution "
+                "authorization binding"
+            )
+
         validate_exact_record_tuple(
             "authorized_inputs",
             self.authorized_inputs,
@@ -606,15 +748,16 @@ class AuthorizedAgentExecutionRequest:
         if self.request_sha256 != expected_request_sha256:
             raise ValueError("authorized Agent execution request hash mismatch")
 
+    @property
+    def has_operation_evidence(self) -> bool:
+        """Report whether the complete operation-decision evidence is bound."""
+
+        return self.protected_operation_intent_ref is not None
+
 
 @runtime_checkable
 class AuthorizedAgentExecutionHost(Protocol):
     """Canonical host after Product decision resolution; it cannot mint authority."""
-
-    def submit_output(self, submission: OutputSubmission) -> None:
-        """Stage one output for Runtime-owned atomic finalization."""
-
-        ...
 
     def read_authorized_input(self, local_handle: str) -> bytes:
         """Read through a request-bound lookup key, never a filesystem path."""
@@ -627,6 +770,14 @@ class AuthorizedAgentExecutionHost(Protocol):
         content: bytes,
     ) -> None:
         """Stage bytes behind one output handle for Runtime finalization."""
+
+        ...
+
+    def authorize_operation(
+        self,
+        request: ProviderOperationIntent,
+    ) -> AuthorizedOperationReceipt:
+        """Authorize one dynamic provider operation before it is approved."""
 
         ...
 
@@ -657,6 +808,7 @@ __all__ = [
     "AuthorizedAgentExecutionAdapter",
     "AuthorizedAgentExecutionHost",
     "AuthorizedAgentExecutionRequest",
+    "AuthorizedOperationReceipt",
     "AgentExecutionAdapterDescriptor",
     "AgentExecutionFailure",
     "AgentExecutionResult",

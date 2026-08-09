@@ -6,14 +6,33 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
+from agent_runtime.contracts.execution_authorization_definition import (
+    ExecutionAuthorizationContextEnvelope,
+    ExecutionAuthorizationContextState,
+    ExecutionAuthorizationFence,
+    ExecutionAuthorizationFenceState,
+    GatewayDecisionEffect,
+    OperationAuthorizationQuery,
+    ProductAuthorizationContextStatus,
+    ProductOperationDecision,
+)
 from agent_runtime.contracts.execution_module_definition import (
     ModuleExecutionRequest,
-    ModuleExecutorFailure,
-    ModuleExecutorRequest,
     ModuleVariantRequest,
+)
+from agent_runtime.contracts.invocation_adapter_definition import (
+    AdapterContextResult,
+    AgentExecutionAdapterDescriptor,
+    AgentExecutionFailure,
+    AgentExecutionResult,
+    AuthorizedAgentExecutionRequest,
+    OutputSubmission,
+    ProviderOperationIntent,
 )
 from agent_runtime.contracts.registry_release_definition import (
     ModuleExecutionPurpose,
@@ -22,19 +41,27 @@ from agent_runtime.contracts.registry_release_definition import (
     ReleaseAdmissionState,
     ReleaseSubjectKind,
 )
+from agent_runtime.execution.execution_authorization_coordination import (
+    ExecutionAuthorizationController,
+    InMemoryExecutionAuthorizationLedger,
+)
 from agent_runtime.execution.execution_content_staging import InMemoryCellArtifactStore
 from agent_runtime.execution.execution_module_invocation import (
-    ModuleExecutorRegistry,
+    AgentExecutionAdapterRegistry,
+    ModuleExecutionAuthority,
+    isolated_execution_scope_id,
     run_module,
 )
 from agent_runtime.invocation.invocation_codex_module_invocation import (
     CodexCliInvocationResult,
     CodexCliModuleExecutor,
 )
+from agent_runtime.invocation import (
+    invocation_codex_module_invocation as codex_module,
+)
 from agent_runtime.invocation.invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
 )
-from agent_runtime.invocation import invocation_codex_module_invocation as codex_module
 from agent_runtime.invocation.invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     OUTPUT_SCHEMA_MARKER,
@@ -301,6 +328,252 @@ def _evaluation_request(
     )
 
 
+class _ProductAuthorityDouble:
+    """Mutable in-process Product Authorization double for kernel tests."""
+
+    def __init__(self, envelope: ExecutionAuthorizationContextEnvelope) -> None:
+        self.envelope = envelope
+        self.context_state = ExecutionAuthorizationContextState.EFFECTIVE
+        self.operation_effect = GatewayDecisionEffect.ALLOW
+        self.operation_queries: list[OperationAuthorizationQuery] = []
+
+    def validate_execution_context(
+        self,
+        context_id: str,
+        tenant_id: str,
+        observed_at_utc: str,
+    ) -> ProductAuthorizationContextStatus:
+        assert context_id == self.envelope.context_id
+        assert tenant_id == self.envelope.tenant_id
+        return ProductAuthorizationContextStatus.build(
+            status_ref="product-status:isolated-test",
+            context_id=self.envelope.context_id,
+            context_ref=self.envelope.context_ref,
+            context_sha256=self.envelope.context_sha256,
+            state=self.context_state,
+            reason_code=(
+                "context_effective"
+                if self.context_state
+                is ExecutionAuthorizationContextState.EFFECTIVE
+                else "context_revoked"
+            ),
+            observed_at_utc=observed_at_utc,
+        )
+
+    def authorize_operation(
+        self,
+        query: OperationAuthorizationQuery,
+    ) -> ProductOperationDecision:
+        self.operation_queries.append(query)
+        return ProductOperationDecision(
+            query_id=query.query_id,
+            query_sha256=query.query_sha256,
+            decision_ref=f"product-decision:{query.query_id}",
+            decision_sha256=hashlib.sha256(
+                query.query_sha256.encode("utf-8")
+            ).hexdigest(),
+            effect=self.operation_effect,
+            reason_code=(
+                "operation_allowed"
+                if self.operation_effect is GatewayDecisionEffect.ALLOW
+                else "operation_denied"
+            ),
+            observed_at_utc=query.observed_at_utc,
+        )
+
+
+def _evaluation_authority(
+    release_registry: RuntimeReleaseRegistry,
+    request: ModuleExecutionRequest,
+    *,
+    observed_at_utc: str = _TEST_TIME,
+    scope_id: str | None = None,
+    input_package_ref: str | None = None,
+    input_package_sha256: str | None = None,
+) -> tuple[ModuleExecutionAuthority, _ProductAuthorityDouble]:
+    scope = scope_id or isolated_execution_scope_id(
+        request.isolated_scope_ref,
+        request.isolated_scope_sha256,
+    )
+    envelope = ExecutionAuthorizationContextEnvelope.build(
+        context_id="context_isolated_test",
+        context_ref="product-context:isolated-test",
+        workflow_execution_id=scope,
+        workflow_release_id="module_isolated_evaluation",
+        principal_id="principal_test",
+        actor_workload_id="workload_agent_runtime_tests",
+        tenant_id="tenant_test",
+        cell_id="cell_test",
+        authorization_decision_ref="product-decision:isolated-context",
+        catalog_release_ref="catalog:isolated-test@v1",
+        input_scope_refs=(request.input_package_ref,),
+        effective_at_utc="2026-01-01T00:00:00Z",
+        expiry_at_utc="2027-01-01T00:00:00Z",
+    )
+    product = _ProductAuthorityDouble(envelope)
+    controller = ExecutionAuthorizationController(
+        client=product,
+        ledger=InMemoryExecutionAuthorizationLedger(),
+        module_release_client=release_registry,
+    )
+    admission = controller.bind_execution_context(
+        envelope=envelope,
+        expected_workflow_execution_id=scope,
+        expected_workflow_release_id="module_isolated_evaluation",
+        expected_principal_id="principal_test",
+        expected_actor_workload_id="workload_agent_runtime_tests",
+        expected_tenant_id="tenant_test",
+        expected_cell_id="cell_test",
+        execution_input_package_ref=(
+            input_package_ref or request.input_package_ref
+        ),
+        execution_input_package_sha256=(
+            input_package_sha256 or request.input_package_sha256
+        ),
+        observed_at_utc=observed_at_utc,
+    )
+    authority = ModuleExecutionAuthority(
+        controller=controller,
+        binding=admission.binding,
+        authorization_client=product,
+        enforcing_gateway_id="agent_runtime_module_kernel",
+        environment_id="development",
+    )
+    return authority, product
+
+
+class _StubInlineAdapter:
+    """Canonical in-process adapter double with observable invocation count."""
+
+    def __init__(
+        self,
+        *,
+        release_registry: RuntimeReleaseRegistry,
+        adapter_id: str = "stub_inline_executor",
+        adapter_revision: str = "v1",
+        transport_kind: str = "in_process_test",
+        transport_family: str = "in_process",
+        supported_execution_modes: tuple[str, ...] = ("tool_free",),
+        payload: bytes = b'{"value":"stub"}',
+        on_execute=None,
+        terminal_status: str = "completed",
+        result_type_override=None,
+    ) -> None:
+        self._release_registry = release_registry
+        self._adapter_id = adapter_id
+        self._adapter_revision = adapter_revision
+        self._transport_kind = transport_kind
+        self._transport_family = transport_family
+        self._supported_execution_modes = supported_execution_modes
+        self._payload = payload
+        self._on_execute = on_execute
+        self._terminal_status = terminal_status
+        self._result_type_override = result_type_override
+        self.calls = 0
+
+    @property
+    def descriptor(self) -> AgentExecutionAdapterDescriptor:
+        return AgentExecutionAdapterDescriptor(
+            adapter_contract_version="v1",
+            adapter_id=self._adapter_id,
+            adapter_revision=self._adapter_revision,
+            provider_id="provider_stub",
+            transport_family=self._transport_family,
+            transport_kind=self._transport_kind,
+            runtime_package_id="agent_runtime_core",
+            runtime_package_version="0.0.0",
+            supported_context_modes=("stateless",),
+            supported_output_constraint_modes=(
+                "prompt_only_json",
+                "native_structured_output",
+            ),
+            supported_read_isolation_modes=("entitled_refs",),
+            supported_execution_modes=self._supported_execution_modes,
+            supported_input_delivery_modes=("inline",),
+            supported_network_policies=("denied",),
+            supports_dynamic_operation_authorization=False,
+            admission_state="in_process_test_double",
+        )
+
+    def execute(self, request: AuthorizedAgentExecutionRequest, host):
+        self.calls += 1
+        profile = self._release_registry.get_execution_profile(
+            request.execution_profile_ref,
+            request.execution_profile_sha256,
+        )
+        if self._on_execute is not None:
+            self._on_execute(request, host)
+        if self._result_type_override is not None:
+            return self._result_type_override
+        submission = OutputSubmission(
+            output_slot_id="result",
+            local_handle="output/result.json",
+        )
+        outputs: tuple[OutputSubmission, ...] = ()
+        failure = None
+        if self._terminal_status == "completed":
+            host.stage_output_bytes(submission, self._payload)
+            outputs = (submission,)
+        else:
+            host.stage_output_bytes(submission, self._payload)
+            failure = AgentExecutionFailure(
+                failure_class="provider",
+                retry_disposition_id="retry_allowed",
+                failure_scope_id="attempt_only",
+                retry_after_seconds=None,
+                detail_ref=None,
+                detail_sha256=None,
+            )
+        return AgentExecutionResult(
+            terminal_status=self._terminal_status,
+            provider_id=profile.provider_id,
+            model_id=profile.model_id,
+            runtime_version="0.0.0",
+            outputs=outputs,
+            model_operation_ref_ids=(),
+            tool_operation_ref_ids=(),
+            input_tokens=3,
+            output_tokens=2,
+            cache_read_tokens=None,
+            cache_creation_tokens=None,
+            estimated_cost_usd=None,
+            provider_charge_usd=None,
+            context=AdapterContextResult(
+                disposition_id="stateless_closed",
+                context_ref=None,
+                compatibility_sha256=request.execution_profile_sha256,
+            ),
+            failure=failure,
+            cell_local_trace_ref="cell-trace:stub-attempt",
+            cell_local_trace_sha256="7" * 64,
+        )
+
+
+def _stub_compiled(tmp_path: Path, **overrides):
+    parameters = {
+        "output_resolution_policy": OutputResolutionPolicy.DIRECT_SINGLE,
+        "execution_profile_id": "stub_profile",
+        "executor_adapter_id": "stub_inline_executor",
+        "executor_adapter_revision": "v1",
+        "transport_kind": "in_process_test",
+        "provider_id": "provider_stub",
+        "model_id": "model_stub",
+    }
+    parameters.update(overrides)
+    return _compile_native_module(tmp_path, **parameters)
+
+
+def _registered_stub(
+    compiled,
+    **adapter_overrides,
+) -> tuple[RuntimeReleaseRegistry, AgentExecutionAdapterRegistry, _StubInlineAdapter]:
+    registry = _register_compiled_for_evaluation(compiled)
+    adapter = _StubInlineAdapter(release_registry=registry, **adapter_overrides)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    return registry, adapters, adapter
+
+
 def _assert_completed_provider_run(run, artifact_host) -> dict[str, object]:
     assert run.module_run.purpose is ModuleExecutionPurpose.EVALUATION
     assert len(run.attempts) == 1
@@ -327,6 +600,17 @@ def _assert_completed_provider_run(run, artifact_host) -> dict[str, object]:
         artifact_host.read_bytes(
             run.outputs[0].output_ref,
             run.outputs[0].output_sha256,
+        )
+    )
+
+
+def _failure_detail(run, artifact_host) -> dict[str, object]:
+    attempt = run.attempts[0]
+    assert attempt.failure_detail_ref is not None
+    return json.loads(
+        artifact_host.read_bytes(
+            attempt.failure_detail_ref,
+            attempt.failure_detail_sha256,
         )
     )
 
@@ -395,14 +679,18 @@ def test_run_module_evaluation_executes_registered_codex_transport(
         invoker=invoker,
         codex_bin="codex-test-stub",
     )
-    executors = ModuleExecutorRegistry()
-    executors.register(executor.executor_adapter_id, executor)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(compiled, prompt_ref, suffix="codex_stub")
+    authority, _ = _evaluation_authority(registry, request)
 
     run = run_module(
-        _evaluation_request(compiled, prompt_ref, suffix="codex_stub"),
+        request,
         release_registry=registry,
-        executors=executors,
+        adapters=adapters,
+        artifact_host=artifact_host,
         ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
         clock=lambda: _TEST_TIME,
     )
 
@@ -444,19 +732,23 @@ def test_run_module_records_registered_codex_transport_failure(
         invoker=invoker,
         codex_bin="codex-test-stub",
     )
-    executors = ModuleExecutorRegistry()
-    executors.register(executor.executor_adapter_id, executor)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(compiled, prompt_ref, suffix="codex_failure")
+    authority, _ = _evaluation_authority(registry, request)
 
     run = run_module(
-        _evaluation_request(compiled, prompt_ref, suffix="codex_failure"),
+        request,
         release_registry=registry,
-        executors=executors,
+        adapters=adapters,
+        artifact_host=artifact_host,
         ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
         clock=lambda: _TEST_TIME,
     )
 
     assert run.attempts[0].status == "failed"
-    assert run.attempts[0].failure_class == "provider_failure"
+    assert run.attempts[0].failure_class == "provider"
     assert run.attempts[0].failure_detail_ref is not None
     assert run.attempts[0].usage.input_tokens == 5
     assert run.resolution is None
@@ -486,15 +778,19 @@ def test_run_module_provider_transport_still_rejects_protected_module(
         invoker=invoker,
         codex_bin="codex-test-stub",
     )
-    executors = ModuleExecutorRegistry()
-    executors.register(executor.executor_adapter_id, executor)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(compiled, prompt_ref, suffix="protected")
+    authority, _ = _evaluation_authority(registry, request)
 
     with pytest.raises(NotImplementedError, match="protected Module operations"):
         run_module(
-            _evaluation_request(compiled, prompt_ref, suffix="protected"),
+            request,
             release_registry=registry,
-            executors=executors,
+            adapters=adapters,
+            artifact_host=artifact_host,
             ledger=InMemoryModuleExecutionLedger(),
+            authority=authority,
         )
 
     assert entered is False
@@ -524,23 +820,636 @@ def test_run_module_provider_transport_still_rejects_production_purpose(
         invoker=invoker,
         codex_bin="codex-test-stub",
     )
-    executors = ModuleExecutorRegistry()
-    executors.register(executor.executor_adapter_id, executor)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(
+        compiled,
+        prompt_ref,
+        suffix="production",
+        purpose=ModuleExecutionPurpose.WORKFLOW,
+    )
 
     with pytest.raises(NotImplementedError, match="production Module execution"):
         run_module(
-            _evaluation_request(
-                compiled,
-                prompt_ref,
-                suffix="production",
-                purpose=ModuleExecutionPurpose.WORKFLOW,
-            ),
+            request,
             release_registry=registry,
-            executors=executors,
+            adapters=adapters,
+            artifact_host=artifact_host,
             ledger=InMemoryModuleExecutionLedger(),
         )
 
     assert entered is False
+
+
+def test_model_module_without_authority_is_rejected_before_dispatch(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry, adapters, adapter = _registered_stub(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="no_authority")
+    request = _evaluation_request(compiled, prompt_ref, suffix="no_authority")
+
+    with pytest.raises(PermissionError, match="module execution authority"):
+        run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+        )
+
+    assert adapter.calls == 0
+
+
+def test_denied_product_decision_fails_the_attempt_without_provider_call(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry, adapters, adapter = _registered_stub(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="denied")
+    request = _evaluation_request(compiled, prompt_ref, suffix="denied")
+    authority, product = _evaluation_authority(registry, request)
+    product.operation_effect = GatewayDecisionEffect.DENY
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert adapter.calls == 0
+    attempt = run.attempts[0]
+    assert attempt.status == "failed"
+    assert attempt.failure_class == "authorization"
+    assert attempt.output_refs == ()
+    assert run.outputs == ()
+    assert run.resolution is None
+    detail = _failure_detail(run, artifact_host)
+    assert detail["disposition"] == "product_operation_denied"
+    assert detail["reason_code"] == "operation_denied"
+
+
+def test_fence_closed_while_result_in_flight_quarantines_the_late_result(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="in_flight")
+    request = _evaluation_request(compiled, prompt_ref, suffix="in_flight")
+    authority, product = _evaluation_authority(registry, request)
+
+    def revoke_during_execution(_request, _host) -> None:
+        product.context_state = ExecutionAuthorizationContextState.REVOKED
+
+    adapter = _StubInlineAdapter(
+        release_registry=registry,
+        on_execute=revoke_during_execution,
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert adapter.calls == 1
+    attempt = run.attempts[0]
+    assert attempt.status == "failed"
+    assert attempt.failure_class == "authorization"
+    assert attempt.output_refs == ()
+    assert run.outputs == ()
+    assert run.resolution is None
+    assert attempt.usage.input_tokens == 3
+    detail = _failure_detail(run, artifact_host)
+    assert detail["disposition"] == "stale_result_quarantined"
+
+
+def test_fence_commit_is_atomic_against_concurrent_invalidation(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry = _register_compiled_for_evaluation(compiled)
+    request = _evaluation_request(
+        compiled,
+        _evaluation_prompt(
+            InMemoryCellArtifactStore(), compiled, suffix="atomic"
+        ),
+        suffix="atomic",
+    )
+    authority, product = _evaluation_authority(registry, request)
+    controller = authority.controller
+    binding_ref = authority.binding.binding_ref
+
+    entered = threading.Event()
+    fence_flipped = threading.Event()
+
+    def invalidate() -> None:
+        entered.wait(timeout=5)
+        product.context_state = ExecutionAuthorizationContextState.REVOKED
+        controller.revalidate(
+            binding_ref=binding_ref,
+            observed_at_utc="2026-08-09T12:00:01Z",
+        )
+        fence_flipped.set()
+
+    invalidator = threading.Thread(target=invalidate)
+    invalidator.start()
+
+    def finalize(fence: ExecutionAuthorizationFence) -> str:
+        entered.set()
+        time.sleep(0.2)
+        assert not fence_flipped.is_set(), (
+            "a fence transition interleaved inside the atomic commit"
+        )
+        return fence.state.value
+
+    observed_state = controller.finalize_under_current_fence(
+        binding_ref,
+        finalize,
+    )
+    invalidator.join(timeout=5)
+
+    assert observed_state == ExecutionAuthorizationFenceState.OPEN.value
+    assert fence_flipped.is_set()
+    closed = controller._ledger.current_fence(binding_ref)
+    assert closed.state is ExecutionAuthorizationFenceState.FENCED
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    ("input_package", "execution_scope"),
+)
+def test_authority_binding_closure_mismatch_is_zero_invocation(
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry, adapters, adapter = _registered_stub(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix=mismatch)
+    request = _evaluation_request(compiled, prompt_ref, suffix=mismatch)
+    if mismatch == "input_package":
+        authority, _ = _evaluation_authority(
+            registry,
+            request,
+            input_package_ref="artifact-ref:another-package",
+            input_package_sha256="9" * 64,
+        )
+    else:
+        authority, _ = _evaluation_authority(
+            registry,
+            request,
+            scope_id=isolated_execution_scope_id(
+                "scope-ref:another-execution",
+                "8" * 64,
+            ),
+        )
+
+    with pytest.raises(PermissionError, match="authority closure mismatch"):
+        run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            authority=authority,
+            clock=lambda: _TEST_TIME,
+        )
+
+    assert adapter.calls == 0
+
+
+def test_wrong_adapter_revision_is_zero_invocation(tmp_path: Path) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry = _register_compiled_for_evaluation(compiled)
+    adapter = _StubInlineAdapter(
+        release_registry=registry,
+        adapter_revision="v2",
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="revision")
+    request = _evaluation_request(compiled, prompt_ref, suffix="revision")
+    authority, _ = _evaluation_authority(registry, request)
+
+    with pytest.raises(KeyError, match="stub_inline_executor@v1"):
+        run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            authority=authority,
+            clock=lambda: _TEST_TIME,
+        )
+
+    assert adapter.calls == 0
+
+
+def test_descriptor_capability_mismatch_is_zero_invocation(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry = _register_compiled_for_evaluation(compiled)
+    adapter = _StubInlineAdapter(
+        release_registry=registry,
+        supported_execution_modes=("agent",),
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="capability")
+    request = _evaluation_request(compiled, prompt_ref, suffix="capability")
+    authority, _ = _evaluation_authority(registry, request)
+
+    with pytest.raises(PermissionError, match="capability does not cover"):
+        run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            authority=authority,
+            clock=lambda: _TEST_TIME,
+        )
+
+    assert adapter.calls == 0
+
+
+@pytest.mark.parametrize("misbehavior", ("raises", "invalid_type"))
+def test_adapter_misbehavior_records_bounded_conformance_failure(
+    tmp_path: Path,
+    misbehavior: str,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry = _register_compiled_for_evaluation(compiled)
+    if misbehavior == "raises":
+        def explode(_request, _host) -> None:
+            raise RuntimeError("adapter internal defect")
+
+        adapter = _StubInlineAdapter(
+            release_registry=registry,
+            on_execute=explode,
+        )
+    else:
+        adapter = _StubInlineAdapter(
+            release_registry=registry,
+            result_type_override={"not": "a result"},
+        )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix=misbehavior)
+    request = _evaluation_request(compiled, prompt_ref, suffix=misbehavior)
+    authority, _ = _evaluation_authority(registry, request)
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    attempt = run.attempts[0]
+    assert attempt.status == "failed"
+    assert attempt.failure_class == "unknown"
+    assert attempt.output_refs == ()
+    assert run.outputs == ()
+    assert run.resolution is None
+    detail = _failure_detail(run, artifact_host)
+    assert detail["disposition"] == "adapter_conformance_failure"
+
+
+def test_failed_result_with_staged_bytes_produces_no_resolution(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry, adapters, adapter = _registered_stub(
+        compiled,
+        terminal_status="failed",
+    )
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="staged_failed")
+    request = _evaluation_request(compiled, prompt_ref, suffix="staged_failed")
+    authority, _ = _evaluation_authority(registry, request)
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert adapter.calls == 1
+    assert run.attempts[0].status == "failed"
+    assert run.attempts[0].failure_class == "provider"
+    assert run.outputs == ()
+    assert run.resolution is None
+
+
+def test_duplicate_request_replays_without_reinvoking_the_provider(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry, adapters, adapter = _registered_stub(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="duplicate")
+    request = _evaluation_request(compiled, prompt_ref, suffix="duplicate")
+    authority, _ = _evaluation_authority(registry, request)
+    ledger = InMemoryModuleExecutionLedger()
+
+    first = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=ledger,
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+    replay = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=ledger,
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert adapter.calls == 1
+    assert replay == first
+    assert first.attempts[0].status == "completed"
+
+
+def _operation_free_release(
+    *,
+    transport_kind: str,
+    executor_adapter_id: str,
+    executor_adapter_revision: str,
+) -> tuple[RuntimeReleaseRegistry, object, object]:
+    """Register one deterministic operation-free Module and its profile."""
+
+    from agent_runtime.contracts.registry_release_definition import (
+        ExecutionProfileRelease,
+        ModuleEntryPolicy,
+        ModuleKind,
+        RuntimeModuleRelease,
+    )
+
+    profile = ExecutionProfileRelease.build(
+        execution_profile_id="profile_operation_free",
+        execution_profile_version="v1",
+        release_ref="execution-profile:profile-operation-free@v1",
+        executor_adapter_id=executor_adapter_id,
+        executor_adapter_revision=executor_adapter_revision,
+        transport_kind=transport_kind,
+        provider_id="provider_stub",
+        model_id="model_stub",
+        reasoning_profile="none",
+        execution_mode="tool_free",
+        semantic_input_delivery_mode="inline",
+        attempt_workspace_policy="none",
+        gateway_access_reasons=(),
+        output_constraint_mode="prompt_only_json",
+        tool_policy=(),
+        network_policy="denied",
+        context_policy_ref="context-policy:operation-free@v1",
+        context_policy_sha256="a" * 64,
+        timeout_seconds=60,
+    )
+    module = RuntimeModuleRelease.build(
+        module_id="module_operation_free",
+        module_version="v1",
+        release_ref="runtime-module:module-operation-free@v1",
+        module_kind=ModuleKind.DETERMINISTIC,
+        owner_contract_ref="contract:operation-free@v1",
+        owner_contract_sha256="a" * 64,
+        source_skill_package_ref=None,
+        source_skill_package_sha256=None,
+        source_export_id=None,
+        executable_ref="callable:operation-free@v1",
+        executable_sha256="a" * 64,
+        input_schema_ref="schema:operation_free_input@v1",
+        input_schema_sha256="a" * 64,
+        output_schema_ref="schema:operation_free_output@v1",
+        output_schema_sha256="a" * 64,
+        prompt_bundle_ref=None,
+        prompt_bundle_sha256=None,
+        declared_operation_ids=(),
+        context_policy_ref="context-policy:operation-free@v1",
+        context_policy_sha256="a" * 64,
+        evaluation_policy_ref="evaluation-policy:operation-free@v1",
+        evaluation_policy_sha256="a" * 64,
+        retry_policy_ref="retry-policy:operation-free@v1",
+        retry_policy_sha256="a" * 64,
+        compatible_transport_kinds=(transport_kind,),
+        entry_policy=ModuleEntryPolicy.STANDALONE_ALLOWED,
+        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+    )
+    admissions = tuple(
+        ReleaseAdmissionRecord.build(
+            admission_id=f"admission_operation_free_{index:02d}",
+            subject_kind=kind,
+            subject_id=subject_id,
+            release_ref=release_ref,
+            release_sha256=release_sha256,
+            state=ReleaseAdmissionState.CANDIDATE,
+            evidence_members=(),
+            recorded_at_utc=_TEST_TIME,
+        )
+        for index, (kind, subject_id, release_ref, release_sha256) in enumerate(
+            (
+                (
+                    ReleaseSubjectKind.EXECUTION_PROFILE,
+                    profile.execution_profile_id,
+                    profile.release_ref,
+                    profile.release_sha256,
+                ),
+                (
+                    ReleaseSubjectKind.RUNTIME_MODULE,
+                    module.module_id,
+                    module.release_ref,
+                    module.release_sha256,
+                ),
+            )
+        )
+    )
+    registry = RuntimeReleaseRegistry()
+    registry.register_bundle(
+        RuntimeReleaseBundle(
+            execution_profiles=(profile,),
+            modules=(module,),
+            admissions=admissions,
+        )
+    )
+    return registry, module, profile
+
+
+def _operation_free_request(module, profile, *, suffix: str) -> ModuleExecutionRequest:
+    return ModuleExecutionRequest.build(
+        request_id=f"request_operation_free_{suffix}",
+        purpose=ModuleExecutionPurpose.TEST,
+        module_release_ref=module.release_ref,
+        module_release_sha256=module.release_sha256,
+        isolated_scope_ref=f"scope-ref:operation-free-{suffix}",
+        isolated_scope_sha256="2" * 64,
+        input_package_ref=f"artifact-ref:operation-free-{suffix}",
+        input_package_sha256="3" * 64,
+        inputs=(),
+        variants=(
+            ModuleVariantRequest(
+                arm_key=f"operation_free_{suffix}",
+                replicate_index=0,
+                execution_profile_ref=profile.release_ref,
+                execution_profile_sha256=profile.release_sha256,
+                prompt_envelope_ref=None,
+                prompt_envelope_sha256=None,
+            ),
+        ),
+        idempotency_key=f"idempotency_operation_free_{suffix}",
+    )
+
+
+def test_operation_free_in_process_module_runs_without_authority(
+    tmp_path: Path,
+) -> None:
+    registry, module, profile = _operation_free_release(
+        transport_kind="in_process_test",
+        executor_adapter_id="stub_inline_executor",
+        executor_adapter_revision="v1",
+    )
+    adapter = _StubInlineAdapter(release_registry=registry)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    request = _operation_free_request(module, profile, suffix="local")
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=InMemoryCellArtifactStore(),
+        ledger=InMemoryModuleExecutionLedger(),
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert adapter.calls == 1
+    assert run.attempts[0].status == "completed"
+    assert run.resolution is not None
+    assert run.resolution.resolution_status == "resolved"
+
+
+def test_operation_free_module_cannot_use_a_provider_transport(
+    tmp_path: Path,
+) -> None:
+    registry, module, profile = _operation_free_release(
+        transport_kind="codex_cli",
+        executor_adapter_id="codex_cli_agent_executor",
+        executor_adapter_revision="v2",
+    )
+    artifact_host = InMemoryCellArtifactStore()
+    entered = False
+
+    def invoker(**_fields) -> CodexCliInvocationResult:
+        nonlocal entered
+        entered = True
+        raise AssertionError("operation-free Module reached Provider")
+
+    executor = CodexCliModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces",
+        invoker=invoker,
+        codex_bin="codex-test-stub",
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _operation_free_request(module, profile, suffix="codex")
+
+    with pytest.raises(
+        PermissionError,
+        match="declared model invocation operation",
+    ):
+        run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+        )
+
+    assert entered is False
+
+
+def test_dynamic_operation_callback_fails_closed_without_touching_model_authority(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    registry = _register_compiled_for_evaluation(compiled)
+    observed: dict[str, object] = {}
+
+    def probe_dynamic_authorization(request, host) -> None:
+        intent = ProviderOperationIntent(
+            workflow_execution_id="isolated_scope_dynamic_probe",
+            module_run_id=request.module_run_id,
+            variant_id=request.variant_id,
+            attempt_id=request.attempt_id,
+            capability_id="capability_probe",
+            resource_id="resource_probe",
+            action_id="action_probe",
+            entitlement_snapshot_hash="6" * 64,
+            idempotency_key="dynamic_probe_001",
+            expires_after_seconds=30,
+        )
+        try:
+            host.authorize_operation(intent)
+        except PermissionError as exc:
+            observed["denied"] = str(exc)
+
+    adapter = _StubInlineAdapter(
+        release_registry=registry,
+        on_execute=probe_dynamic_authorization,
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="dynamic")
+    request = _evaluation_request(compiled, prompt_ref, suffix="dynamic")
+    authority, _ = _evaluation_authority(registry, request)
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert "Gateway capability slice" in str(observed["denied"])
+    assert run.attempts[0].status == "completed"
+    assert run.resolution is not None
 
 
 @pytest.mark.skipif(
@@ -563,14 +1472,22 @@ def test_live_codex_evaluation_runs_through_run_module(tmp_path: Path) -> None:
         artifact_host=artifact_host,
         workspace_root=tmp_path / "workspaces",
     )
-    executors = ModuleExecutorRegistry()
-    executors.register(executor.executor_adapter_id, executor)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(compiled, prompt_ref, suffix="codex_live")
+    authority, _ = _evaluation_authority(
+        registry,
+        request,
+        observed_at_utc=_TEST_TIME,
+    )
 
     run = run_module(
-        _evaluation_request(compiled, prompt_ref, suffix="codex_live"),
+        request,
         release_registry=registry,
-        executors=executors,
+        adapters=adapters,
+        artifact_host=artifact_host,
         ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
     )
 
     output = _assert_completed_provider_run(run, artifact_host)
@@ -611,20 +1528,88 @@ def test_live_claude_evaluation_runs_through_run_module(tmp_path: Path) -> None:
         artifact_host=artifact_host,
         workspace_root=tmp_path / "workspaces",
     )
-    executors = ModuleExecutorRegistry()
-    executors.register(executor.executor_adapter_id, executor)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(compiled, prompt_ref, suffix="claude_live")
+    authority, _ = _evaluation_authority(registry, request)
 
     run = run_module(
-        _evaluation_request(compiled, prompt_ref, suffix="claude_live"),
+        request,
         release_registry=registry,
-        executors=executors,
+        adapters=adapters,
+        artifact_host=artifact_host,
         ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
     )
 
     output = _assert_completed_provider_run(run, artifact_host)
     assert isinstance(output["value"], str)
     assert run.attempts[0].usage.output_tokens is not None
     _emit_live_provider_evidence(run, compiled)
+
+
+def _direct_adapter_request(
+    compiled,
+    prompt_ref,
+    *,
+    suffix: str,
+) -> AuthorizedAgentExecutionRequest:
+    return AuthorizedAgentExecutionRequest.build(
+        workflow_execution_id=None,
+        isolated_scope_ref=f"scope-ref:native-{suffix}",
+        isolated_scope_sha256="3" * 64,
+        module_run_id=f"module_run_{suffix}",
+        variant_id=f"variant_{suffix}",
+        attempt_id=f"attempt_{suffix}",
+        module_id=compiled.module.module_id,
+        module_release_ref=compiled.module.release_ref,
+        module_release_sha256=compiled.module.release_sha256,
+        execution_profile_id=compiled.execution_profile.execution_profile_id,
+        execution_profile_ref=compiled.execution_profile.release_ref,
+        execution_profile_sha256=compiled.execution_profile.release_sha256,
+        attempt_begin_receipt_ref=f"attempt-begin:attempt_{suffix}",
+        attempt_begin_receipt_sha256="4" * 64,
+        prompt_envelope_ref=prompt_ref.artifact_ref,
+        prompt_envelope_sha256=prompt_ref.artifact_sha256,
+        output_schema_ref=compiled.module.output_schema_ref,
+        output_schema_sha256=compiled.module.output_schema_sha256,
+        execution_authorization_binding_ref=(
+            "runtime-authorization:binding_direct_test"
+        ),
+        execution_authorization_binding_sha256="5" * 64,
+        protected_operation_intent_ref="runtime-authorization:intent_direct_test",
+        protected_operation_intent_sha256="6" * 64,
+        product_operation_decision_ref="product-decision:direct_test",
+        product_operation_decision_sha256="7" * 64,
+        gateway_authorization_observation_ref=(
+            "runtime-authorization:observation_direct_test"
+        ),
+        gateway_authorization_observation_sha256="8" * 64,
+        operation_grant_ref=None,
+        operation_grant_sha256=None,
+        grant_disposition_ref=None,
+        input_closure_sha256=hashlib.sha256(b"[]").hexdigest(),
+        data_use_purpose_id="module_evaluation_execution",
+        authorized_inputs=(),
+        idempotency_key=f"idempotency_direct_{suffix}",
+    )
+
+
+class _RecordingHost:
+    """Minimal canonical host double for direct adapter tests."""
+
+    def __init__(self) -> None:
+        self.staged: dict[str, bytes] = {}
+
+    def read_authorized_input(self, local_handle: str) -> bytes:
+        raise PermissionError(f"no authorized input: {local_handle}")
+
+    def stage_output_bytes(self, submission, content: bytes) -> None:
+        submission.validate()
+        self.staged[submission.output_slot_id] = content
+
+    def authorize_operation(self, request):
+        raise PermissionError("dynamic operation authorization is not available")
 
 
 def test_codex_native_structured_output_executes_end_to_end(
@@ -705,21 +1690,10 @@ def test_codex_native_structured_output_executes_end_to_end(
         invoker=invoker,
         codex_bin="codex-test-stub",
     )
+    host = _RecordingHost()
     result = executor.execute(
-        ModuleExecutorRequest(
-            module_run_id="module_run_native_001",
-            variant_id="variant_native_001",
-            attempt_id="attempt_native_001",
-            module=compiled.module,
-            execution_profile=compiled.execution_profile,
-            input_package_ref="artifact-ref:input-package-001",
-            input_package_sha256="2" * 64,
-            inputs=(),
-            prompt_envelope_ref=prompt_ref.artifact_ref,
-            prompt_envelope_sha256=prompt_ref.artifact_sha256,
-            isolated_scope_ref="scope-ref:native-001",
-            isolated_scope_sha256="3" * 64,
-        )
+        _direct_adapter_request(compiled, prompt_ref, suffix="native_001"),
+        host,
     )
 
     assert OUTPUT_SCHEMA_MARKER not in str(captured["prompt"])
@@ -735,9 +1709,11 @@ def test_codex_native_structured_output_executes_end_to_end(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    assert result.outputs[0].output_sha256 == hashlib.sha256(
-        canonical
-    ).hexdigest()
+    assert result.terminal_status == "completed"
+    assert result.outputs[0].output_slot_id == "result"
+    assert host.staged["result"] == canonical
+    assert result.provider_id == compiled.execution_profile.provider_id
+    assert result.cell_local_trace_ref.startswith("cell-artifact:")
     assert lease_events == [
         "enter:attempt_native_001",
         "exit:attempt_native_001",
@@ -749,35 +1725,58 @@ def test_codex_native_structured_output_executes_end_to_end(
         yield  # pragma: no cover
 
     monkeypatch.setattr(codex_module, "lease_attempt_workspace", conflicting_lease)
-    with pytest.raises(ModuleExecutorFailure) as raised:
-        executor.execute(
-            ModuleExecutorRequest(
-                module_run_id="module_run_native_001",
-                variant_id="variant_native_001",
-                attempt_id="attempt_native_001",
-                module=compiled.module,
-                execution_profile=compiled.execution_profile,
-                input_package_ref="artifact-ref:input-package-001",
-                input_package_sha256="2" * 64,
-                inputs=(),
-                prompt_envelope_ref=prompt_ref.artifact_ref,
-                prompt_envelope_sha256=prompt_ref.artifact_sha256,
-                isolated_scope_ref="scope-ref:native-001",
-                isolated_scope_sha256="3" * 64,
-            )
-        )
-    failure = raised.value
-    assert failure.failure_class == "workspace_initialization_failure"
-    assert failure.failure_code == "codex_attempt_workspace_unavailable"
-    assert failure.detail is not None
+    conflicted = executor.execute(
+        _direct_adapter_request(compiled, prompt_ref, suffix="native_002"),
+        _RecordingHost(),
+    )
+    assert conflicted.terminal_status == "failed"
+    assert conflicted.failure is not None
+    assert conflicted.failure.failure_class == "dependency_unavailable"
+    assert conflicted.failure.retry_disposition_id == "retry_denied"
     detail = json.loads(
         artifact_host.read_bytes(
-            failure.detail.detail_ref,
-            failure.detail.detail_sha256,
+            conflicted.failure.detail_ref,
+            conflicted.failure.detail_sha256,
         )
     )
     assert detail["retryable"] is False
-    assert detail["failure_class"] == "workspace_initialization_failure"
+    assert detail["failure_code"] == "codex_attempt_workspace_unavailable"
+
+
+def test_direct_adapter_refuses_model_invocation_without_evidence(
+    tmp_path: Path,
+) -> None:
+    compiled = _compile_native_module(tmp_path)
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="no_evidence")
+    executor = CodexCliModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces",
+        invoker=lambda **_fields: pytest.fail("Provider must not be reached"),
+        codex_bin="codex-test-stub",
+    )
+    granted = _direct_adapter_request(compiled, prompt_ref, suffix="no_evidence")
+    fields = {
+        name: getattr(granted, name)
+        for name in granted.__dataclass_fields__
+        if name != "request_sha256"
+    }
+    fields.update(
+        execution_authorization_binding_ref=None,
+        execution_authorization_binding_sha256=None,
+        protected_operation_intent_ref=None,
+        protected_operation_intent_sha256=None,
+        product_operation_decision_ref=None,
+        product_operation_decision_sha256=None,
+        gateway_authorization_observation_ref=None,
+        gateway_authorization_observation_sha256=None,
+    )
+    request = AuthorizedAgentExecutionRequest.build(**fields)
+
+    with pytest.raises(PermissionError, match="operation authorization evidence"):
+        executor.execute(request, _RecordingHost())
 
 
 def test_adapters_no_longer_reference_the_removed_prompt_bundle_local() -> None:

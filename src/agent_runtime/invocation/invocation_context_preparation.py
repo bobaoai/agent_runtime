@@ -5,8 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 
-from ..contracts.execution_module_definition import ModuleExecutorRequest
-from ..contracts.registry_release_definition import ModuleKind
+from ..contracts.invocation_adapter_definition import (
+    AuthorizedAgentExecutionRequest,
+)
+from ..contracts.registry_release_definition import (
+    ExecutionProfileRelease,
+    ModuleKind,
+    RuntimeModuleRelease,
+)
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_prompt_assembly import (
     validate_prompt_output_constraint,
@@ -31,29 +37,42 @@ class InvocationExecutionExpectation:
 
 @dataclass(frozen=True)
 class PreparedInvocationContext:
-    """Exact model-visible prompt and registered task-plane output schema."""
+    """Exact resolved releases, model-visible prompt, and output schema."""
 
+    module: RuntimeModuleRelease
+    profile: ExecutionProfileRelease
     prompt: str
     registered_output_schema: dict[str, object]
 
 
 def prepare_registered_invocation_context(
     *,
-    request: ModuleExecutorRequest,
+    request: AuthorizedAgentExecutionRequest,
     release_registry: RuntimeReleaseRegistry,
     artifact_host: ModuleArtifactHost,
     expectation: InvocationExecutionExpectation,
 ) -> PreparedInvocationContext:
     """Validate shared release closure and load one exact Prompt Envelope."""
 
-    if type(request) is not ModuleExecutorRequest:
-        raise ValueError("request must be an exact ModuleExecutorRequest")
-    module = request.module
-    profile = request.execution_profile
+    if type(request) is not AuthorizedAgentExecutionRequest:
+        raise ValueError("request must be an exact AuthorizedAgentExecutionRequest")
+    request.validate()
+    module = release_registry.get_module(
+        request.module_release_ref,
+        request.module_release_sha256,
+    )
+    profile = release_registry.get_execution_profile(
+        request.execution_profile_ref,
+        request.execution_profile_sha256,
+    )
     module.validate()
     profile.validate()
     if module.module_kind is not ModuleKind.AGENT:
         raise ValueError("Agent Executor accepts only Agent Modules")
+    if module.declared_operation_ids and not request.has_operation_evidence:
+        raise PermissionError(
+            "model invocation requires committed operation authorization evidence"
+        )
     if profile.executor_adapter_id != expectation.executor_adapter_id:
         raise ValueError("Execution Profile targets another Executor adapter")
     if profile.executor_adapter_revision != expectation.executor_adapter_revision:
@@ -79,6 +98,11 @@ def prepare_registered_invocation_context(
         profile.tool_policy != expectation.tool_policy
     ):
         raise ValueError("Execution Profile tool policy differs from Executor mode")
+    if (
+        request.output_schema_ref != module.output_schema_ref
+        or request.output_schema_sha256 != module.output_schema_sha256
+    ):
+        raise ValueError("request output schema differs from the Module Release")
     if module.prompt_bundle_ref is None or module.prompt_bundle_sha256 is None:
         raise ValueError("Agent Module lacks an exact Prompt Bundle")
     prompt_bundle = release_registry.get_prompt_bundle(
@@ -112,6 +136,8 @@ def prepare_registered_invocation_context(
         output_constraint_mode=profile.output_constraint_mode,
     )
     return PreparedInvocationContext(
+        module=module,
+        profile=profile,
         prompt=prompt,
         registered_output_schema=registered_output_schema,
     )

@@ -388,16 +388,23 @@ content verification, provider A/B adapters, Temporal recovery, and an
 authorized read-only Live Inspector over the formal records. These surfaces
 are implemented and tested; they are no longer listed as future work.
 
-The public `run_module()` Test/Evaluation path now admits explicitly registered
-provider-backed Executors as well as in-process test doubles. The following
-terms describe separate dimensions and must not be used interchangeably:
+The public `run_module()` Test/Evaluation path is one authorization-enforcing
+execution kernel. Every invocation — explicitly registered provider adapters
+and in-process test doubles alike — crosses the canonical
+`AuthorizedAgentExecutionAdapter` contract, and a Module that declares a model
+operation requires a `ModuleExecutionAuthority`: its AR09 execution
+authorization binding, fence, protected-operation intent, and Product
+operation decision are resolved and validated before the provider transport is
+entered, and the committed fence is re-read inside the atomic finalization
+that makes outputs authoritative. The following terms describe separate
+dimensions and must not be used interchangeably:
 
 | Dimension | Question answered | Current values or examples |
 | --- | --- | --- |
 | Execution purpose | Why is this run being performed? | `test`, `evaluation`, `workflow`, `standalone`, `replay` |
-| Provider transport | How is the Executor reached? | `in_process_test`, `claude_agent_sdk`, `codex_cli` |
+| Provider transport | How is the adapter reached? | `transport_kind`: `in_process_test`, `claude_agent_sdk`, `codex_cli`; `transport_family`: `in_process`, `sdk`, `cli`, `api` |
 | Capability profile | What may the model do and receive? | `execution_mode`, semantic input delivery, Attempt workspace, Gateway tools, and network policy |
-| Runtime admission | May this exact request execute now? | Purpose gate, release state, Module operations, exact profile, and registered Executor must all pass |
+| Runtime admission | May this exact request execute now? | Purpose gate, release state, Module operations, exact profile, registered adapter identity and capability coverage, and — for model operations — committed AR09 authorization evidence must all pass |
 
 `production` is not a `ModuleExecutionPurpose` value. It describes a lifecycle
 and admission scope normally entered through `workflow` or `standalone`; those
@@ -407,10 +414,10 @@ purposes are not admitted by the current public entry point.
 
 | Purpose and Module shape | Capability profile | Registered transport | Current result |
 | --- | --- | --- | --- |
-| `test` or `evaluation`, no protected operation | Exact registered profile | Compatible in-process or Provider transport | Admitted, subject to release and Executor checks |
-| `test` or `evaluation`, model-only operation (`invoke_model` or `model_execute`) | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible, explicitly registered Provider transport | Admitted; live Claude Agent SDK and Codex CLI smoke tests use this row |
-| `test` or `evaluation`, model-only operation | `agent`, writable draft workspace, Gateway tools, or broader network capability | Any | Rejected before Provider invocation by the current first-slice gate |
-| `test` or `evaluation`, any other protected operation | Any | Any | Rejected before Provider invocation pending request/grant binding |
+| `test` or `evaluation`, no protected operation | Exact registered profile | `in_process` transport family only; a provider transport requires a declared model operation | Admitted without authorization evidence, subject to release and adapter checks |
+| `test` or `evaluation`, exactly one model operation (`invoke_model` or `model_execute`) | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible, explicitly registered adapter | Admitted with a required `ModuleExecutionAuthority`; a Product `DENY` or closed fence fails the Attempt with zero provider invocation |
+| `test` or `evaluation`, model operation | `agent`, writable draft workspace, Gateway tools, or broader network capability | Any | Rejected before Provider invocation by the current first-slice gate |
+| `test` or `evaluation`, any other protected operation | Any | Any | Rejected before Provider invocation pending AR09 request/grant binding |
 | `workflow`, `standalone`, or `replay` | Any | Any | Rejected at the current purpose gate before transport resolution or Provider invocation |
 
 The restrictive second row defines only the **currently admitted model-backed
@@ -447,10 +454,11 @@ RUN_PROVIDER_INTEGRATION=1 python -m pytest \
 
 The development version remains appropriate because a Product host must still
 supply and validate its authentication, authorization, governed-data, and
-deployment assembly. The shadow `ModuleExecutor` compatibility seam must also
-converge into the canonical `AuthorizedAgentExecutionAdapter` DTOs and
-normalized failure taxonomy before production admission. End-to-end consumer
-migration remains a release gate, not an implied capability.
+deployment assembly. The shadow `ModuleExecutor` compatibility seam is retired:
+the canonical `AuthorizedAgentExecutionAdapter` DTOs and the bounded failure
+taxonomy are the only execution contract, with no compatibility aliases.
+End-to-end consumer migration remains a release gate, not an implied
+capability.
 
 Two boundaries are intentionally still explicit integration gates. Runtime
 defines `AgentRuntimeProductHostApi`, but a concrete product-host controller

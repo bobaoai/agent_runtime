@@ -2,7 +2,10 @@
 
 These values cross the Execution and Provider product-module boundary. They
 contain immutable references, hashes, normalized usage, and diagnostics; they
-do not choose a provider, execute a Workflow, or persist Runtime records.
+do not choose a provider, execute a Workflow, or persist Runtime records. The
+provider adapter boundary itself is the canonical
+``AuthorizedAgentExecutionAdapter`` contract in
+``invocation_adapter_definition``.
 """
 
 from __future__ import annotations
@@ -25,14 +28,8 @@ from .ledger_lineage_definition import (
     ModuleExecutionVariantRecord,
     ModuleOutputResolutionRecord,
     ModuleRunRecord,
-    ModuleToolCallObservation,
-    ModuleUsageObservation,
 )
-from .registry_release_definition import (
-    ExecutionProfileRelease,
-    ModuleExecutionPurpose,
-    RuntimeModuleRelease,
-)
+from .registry_release_definition import ModuleExecutionPurpose
 
 
 def _canonical_sha256(payload: Mapping[str, Any] | list[Any]) -> str:
@@ -266,102 +263,6 @@ class ModuleFailureDetailBinding:
             raise ValueError("invalid failure detail media_type")
 
 
-class ModuleExecutorFailure(RuntimeError):
-    """Typed post-invocation failure with Runtime-owned diagnostic lineage."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        failure_class: str,
-        failure_code: str,
-        usage: ModuleUsageObservation,
-        tool_calls: tuple[ModuleToolCallObservation, ...] = (),
-        detail: ModuleFailureDetailBinding | None = None,
-    ) -> None:
-        super().__init__(message)
-        validate_id("failure_class", failure_class)
-        validate_id("failure_code", failure_code)
-        usage.validate()
-        validate_exact_record_tuple(
-            "tool_calls",
-            tool_calls,
-            expected_type=ModuleToolCallObservation,
-            item_validator=lambda tool_call: tool_call.validate(),
-            unique_key=lambda tool_call: tool_call.tool_call_id,
-            unique_key_label="tool_call_id",
-            require_non_empty=False,
-        )
-        if detail is not None:
-            if type(detail) is not ModuleFailureDetailBinding:
-                raise ValueError("detail must be a ModuleFailureDetailBinding")
-            detail.validate()
-        self.failure_class = failure_class
-        self.failure_code = failure_code
-        self.usage = usage
-        self.tool_calls = tool_calls
-        self.detail = detail
-
-
-@dataclass(frozen=True)
-class ModuleExecutorRequest:
-    """Variant-bound request passed to one registered Executor implementation."""
-
-    module_run_id: str
-    variant_id: str
-    attempt_id: str
-    module: RuntimeModuleRelease
-    execution_profile: ExecutionProfileRelease
-    input_package_ref: str
-    input_package_sha256: str
-    inputs: tuple[ModuleInputBinding, ...]
-    prompt_envelope_ref: str | None
-    prompt_envelope_sha256: str | None
-    isolated_scope_ref: str
-    isolated_scope_sha256: str
-
-
-@dataclass(frozen=True)
-class ModuleExecutorResult:
-    """Normalized output of one synthetic or admitted Module Executor."""
-
-    outputs: tuple[ModuleOutputBinding, ...]
-    usage: ModuleUsageObservation
-    tool_calls: tuple[ModuleToolCallObservation, ...] = ()
-
-    def validate(self) -> None:
-        """Validate executor outputs and their provider usage observation."""
-
-        validate_exact_record_tuple(
-            "outputs",
-            self.outputs,
-            expected_type=ModuleOutputBinding,
-            item_validator=lambda output: output.validate(),
-            unique_key=lambda output: output.logical_name,
-            unique_key_label="logical_name",
-            require_non_empty=True,
-        )
-        if type(self.usage) is not ModuleUsageObservation:
-            raise ValueError("usage must be a ModuleUsageObservation")
-        self.usage.validate()
-        validate_exact_record_tuple(
-            "tool_calls",
-            self.tool_calls,
-            expected_type=ModuleToolCallObservation,
-            item_validator=lambda tool_call: tool_call.validate(),
-            unique_key=lambda tool_call: tool_call.tool_call_id,
-            unique_key_label="tool_call_id",
-            require_non_empty=False,
-        )
-
-
-class ModuleExecutor(Protocol):
-    """Replaceable Executor interface for one frozen Module Attempt."""
-
-    def execute(self, request: ModuleExecutorRequest) -> ModuleExecutorResult:
-        """Execute one frozen Variant Attempt and return immutable output refs."""
-
-
 @dataclass(frozen=True)
 class ModuleRunResult:
     """Complete content-free result returned by one Module invocation."""
@@ -399,10 +300,6 @@ class ModuleExecutionLedger(Protocol):
 
 
 __all__ = [
-    "ModuleExecutor",
-    "ModuleExecutorFailure",
-    "ModuleExecutorRequest",
-    "ModuleExecutorResult",
     "ModuleExecutionRequest",
     "ModuleExecutionLedger",
     "ModuleFailureDetailBinding",

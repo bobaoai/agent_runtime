@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import metadata
 from typing import Any, Mapping, Protocol
-
-from jsonschema import Draft202012Validator
 
 from ..contracts.registry_contract_validation import validate_id
 from ..contracts.ledger_lineage_definition import ModuleToolCallObservation
 from ..contracts.execution_module_definition import (
-    ModuleExecutorRequest,
     ModuleFailureDetailBinding,
     ModuleOutputBinding,
 )
+from ..contracts.invocation_adapter_definition import (
+    AuthorizedAgentExecutionRequest,
+)
+
+
+def runtime_package_version() -> str:
+    """Return the installed Runtime package version for adapter descriptors."""
+
+    try:
+        return metadata.version("agent-runtime-core")
+    except metadata.PackageNotFoundError:
+        return "0.0.0.dev0"
 
 
 class ModuleArtifactHost(Protocol):
@@ -48,6 +58,17 @@ class ModuleArtifactHost(Protocol):
     ) -> ModuleFailureDetailBinding:
         """Persist one bounded Cell-local failure diagnostic."""
 
+    def commit_attempt_trace(
+        self,
+        *,
+        module_run_id: str,
+        variant_id: str,
+        attempt_id: str,
+        content: bytes,
+        media_type: str,
+    ) -> tuple[str, str]:
+        """Persist one bounded Cell-local provider trace; return (ref, sha256)."""
+
 
 @dataclass(frozen=True)
 class ProviderToolDefinition:
@@ -59,6 +80,10 @@ class ProviderToolDefinition:
 
     def validate(self) -> None:
         """Validate tool identity, description, and Draft 2020-12 input schema."""
+
+        # Imported lazily so the dependency-free core namespace stays
+        # importable from a clean wheel without provider extras.
+        from jsonschema import Draft202012Validator
 
         validate_id("tool_name", self.tool_name)
         if type(self.description) is not str or not self.description.strip():
@@ -87,11 +112,11 @@ class ModuleProviderToolSession(Protocol):
 
 
 class ModuleProviderToolSessionFactory(Protocol):
-    """Create one isolated tool session from an exact Executor request."""
+    """Create one isolated tool session from an exact authorized request."""
 
     def open_session(
         self,
-        request: ModuleExecutorRequest,
+        request: AuthorizedAgentExecutionRequest,
     ) -> ModuleProviderToolSession:
         """Bind exact Module inputs and authorization to one provider Attempt."""
 
@@ -121,5 +146,6 @@ __all__ = [
     "ModuleProviderToolSession",
     "ModuleProviderToolSessionFactory",
     "ProviderToolDefinition",
+    "runtime_package_version",
     "validate_provider_tool_set",
 ]

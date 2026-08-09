@@ -222,6 +222,16 @@ class InMemoryExecutionAuthorizationLedger:
             self._observations_by_intent[observation.intent_ref] = observation
             return observation
 
+    def commit_under_current_fence(self, binding_ref, operation):
+        """Run one finalization atomically against the committed fence.
+
+        The fence lock is held for the whole operation, so no fence transition
+        can interleave between the compare and the commit.
+        """
+
+        with self._lock:
+            return operation(self.current_fence(binding_ref))
+
 
 class ExecutionAuthorizationController:
     """Coordinate Product status observations with Runtime-owned ordering."""
@@ -446,6 +456,11 @@ class ExecutionAuthorizationController:
             recorded_at_utc=observed_at_utc,
         )
         return self._ledger.commit_intent(intent)
+
+    def finalize_under_current_fence(self, binding_ref, operation):
+        """Run one commit operation atomically against the committed fence."""
+
+        return self._ledger.commit_under_current_fence(binding_ref, operation)
 
     def record_gateway_observation(
         self,

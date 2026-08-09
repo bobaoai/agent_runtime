@@ -488,12 +488,6 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "invocation",
-        "model",
-        "invocation",
-        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
-    ),
-    _source(
-        "invocation",
         "claude_module",
         "invocation",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",

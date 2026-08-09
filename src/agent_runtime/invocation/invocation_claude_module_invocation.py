@@ -1,9 +1,13 @@
-"""Claude Agent SDK Executor for Gateway-backed Runtime Modules.
+"""Claude Agent SDK adapters for registered Agent Runtime Modules.
 
-The Adapter exposes only the exact MCP read operations declared by the selected
-Execution Profile. Governed Source and Expertise content stays behind the
-attempt-local Gateway session; no repository, local input file, shell, browser,
-or direct network tool is visible to the model.
+The adapters implement the canonical ``AuthorizedAgentExecutionAdapter``
+protocol. The Gateway adapter exposes only the exact MCP read operations
+declared by the selected Execution Profile; governed Source and Expertise
+content stays behind the attempt-local Gateway session. No repository, local
+input file, shell, browser, or direct network tool is visible to the model.
+Expected provider failures return a typed failed result; exceptions are
+adapter conformance failures. Outputs are staged through the host and become
+authoritative only through Runtime finalization.
 """
 
 from __future__ import annotations
@@ -33,16 +37,21 @@ from claude_agent_sdk import (
 )
 
 from ..contracts.ledger_lineage_definition import ModuleUsageObservation
-from ..contracts.execution_module_definition import (
-    ModuleExecutorFailure,
-    ModuleExecutorRequest,
-    ModuleExecutorResult,
+from ..contracts.invocation_adapter_definition import (
+    AdapterContextResult,
+    AgentExecutionAdapterDescriptor,
+    AgentExecutionFailure,
+    AgentExecutionResult,
+    AuthorizedAgentExecutionHost,
+    AuthorizedAgentExecutionRequest,
+    OutputSubmission,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_tool_definition import (
     ModuleArtifactHost,
     ModuleProviderToolSessionFactory,
     ProviderToolDefinition,
+    runtime_package_version,
     validate_provider_tool_set,
 )
 from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
@@ -61,10 +70,25 @@ from .invocation_workspace_preparation import (
 
 _MCP_SERVER_NAME = "runtime_data_access"
 _DRAFT_WORKSPACE_TOOLS = ("Read", "Write", "Edit")
+_TRACE_SECTION_LIMIT = 65_536
+
+
+class _ClaudeTerminalFailure(Exception):
+    """Internal control flow carrying one typed failed provider result."""
+
+    def __init__(self, result: AgentExecutionResult) -> None:
+        super().__init__(result.failure.failure_class if result.failure else "")
+        self.result = result
 
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _bounded(text: str) -> str:
+    if len(text) <= _TRACE_SECTION_LIMIT:
+        return text
+    return text[:_TRACE_SECTION_LIMIT] + "\n[truncated]"
 
 
 def _inside(root: Path, raw_path: str) -> bool:
@@ -269,6 +293,7 @@ class _ClaudeAgentSdkExecutorBase:
     expected_network_policy = "denied"
     requires_gateway = False
     workspace_tools: tuple[str, ...] = ()
+    descriptor_admission_state = "integration_tested"
 
     def __init__(
         self,
@@ -282,8 +307,8 @@ class _ClaudeAgentSdkExecutorBase:
     ) -> None:
         required_artifact_methods = (
             "read_bytes",
-            "commit_output",
             "commit_failure_detail",
+            "commit_attempt_trace",
         )
         if any(
             not callable(getattr(artifact_host, method_name, None))
@@ -303,7 +328,39 @@ class _ClaudeAgentSdkExecutorBase:
         self._query = query_fn
         self._max_turns = max_turns
 
-    def execute(self, request: ModuleExecutorRequest) -> ModuleExecutorResult:
+    @property
+    def descriptor(self) -> AgentExecutionAdapterDescriptor:
+        """Return immutable canonical adapter admission metadata."""
+
+        return AgentExecutionAdapterDescriptor(
+            adapter_contract_version="v1",
+            adapter_id=self.executor_adapter_id,
+            adapter_revision=self.executor_adapter_revision,
+            provider_id="anthropic",
+            transport_family="sdk",
+            transport_kind="claude_agent_sdk",
+            runtime_package_id="agent_runtime_core",
+            runtime_package_version=runtime_package_version(),
+            supported_context_modes=("stateless",),
+            supported_output_constraint_modes=(
+                "prompt_only_json",
+                "native_structured_output",
+            ),
+            supported_read_isolation_modes=("entitled_refs",),
+            supported_execution_modes=(self.expected_execution_mode,),
+            supported_input_delivery_modes=(
+                self.expected_semantic_input_delivery_mode,
+            ),
+            supported_network_policies=(self.expected_network_policy,),
+            supports_dynamic_operation_authorization=False,
+            admission_state=self.descriptor_admission_state,
+        )
+
+    def execute(
+        self,
+        request: AuthorizedAgentExecutionRequest,
+        host: AuthorizedAgentExecutionHost,
+    ) -> AgentExecutionResult:
         prepared = prepare_registered_invocation_context(
             request=request,
             release_registry=self._release_registry,
@@ -321,8 +378,19 @@ class _ClaudeAgentSdkExecutorBase:
                 tool_policy=None if self.requires_gateway else (),
             ),
         )
-        module = request.module
-        profile = request.execution_profile
+        try:
+            return self._execute_prepared(request, host, prepared)
+        except _ClaudeTerminalFailure as failure:
+            return failure.result
+
+    def _execute_prepared(
+        self,
+        request: AuthorizedAgentExecutionRequest,
+        host: AuthorizedAgentExecutionHost,
+        prepared,
+    ) -> AgentExecutionResult:
+        module = prepared.module
+        profile = prepared.profile
         registered_output_schema = prepared.registered_output_schema
         prompt = prepared.prompt
 
@@ -392,6 +460,9 @@ class _ClaudeAgentSdkExecutorBase:
                 interrupt=True,
             )
 
+        def current_tool_calls():
+            return session.observations if session is not None else ()
+
         try:
             workspace = prepare_attempt_workspace(
                 workspace_root=self._workspace_root,
@@ -405,20 +476,17 @@ class _ClaudeAgentSdkExecutorBase:
                 },
             )
         except (OSError, AttemptWorkspaceConflictError) as exc:
-            self._raise_failure(
+            self._raise_terminal_failure(
                 request=request,
-                failure_class="workspace_initialization_failure",
+                profile=profile,
+                failure_class="dependency_unavailable",
                 failure_code="claude_attempt_workspace_unavailable",
                 message="Claude Attempt draft workspace could not be created",
                 provider_response="",
-                usage=ModuleUsageObservation(
-                    input_tokens=0,
-                    output_tokens=0,
-                    cache_read_tokens=0,
-                    cache_creation_tokens=0,
-                ),
-                tool_calls=(),
-                retryable=False,
+                usage=_usage_observation(None),
+                tool_calls=current_tool_calls(),
+                retry_disposition_id="retry_denied",
+                trace={"stage": "workspace_preparation", "error": str(exc)},
                 cause=exc,
             )
         exposed_tools = [*self.workspace_tools, *full_names]
@@ -445,9 +513,6 @@ class _ClaudeAgentSdkExecutorBase:
                 else None
             ),
         )
-
-        def current_tool_calls():
-            return session.observations if session is not None else ()
 
         messages: list[Any] = []
 
@@ -478,20 +543,17 @@ class _ClaudeAgentSdkExecutorBase:
                     asyncio.wait_for(consume(), timeout=profile.timeout_seconds)
                 )
         except AttemptWorkspaceConflictError as exc:
-            self._raise_failure(
+            self._raise_terminal_failure(
                 request=request,
-                failure_class="workspace_initialization_failure",
+                profile=profile,
+                failure_class="dependency_unavailable",
                 failure_code="claude_attempt_workspace_unavailable",
                 message="Claude Attempt draft workspace is already leased",
                 provider_response="",
-                usage=ModuleUsageObservation(
-                    input_tokens=0,
-                    output_tokens=0,
-                    cache_read_tokens=0,
-                    cache_creation_tokens=0,
-                ),
+                usage=_usage_observation(None),
                 tool_calls=current_tool_calls(),
-                retryable=False,
+                retry_disposition_id="retry_denied",
+                trace={"stage": "workspace_lease", "error": str(exc)},
                 cause=exc,
             )
         except Exception as exc:
@@ -510,71 +572,93 @@ class _ClaudeAgentSdkExecutorBase:
                     exc,
                     provider_response=provider_response,
                 )
-                failure_class = (
-                    "provider_timeout"
-                    if isinstance(exc, (TimeoutError, asyncio.TimeoutError))
-                    else "provider_failure"
-                )
-                self._raise_failure(
+                if failure_code == "provider_quota_exhausted":
+                    failure_class = "quota"
+                    retry_disposition_id = "retry_denied"
+                elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+                    failure_class = "timeout"
+                    retry_disposition_id = "retry_allowed"
+                else:
+                    failure_class = "provider"
+                    retry_disposition_id = "retry_allowed"
+                self._raise_terminal_failure(
                     request=request,
+                    profile=profile,
                     failure_class=failure_class,
                     failure_code=failure_code,
                     message="Claude Agent SDK invocation failed",
                     provider_response=provider_response,
                     usage=_usage_observation(partial_result),
                     tool_calls=current_tool_calls(),
-                    retryable=(
-                        False
-                        if failure_code == "provider_quota_exhausted"
-                        else None
-                    ),
+                    retry_disposition_id=retry_disposition_id,
+                    trace={
+                        "stage": "provider_invocation",
+                        "error": str(exc),
+                        "provider_response": _bounded(provider_response),
+                    },
                     cause=exc,
                 )
         result_message = _result_message(messages)
         if result_message is None:
-            self._raise_failure(
+            self._raise_terminal_failure(
                 request=request,
-                failure_class="provider_failure",
+                profile=profile,
+                failure_class="provider",
                 failure_code="claude_sdk_missing_result",
                 message="Claude Agent SDK returned no ResultMessage",
                 provider_response=_provider_text(messages, None),
                 usage=_usage_observation(None),
                 tool_calls=current_tool_calls(),
+                retry_disposition_id="retry_allowed",
+                trace={
+                    "stage": "provider_completion",
+                    "error": "missing ResultMessage",
+                },
             )
         assert result_message is not None
         usage = _usage_observation(result_message)
         provider_text = _provider_text(messages, result_message)
+        trace = {
+            "transport": "claude_agent_sdk",
+            "message_count": len(messages),
+            "is_error": bool(result_message.is_error),
+            "provider_response": _bounded(provider_text),
+        }
         if result_message.is_error:
-            failure_code = (
-                "provider_quota_exhausted"
-                if _is_quota_response(provider_text)
-                else "claude_sdk_error_result"
-            )
-            self._raise_failure(
+            if _is_quota_response(provider_text):
+                failure_class = "quota"
+                failure_code = "provider_quota_exhausted"
+                retry_disposition_id = "retry_denied"
+            else:
+                failure_class = "provider"
+                failure_code = "claude_sdk_error_result"
+                retry_disposition_id = "retry_allowed"
+            self._raise_terminal_failure(
                 request=request,
-                failure_class="provider_failure",
+                profile=profile,
+                failure_class=failure_class,
                 failure_code=failure_code,
                 message="Claude Agent SDK returned an error result",
                 provider_response=provider_text,
                 usage=usage,
                 tool_calls=current_tool_calls(),
-                retryable=(
-                    False
-                    if failure_code == "provider_quota_exhausted"
-                    else None
-                ),
+                retry_disposition_id=retry_disposition_id,
+                trace=trace,
             )
         try:
             canonical_output = _canonical_output(messages, result_message)
         except (TypeError, ValueError) as exc:
-            self._raise_failure(
+            self._raise_terminal_failure(
                 request=request,
-                failure_class="output_parse_failure",
+                profile=profile,
+                failure_class="schema",
                 failure_code="claude_sdk_output_json_invalid",
                 message=str(exc),
                 provider_response=provider_text,
                 usage=usage,
                 tool_calls=current_tool_calls(),
+                retry_disposition_id="retry_allowed",
+                trace=trace,
                 cause=exc,
             )
         validation_errors = sorted(
@@ -586,9 +670,10 @@ class _ClaudeAgentSdkExecutorBase:
         if validation_errors:
             first = validation_errors[0]
             location = "/".join(str(item) for item in first.path) or "#"
-            self._raise_failure(
+            self._raise_terminal_failure(
                 request=request,
-                failure_class="output_validation_failure",
+                profile=profile,
+                failure_class="schema",
                 failure_code="claude_sdk_output_schema_violation",
                 message=(
                     "Claude output violates the registered Module schema at "
@@ -597,53 +682,107 @@ class _ClaudeAgentSdkExecutorBase:
                 provider_response=canonical_output.decode("utf-8"),
                 usage=usage,
                 tool_calls=current_tool_calls(),
+                retry_disposition_id="retry_allowed",
+                trace=trace,
             )
         try:
             if session is not None:
                 session.validate_completion()
         except Exception as exc:
-            self._raise_failure(
+            self._raise_terminal_failure(
                 request=request,
-                failure_class="output_validation_failure",
+                profile=profile,
+                failure_class="policy_violation",
                 failure_code="claude_gateway_completion_validation_failed",
                 message="Claude Gateway Attempt failed completion validation",
                 provider_response=canonical_output.decode("utf-8"),
                 usage=usage,
                 tool_calls=current_tool_calls(),
+                retry_disposition_id="retry_denied",
+                trace=trace,
                 cause=exc,
             )
-        output = self._artifact_host.commit_output(
+        submission = OutputSubmission(
+            output_slot_id="result",
+            local_handle="output/result.json",
+        )
+        host.stage_output_bytes(submission, canonical_output)
+        trace_ref, trace_sha256 = self._commit_trace(request, trace)
+        completed = AgentExecutionResult(
+            terminal_status="completed",
+            provider_id=profile.provider_id,
+            model_id=profile.model_id,
+            runtime_version=runtime_package_version(),
+            outputs=(submission,),
+            model_operation_ref_ids=(),
+            tool_operation_ref_ids=tuple(
+                observation.tool_call_id
+                for observation in current_tool_calls()
+            ),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+            estimated_cost_usd=None,
+            provider_charge_usd=None,
+            context=self._context_result(request),
+            failure=None,
+            cell_local_trace_ref=trace_ref,
+            cell_local_trace_sha256=trace_sha256,
+        )
+        completed.validate()
+        return completed
+
+    def _context_result(
+        self,
+        request: AuthorizedAgentExecutionRequest,
+    ) -> AdapterContextResult:
+        compatibility = hashlib.sha256(
+            "\x1f".join(
+                (
+                    request.module_release_sha256,
+                    request.execution_profile_sha256,
+                    request.prompt_envelope_sha256 or "none",
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        return AdapterContextResult(
+            disposition_id="stateless_closed",
+            context_ref=None,
+            compatibility_sha256=compatibility,
+        )
+
+    def _commit_trace(
+        self,
+        request: AuthorizedAgentExecutionRequest,
+        trace: dict,
+    ) -> tuple[str, str]:
+        return self._artifact_host.commit_attempt_trace(
             module_run_id=request.module_run_id,
             variant_id=request.variant_id,
             attempt_id=request.attempt_id,
-            logical_name="result",
-            content=canonical_output,
-            schema_ref=module.output_schema_ref,
-            schema_sha256=module.output_schema_sha256,
+            content=json.dumps(
+                trace,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8"),
             media_type="application/json",
         )
-        output.validate()
-        if output.output_sha256 != _sha256(canonical_output):
-            raise ValueError("Module artifact host returned a mismatched output")
-        normalized = ModuleExecutorResult(
-            outputs=(output,),
-            usage=usage,
-            tool_calls=current_tool_calls(),
-        )
-        normalized.validate()
-        return normalized
 
-    def _raise_failure(
+    def _raise_terminal_failure(
         self,
         *,
-        request: ModuleExecutorRequest,
+        request: AuthorizedAgentExecutionRequest,
+        profile,
         failure_class: str,
         failure_code: str,
         message: str,
         provider_response: str,
         usage: ModuleUsageObservation,
         tool_calls,
-        retryable: bool | None = None,
+        retry_disposition_id: str,
+        trace: dict,
         cause: Exception | None = None,
     ) -> None:
         detail = self._artifact_host.commit_failure_detail(
@@ -664,28 +803,41 @@ class _ClaudeAgentSdkExecutorBase:
                     if isinstance(cause, ProcessError)
                     else None
                 ),
-                retryable=(
-                    retryable
-                    if retryable is not None
-                    else failure_class in {
-                        "provider_failure",
-                        "provider_timeout",
-                    }
-                ),
+                retryable=retry_disposition_id == "retry_allowed",
             ),
             media_type="application/json",
         )
-        failure = ModuleExecutorFailure(
-            message,
-            failure_class=failure_class,
-            failure_code=failure_code,
-            usage=usage,
-            tool_calls=tuple(tool_calls),
-            detail=detail,
+        trace_ref, trace_sha256 = self._commit_trace(request, trace)
+        failed = AgentExecutionResult(
+            terminal_status="failed",
+            provider_id=profile.provider_id,
+            model_id=profile.model_id,
+            runtime_version=runtime_package_version(),
+            outputs=(),
+            model_operation_ref_ids=(),
+            tool_operation_ref_ids=tuple(
+                observation.tool_call_id for observation in tool_calls
+            ),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+            estimated_cost_usd=None,
+            provider_charge_usd=None,
+            context=self._context_result(request),
+            failure=AgentExecutionFailure(
+                failure_class=failure_class,
+                retry_disposition_id=retry_disposition_id,
+                failure_scope_id="attempt_only",
+                retry_after_seconds=None,
+                detail_ref=detail.detail_ref,
+                detail_sha256=detail.detail_sha256,
+            ),
+            cell_local_trace_ref=trace_ref,
+            cell_local_trace_sha256=trace_sha256,
         )
-        if cause is None:
-            raise failure
-        raise failure from cause
+        failed.validate()
+        raise _ClaudeTerminalFailure(failed)
 
 
 class ClaudeAgentSdkInlineModuleExecutor(_ClaudeAgentSdkExecutorBase):

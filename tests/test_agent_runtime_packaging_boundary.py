@@ -342,14 +342,15 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
         import sys
 
         sys.path.insert(0, sys.argv[1])
-        from agent_runtime.contracts.ledger_lineage_definition import (
-            ModuleUsageObservation,
-        )
         from agent_runtime.contracts.execution_module_definition import (
             ModuleExecutionRequest,
-            ModuleExecutorResult,
-            ModuleOutputBinding,
             ModuleVariantRequest,
+        )
+        from agent_runtime.contracts.invocation_adapter_definition import (
+            AdapterContextResult,
+            AgentExecutionAdapterDescriptor,
+            AgentExecutionResult,
+            OutputSubmission,
         )
         from agent_runtime.contracts.registry_release_definition import (
             ExecutionProfileRelease,
@@ -365,8 +366,11 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
         from agent_runtime.ledger.ledger_lineage_recording import (
             InMemoryModuleExecutionLedger,
         )
+        from agent_runtime.execution.execution_content_staging import (
+            InMemoryCellArtifactStore,
+        )
         from agent_runtime.execution.execution_module_invocation import (
-            ModuleExecutorRegistry,
+            AgentExecutionAdapterRegistry,
             run_module,
         )
         from agent_runtime.registry.registry_release_registration import (
@@ -463,29 +467,60 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             )
         )
 
-        class OpaqueExecutor:
-            def execute(self, request):
-                return ModuleExecutorResult(
-                    outputs=(
-                        ModuleOutputBinding(
-                            logical_name="result",
-                            output_ref="artifact:opaque-output@v1",
-                            output_sha256=HASH,
-                            schema_ref=request.module.output_schema_ref,
-                            schema_sha256=request.module.output_schema_sha256,
-                            media_type="application/json",
-                        ),
-                    ),
-                    usage=ModuleUsageObservation(
-                        input_tokens=1,
-                        output_tokens=1,
-                        cache_read_tokens=None,
-                        cache_creation_tokens=None,
-                    ),
+        class OpaqueAdapter:
+            @property
+            def descriptor(self):
+                return AgentExecutionAdapterDescriptor(
+                    adapter_contract_version="v1",
+                    adapter_id="executor_opaque_test",
+                    adapter_revision="v1",
+                    provider_id="provider_opaque",
+                    transport_family="in_process",
+                    transport_kind="in_process_test",
+                    runtime_package_id="agent_runtime_core",
+                    runtime_package_version="0.0.0",
+                    supported_context_modes=("stateless",),
+                    supported_output_constraint_modes=("prompt_only_json",),
+                    supported_read_isolation_modes=("entitled_refs",),
+                    supported_execution_modes=("tool_free",),
+                    supported_input_delivery_modes=("inline",),
+                    supported_network_policies=("denied",),
+                    supports_dynamic_operation_authorization=False,
+                    admission_state="in_process_test_double",
                 )
 
-        executors = ModuleExecutorRegistry()
-        executors.register("executor_opaque_test", OpaqueExecutor())
+            def execute(self, request, host):
+                submission = OutputSubmission(
+                    output_slot_id="result",
+                    local_handle="output/result.json",
+                )
+                host.stage_output_bytes(submission, b'{"value": "opaque"}')
+                return AgentExecutionResult(
+                    terminal_status="completed",
+                    provider_id="provider_opaque",
+                    model_id="model_opaque",
+                    runtime_version="0.0.0",
+                    outputs=(submission,),
+                    model_operation_ref_ids=(),
+                    tool_operation_ref_ids=(),
+                    input_tokens=1,
+                    output_tokens=1,
+                    cache_read_tokens=None,
+                    cache_creation_tokens=None,
+                    estimated_cost_usd=None,
+                    provider_charge_usd=None,
+                    context=AdapterContextResult(
+                        disposition_id="stateless_closed",
+                        context_ref=None,
+                        compatibility_sha256=HASH,
+                    ),
+                    failure=None,
+                    cell_local_trace_ref="cell-trace:opaque-attempt",
+                    cell_local_trace_sha256=HASH,
+                )
+
+        adapters = AgentExecutionAdapterRegistry()
+        adapters.register(OpaqueAdapter())
         request = ModuleExecutionRequest.build(
             request_id="request_opaque_test",
             purpose=ModuleExecutionPurpose.TEST,
@@ -511,7 +546,8 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
         run = run_module(
             request,
             release_registry=release_registry,
-            executors=executors,
+            adapters=adapters,
+            artifact_host=InMemoryCellArtifactStore(),
             ledger=InMemoryModuleExecutionLedger(),
             clock=lambda: TIME,
         )
@@ -529,7 +565,9 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             "attempt_status": run.attempts[0].status,
             "domain_modules": domain_modules,
             "module_id": run.module_run.module_release_ref,
-            "output_refs": list(run.attempts[0].output_refs),
+            "output_ref_schemes": [
+                ref.split(":", 1)[0] for ref in run.attempts[0].output_refs
+            ],
             "resolution_status": run.resolution.resolution_status,
         }))
         """,
@@ -541,7 +579,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
         "attempt_status": "completed",
         "domain_modules": [],
         "module_id": "runtime-module:module-opaque-test@v1",
-        "output_refs": ["artifact:opaque-output@v1"],
+        "output_ref_schemes": ["cell-artifact"],
         "resolution_status": "resolved",
     }
 
