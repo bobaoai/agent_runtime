@@ -23,6 +23,7 @@ from jsonschema import Draft202012Validator
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    HookMatcher,
     PermissionResultAllow,
     PermissionResultDeny,
     ResultMessage,
@@ -329,6 +330,7 @@ class _ClaudeAgentSdkExecutorBase:
             execution_mode=self.expected_execution_mode,
             input_delivery_mode=self.expected_semantic_input_delivery_mode,
             network_policy=self.expected_network_policy,
+            supports_dynamic_operation_authorization=self.requires_gateway,
             admission_state=self.descriptor_admission_state,
         )
 
@@ -400,7 +402,11 @@ class _ClaudeAgentSdkExecutorBase:
                 tool_name: str = definition.tool_name,
             ) -> dict[str, Any]:
                 assert session is not None
-                return _json_tool_result(session.invoke(tool_name, payload))
+                intent = session.operation_intent(tool_name, payload)
+                receipt = host.authorize_operation(intent)
+                return _json_tool_result(
+                    session.invoke(tool_name, payload, receipt)
+                )
 
             tools.append(
                 SdkMcpTool(
@@ -417,7 +423,6 @@ class _ClaudeAgentSdkExecutorBase:
                 version="1.0.0",
                 tools=tools,
             )
-
         async def can_use_tool(
             tool_name: str,
             tool_input: dict[str, Any],
@@ -441,6 +446,37 @@ class _ClaudeAgentSdkExecutorBase:
                 message=f"tool {tool_name} is outside the Execution Profile",
                 interrupt=True,
             )
+
+        profile_policy_refused = False
+
+        async def enforce_profile_tool(
+            hook_input: dict[str, Any],
+            _tool_use_id: str | None,
+            _context: Any,
+        ) -> dict[str, Any]:
+            """Gate every exposed tool, including SDK-auto-approved Read calls."""
+
+            nonlocal profile_policy_refused
+            decision = await can_use_tool(
+                hook_input["tool_name"],
+                hook_input["tool_input"],
+                None,
+            )
+            if isinstance(decision, PermissionResultAllow):
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                    }
+                }
+            profile_policy_refused = True
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": decision.message,
+                }
+            }
 
         def current_tool_calls():
             return session.observations if session is not None else ()
@@ -475,9 +511,22 @@ class _ClaudeAgentSdkExecutorBase:
                 retry_disposition_id="retry_denied",
                 trace={"stage": "workspace_preparation", "error": str(exc)},
                 tool_operation_ref_ids=tool_ref_ids(),
+                tool_observations=current_tool_calls(),
                 cause=exc,
             )
         exposed_tools = [*self.workspace_tools, *full_names]
+        hooks = (
+            {
+                "PreToolUse": [
+                    HookMatcher(
+                        matcher="|".join(exposed_tools),
+                        hooks=[enforce_profile_tool],
+                    )
+                ]
+            }
+            if exposed_tools
+            else None
+        )
         options = ClaudeAgentOptions(
             model=profile.model_id,
             effort=profile.reasoning_profile,
@@ -489,6 +538,7 @@ class _ClaudeAgentSdkExecutorBase:
                 "default" if exposed_tools else "dontAsk"
             ),
             can_use_tool=can_use_tool,
+            hooks=hooks,
             max_turns=self._max_turns,
             setting_sources=[],
             skills=[],
@@ -507,10 +557,12 @@ class _ClaudeAgentSdkExecutorBase:
         async def consume() -> None:
             # The SDK owns stdin lifecycle.  Its stream_input() consumes this
             # one-message iterable and then closes input immediately for
-            # ordinary tool-free/workspace runs, or keeps it open itself when
-            # SDK MCP/hooks require bidirectional control.  Holding our input
-            # iterable open until ResultMessage duplicates that protocol and
-            # can deadlock a one-shot CLI invocation waiting for EOF.
+            # ordinary tool-free runs. Agent runs carry the PreToolUse hook
+            # above (and Gateway runs also carry their registered SDK MCP
+            # server), so the SDK itself keeps stdin open for callbacks until
+            # ResultMessage. Holding our input iterable open duplicates that
+            # protocol and can deadlock a one-shot CLI invocation waiting for
+            # EOF.
             async for message in self._query(
                 prompt=_streaming_prompt(prompt),
                 options=options,
@@ -542,6 +594,7 @@ class _ClaudeAgentSdkExecutorBase:
                 retry_disposition_id="retry_denied",
                 trace={"stage": "workspace_lease", "error": str(exc)},
                 tool_operation_ref_ids=tool_ref_ids(),
+                tool_observations=current_tool_calls(),
                 cause=exc,
             )
         except Exception as exc:
@@ -586,6 +639,7 @@ class _ClaudeAgentSdkExecutorBase:
                         ),
                     },
                     tool_operation_ref_ids=tool_ref_ids(),
+                    tool_observations=current_tool_calls(),
                     cause=exc,
                     **_usage_fields(_usage_observation(partial_result)),
                 )
@@ -605,6 +659,7 @@ class _ClaudeAgentSdkExecutorBase:
                     "error": "missing ResultMessage",
                 },
                 tool_operation_ref_ids=tool_ref_ids(),
+                tool_observations=current_tool_calls(),
             )
         assert result_message is not None
         usage = _usage_observation(result_message)
@@ -615,6 +670,21 @@ class _ClaudeAgentSdkExecutorBase:
             "is_error": bool(result_message.is_error),
             "provider_response": bounded_trace_text(provider_text),
         }
+        if profile_policy_refused:
+            raise_terminal_failure(
+                artifact_host=self._artifact_host,
+                request=request,
+                profile=profile,
+                failure_class="policy_violation",
+                failure_code="claude_profile_tool_refused",
+                message="Claude requested a tool outside its Profile boundary",
+                provider_response=provider_text,
+                retry_disposition_id="retry_denied",
+                trace=trace,
+                tool_operation_ref_ids=tool_ref_ids(),
+                tool_observations=current_tool_calls(),
+                **_usage_fields(usage),
+            )
         if result_message.is_error:
             if _is_quota_response(provider_text):
                 failure_class = "quota"
@@ -635,6 +705,7 @@ class _ClaudeAgentSdkExecutorBase:
                 retry_disposition_id=retry_disposition_id,
                 trace=trace,
                 tool_operation_ref_ids=tool_ref_ids(),
+                tool_observations=current_tool_calls(),
                 **_usage_fields(usage),
             )
         try:
@@ -651,6 +722,7 @@ class _ClaudeAgentSdkExecutorBase:
                 retry_disposition_id="retry_allowed",
                 trace=trace,
                 tool_operation_ref_ids=tool_ref_ids(),
+                tool_observations=current_tool_calls(),
                 cause=exc,
                 **_usage_fields(usage),
             )
@@ -677,6 +749,7 @@ class _ClaudeAgentSdkExecutorBase:
                 retry_disposition_id="retry_allowed",
                 trace=trace,
                 tool_operation_ref_ids=tool_ref_ids(),
+                tool_observations=current_tool_calls(),
                 **_usage_fields(usage),
             )
         try:
@@ -694,6 +767,7 @@ class _ClaudeAgentSdkExecutorBase:
                 retry_disposition_id="retry_denied",
                 trace=trace,
                 tool_operation_ref_ids=tool_ref_ids(),
+                tool_observations=current_tool_calls(),
                 cause=exc,
                 **_usage_fields(usage),
             )
@@ -710,6 +784,7 @@ class _ClaudeAgentSdkExecutorBase:
             request=request,
             outputs=(submission,),
             tool_operation_ref_ids=tool_ref_ids(),
+            tool_observations=current_tool_calls(),
             trace_ref=trace_ref,
             trace_sha256=trace_sha256,
             **_usage_fields(usage),

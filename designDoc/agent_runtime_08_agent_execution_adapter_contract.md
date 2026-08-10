@@ -297,6 +297,14 @@ empty `gateway_access_reasons` and Gateway `tool_policy`. The Agent may reread
 and revise only its own drafts; it receives no PG, repository, ambient
 filesystem, search, browser, or network capability.
 
+Claude SDK may auto-approve built-in reads before its ordinary
+`can_use_tool` callback. The Claude Adapter therefore installs a `PreToolUse`
+hook over every Profile-visible workspace tool and resolves each path against
+the Attempt root before execution. The hook also keeps the SDK bidirectional
+control stream alive through the terminal Result, so permissioned writes do
+not encounter a prematurely closed stream. Any hook denial taints the Attempt;
+the model cannot recover it into a successful Runtime output.
+
 `agent` does not imply network access. `network_policy` is pinned
 independently in the same Execution Profile:
 
@@ -596,10 +604,12 @@ class AuthorizedAgentExecutionHost(Protocol):
 
 Staged bytes are not outputs. Runtime validates, hashes, and commits them only
 inside the fenced finalization of section 10; an adapter that bypasses the
-host to write authoritative state is non-conformant. Until the Gateway
-capability slice is admitted, the kernel host fails `authorize_operation`
-closed; the callback's authority is independent of the model-invocation
-evidence already bound to the request.
+host to write authoritative state is non-conformant. The Gateway capability
+slice admits `authorize_operation` only for an exact `gateway_read +
+gateway_only` Profile tool that is also declared by the Module Release. Every
+other capability, action, resource, execution identity, or authorization-
+context hash fails closed. The callback's authority is independent of the
+model-invocation evidence already bound to the request.
 
 The host resolves the provider intent against the immutable execution
 authorization context, Module Run, Variant, Attempt, admitted Module
@@ -609,6 +619,21 @@ validates the current Product Authorization decision and returns a bounded
 receipt. When the resource manifest classifies the action as high risk, the
 receipt additionally proves the Product-issued grant and Gateway disposition.
 Only then may the adapter approve the tool call.
+
+The admitted Gateway tool session separates authorization from resource
+execution. For each provider callback it first builds one exact
+`ProviderOperationIntent`; the Adapter passes that intent to
+`authorize_operation`; and the session's resource `invoke` operation requires
+the returned `AuthorizedOperationReceipt`. The first Gateway slice requires
+the intent's capability and action IDs to equal the selected Profile tool name
+and the Module's declared operation ID. The bounded provider resource ID is
+projected into the Stack-A `gateway-resource:` reference namespace. A denial,
+closed fence, mismatched lineage, or missing receipt proves that the resource
+callable was never entered. A refused callback taints the Attempt, so an SDK
+or Adapter that catches the callback exception cannot later finalize a
+successful output. The session returns Runtime-authored request/response
+observations; the Adapter result carries those observations into the terminal
+Attempt.
 
 An adapter cannot call Product Authorization, construct a grant, or access a
 resource credential. After-the-fact provider events cannot be promoted to
@@ -838,10 +863,29 @@ remain inside that composite boundary,
 it is no-tools or unadmitted. Raw CLI file events are trace observations, not
 independently authorized canonical tool operations.
 
-The current Codex Agent-workspace adapter release admits
-`agent + denied`. `gateway_only` and `direct_sandboxed` require a new
-adapter revision with matching enforcement and conformance evidence; changing
-only prose or a prompt cannot enable them.
+The current Codex Agent-workspace adapter release implements
+`agent + denied` for conformance testing but is not admitted through the public
+kernel. Codex `workspace-write` constrains writes, not all ambient reads, so it
+does not prove the Runtime's `own_draft_read_write` read boundary. Admission
+requires a new adapter or sandbox revision that can enforce and demonstrate
+Attempt-only reads. `gateway_only` and `direct_sandboxed` likewise require a
+new adapter revision with matching enforcement and conformance evidence;
+changing only prose or a prompt cannot enable them.
+
+The public Test/Evaluation kernel admits capability profiles in dependency
+order. Its current bounded set is:
+
+1. `tool_free + inline + workspace none + denied` for Claude and Codex;
+2. `agent + inline + own_draft_read_write + denied`, with no Gateway tool
+   policy, for the exact Claude SDK inline-draft adapter revision; and
+3. `agent + gateway_read + workspace none + gateway_only`, with a non-empty
+   exact Gateway tool policy and admitted access reason, for the Claude SDK
+   adapter whose before-operation callback can enforce the Runtime receipt.
+
+`hybrid`, `managed_attachment`, `direct_sandboxed`, a Gateway-plus-draft
+combination, Codex workspace, and Codex Gateway tools remain unadmitted.
+Production purposes remain behind their separate start and release-admission
+gate.
 
 ## 10. Provider-generated Audit Boundary
 

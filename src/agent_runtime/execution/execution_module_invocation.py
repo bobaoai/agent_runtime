@@ -43,6 +43,7 @@ from ..contracts.invocation_adapter_definition import (
     AuthorizedOperationReceipt,
     OutputSubmission,
     ProviderOperationIntent,
+    isolated_execution_scope_id,
 )
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
@@ -57,6 +58,7 @@ from ..contracts.ledger_lineage_definition import (
     ModuleAttemptStartedRecord,
     ModuleExecutionVariantRecord,
     ModuleOutputResolutionRecord,
+    ModuleToolCallObservation,
     ModuleRunRecord,
     ModuleUsageObservation,
 )
@@ -88,20 +90,6 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
         "+00:00", "Z"
     )
-
-
-def isolated_execution_scope_id(
-    isolated_scope_ref: str,
-    isolated_scope_sha256: str,
-) -> str:
-    """Derive the deterministic execution scope identity of one isolated run.
-
-    AR09 authority records carry this identity in their pre-split
-    ``workflow_execution_id`` field; a caller never fabricates a Workflow
-    Execution for an isolated Module Run.
-    """
-
-    return _stable_id("isolated_scope", isolated_scope_ref, isolated_scope_sha256)
 
 
 def _data_use_purpose_id(purpose: ModuleExecutionPurpose) -> str:
@@ -193,12 +181,25 @@ class _AttemptExecutionHost:
         *,
         request: AuthorizedAgentExecutionRequest,
         artifact_host: ModuleArtifactHost,
+        module: RuntimeModuleRelease,
+        profile: ExecutionProfileRelease,
+        purpose: ModuleExecutionPurpose,
+        authority: ModuleExecutionAuthority | None,
+        clock: Callable[[], str],
     ) -> None:
+        self._request = request
         self._artifact_host = artifact_host
+        self._module = module
+        self._profile = profile
+        self._purpose = purpose
+        self._authority = authority
+        self._clock = clock
         self._inputs_by_handle = {
             item.local_handle: item for item in request.authorized_inputs
         }
         self._staged: dict[str, tuple[OutputSubmission, bytes]] = {}
+        self._authorized_operation_names: list[str] = []
+        self._dynamic_authorization_refused = False
 
     def read_authorized_input(self, local_handle: str) -> bytes:
         entry = self._inputs_by_handle.get(local_handle)
@@ -231,12 +232,144 @@ class _AttemptExecutionHost:
         self,
         request: ProviderOperationIntent,
     ) -> AuthorizedOperationReceipt:
+        """Authorize one exact Gateway tool before its resource call."""
+
+        try:
+            return self._authorize_operation(request)
+        except Exception:
+            self._dynamic_authorization_refused = True
+            raise
+
+    def _authorize_operation(
+        self,
+        request: ProviderOperationIntent,
+    ) -> AuthorizedOperationReceipt:
+        """Resolve one dynamic operation while the public wrapper tracks denial."""
+
         if type(request) is not ProviderOperationIntent:
             raise ValueError("request must be an exact ProviderOperationIntent")
         request.validate()
-        raise PermissionError(
-            "dynamic operation authorization awaits the Gateway capability slice"
+        if self._authority is None:
+            raise PermissionError("dynamic operation requires execution authority")
+        if not (
+            self._profile.execution_mode == "agent"
+            and self._profile.semantic_input_delivery_mode == "gateway_read"
+            and self._profile.attempt_workspace_policy == "none"
+            and self._profile.network_policy == "gateway_only"
+            and self._profile.tool_policy
+        ):
+            raise PermissionError(
+                "dynamic operation is outside the admitted Gateway profile"
+            )
+        exact_lineage = (
+            request.workflow_execution_id
+            == self._request.execution_scope_id,
+            request.module_run_id == self._request.module_run_id,
+            request.variant_id == self._request.variant_id,
+            request.attempt_id == self._request.attempt_id,
+            request.entitlement_snapshot_hash
+            == self._request.execution_authorization_binding_sha256,
         )
+        if not all(exact_lineage):
+            raise PermissionError(
+                "dynamic operation crossed its authorized Attempt lineage"
+            )
+        if (
+            request.capability_id != request.action_id
+            or request.capability_id not in self._profile.tool_policy
+            or request.action_id not in self._module.declared_operation_ids
+        ):
+            raise PermissionError(
+                "dynamic operation is absent from the Profile and Module closure"
+            )
+
+        observed_at_utc = self._clock()
+        authority = self._authority
+        resource_ref = f"gateway-resource:{request.resource_id}"
+        intent = authority.controller.commit_protected_operation_intent(
+            binding_ref=authority.binding.binding_ref,
+            module_run_id=self._request.module_run_id,
+            module_release_ref=self._module.release_ref,
+            module_release_sha256=self._module.release_sha256,
+            operation_id=request.action_id,
+            resource_ref=resource_ref,
+            enforcing_gateway_id=authority.enforcing_gateway_id,
+            idempotency_key=request.idempotency_key,
+            requires_grant=False,
+            operation_grant_ref=None,
+            observed_at_utc=observed_at_utc,
+        )
+        query = OperationAuthorizationQuery.build(
+            query_id=_stable_id("operation_query", intent.intent_sha256),
+            idempotency_key=request.idempotency_key,
+            principal_id=authority.binding.principal_id,
+            actor_workload_id=authority.binding.actor_workload_id,
+            operation_id=request.action_id,
+            resource_type="gateway_resource",
+            resource_ref=resource_ref,
+            tenant_id=authority.binding.tenant_id,
+            cell_id=authority.binding.cell_id,
+            purpose_id=_data_use_purpose_id(self._purpose),
+            environment_id=authority.environment_id,
+            workflow_release_id=authority.binding.workflow_release_id,
+            execution_context_id=authority.binding.context_id,
+            enforcing_gateway_id=authority.enforcing_gateway_id,
+            observed_at_utc=observed_at_utc,
+        )
+        decision = authority.authorization_client.authorize_operation(query)
+        if type(decision) is not ProductOperationDecision:
+            raise TypeError("Product Authorization returned an invalid decision")
+        decision.validate()
+        if (
+            decision.query_id != query.query_id
+            or decision.query_sha256 != query.query_sha256
+            or decision.observed_at_utc != query.observed_at_utc
+        ):
+            raise PermissionError(
+                "dynamic Product Authorization decision closure mismatch"
+            )
+        observation = authority.controller.record_gateway_observation(
+            intent_ref=intent.intent_ref,
+            decision_ref=decision.decision_ref,
+            decision_sha256=decision.decision_sha256,
+            effect=decision.effect,
+            effect_evidence_ref=None,
+            grant_disposition_ref=None,
+            observed_at_utc=observed_at_utc,
+        )
+        if decision.effect is not GatewayDecisionEffect.ALLOW:
+            raise PermissionError(
+                f"dynamic operation denied: {decision.reason_code}"
+            )
+        receipt = AuthorizedOperationReceipt(
+            receipt_id=_stable_id(
+                "authorized_operation_receipt",
+                observation.observation_sha256,
+            ),
+            decision_ref=decision.decision_ref,
+            decision_sha256=decision.decision_sha256,
+            grant_disposition_ref=None,
+            recorded_at_utc=observed_at_utc,
+        )
+        receipt.validate()
+        self._authorized_operation_names.append(request.action_id)
+        return receipt
+
+    def assert_tool_observation_closure(
+        self,
+        observations: tuple[ModuleToolCallObservation, ...],
+    ) -> None:
+        """Require exact ordered lineage for every dynamically allowed call."""
+
+        if self._dynamic_authorization_refused:
+            raise PermissionError(
+                "at least one dynamic operation was refused during the Attempt"
+            )
+        observed_names = tuple(item.tool_name for item in observations)
+        if observed_names != tuple(self._authorized_operation_names):
+            raise PermissionError(
+                "tool observations differ from Runtime-authorized operations"
+            )
 
     def staged_output(self, output_slot_id: str) -> bytes:
         try:
@@ -289,15 +422,12 @@ def run_module(
     )
     release_registry.assert_module_execution_allowed(module, request.purpose)
     _assert_module_dependencies_shadow_executable(release_registry, module)
-    unsupported_operation_ids = (
-        set(module.declared_operation_ids) - _MODEL_INVOCATION_OPERATION_IDS
+    model_operation_ids = tuple(
+        operation_id
+        for operation_id in module.declared_operation_ids
+        if operation_id in _MODEL_INVOCATION_OPERATION_IDS
     )
-    if unsupported_operation_ids:
-        raise NotImplementedError(
-            "protected Module operations await AR09 request and grant binding: "
-            + ", ".join(sorted(unsupported_operation_ids))
-        )
-    if len(module.declared_operation_ids) > 1:
+    if module.declared_operation_ids and len(model_operation_ids) != 1:
         raise ValueError(
             "the model-backed slice admits exactly one declared model operation"
         )
@@ -350,10 +480,9 @@ def run_module(
         if profile.transport_kind not in module.compatible_transport_kinds:
             raise ValueError("Execution Profile transport is incompatible with Module")
         if module.declared_operation_ids:
-            _assert_model_only_test_evaluation_profile(profile)
-        if profile.tool_policy:
-            raise NotImplementedError(
-                "model-visible tool profiles await the Gateway capability slice"
+            _assert_admitted_test_evaluation_profile(
+                module,
+                profile,
             )
         adapter = adapters.resolve(
             profile.executor_adapter_id,
@@ -535,6 +664,11 @@ def _execute_attempt(
     host = _AttemptExecutionHost(
         request=canonical_request,
         artifact_host=artifact_host,
+        module=module,
+        profile=profile,
+        purpose=run_request.purpose,
+        authority=authority,
+        clock=clock,
     )
 
     staged: tuple[tuple[OutputSubmission, bytes], ...] = ()
@@ -543,6 +677,7 @@ def _execute_attempt(
         if type(result) is not AgentExecutionResult:
             raise TypeError("adapter returned an invalid result type")
         result.validate()
+        host.assert_tool_observation_closure(result.tool_observations)
         if (
             result.provider_id != profile.provider_id
             or result.model_id != profile.model_id
@@ -565,6 +700,21 @@ def _execute_attempt(
                     output_slot_id=submission.output_slot_id,
                     content=content,
                 )
+    except PermissionError as exc:
+        return _record_failed_attempt(
+            variant=variant,
+            attempt_start=attempt_start,
+            failure_class="authorization",
+            usage=_empty_usage(),
+            ended_at=clock(),
+            payload={
+                "disposition": "dynamic_operation_authorization_refused",
+                "exception_type": type(exc).__name__,
+                "message": str(exc),
+            },
+            artifact_host=artifact_host,
+            ledger=ledger,
+        )
     except Exception as exc:
         return _record_failed_attempt(
             variant=variant,
@@ -608,6 +758,7 @@ def _execute_attempt(
                 and result.failure.detail_sha256 is not None
                 else None
             ),
+            tool_calls=result.tool_observations,
         )
         ledger.commit_attempt(attempt)
         return attempt, ()
@@ -657,6 +808,7 @@ def _execute_attempt(
                 },
                 artifact_host=artifact_host,
                 ledger=ledger,
+                tool_calls=result.tool_observations,
             )
         completed = ModuleAttemptRecord(
             module_run_id=variant.module_run_id,
@@ -669,7 +821,7 @@ def _execute_attempt(
             period_start_at_utc=attempt_start.recorded_at_utc,
             period_end_at_utc=ended_at,
             recorded_at_utc=ended_at,
-            tool_calls=(),
+            tool_calls=result.tool_observations,
             prompt_envelope_ref=variant.prompt_envelope_ref,
             prompt_envelope_sha256=variant.prompt_envelope_sha256,
         )
@@ -706,7 +858,11 @@ def _authorize_model_attempt(
     """
 
     binding = authority.binding
-    operation_id = module.declared_operation_ids[0]
+    operation_id = next(
+        operation_id
+        for operation_id in module.declared_operation_ids
+        if operation_id in _MODEL_INVOCATION_OPERATION_IDS
+    )
     intent = authority.controller.commit_protected_operation_intent(
         binding_ref=binding.binding_ref,
         module_run_id=module_run_id,
@@ -744,6 +900,7 @@ def _authorize_model_attempt(
     if (
         decision.query_id != query.query_id
         or decision.query_sha256 != query.query_sha256
+        or decision.observed_at_utc != query.observed_at_utc
     ):
         raise PermissionError("Product Authorization decision closure mismatch")
     observation = authority.controller.record_gateway_observation(
@@ -898,6 +1055,14 @@ def _assert_descriptor_covers_profile(
         raise PermissionError(
             "adapter descriptor capability does not cover the Execution Profile"
         )
+    if (
+        profile.tool_policy
+        and not descriptor.supports_dynamic_operation_authorization
+    ):
+        raise PermissionError(
+            "Gateway Execution Profile requires an adapter with dynamic "
+            "operation authorization"
+        )
 
 
 def _empty_usage() -> ModuleUsageObservation:
@@ -919,6 +1084,7 @@ def _record_failed_attempt(
     payload: Mapping[str, Any],
     artifact_host: ModuleArtifactHost,
     ledger: ModuleExecutionLedger,
+    tool_calls: tuple[ModuleToolCallObservation, ...] = (),
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Commit one kernel-owned failed Attempt with its bounded diagnostic."""
 
@@ -935,6 +1101,7 @@ def _record_failed_attempt(
             failure_class=failure_class,
             payload=payload,
         ),
+        tool_calls=tool_calls,
     )
     ledger.commit_attempt(attempt)
     return attempt, ()
@@ -959,6 +1126,15 @@ def _assert_result_lineage_resolvable(
         artifact_host.read_bytes(
             result.failure.detail_ref,
             result.failure.detail_sha256,
+        )
+    for observation in result.tool_observations:
+        artifact_host.read_bytes(
+            observation.request_ref,
+            observation.request_sha256,
+        )
+        artifact_host.read_bytes(
+            observation.response_ref,
+            observation.response_sha256,
         )
 
 
@@ -1047,6 +1223,7 @@ def _failed_attempt(
     ended_at: str,
     status: str = "failed",
     detail: tuple[str, str] | None = None,
+    tool_calls: tuple[ModuleToolCallObservation, ...] = (),
 ) -> ModuleAttemptRecord:
     return ModuleAttemptRecord(
         module_run_id=variant.module_run_id,
@@ -1059,7 +1236,7 @@ def _failed_attempt(
         period_start_at_utc=attempt_start.recorded_at_utc,
         period_end_at_utc=ended_at,
         recorded_at_utc=ended_at,
-        tool_calls=(),
+        tool_calls=tool_calls,
         prompt_envelope_ref=variant.prompt_envelope_ref,
         prompt_envelope_sha256=variant.prompt_envelope_sha256,
         failure_detail_ref=detail[0] if detail is not None else None,
@@ -1084,22 +1261,63 @@ def _assert_profile_shadow_executable(
         raise PermissionError(f"Execution Profile is not shadow-executable: {state.value}")
 
 
-def _assert_model_only_test_evaluation_profile(
+def _assert_admitted_test_evaluation_profile(
+    module: RuntimeModuleRelease,
     profile: ExecutionProfileRelease,
 ) -> None:
-    """Admit only the first model-backed Test/Evaluation capability slice.
+    """Admit the exact model-backed Test/Evaluation capability slices.
 
-    Registration already guarantees that a ``tool_free`` profile carries no
-    tools, no writable Attempt workspace, inline delivery, and a denied
-    network; re-encoding those invariants here is how the gate and the
-    profile contract drift apart.
+    Registration validates the dimensions independently. The execution kernel
+    intentionally admits only reviewed conjunctions, so a newly representable
+    hybrid cannot become executable by accident.
     """
 
-    if profile.execution_mode != "tool_free":
-        raise NotImplementedError(
-            "model-backed Test/Evaluation admits only tool_free Execution "
-            "Profiles"
-        )
+    non_model_operations = frozenset(module.declared_operation_ids).difference(
+        _MODEL_INVOCATION_OPERATION_IDS
+    )
+    if (
+        profile.execution_mode == "tool_free"
+        and profile.semantic_input_delivery_mode == "inline"
+        and profile.attempt_workspace_policy == "none"
+        and profile.network_policy == "denied"
+        and not profile.tool_policy
+        and not profile.gateway_access_reasons
+        and not non_model_operations
+    ):
+        return
+    if (
+        profile.execution_mode == "agent"
+        and profile.semantic_input_delivery_mode == "inline"
+        and profile.attempt_workspace_policy == "own_draft_read_write"
+        and profile.network_policy == "denied"
+        and not profile.tool_policy
+        and not profile.gateway_access_reasons
+        and not non_model_operations
+        and profile.executor_adapter_id
+        == "claude_agent_sdk_inline_draft_workspace_executor"
+        and profile.executor_adapter_revision == "v1"
+        and profile.transport_kind == "claude_agent_sdk"
+        and profile.provider_id == "anthropic"
+    ):
+        return
+    if (
+        profile.execution_mode == "agent"
+        and profile.semantic_input_delivery_mode == "gateway_read"
+        and profile.attempt_workspace_policy == "none"
+        and profile.network_policy == "gateway_only"
+        and bool(profile.tool_policy)
+        and bool(profile.gateway_access_reasons)
+        and frozenset(profile.tool_policy) == non_model_operations
+        and profile.executor_adapter_id == "claude_agent_sdk_gateway_executor"
+        and profile.executor_adapter_revision == "v2"
+        and profile.transport_kind == "claude_agent_sdk"
+        and profile.provider_id == "anthropic"
+    ):
+        return
+    raise NotImplementedError(
+        "model-backed Test/Evaluation profile is outside the admitted "
+        "tool-free, draft-workspace, and Gateway-read slices"
+    )
 
 
 def _assert_module_dependencies_shadow_executable(

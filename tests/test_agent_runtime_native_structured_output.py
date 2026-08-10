@@ -34,6 +34,9 @@ from agent_runtime.contracts.invocation_adapter_definition import (
     OutputSubmission,
     ProviderOperationIntent,
 )
+from agent_runtime.contracts.ledger_lineage_definition import (
+    ModuleToolCallObservation,
+)
 from agent_runtime.contracts.registry_release_definition import (
     ModuleExecutionPurpose,
     OutputResolutionPolicy,
@@ -53,6 +56,7 @@ from agent_runtime.execution.execution_module_invocation import (
     run_module,
 )
 from agent_runtime.invocation.invocation_codex_module_invocation import (
+    CodexCliAgentWorkspaceModuleExecutor,
     CodexCliInvocationResult,
     CodexCliModuleExecutor,
 )
@@ -61,6 +65,9 @@ from agent_runtime.invocation import (
 )
 from agent_runtime.invocation.invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
+)
+from agent_runtime.invocation.invocation_tool_definition import (
+    ProviderToolDefinition,
 )
 from agent_runtime.invocation.invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
@@ -113,6 +120,12 @@ def _compile_native_module(
     model_id: str = "native_model",
     reasoning_profile: str = "none",
     timeout_seconds: int = 60,
+    execution_mode: str = "tool_free",
+    semantic_input_delivery_mode: str = "inline",
+    attempt_workspace_policy: str = "none",
+    gateway_access_reasons: tuple[str, ...] = (),
+    tool_policy: tuple[str, ...] = (),
+    network_policy: str = "denied",
 ):
     owner = tmp_path / "designDoc" / "owner.md"
     owner.parent.mkdir()
@@ -198,6 +211,12 @@ def _compile_native_module(
             reasoning_profile=reasoning_profile,
             output_constraint_mode=NATIVE_STRUCTURED_OUTPUT,
             timeout_seconds=timeout_seconds,
+            execution_mode=execution_mode,
+            semantic_input_delivery_mode=semantic_input_delivery_mode,
+            attempt_workspace_policy=attempt_workspace_policy,
+            gateway_access_reasons=gateway_access_reasons,
+            tool_policy=tool_policy,
+            network_policy=network_policy,
             input_schema_path="schemas/input.schema.json",
             output_schema_path="schemas/output.schema.json",
             compatible_transport_kinds=(transport_kind,),
@@ -238,10 +257,16 @@ def _register_compiled_for_evaluation(compiled) -> RuntimeReleaseRegistry:
     return registry
 
 
-def _evaluation_prompt(artifact_host, compiled, *, suffix: str):
+def _evaluation_prompt(
+    artifact_host,
+    compiled,
+    *,
+    suffix: str,
+    execution_specific_instructions: str = "",
+):
     envelope = build_inline_provider_prompt(
         compiled_static_body=compiled.prompt_bundle.compiled_static_body,
-        execution_specific_instructions="",
+        execution_specific_instructions=execution_specific_instructions,
         inputs=(),
         output_constraint_mode=NATIVE_STRUCTURED_OUTPUT,
     )
@@ -296,6 +321,7 @@ class _ProductAuthorityDouble:
         self.envelope = envelope
         self.context_state = ExecutionAuthorizationContextState.EFFECTIVE
         self.operation_effect = GatewayDecisionEffect.ALLOW
+        self.operation_effects: dict[str, GatewayDecisionEffect] = {}
         self.operation_queries: list[OperationAuthorizationQuery] = []
 
     def validate_execution_context(
@@ -326,6 +352,7 @@ class _ProductAuthorityDouble:
         query: OperationAuthorizationQuery,
     ) -> ProductOperationDecision:
         self.operation_queries.append(query)
+        effect = self.operation_effects.get(query.operation_id, self.operation_effect)
         return ProductOperationDecision(
             query_id=query.query_id,
             query_sha256=query.query_sha256,
@@ -333,10 +360,10 @@ class _ProductAuthorityDouble:
             decision_sha256=hashlib.sha256(
                 query.query_sha256.encode("utf-8")
             ).hexdigest(),
-            effect=self.operation_effect,
+            effect=effect,
             reason_code=(
                 "operation_allowed"
-                if self.operation_effect is GatewayDecisionEffect.ALLOW
+                if effect is GatewayDecisionEffect.ALLOW
                 else "operation_denied"
             ),
             observed_at_utc=query.observed_at_utc,
@@ -413,9 +440,13 @@ class _StubInlineAdapter:
         artifact_host: InMemoryCellArtifactStore,
         adapter_id: str = "stub_inline_executor",
         adapter_revision: str = "v1",
+        provider_id: str = "provider_stub",
         transport_kind: str = "in_process_test",
         transport_family: str = "in_process",
         supported_execution_modes: tuple[str, ...] = ("tool_free",),
+        supported_input_delivery_modes: tuple[str, ...] = ("inline",),
+        supported_network_policies: tuple[str, ...] = ("denied",),
+        supports_dynamic_operation_authorization: bool = False,
         payload: bytes = b'{"value":"stub"}',
         on_execute=None,
         terminal_status: str = "completed",
@@ -425,9 +456,15 @@ class _StubInlineAdapter:
         self._artifact_host = artifact_host
         self._adapter_id = adapter_id
         self._adapter_revision = adapter_revision
+        self._provider_id = provider_id
         self._transport_kind = transport_kind
         self._transport_family = transport_family
         self._supported_execution_modes = supported_execution_modes
+        self._supported_input_delivery_modes = supported_input_delivery_modes
+        self._supported_network_policies = supported_network_policies
+        self._supports_dynamic_operation_authorization = (
+            supports_dynamic_operation_authorization
+        )
         self._payload = payload
         self._on_execute = on_execute
         self._terminal_status = terminal_status
@@ -440,7 +477,7 @@ class _StubInlineAdapter:
             adapter_contract_version="v1",
             adapter_id=self._adapter_id,
             adapter_revision=self._adapter_revision,
-            provider_id="provider_stub",
+            provider_id=self._provider_id,
             transport_family=self._transport_family,
             transport_kind=self._transport_kind,
             runtime_package_id="agent_runtime_core",
@@ -452,9 +489,11 @@ class _StubInlineAdapter:
             ),
             supported_read_isolation_modes=("entitled_refs",),
             supported_execution_modes=self._supported_execution_modes,
-            supported_input_delivery_modes=("inline",),
-            supported_network_policies=("denied",),
-            supports_dynamic_operation_authorization=False,
+            supported_input_delivery_modes=self._supported_input_delivery_modes,
+            supported_network_policies=self._supported_network_policies,
+            supports_dynamic_operation_authorization=(
+                self._supports_dynamic_operation_authorization
+            ),
             admission_state="in_process_test_double",
         )
 
@@ -466,8 +505,9 @@ class _StubInlineAdapter:
             request.execution_profile_ref,
             request.execution_profile_sha256,
         )
+        tool_observations: tuple[ModuleToolCallObservation, ...] = ()
         if self._on_execute is not None:
-            self._on_execute(request, host)
+            tool_observations = self._on_execute(request, host) or ()
         if self._result_type_override is not None:
             return self._result_type_override
         trace_ref, trace_sha256 = self._artifact_host.commit_attempt_trace(
@@ -504,7 +544,9 @@ class _StubInlineAdapter:
             runtime_version="0.0.0",
             outputs=outputs,
             model_operation_ref_ids=(),
-            tool_operation_ref_ids=(),
+            tool_operation_ref_ids=tuple(
+                observation.tool_call_id for observation in tool_observations
+            ),
             input_tokens=3,
             output_tokens=2,
             cache_read_tokens=None,
@@ -519,6 +561,7 @@ class _StubInlineAdapter:
             failure=failure,
             cell_local_trace_ref=trace_ref,
             cell_local_trace_sha256=trace_sha256,
+            tool_observations=tool_observations,
         )
 
 
@@ -609,6 +652,123 @@ def _emit_live_provider_evidence(run, compiled) -> None:
             sort_keys=True,
         )
     )
+
+
+class _ProviderIntegrationToolSessionFactory:
+    """Controlled governed-read seam used with a real Claude model."""
+
+    def __init__(self, artifact_host: InMemoryCellArtifactStore) -> None:
+        self._artifact_host = artifact_host
+        self.sessions: list[_ProviderIntegrationToolSession] = []
+
+    def open_session(self, request):
+        session = _ProviderIntegrationToolSession(
+            request,
+            self._artifact_host,
+        )
+        self.sessions.append(session)
+        return session
+
+
+class _ProviderIntegrationToolSession:
+    def __init__(self, request, artifact_host) -> None:
+        self._request = request
+        self._artifact_host = artifact_host
+        self._observations: list[ModuleToolCallObservation] = []
+        self._intent_count = 0
+
+    @property
+    def definitions(self):
+        return (
+            ProviderToolDefinition(
+                tool_name="read_source",
+                description="Read the authorized evaluation source by source_id",
+                input_schema={
+                    "type": "object",
+                    "properties": {"source_id": {"type": "string"}},
+                    "required": ["source_id"],
+                    "additionalProperties": False,
+                },
+            ),
+        )
+
+    def operation_intent(self, tool_name, payload):
+        self._intent_count += 1
+        return ProviderOperationIntent(
+            workflow_execution_id=self._request.execution_scope_id,
+            module_run_id=self._request.module_run_id,
+            variant_id=self._request.variant_id,
+            attempt_id=self._request.attempt_id,
+            capability_id=tool_name,
+            resource_id=payload["source_id"],
+            action_id=tool_name,
+            entitlement_snapshot_hash=(
+                self._request.execution_authorization_binding_sha256
+            ),
+            idempotency_key=(
+                f"live_gateway_{self._request.attempt_id}_{self._intent_count}"
+            ),
+            expires_after_seconds=30,
+        )
+
+    def invoke(self, tool_name, payload, authorization):
+        authorization.validate()
+        ordinal = len(self._observations) + 1
+        request_bytes = json.dumps(
+            dict(payload),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        response = {
+            "source_id": payload["source_id"],
+            "fact": "runtime_gateway_authorized",
+        }
+        response_bytes = json.dumps(
+            response,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        request_artifact = self._artifact_host.put_bytes(
+            artifact_kind_id="gateway_tool_request",
+            schema_version="gateway_tool_request_v1",
+            schema_ref="schema:gateway_tool_request@v1",
+            schema_sha256="7" * 64,
+            media_type="application/json",
+            content=request_bytes,
+            idempotency_key=(
+                f"live_gateway_request_{self._request.attempt_id}_{ordinal}"
+            ),
+        )
+        response_artifact = self._artifact_host.put_bytes(
+            artifact_kind_id="gateway_tool_response",
+            schema_version="gateway_tool_response_v1",
+            schema_ref="schema:gateway_tool_response@v1",
+            schema_sha256="8" * 64,
+            media_type="application/json",
+            content=response_bytes,
+            idempotency_key=(
+                f"live_gateway_response_{self._request.attempt_id}_{ordinal}"
+            ),
+        )
+        self._observations.append(
+            ModuleToolCallObservation(
+                tool_call_id=f"live_gateway_call_{ordinal:03d}",
+                tool_name=tool_name,
+                request_ref=request_artifact.artifact_ref,
+                request_sha256=request_artifact.artifact_sha256,
+                response_ref=response_artifact.artifact_ref,
+                response_sha256=response_artifact.artifact_sha256,
+            )
+        )
+        return response
+
+    def validate_completion(self) -> None:
+        if len(self._observations) != 1:
+            raise ValueError("live Gateway smoke requires exactly one governed read")
+
+    @property
+    def observations(self):
+        return tuple(self._observations)
 
 
 def test_run_module_evaluation_executes_registered_codex_transport(
@@ -732,7 +892,7 @@ def test_run_module_records_registered_codex_transport_failure(
     assert run.resolution is None
 
 
-def test_run_module_provider_transport_still_rejects_protected_module(
+def test_tool_free_profile_rejects_undeclared_gateway_surface_before_provider(
     tmp_path: Path,
 ) -> None:
     compiled = _compile_native_module(
@@ -761,7 +921,7 @@ def test_run_module_provider_transport_still_rejects_protected_module(
     request = _evaluation_request(compiled, prompt_ref, suffix="protected")
     authority, _ = _evaluation_authority(registry, request)
 
-    with pytest.raises(NotImplementedError, match="protected Module operations"):
+    with pytest.raises(NotImplementedError, match="outside the admitted"):
         run_module(
             request,
             release_registry=registry,
@@ -772,6 +932,146 @@ def test_run_module_provider_transport_still_rejects_protected_module(
         )
 
     assert entered is False
+
+
+def test_run_module_rejects_codex_agent_draft_workspace_before_provider(
+    tmp_path: Path,
+) -> None:
+    compiled = _compile_native_module(
+        tmp_path,
+        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        execution_profile_id="codex_workspace_profile",
+        executor_adapter_id="codex_cli_agent_workspace_executor",
+        executor_adapter_revision="v1",
+        execution_mode="agent",
+        attempt_workspace_policy="own_draft_read_write",
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="workspace")
+    entered = False
+
+    def invoker(**_fields) -> CodexCliInvocationResult:
+        nonlocal entered
+        entered = True
+        raise AssertionError("unadmitted Codex workspace reached Provider")
+
+    executor = CodexCliAgentWorkspaceModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces",
+        invoker=invoker,
+        codex_bin="codex-test-stub",
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(compiled, prompt_ref, suffix="workspace")
+    authority, _ = _evaluation_authority(registry, request)
+
+    with pytest.raises(NotImplementedError, match="outside the admitted"):
+        run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            authority=authority,
+            clock=lambda: _TEST_TIME,
+        )
+
+    assert entered is False
+
+
+def test_run_module_executes_claude_agent_draft_workspace_slice(
+    tmp_path: Path,
+) -> None:
+    claude_module = pytest.importorskip(
+        "agent_runtime.invocation.invocation_claude_module_invocation"
+    )
+    compiled = _compile_native_module(
+        tmp_path,
+        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        execution_profile_id="claude_workspace_profile",
+        executor_adapter_id=(
+            "claude_agent_sdk_inline_draft_workspace_executor"
+        ),
+        executor_adapter_revision="v1",
+        transport_kind="claude_agent_sdk",
+        provider_id="anthropic",
+        model_id="claude-workspace-test",
+        execution_mode="agent",
+        attempt_workspace_policy="own_draft_read_write",
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="claude_workspace",
+    )
+    observed: dict[str, object] = {}
+
+    async def fake_query(*, prompt, options):
+        async for _message in prompt:
+            pass
+        hook = options.hooks["PreToolUse"][0].hooks[0]
+        draft = Path(options.cwd) / "draft.txt"
+        decision = await hook(
+            {
+                "tool_name": "Write",
+                "tool_input": {
+                    "file_path": str(draft),
+                    "content": "workspace_slice",
+                },
+            },
+            None,
+            {},
+        )
+        observed["decision"] = decision
+        draft.write_text("workspace_slice", encoding="utf-8")
+        yield claude_module.ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="session_workspace",
+            usage={"input_tokens": 13, "output_tokens": 5},
+            structured_output={"value": draft.read_text(encoding="utf-8")},
+        )
+
+    executor = claude_module.ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces",
+        query_fn=fake_query,
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(
+        compiled,
+        prompt_ref,
+        suffix="claude_workspace",
+    )
+    authority, product = _evaluation_authority(registry, request)
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert _assert_completed_provider_run(run, artifact_host) == {
+        "value": "workspace_slice"
+    }
+    assert observed["decision"]["hookSpecificOutput"][
+        "permissionDecision"
+    ] == "allow"
+    assert len(product.operation_queries) == 1
 
 
 def test_run_module_provider_transport_still_rejects_production_purpose(
@@ -1564,7 +1864,7 @@ def test_operation_free_module_cannot_use_a_provider_transport(
     assert entered is False
 
 
-def test_dynamic_operation_callback_fails_closed_without_touching_model_authority(
+def test_dynamic_operation_callback_fails_closed_outside_gateway_profile(
     tmp_path: Path,
 ) -> None:
     compiled = _stub_compiled(tmp_path)
@@ -1611,9 +1911,522 @@ def test_dynamic_operation_callback_fails_closed_without_touching_model_authorit
         clock=lambda: _TEST_TIME,
     )
 
-    assert "Gateway capability slice" in str(observed["denied"])
+    assert "outside the admitted Gateway profile" in str(observed["denied"])
+    assert run.attempts[0].status == "failed"
+    assert run.attempts[0].failure_class == "authorization"
+    assert run.resolution is None
+
+
+def _gateway_stub_compiled(tmp_path: Path):
+    return _stub_compiled(
+        tmp_path,
+        declared_operation_ids=("invoke_model", "read_source"),
+        executor_adapter_id="claude_agent_sdk_gateway_executor",
+        executor_adapter_revision="v2",
+        transport_kind="claude_agent_sdk",
+        provider_id="anthropic",
+        execution_mode="agent",
+        semantic_input_delivery_mode="gateway_read",
+        attempt_workspace_policy="none",
+        gateway_access_reasons=("oversized_knowledge_retrieval",),
+        tool_policy=("read_source",),
+        network_policy="gateway_only",
+    )
+
+
+def _gateway_tool_callback(
+    artifact_host: InMemoryCellArtifactStore,
+    resource_calls: list[object],
+    *,
+    before_authorization=None,
+    mismatched_lineage: bool = False,
+):
+    def callback(request, host):
+        if before_authorization is not None:
+            before_authorization()
+        intent = ProviderOperationIntent(
+            workflow_execution_id=(
+                "isolated_scope_wrong"
+                if mismatched_lineage
+                else request.execution_scope_id
+            ),
+            module_run_id=request.module_run_id,
+            variant_id=request.variant_id,
+            attempt_id=request.attempt_id,
+            capability_id="read_source",
+            resource_id="resource_gateway_test",
+            action_id="read_source",
+            entitlement_snapshot_hash=(
+                request.execution_authorization_binding_sha256
+            ),
+            idempotency_key=f"gateway_read_{request.attempt_id}",
+            expires_after_seconds=30,
+        )
+        receipt = host.authorize_operation(intent)
+        receipt.validate()
+        resource_calls.append(receipt)
+        request_artifact = artifact_host.put_bytes(
+            artifact_kind_id="gateway_tool_request",
+            schema_version="gateway_tool_request_v1",
+            schema_ref="schema:gateway_tool_request@v1",
+            schema_sha256="7" * 64,
+            media_type="application/json",
+            content=b'{"resource_id":"resource_gateway_test"}',
+            idempotency_key=f"gateway_request_{request.attempt_id}",
+        )
+        response_artifact = artifact_host.put_bytes(
+            artifact_kind_id="gateway_tool_response",
+            schema_version="gateway_tool_response_v1",
+            schema_ref="schema:gateway_tool_response@v1",
+            schema_sha256="8" * 64,
+            media_type="application/json",
+            content=b'{"value":"authorized_resource"}',
+            idempotency_key=f"gateway_response_{request.attempt_id}",
+        )
+        return (
+            ModuleToolCallObservation(
+                tool_call_id="gateway_call_001",
+                tool_name="read_source",
+                request_ref=request_artifact.artifact_ref,
+                request_sha256=request_artifact.artifact_sha256,
+                response_ref=response_artifact.artifact_ref,
+                response_sha256=response_artifact.artifact_sha256,
+            ),
+        )
+
+    return callback
+
+
+def _registered_gateway_stub(
+    tmp_path: Path,
+    artifact_host: InMemoryCellArtifactStore,
+    *,
+    on_execute,
+    supports_dynamic_operation_authorization: bool = True,
+):
+    compiled = _gateway_stub_compiled(tmp_path)
+    registry = _register_compiled_for_evaluation(compiled)
+    adapter = _StubInlineAdapter(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        adapter_id="claude_agent_sdk_gateway_executor",
+        adapter_revision="v2",
+        provider_id="anthropic",
+        transport_kind="claude_agent_sdk",
+        transport_family="sdk",
+        supported_execution_modes=("agent",),
+        supported_input_delivery_modes=("gateway_read",),
+        supported_network_policies=("gateway_only",),
+        supports_dynamic_operation_authorization=(
+            supports_dynamic_operation_authorization
+        ),
+        on_execute=on_execute,
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="gateway")
+    request = _evaluation_request(compiled, prompt_ref, suffix="gateway")
+    authority, product = _evaluation_authority(registry, request)
+    return compiled, registry, adapters, adapter, request, authority, product
+
+
+def test_gateway_read_authorizes_each_resource_call_and_records_lineage(
+    tmp_path: Path,
+) -> None:
+    artifact_host = InMemoryCellArtifactStore()
+    resource_calls: list[object] = []
+    (
+        _compiled,
+        registry,
+        adapters,
+        adapter,
+        request,
+        authority,
+        product,
+    ) = _registered_gateway_stub(
+        tmp_path,
+        artifact_host,
+        on_execute=_gateway_tool_callback(artifact_host, resource_calls),
+    )
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert adapter.calls == 1
+    assert len(resource_calls) == 1
+    assert tuple(query.operation_id for query in product.operation_queries) == (
+        "invoke_model",
+        "read_source",
+    )
     assert run.attempts[0].status == "completed"
+    assert len(run.attempts[0].tool_calls) == 1
+    assert run.attempts[0].tool_calls[0].tool_name == "read_source"
     assert run.resolution is not None
+
+
+def test_gateway_read_denial_never_enters_resource_callable(
+    tmp_path: Path,
+) -> None:
+    artifact_host = InMemoryCellArtifactStore()
+    resource_calls: list[object] = []
+    (
+        _compiled,
+        registry,
+        adapters,
+        _adapter,
+        request,
+        authority,
+        product,
+    ) = _registered_gateway_stub(
+        tmp_path,
+        artifact_host,
+        on_execute=_gateway_tool_callback(artifact_host, resource_calls),
+    )
+    product.operation_effects["read_source"] = GatewayDecisionEffect.DENY
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert resource_calls == []
+    assert run.attempts[0].status == "failed"
+    assert run.attempts[0].failure_class == "authorization"
+    assert run.outputs == ()
+    assert run.resolution is None
+
+
+def test_gateway_read_revalidates_fence_before_resource_call(
+    tmp_path: Path,
+) -> None:
+    artifact_host = InMemoryCellArtifactStore()
+    resource_calls: list[object] = []
+    product_holder: dict[str, _ProductAuthorityDouble] = {}
+    (
+        _compiled,
+        registry,
+        adapters,
+        _adapter,
+        request,
+        authority,
+        product,
+    ) = _registered_gateway_stub(
+        tmp_path,
+        artifact_host,
+        on_execute=_gateway_tool_callback(
+            artifact_host,
+            resource_calls,
+            before_authorization=lambda: setattr(
+                product_holder["product"],
+                "context_state",
+                ExecutionAuthorizationContextState.REVOKED,
+            ),
+        ),
+    )
+    product_holder["product"] = product
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert resource_calls == []
+    assert run.attempts[0].status == "failed"
+    assert run.attempts[0].failure_class == "authorization"
+    assert tuple(query.operation_id for query in product.operation_queries) == (
+        "invoke_model",
+    )
+
+
+def test_gateway_read_rejects_cross_attempt_lineage_before_resource_call(
+    tmp_path: Path,
+) -> None:
+    artifact_host = InMemoryCellArtifactStore()
+    resource_calls: list[object] = []
+    (
+        _compiled,
+        registry,
+        adapters,
+        _adapter,
+        request,
+        authority,
+        product,
+    ) = _registered_gateway_stub(
+        tmp_path,
+        artifact_host,
+        on_execute=_gateway_tool_callback(
+            artifact_host,
+            resource_calls,
+            mismatched_lineage=True,
+        ),
+    )
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert resource_calls == []
+    assert run.attempts[0].failure_class == "authorization"
+    assert len(product.operation_queries) == 1
+
+
+def test_gateway_profile_requires_dynamic_authorization_descriptor(
+    tmp_path: Path,
+) -> None:
+    artifact_host = InMemoryCellArtifactStore()
+    resource_calls: list[object] = []
+    (
+        _compiled,
+        registry,
+        adapters,
+        adapter,
+        request,
+        authority,
+        product,
+    ) = _registered_gateway_stub(
+        tmp_path,
+        artifact_host,
+        on_execute=_gateway_tool_callback(artifact_host, resource_calls),
+        supports_dynamic_operation_authorization=False,
+    )
+
+    with pytest.raises(PermissionError, match="dynamic operation authorization"):
+        run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            authority=authority,
+            clock=lambda: _TEST_TIME,
+        )
+
+    assert adapter.calls == 0
+    assert product.operation_queries == []
+    assert resource_calls == []
+
+
+@pytest.mark.parametrize("deny_tool", [False, True])
+def test_claude_gateway_executor_routes_tool_through_kernel_authorization(
+    tmp_path: Path,
+    monkeypatch,
+    deny_tool: bool,
+) -> None:
+    claude_module = pytest.importorskip(
+        "agent_runtime.invocation.invocation_claude_module_invocation"
+    )
+    compiled = _compile_native_module(
+        tmp_path,
+        declared_operation_ids=("invoke_model", "read_source"),
+        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        execution_profile_id="claude_gateway_profile",
+        executor_adapter_id="claude_agent_sdk_gateway_executor",
+        executor_adapter_revision="v2",
+        transport_kind="claude_agent_sdk",
+        provider_id="anthropic",
+        model_id="claude-gateway-test",
+        execution_mode="agent",
+        semantic_input_delivery_mode="gateway_read",
+        gateway_access_reasons=("oversized_knowledge_retrieval",),
+        tool_policy=("read_source",),
+        network_policy="gateway_only",
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    events: list[str] = []
+
+    class FakeSdkTool:
+        def __init__(self, *, name, description, input_schema, handler):
+            self.name = name
+            self.description = description
+            self.input_schema = input_schema
+            self.handler = handler
+
+    monkeypatch.setattr(claude_module, "SdkMcpTool", FakeSdkTool)
+    monkeypatch.setattr(
+        claude_module,
+        "create_sdk_mcp_server",
+        lambda **fields: fields,
+    )
+
+    class ToolSession:
+        def __init__(self, request) -> None:
+            self.request = request
+            self._observations: list[ModuleToolCallObservation] = []
+
+        @property
+        def definitions(self):
+            return (
+                ProviderToolDefinition(
+                    tool_name="read_source",
+                    description="Read one authorized source",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"source_id": {"type": "string"}},
+                        "required": ["source_id"],
+                        "additionalProperties": False,
+                    },
+                ),
+            )
+
+        def operation_intent(self, tool_name, payload):
+            events.append("intent")
+            return ProviderOperationIntent(
+                workflow_execution_id=self.request.execution_scope_id,
+                module_run_id=self.request.module_run_id,
+                variant_id=self.request.variant_id,
+                attempt_id=self.request.attempt_id,
+                capability_id=tool_name,
+                resource_id=payload["source_id"],
+                action_id=tool_name,
+                entitlement_snapshot_hash=(
+                    self.request.execution_authorization_binding_sha256
+                ),
+                idempotency_key=f"claude_gateway_{self.request.attempt_id}",
+                expires_after_seconds=30,
+            )
+
+        def invoke(self, tool_name, payload, authorization):
+            events.append("resource")
+            authorization.validate()
+            request_artifact = artifact_host.put_bytes(
+                artifact_kind_id="gateway_tool_request",
+                schema_version="gateway_tool_request_v1",
+                schema_ref="schema:gateway_tool_request@v1",
+                schema_sha256="7" * 64,
+                media_type="application/json",
+                content=json.dumps(payload, sort_keys=True).encode("utf-8"),
+                idempotency_key=f"claude_request_{self.request.attempt_id}",
+            )
+            response = {"value": "authorized_source"}
+            response_artifact = artifact_host.put_bytes(
+                artifact_kind_id="gateway_tool_response",
+                schema_version="gateway_tool_response_v1",
+                schema_ref="schema:gateway_tool_response@v1",
+                schema_sha256="8" * 64,
+                media_type="application/json",
+                content=json.dumps(response, sort_keys=True).encode("utf-8"),
+                idempotency_key=f"claude_response_{self.request.attempt_id}",
+            )
+            self._observations.append(
+                ModuleToolCallObservation(
+                    tool_call_id="claude_gateway_call_001",
+                    tool_name=tool_name,
+                    request_ref=request_artifact.artifact_ref,
+                    request_sha256=request_artifact.artifact_sha256,
+                    response_ref=response_artifact.artifact_ref,
+                    response_sha256=response_artifact.artifact_sha256,
+                )
+            )
+            return response
+
+        def validate_completion(self) -> None:
+            assert len(self._observations) == 1
+
+        @property
+        def observations(self):
+            return tuple(self._observations)
+
+    class ToolSessionFactory:
+        def open_session(self, request):
+            return ToolSession(request)
+
+    async def fake_query(*, prompt, options):
+        async for _message in prompt:
+            pass
+        server = next(iter(options.mcp_servers.values()))
+        tool = server["tools"][0]
+        try:
+            tool_result = await tool.handler({"source_id": "source_001"})
+        except PermissionError:
+            assert deny_tool is True
+        else:
+            assert deny_tool is False
+            assert json.loads(tool_result["content"][0]["text"]) == {
+                "value": "authorized_source"
+            }
+        yield claude_module.ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=2,
+            session_id="session_gateway_test",
+            usage={"input_tokens": 5, "output_tokens": 3},
+            structured_output={"value": "gateway_complete"},
+        )
+
+    executor = claude_module.ClaudeAgentSdkGatewayModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        tool_session_factory=ToolSessionFactory(),
+        workspace_root=tmp_path / "workspaces",
+        query_fn=fake_query,
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="claude_gateway",
+    )
+    request = _evaluation_request(
+        compiled,
+        prompt_ref,
+        suffix="claude_gateway",
+    )
+    authority, product = _evaluation_authority(registry, request)
+    if deny_tool:
+        product.operation_effects["read_source"] = GatewayDecisionEffect.DENY
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert events == (["intent"] if deny_tool else ["intent", "resource"])
+    assert tuple(query.operation_id for query in product.operation_queries) == (
+        "invoke_model",
+        "read_source",
+    )
+    if deny_tool:
+        assert run.attempts[0].status == "failed"
+        assert run.attempts[0].failure_class == "authorization"
+        assert run.outputs == ()
+        assert run.resolution is None
+    else:
+        assert _assert_completed_provider_run(run, artifact_host) == {
+            "value": "gateway_complete"
+        }
+        assert run.attempts[0].tool_calls[0].tool_name == "read_source"
 
 
 @pytest.mark.skipif(
@@ -1709,6 +2522,174 @@ def test_live_claude_evaluation_runs_through_run_module(tmp_path: Path) -> None:
     output = _assert_completed_provider_run(run, artifact_host)
     assert isinstance(output["value"], str)
     assert run.attempts[0].usage.output_tokens is not None
+    _emit_live_provider_evidence(run, compiled)
+
+
+@pytest.mark.skipif(
+    not _RUN_PROVIDER_INTEGRATION,
+    reason="set RUN_PROVIDER_INTEGRATION=1 for live Provider smoke tests",
+)
+def test_live_claude_agent_workspace_runs_through_run_module(
+    tmp_path: Path,
+) -> None:
+    claude_module = pytest.importorskip(
+        "agent_runtime.invocation.invocation_claude_module_invocation"
+    )
+    compiled = _compile_native_module(
+        tmp_path,
+        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        execution_profile_id="live_claude_workspace_profile",
+        executor_adapter_id=(
+            "claude_agent_sdk_inline_draft_workspace_executor"
+        ),
+        executor_adapter_revision="v1",
+        transport_kind="claude_agent_sdk",
+        provider_id="anthropic",
+        model_id=os.environ.get(
+            "AGENT_RUNTIME_TEST_CLAUDE_MODEL",
+            "claude-fable-5",
+        ),
+        reasoning_profile="low",
+        timeout_seconds=300,
+        execution_mode="agent",
+        attempt_workspace_policy="own_draft_read_write",
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    challenge = "workspace_challenge_9c51b7"
+
+    async def live_query(*, prompt, options):
+        (Path(options.cwd) / "workspace-challenge.txt").write_text(
+            challenge,
+            encoding="utf-8",
+        )
+        async for message in claude_module.query(prompt=prompt, options=options):
+            yield message
+
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="claude_workspace_live",
+        execution_specific_instructions=(
+            "MANDATORY TOOL EVIDENCE: use Read on ./workspace-challenge.txt. Its "
+            "contents are not in this prompt. Then use Write to copy those exact "
+            "contents to ./workspace-proof.txt, and use Read to verify the copy. "
+            "Return the required JSON object only afterward, with value set to "
+            "the exact challenge contents."
+        ),
+    )
+    executor = claude_module.ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces",
+        query_fn=live_query,
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(
+        compiled,
+        prompt_ref,
+        suffix="claude_workspace_live",
+    )
+    authority, _ = _evaluation_authority(registry, request)
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+    )
+
+    output = _assert_completed_provider_run(run, artifact_host)
+    assert output["value"] == challenge
+    workspace_proofs = tuple(
+        (tmp_path / "workspaces").glob("*/workspace-proof.txt")
+    )
+    assert len(workspace_proofs) == 1
+    assert workspace_proofs[0].read_text(encoding="utf-8").strip() == (
+        challenge
+    )
+    _emit_live_provider_evidence(run, compiled)
+
+
+@pytest.mark.skipif(
+    not _RUN_PROVIDER_INTEGRATION,
+    reason="set RUN_PROVIDER_INTEGRATION=1 for live Provider smoke tests",
+)
+def test_live_claude_gateway_read_runs_through_run_module(
+    tmp_path: Path,
+) -> None:
+    claude_module = pytest.importorskip(
+        "agent_runtime.invocation.invocation_claude_module_invocation"
+    )
+    compiled = _compile_native_module(
+        tmp_path,
+        declared_operation_ids=("invoke_model", "read_source"),
+        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        execution_profile_id="live_claude_gateway_profile",
+        executor_adapter_id="claude_agent_sdk_gateway_executor",
+        executor_adapter_revision="v2",
+        transport_kind="claude_agent_sdk",
+        provider_id="anthropic",
+        model_id=os.environ.get(
+            "AGENT_RUNTIME_TEST_CLAUDE_MODEL",
+            "claude-fable-5",
+        ),
+        reasoning_profile="low",
+        timeout_seconds=300,
+        execution_mode="agent",
+        semantic_input_delivery_mode="gateway_read",
+        gateway_access_reasons=("oversized_knowledge_retrieval",),
+        tool_policy=("read_source",),
+        network_policy="gateway_only",
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    tool_sessions = _ProviderIntegrationToolSessionFactory(artifact_host)
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="claude_gateway_live",
+        execution_specific_instructions=(
+            "Call read_source exactly once with source_id source_001. Use the "
+            "returned fact as the value in the required JSON object."
+        ),
+    )
+    executor = claude_module.ClaudeAgentSdkGatewayModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        tool_session_factory=tool_sessions,
+        workspace_root=tmp_path / "workspaces",
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    request = _evaluation_request(
+        compiled,
+        prompt_ref,
+        suffix="claude_gateway_live",
+    )
+    authority, product = _evaluation_authority(registry, request)
+
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+    )
+
+    output = _assert_completed_provider_run(run, artifact_host)
+    assert output["value"] == "runtime_gateway_authorized"
+    assert len(tool_sessions.sessions) == 1
+    assert len(tool_sessions.sessions[0].observations) == 1
+    assert tuple(query.operation_id for query in product.operation_queries) == (
+        "invoke_model",
+        "read_source",
+    )
+    assert run.attempts[0].tool_calls == tool_sessions.sessions[0].observations
     _emit_live_provider_evidence(run, compiled)
 
 
@@ -1837,6 +2818,97 @@ def test_claude_tool_free_executor_honors_configured_turn_budget(
     assert observed["max_turns"] == 3
     assert result.terminal_status == "completed"
     assert json.loads(host.staged["result"]) == {"value": "completed"}
+
+
+@pytest.mark.parametrize("escape_workspace", [False, True])
+def test_claude_workspace_executor_gates_every_tool_with_pre_hook(
+    tmp_path: Path,
+    escape_workspace: bool,
+) -> None:
+    claude_module = pytest.importorskip(
+        "agent_runtime.invocation.invocation_claude_module_invocation"
+    )
+    compiled = _compile_native_module(
+        tmp_path,
+        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        execution_profile_id="claude_workspace_profile",
+        executor_adapter_id=(
+            "claude_agent_sdk_inline_draft_workspace_executor"
+        ),
+        executor_adapter_revision="v1",
+        transport_kind="claude_agent_sdk",
+        provider_id="anthropic",
+        model_id="claude-workspace-test",
+        execution_mode="agent",
+        attempt_workspace_policy="own_draft_read_write",
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="claude_workspace_control",
+    )
+    observed: dict[str, object] = {}
+
+    async def fake_query(*, prompt, options):
+        observed["tools"] = tuple(options.tools)
+        async for _message in prompt:
+            pass
+        matcher = options.hooks["PreToolUse"][0]
+        observed["matcher"] = matcher.matcher
+        hook = matcher.hooks[0]
+        decision = await hook(
+            {
+                "tool_name": "Read",
+                "tool_input": {
+                    "file_path": str(
+                        tmp_path.parent / "escaped.txt"
+                        if escape_workspace
+                        else Path(options.cwd) / "draft.txt"
+                    )
+                },
+            },
+            None,
+            {},
+        )
+        observed["decision"] = decision
+        yield claude_module.ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="session_workspace_control",
+            usage={"input_tokens": 3, "output_tokens": 2},
+            structured_output={"value": "completed"},
+        )
+
+    executor = claude_module.ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces",
+        query_fn=fake_query,
+    )
+    result = executor.execute(
+        _direct_adapter_request(
+            compiled,
+            prompt_ref,
+            suffix="claude_workspace_control",
+        ),
+        _RecordingHost(),
+    )
+
+    assert observed["tools"] == ("Read", "Write", "Edit")
+    assert observed["matcher"] == "Read|Write|Edit"
+    hook_output = observed["decision"]["hookSpecificOutput"]
+    if escape_workspace:
+        assert hook_output["permissionDecision"] == "deny"
+        assert result.terminal_status == "failed"
+        assert result.failure.failure_class == "policy_violation"
+    else:
+        assert hook_output["permissionDecision"] == "allow"
+        assert result.terminal_status == "completed"
 
 
 def test_codex_native_structured_output_executes_end_to_end(

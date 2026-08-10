@@ -4,8 +4,10 @@ The adapters implement the canonical ``AuthorizedAgentExecutionAdapter``
 protocol. Both send one complete, precommitted Prompt Envelope assembled from
 authorized inputs. The tool-free adapter consumes the final response directly.
 The Agent-workspace adapter gives Codex its standard workspace-write and shell
-permissions so it can draft, reread, revise, and validate inside the isolated
-Attempt workspace. Neither adapter gives the provider a database connection or
+permissions so it can draft, reread, revise, and validate from an Attempt-local
+cwd. That adapter remains a conformance candidate rather than a public-kernel
+admission because Codex workspace-write does not confine ambient filesystem
+reads to that cwd. Neither adapter gives the provider a database connection or
 network-enabled tool execution. Expected provider failures return a typed
 failed result; exceptions are adapter conformance failures. Outputs are staged
 through the host and become authoritative only through Runtime finalization.

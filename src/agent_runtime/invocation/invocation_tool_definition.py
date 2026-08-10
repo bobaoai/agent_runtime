@@ -7,15 +7,17 @@ import functools
 from importlib import metadata
 from typing import Any, Mapping, Protocol
 
-from ..contracts.registry_contract_validation import validate_id
-from ..contracts.ledger_lineage_definition import ModuleToolCallObservation
 from ..contracts.execution_module_definition import (
     ModuleFailureDetailBinding,
     ModuleOutputBinding,
 )
 from ..contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionRequest,
+    AuthorizedOperationReceipt,
+    ProviderOperationIntent,
 )
+from ..contracts.ledger_lineage_definition import ModuleToolCallObservation
+from ..contracts.registry_contract_validation import validate_id
 
 
 @functools.cache
@@ -106,8 +108,20 @@ class ModuleProviderToolSession(Protocol):
     def definitions(self) -> tuple[ProviderToolDefinition, ...]:
         """Return every and only tool exposed for this Attempt."""
 
-    def invoke(self, tool_name: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Execute one admitted call and return model-visible semantic content."""
+    def operation_intent(
+        self,
+        tool_name: str,
+        payload: Mapping[str, Any],
+    ) -> ProviderOperationIntent:
+        """Build the exact Runtime authorization request for one tool call."""
+
+    def invoke(
+        self,
+        tool_name: str,
+        payload: Mapping[str, Any],
+        authorization: AuthorizedOperationReceipt,
+    ) -> Mapping[str, Any]:
+        """Execute only after receiving the Runtime authorization receipt."""
 
     def validate_completion(self) -> None:
         """Fail when required registered reads were skipped or left incomplete."""

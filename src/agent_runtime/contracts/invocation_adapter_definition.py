@@ -22,6 +22,7 @@ from .registry_contract_validation import (
     validate_token,
     validate_utc_timestamp,
 )
+from .ledger_lineage_definition import ModuleToolCallObservation
 from .registry_release_definition import (
     EXECUTION_MODES,
     NETWORK_POLICIES,
@@ -45,6 +46,22 @@ def _validate_local_handle(label: str, value: Any) -> None:
         segment in {"", ".", ".."} for segment in value.split("/")
     ):
         raise ValueError(f"{label} must be an opaque Cell-local lookup key")
+
+
+def isolated_execution_scope_id(
+    isolated_scope_ref: str,
+    isolated_scope_sha256: str,
+) -> str:
+    """Derive the canonical AR09 identity of one isolated Module scope."""
+
+    validate_opaque_ref("isolated_scope_ref", isolated_scope_ref)
+    validate_sha256("isolated_scope_sha256", isolated_scope_sha256)
+    digest = hashlib.sha256(
+        "\x1f".join(
+            (isolated_scope_ref, isolated_scope_sha256)
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    return f"isolated_scope_{digest}"
 
 
 def _validate_ref_hash_group(
@@ -442,6 +459,7 @@ class AgentExecutionResult:
     failure: AgentExecutionFailure | None
     cell_local_trace_ref: str
     cell_local_trace_sha256: str
+    tool_observations: tuple[ModuleToolCallObservation, ...] = ()
 
     def validate(self) -> None:
         """Validate normalized output, usage, failure, and local trace lineage."""
@@ -478,6 +496,22 @@ class AgentExecutionResult:
                 refs,
                 item_validator=validate_id,
                 require_non_empty=False,
+            )
+        validate_exact_record_tuple(
+            "tool_observations",
+            self.tool_observations,
+            expected_type=ModuleToolCallObservation,
+            item_validator=ModuleToolCallObservation.validate,
+            unique_key=lambda observation: observation.tool_call_id,
+            unique_key_label="tool_call_id",
+            require_non_empty=False,
+        )
+        if tuple(
+            observation.tool_call_id
+            for observation in self.tool_observations
+        ) != self.tool_operation_ref_ids:
+            raise ValueError(
+                "tool_operation_ref_ids must exactly match tool observations"
             )
         for label, value in (
             ("input_tokens", self.input_tokens),
@@ -753,6 +787,22 @@ class AuthorizedAgentExecutionRequest:
 
         return self.protected_operation_intent_ref is not None
 
+    @property
+    def execution_scope_id(self) -> str:
+        """Return the exact Workflow or isolated-scope AR09 identity."""
+
+        if self.workflow_execution_id is not None:
+            return self.workflow_execution_id
+        if (
+            self.isolated_scope_ref is None
+            or self.isolated_scope_sha256 is None
+        ):
+            raise ValueError("request execution scope is incomplete")
+        return isolated_execution_scope_id(
+            self.isolated_scope_ref,
+            self.isolated_scope_sha256,
+        )
+
 
 @runtime_checkable
 class AuthorizedAgentExecutionHost(Protocol):
@@ -813,5 +863,6 @@ __all__ = [
     "AgentExecutionResult",
     "AuthorizedExecutionInput",
     "ProviderOperationIntent",
+    "isolated_execution_scope_id",
     "OutputSubmission",
 ]

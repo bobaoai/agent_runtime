@@ -21,6 +21,7 @@ from ..contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionRequest,
     OutputSubmission,
 )
+from ..contracts.ledger_lineage_definition import ModuleToolCallObservation
 from ..contracts.registry_release_definition import ExecutionProfileRelease
 from .invocation_failure_recording import build_provider_failure_detail
 from .invocation_tool_definition import (
@@ -142,6 +143,7 @@ def completed_adapter_result(
     request: AuthorizedAgentExecutionRequest,
     outputs: tuple[OutputSubmission, ...],
     tool_operation_ref_ids: tuple[str, ...],
+    tool_observations: tuple[ModuleToolCallObservation, ...] = (),
     input_tokens: int | None,
     output_tokens: int | None,
     cache_read_tokens: int | None,
@@ -169,6 +171,7 @@ def completed_adapter_result(
         failure=None,
         cell_local_trace_ref=trace_ref,
         cell_local_trace_sha256=trace_sha256,
+        tool_observations=tool_observations,
     )
     completed.validate()
     return completed
@@ -190,6 +193,7 @@ def raise_terminal_failure(
     cache_read_tokens: int | None = None,
     cache_creation_tokens: int | None = None,
     tool_operation_ref_ids: tuple[str, ...] = (),
+    tool_observations: tuple[ModuleToolCallObservation, ...] = (),
     transport_exit_code: int | None = None,
     cause: Exception | None = None,
 ) -> NoReturn:
@@ -241,6 +245,7 @@ def raise_terminal_failure(
         ),
         cell_local_trace_ref=trace_ref,
         cell_local_trace_sha256=trace_sha256,
+        tool_observations=tool_observations,
     )
     failed.validate()
     raise TerminalAdapterFailure(failed)

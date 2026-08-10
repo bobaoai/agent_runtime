@@ -415,36 +415,39 @@ purposes are not admitted by the current public entry point.
 | Purpose and Module shape | Capability profile | Registered transport | Current result |
 | --- | --- | --- | --- |
 | `test` or `evaluation`, no protected operation | Exact registered profile | `in_process` transport family only; a provider transport requires a declared model operation | Admitted without authorization evidence, subject to release and adapter checks |
-| `test` or `evaluation`, exactly one model operation (`invoke_model` or `model_execute`) | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible, explicitly registered adapter | Admitted with a required `ModuleExecutionAuthority`; a Product `DENY` or closed fence fails the Attempt with zero provider invocation |
-| `test` or `evaluation`, model operation | `agent`, writable draft workspace, Gateway tools, or broader network capability | Any | Rejected before Provider invocation by the current first-slice gate |
-| `test` or `evaluation`, any other protected operation | Any | Any | Rejected before Provider invocation pending AR09 request/grant binding |
+| `test` or `evaluation`, exactly one model operation (`invoke_model` or `model_execute`) and no other operation | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible, explicitly registered Claude SDK or Codex CLI adapter | Admitted with a required `ModuleExecutionAuthority`; a Product `DENY` or closed fence fails the Attempt with zero Provider invocation |
+| `test` or `evaluation`, exactly one model operation and no other operation | `agent` + `inline` + workspace `own_draft_read_write` + empty Gateway tool policy + network `denied` | Exact Claude SDK inline-draft adapter revision | Admitted. Every exposed Read/Write/Edit is checked against the Attempt root; the model receives no governed Gateway resource and no general network |
+| `test` or `evaluation`, exactly one model operation plus one or more declared Gateway read operations | `agent` + `gateway_read` + workspace `none` + exact non-empty tool policy and access reason + network `gateway_only` | Claude SDK Gateway adapter with dynamic-operation authorization support | Admitted. Model dispatch is authorized first; every tool call then requires a fresh Stack-A decision and Runtime receipt before the resource callable is entered |
+| `test` or `evaluation`, any other protected-operation/profile conjunction | Any | Any | Rejected before Provider invocation, including `hybrid`, Gateway-plus-draft, attachments, direct egress, Codex workspace/Gateway, or a descriptor without dynamic authorization support |
 | `workflow`, `standalone`, or `replay` | Any | Any | Rejected at the current purpose gate before transport resolution or Provider invocation |
 
-The restrictive second row defines only the **currently admitted model-backed
-Test/Evaluation slice**; it is not the general definition of `evaluation` and
-does not mean every future Evaluation must be tool-free. Agent-capable adapters
-already exist for Claude and Codex inline draft workspaces, and for Claude
-Gateway reads, but `run_module()` does not yet admit those profiles for a
-Module that declares model invocation. Adapter implementation and public-entry
-admission are separate facts.
+These rows are exact reviewed conjunctions, not a rule that every
+Test/Evaluation capability may be freely combined. Adapter implementation and
+public-entry admission remain separate facts: adding a representable profile
+dimension or registering an adapter cannot implicitly admit a new hybrid.
 
 | Capability profile | Semantic input | Attempt workspace | Model-visible tools | Agent network | Adapter status | Model-backed `run_module()` admission |
 | --- | --- | --- | --- | --- | --- | --- |
 | Tool-free inline | `inline` | `none` | None | `denied` | Claude SDK and Codex CLI implemented | `test` / `evaluation` admitted |
-| Agent with private drafts | `inline` | `own_draft_read_write` | Draft-only local capabilities | `denied` | Claude SDK and Codex CLI implemented | Not yet admitted |
-| Agent with governed reads | `gateway_read` | `none` unless separately declared | Registered Runtime Gateway tools | `gateway_only` | Claude SDK implemented | Not yet admitted |
+| Agent with private drafts | `inline` | `own_draft_read_write` | Draft-only local capabilities | `denied` | Claude SDK admitted; Codex CLI adapter is implemented but its sandbox does not prove Attempt-only reads | Claude SDK `test` / `evaluation` admitted; Codex not admitted |
+| Agent with governed reads | `gateway_read` | `none` | Exact registered Runtime Gateway tools | `gateway_only` | Claude SDK implemented with per-tool Runtime callback | `test` / `evaluation` admitted |
 | Agent with direct sandboxed egress | Profile-specific | Profile-specific | Profile-specific | `direct_sandboxed` | No current public-entry slice | Not admitted |
 
-In that restricted profile, workspace `none` means the model receives no
+In the tool-free and Gateway-read profiles, workspace `none` means the model receives no
 writable Attempt draft capability; the Runtime may still create an isolated
 Attempt directory as an execution boundary. An empty tool policy means no
 model-visible tools. Network `denied` means no Agent-initiated general outbound
 or tool network access; the registered SDK/CLI transport may still connect to
 its model Provider control plane. Transport connectivity is not an Agent
-capability.
+capability. In the Gateway slice, `gateway_only` exposes only the exact
+Profile/Module tool intersection; `DENY`, a closed fence, mismatched Attempt
+lineage, or a missing receipt prevents the governed resource call and taints
+the Attempt even if the Provider SDK swallows the callback error; exact
+request/response lineage is retained on the terminal Attempt.
 
 Opt-in live smoke tests exercise both Claude Agent SDK and Codex CLI through
-this exact entry point.
+this exact entry point: both transports cover tool-free execution, while the
+Claude cases additionally cover the admitted workspace and Gateway slices.
 
 ```bash
 RUN_PROVIDER_INTEGRATION=1 python -m pytest \
