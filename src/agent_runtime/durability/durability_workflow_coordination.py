@@ -7,12 +7,16 @@ loads domain content and never interprets Module, artifact, or verdict meaning.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
-from ..contracts.registry_release_definition import WorkflowRelease
+from ..contracts.registry_release_definition import (
+    WorkflowParallelGroupBinding,
+    WorkflowRelease,
+)
 from ..contracts.registry_workflow_definition import (
     ModuleDispatchRequest,
     ModuleOutcome,
@@ -146,12 +150,20 @@ class DurableExecutionCoordinator:
         request: RuntimeWorkflowStartRequest,
         *,
         max_dispatches: int = 100,
+        max_committed_retry_scan: int = 1_000,
     ) -> DurableExecutionProgress:
         """Drive until terminal, wait, retryable failure, or the call bound."""
 
         request.validate()
         if not isinstance(max_dispatches, int) or max_dispatches < 1:
             raise ValueError("max_dispatches must be a positive integer")
+        if (
+            not isinstance(max_committed_retry_scan, int)
+            or max_committed_retry_scan < 1
+        ):
+            raise ValueError(
+                "max_committed_retry_scan must be a positive integer"
+            )
         release = self._release_registry.get_workflow(
             request.workflow_release_ref,
             request.workflow_release_sha256,
@@ -174,8 +186,85 @@ class DurableExecutionCoordinator:
             )
 
         last_outcome: ModuleOutcome | None = None
-        for dispatch_count in range(1, max_dispatches + 1):
+        dispatch_count = 0
+        while dispatch_count < max_dispatches:
+            parallel_group = self._parallel_group_for_state(
+                release,
+                snapshot.current_state,
+            )
+            if parallel_group is not None:
+                branch_outcomes, new_dispatch_count = (
+                    await self._dispatch_parallel_group(
+                        release=release,
+                        group=parallel_group,
+                        snapshot=snapshot,
+                        request=request,
+                        remaining_dispatches=max_dispatches - dispatch_count,
+                        max_committed_retry_scan=max_committed_retry_scan,
+                    )
+                )
+                if branch_outcomes is None:
+                    return self._progress(
+                        execution,
+                        snapshot,
+                        DurableExecutionStopReason.DISPATCH_LIMIT,
+                        dispatch_count,
+                        last_outcome,
+                    )
+                dispatch_count += new_dispatch_count
+                last_outcome = branch_outcomes[-1]
+                retryable_failures = tuple(
+                    outcome
+                    for outcome in branch_outcomes
+                    if outcome.disposition
+                    is ModuleOutcomeDisposition.RETRYABLE_FAILURE
+                )
+                if retryable_failures:
+                    return self._progress(
+                        execution,
+                        snapshot,
+                        DurableExecutionStopReason.RETRYABLE_FAILURE,
+                        dispatch_count,
+                        retryable_failures[0],
+                    )
+                completion_digest = hashlib.sha256(
+                    "\x1f".join(
+                        (
+                            snapshot.workflow_execution_id,
+                            release.release_sha256,
+                            parallel_group.group_id,
+                            str(len(snapshot.applied_events)),
+                            *(outcome.outcome_sha256 for outcome in branch_outcomes),
+                        )
+                    ).encode("utf-8")
+                ).hexdigest()
+                snapshot = await self._cursor.apply_external_event(
+                    execution,
+                    ExternalEvent(
+                        event_id=f"parallel_{completion_digest[:24]}",
+                        event_type=parallel_group.completion_outcome_id,
+                        workflow_execution_id=snapshot.workflow_execution_id,
+                        expected_state=parallel_group.control_node_id,
+                        target_state=parallel_group.join_node_id,
+                        evidence_ref=(
+                            "parallel-group-completion:"
+                            f"{parallel_group.group_id}/{completion_digest}"
+                        ),
+                    ),
+                )
+                self._validate_snapshot(snapshot, release, graph, execution)
+                if snapshot.terminal:
+                    return self._progress(
+                        execution,
+                        snapshot,
+                        self._terminal_stop_reason(snapshot),
+                        dispatch_count,
+                        last_outcome,
+                    )
+                continue
+
             dispatch = self._build_dispatch(release, snapshot, request)
+            dispatch_count += 1
             outcome = self._activity_bridge.dispatch(dispatch)
             outcome.validate()
             self._validate_outcome(dispatch, outcome)
@@ -235,17 +324,109 @@ class DurableExecutionCoordinator:
             last_outcome,
         )
 
+    async def _dispatch_parallel_group(
+        self,
+        *,
+        release: WorkflowRelease,
+        group: WorkflowParallelGroupBinding,
+        snapshot: ExecutionSnapshot,
+        request: RuntimeWorkflowStartRequest,
+        remaining_dispatches: int,
+        max_committed_retry_scan: int,
+    ) -> tuple[tuple[ModuleOutcome, ...] | None, int]:
+        """Resolve committed branches and concurrently dispatch missing work."""
+
+        resolved: dict[str, ModuleOutcome] = {}
+        pending: list[ModuleDispatchRequest] = []
+        for branch_node_id in group.branch_node_ids:
+            retry_sequence = 0
+            while True:
+                if retry_sequence >= max_committed_retry_scan:
+                    raise RuntimeError(
+                        "parallel branch committed retry scan exceeded safety bound"
+                    )
+                dispatch = self._build_dispatch(
+                    release,
+                    snapshot,
+                    request,
+                    node_id=branch_node_id,
+                    retry_sequence=retry_sequence,
+                )
+                committed = self._activity_bridge.get_committed_outcome(
+                    dispatch.workflow_execution_id,
+                    dispatch.dispatch_id,
+                )
+                if committed is None:
+                    pending.append(dispatch)
+                    break
+                committed.validate()
+                self._validate_outcome(dispatch, committed)
+                if (
+                    committed.disposition
+                    is ModuleOutcomeDisposition.RETRYABLE_FAILURE
+                ):
+                    retry_sequence += 1
+                    continue
+                self._validate_parallel_branch_outcome(group, committed)
+                resolved[branch_node_id] = committed
+                break
+
+        if len(pending) > remaining_dispatches:
+            return None, 0
+        if pending:
+            raw_results = await asyncio.gather(
+                *(
+                    asyncio.to_thread(self._activity_bridge.dispatch, dispatch)
+                    for dispatch in pending
+                ),
+                return_exceptions=True,
+            )
+            failures = tuple(
+                result for result in raw_results if isinstance(result, BaseException)
+            )
+            if failures:
+                first_failure = failures[0]
+                if not isinstance(first_failure, Exception):
+                    raise first_failure
+                raise RuntimeError("parallel Module dispatch failed") from first_failure
+            for dispatch, raw_outcome in zip(pending, raw_results, strict=True):
+                if type(raw_outcome) is not ModuleOutcome:
+                    raise TypeError("Activity bridge returned an invalid ModuleOutcome")
+                outcome = raw_outcome
+                outcome.validate()
+                self._validate_outcome(dispatch, outcome)
+                committed = self._activity_bridge.get_committed_outcome(
+                    dispatch.workflow_execution_id,
+                    dispatch.dispatch_id,
+                )
+                if committed != outcome:
+                    raise RuntimeError(
+                        "Activity bridge returned an uncommitted ModuleOutcome"
+                    )
+                if outcome.disposition is not ModuleOutcomeDisposition.RETRYABLE_FAILURE:
+                    self._validate_parallel_branch_outcome(group, outcome)
+                resolved[dispatch.current_state_id] = outcome
+
+        return (
+            tuple(resolved[branch_node_id] for branch_node_id in group.branch_node_ids),
+            len(pending),
+        )
+
     @staticmethod
     def _build_dispatch(
         release: WorkflowRelease,
         snapshot: ExecutionSnapshot,
         request: RuntimeWorkflowStartRequest,
+        *,
+        node_id: str | None = None,
+        retry_sequence: int = 0,
     ) -> ModuleDispatchRequest:
+        selected_node_id = snapshot.current_state if node_id is None else node_id
         node = next(
             (
                 candidate
                 for candidate in release.nodes
-                if candidate.node_id == snapshot.current_state
+                if candidate.node_id == selected_node_id
             ),
             None,
         )
@@ -256,16 +437,21 @@ class DurableExecutionCoordinator:
         ):
             raise ValueError("current Workflow node has no exact Module Release")
         sequence = len(snapshot.applied_events)
+        identity_fields = (
+            snapshot.workflow_execution_id,
+            release.release_sha256,
+            request.execution_profile_selection_sha256,
+            snapshot.current_state,
+            str(sequence),
+        )
+        if node_id is not None or retry_sequence:
+            identity_fields = (
+                *identity_fields,
+                selected_node_id,
+                str(retry_sequence),
+            )
         digest = hashlib.sha256(
-            "\x1f".join(
-                (
-                    snapshot.workflow_execution_id,
-                    release.release_sha256,
-                    request.execution_profile_selection_sha256,
-                    snapshot.current_state,
-                    str(sequence),
-                )
-            ).encode("utf-8")
+            "\x1f".join(identity_fields).encode("utf-8")
         ).hexdigest()[:24]
         dispatch = ModuleDispatchRequest(
             workflow_execution_id=snapshot.workflow_execution_id,
@@ -273,9 +459,10 @@ class DurableExecutionCoordinator:
             workflow_contract_version=release.workflow_contract_version,
             execution_release_ref=release.execution_release_ref,
             graph_sha256=release.graph_sha256,
-            current_state_id=snapshot.current_state,
+            current_state_id=selected_node_id,
             transition_sequence=sequence,
             dispatch_id=f"dispatch_{digest}",
+            retry_sequence=retry_sequence,
             workflow_release_ref=release.release_ref,
             workflow_release_sha256=release.release_sha256,
             execution_profile_selection_ref=(
@@ -289,6 +476,33 @@ class DurableExecutionCoordinator:
         )
         dispatch.validate()
         return dispatch
+
+    @staticmethod
+    def _parallel_group_for_state(
+        release: WorkflowRelease,
+        state_id: str,
+    ) -> WorkflowParallelGroupBinding | None:
+        groups = tuple(
+            group
+            for group in release.parallel_groups
+            if group.control_node_id == state_id
+        )
+        if len(groups) > 1:
+            raise ValueError("Workflow state owns several parallel groups")
+        return None if not groups else groups[0]
+
+    @staticmethod
+    def _validate_parallel_branch_outcome(
+        group: WorkflowParallelGroupBinding,
+        outcome: ModuleOutcome,
+    ) -> None:
+        if outcome.disposition is ModuleOutcomeDisposition.WAIT:
+            raise ValueError("parallel Module branch cannot enter external wait")
+        if (
+            outcome.disposition is ModuleOutcomeDisposition.TRANSITION
+            and outcome.target_state_id != group.join_node_id
+        ):
+            raise ValueError("parallel Module branch crossed its declared join")
 
     @staticmethod
     def _validate_start_release(

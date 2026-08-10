@@ -192,6 +192,39 @@ Coordinator or worker retry is infrastructure metadata. It is never a Runtime
 Attempt ID and cannot authorize another provider invocation or protected
 effect.
 
+### 4.1 Durable parallel groups
+
+A Workflow Release may bind a control node to one immutable parallel group.
+The group declares two or more ordinary Module nodes, one `all_required` join
+target, and exactly one completion outcome route from the control node. No
+ordinary edge may enter a branch or bypass the group. Parallelism is therefore
+Workflow graph authority, not a Prompt instruction or a hidden product-driver
+detail.
+
+The backend cursor remains at the parallel control node while Runtime derives
+one stable dispatch identity per branch. Branch Module Runs, Variants, Attempts,
+outputs, usage, failures, and retry lineage remain ordinary Runtime records.
+After every required branch has one committed successful outcome targeting the
+declared join, Runtime applies one idempotent group-completion event and advances
+the backend cursor once. Temporal history never stores model content.
+
+Successful branch outcomes may be reused after coordinator or worker recovery
+only while the Workflow Release, group binding, frozen execution input,
+entitlement snapshot, Module Release, and Execution Profile selection remain
+identical. A retryable technical failure advances only that branch's stable
+retry sequence; it does not rerun successful siblings. Recovery scans committed
+retry identities under a bounded Runtime safety ceiling and fails closed if the
+history exceeds that ceiling. Parallel branches may not enter an external
+wait. A workflow requiring a wait places it after the join or models it outside
+the parallel group.
+
+The first admitted join policy is `all_required`. Runtime dispatches every
+branch and collects every committed outcome before returning a semantic result;
+it does not short-circuit because one branch's business artifact contains a
+negative verdict. Business aggregation remains an explicit downstream Module
+or deterministic service. Runtime interprets only technical disposition and
+the declared join target.
+
 ## 5. Cell Module Activity Bridge
 
 The Runtime-owned `cell_module_activity_bridge` protocol is domain-neutral. A

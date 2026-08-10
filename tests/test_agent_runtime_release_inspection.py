@@ -17,7 +17,7 @@ from agent_runtime.registry.registry_release_registration import (
 )
 
 
-def test_release_inventory_projects_prompt_components_under_schema_v2() -> None:
+def test_release_inventory_projects_prompt_components_under_schema_v3() -> None:
     component = PromptComponentRelease.build(
         prompt_component_id="inventory_task_instruction",
         prompt_component_version="v1",
@@ -43,7 +43,7 @@ def test_release_inventory_projects_prompt_components_under_schema_v2() -> None:
     inventory = build_runtime_release_inventory(registry)
     markdown = render_runtime_release_markdown(registry)
 
-    assert RELEASE_INVENTORY_SCHEMA_VERSION == "agent_runtime_release_inventory_v2"
+    assert RELEASE_INVENTORY_SCHEMA_VERSION == "agent_runtime_release_inventory_v3"
     assert inventory["schema_version"] == RELEASE_INVENTORY_SCHEMA_VERSION
     assert inventory["prompt_components"] == [
         {

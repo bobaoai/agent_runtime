@@ -124,6 +124,8 @@ from .registry_release_definition import (
     WorkflowNodeKind,
     WorkflowNodeBinding,
     WorkflowNodeExecutionProfileBinding,
+    WorkflowParallelGroupBinding,
+    WorkflowParallelJoinPolicy,
     WorkflowRelease,
 )
 from .ledger_lineage_definition import (
@@ -241,6 +243,8 @@ __all__ = [
     "WorkflowNodeKind",
     "WorkflowNodeBinding",
     "WorkflowNodeExecutionProfileBinding",
+    "WorkflowParallelGroupBinding",
+    "WorkflowParallelJoinPolicy",
     "WorkflowRelease",
     "WorkflowRuntimeRegistration",
     "validate_capability_id",

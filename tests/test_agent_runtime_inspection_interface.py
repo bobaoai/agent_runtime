@@ -157,6 +157,28 @@ def test_review_bundle_detects_tampering() -> None:
         validate_workflow_review_bundle(bundle)
 
 
+def test_review_page_renders_registered_parallel_group() -> None:
+    inspection = _inspection()
+    workflow_release = inspection["workflow_release"]
+    assert isinstance(workflow_release, dict)
+    workflow_release["parallel_groups"] = [
+        {
+            "group_id": "overview_review_group",
+            "control_node_id": "review_parallel",
+            "branch_node_ids": ["fidelity_review", "reader_gain_review"],
+            "join_node_id": "review_aggregate",
+            "completion_outcome_id": "all_completed",
+            "join_policy": "all_required",
+        }
+    ]
+
+    html = render_workflow_review_html(build_workflow_review_bundle(inspection))
+
+    assert "overview_review_group" in html
+    assert "parallel_groups" in html
+    assert "PARALLEL" in html
+
+
 def test_review_cli_renders_bundle_to_one_offline_html(tmp_path: Path) -> None:
     bundle_path = tmp_path / "workflow_review_bundle.json"
     output_path = tmp_path / "workflow_review.html"

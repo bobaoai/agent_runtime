@@ -120,6 +120,21 @@ def postgres_release_ddl(schema: str = "agent_runtime_control") -> tuple[str, ..
         )
         """.strip(),
         f"""
+        CREATE TABLE IF NOT EXISTS {schema}.workflow_parallel_group_binding (
+            workflow_release_ref TEXT NOT NULL REFERENCES
+                {schema}.workflow_release(release_ref),
+            group_id TEXT NOT NULL,
+            control_node_id TEXT NOT NULL,
+            join_node_id TEXT NOT NULL,
+            join_policy TEXT NOT NULL,
+            row_sha256 CHAR(64) NOT NULL,
+            payload JSONB NOT NULL,
+            PRIMARY KEY (workflow_release_ref, group_id),
+            UNIQUE (workflow_release_ref, control_node_id),
+            CHECK (row_sha256 ~ '^[0-9a-f]{{64}}$')
+        )
+        """.strip(),
+        f"""
         CREATE TABLE IF NOT EXISTS {schema}.release_admission (
             admission_sequence BIGSERIAL PRIMARY KEY,
             admission_id TEXT NOT NULL UNIQUE,
@@ -238,6 +253,19 @@ def serialize_registry_tables(
         for workflow in snapshot.workflows
         for edge in workflow.edges
     )
+    parallel_group_rows = tuple(
+        {
+            "workflow_release_ref": workflow.release_ref,
+            "group_id": group.group_id,
+            "control_node_id": group.control_node_id,
+            "join_node_id": group.join_node_id,
+            "join_policy": group.join_policy.value,
+            "row_sha256": _canonical_sha256(group.as_dict()),
+            "payload": group.as_dict(),
+        }
+        for workflow in snapshot.workflows
+        for group in workflow.parallel_groups
+    )
     admission_rows = tuple(
         {
             "admission_id": admission.admission_id,
@@ -279,6 +307,7 @@ def serialize_registry_tables(
             "skill_module_export_binding": export_rows,
             "workflow_node_binding": node_rows,
             "workflow_edge": edge_rows,
+            "workflow_parallel_group_binding": parallel_group_rows,
             "release_admission": admission_rows,
             "active_release_pointer": active_rows,
         }
@@ -468,6 +497,8 @@ class PostgresRuntimeReleaseStore:
             self._put_node(cursor, row)
         for row in rows["workflow_edge"]:
             self._put_edge(cursor, row)
+        for row in rows["workflow_parallel_group_binding"]:
+            self._put_parallel_group(cursor, row)
         for row in rows["release_admission"]:
             self._put_admission(cursor, row)
         cursor.execute(f"DELETE FROM {self.schema}.active_release_pointer")
@@ -536,6 +567,19 @@ class PostgresRuntimeReleaseStore:
             key_columns=("workflow_release_ref", "source_node_id", "outcome_id"),
             row=row,
             additional_columns=(),
+        )
+
+    def _put_parallel_group(self, cursor: Any, row: Mapping[str, Any]) -> None:
+        self._put_child(
+            cursor,
+            table="workflow_parallel_group_binding",
+            key_columns=("workflow_release_ref", "group_id"),
+            row=row,
+            additional_columns=(
+                "control_node_id",
+                "join_node_id",
+                "join_policy",
+            ),
         )
 
     def _put_child(

@@ -131,6 +131,17 @@ Product Authorization and governed Data Access remain external authorities.
 Runtime carries the admitted authorization context and calls those authorities
 when an execution requires a current decision or authorized product data.
 
+### Durable parallel groups
+
+A Workflow Release may declare an `all_required` parallel group at one control
+node. Every branch remains an ordinary registered Module with its own Module
+Run, Variant, Attempt, output, usage, failure, and retry lineage. Runtime keeps
+the durable backend cursor at the control node, dispatches missing branches
+concurrently, reuses already committed sibling outcomes after recovery, and
+advances once to the declared join only after all branches succeed. Parallel
+branches cannot wait for external events; waits belong after the join or in a
+separate graph position.
+
 ## Naming
 
 Runtime-owned code uses one three-part semantic name:

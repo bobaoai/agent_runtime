@@ -106,6 +106,7 @@ def test_postgres_projection_has_all_normalized_registry_tables() -> None:
         "skill_module_export_binding",
         "workflow_node_binding",
         "workflow_edge",
+        "workflow_parallel_group_binding",
         "release_admission",
         "active_release_pointer",
     }

@@ -14,6 +14,9 @@ may require a clean development database before the first public release.
   separately authorized execution content.
 - Architecture projections, clean-wheel checks, and packaged Design Contracts
   for the standalone distribution.
+- Immutable `all_required` Workflow parallel groups with concurrent branch
+  dispatch, branch-local retry recovery, one durable join transition,
+  PostgreSQL registration, and Inspector projection.
 
 ### Fixed
 
@@ -40,6 +43,8 @@ may require a clean development database before the first public release.
 - Architecture and inventory projections use schema version `v3`, and public
   exports use the responsibility-oriented `registry`, `invocation`, `ledger`,
   and `inspection` namespaces rather than predecessor host package names.
+- Release inventory projection advances to
+  `agent_runtime_release_inventory_v3` to expose Workflow parallel groups.
 - Development PostgreSQL ledger schemas created before canonical payload byte
   columns were added must be dropped and initialized again. No tagged release
   or supported in-place database upgrade predates this change.

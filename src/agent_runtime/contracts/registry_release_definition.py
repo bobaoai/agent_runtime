@@ -102,6 +102,12 @@ class WorkflowNodeKind(StrEnum):
     CONTROL = "control"
 
 
+class WorkflowParallelJoinPolicy(StrEnum):
+    """How Runtime closes one immutable parallel branch group."""
+
+    ALL_REQUIRED = "all_required"
+
+
 class OutputResolutionPolicy(StrEnum):
     """Rule controlling which Module output may leave the Runtime."""
 
@@ -1356,6 +1362,74 @@ class WorkflowEdge:
 
 
 @dataclass(frozen=True)
+class WorkflowParallelGroupBinding:
+    """Workflow-local fan-out binding with one durable join target."""
+
+    record_type: ClassVar[str] = "workflow_parallel_group_binding"
+
+    group_id: str
+    control_node_id: str
+    branch_node_ids: tuple[str, ...]
+    join_node_id: str
+    completion_outcome_id: str
+    join_policy: WorkflowParallelJoinPolicy
+
+    def validate(self) -> None:
+        """Validate bounded group identity without loading domain content."""
+
+        validate_snake_case_name("group_id", self.group_id)
+        validate_snake_case_name("control_node_id", self.control_node_id)
+        validate_snake_case_name("join_node_id", self.join_node_id)
+        validate_snake_case_name(
+            "completion_outcome_id", self.completion_outcome_id
+        )
+        if type(self.branch_node_ids) is not tuple:
+            raise ValueError("branch_node_ids must be an immutable tuple")
+        if len(self.branch_node_ids) < 2:
+            raise ValueError("parallel group requires at least two branches")
+        if len(self.branch_node_ids) != len(set(self.branch_node_ids)):
+            raise ValueError("parallel group branch_node_ids must be unique")
+        for branch_node_id in self.branch_node_ids:
+            validate_snake_case_name("branch_node_id", branch_node_id)
+        if self.control_node_id in self.branch_node_ids:
+            raise ValueError("parallel control node cannot be a branch")
+        if self.join_node_id in self.branch_node_ids:
+            raise ValueError("parallel join node cannot be a branch")
+        if self.control_node_id == self.join_node_id:
+            raise ValueError("parallel control and join nodes must differ")
+        if type(self.join_policy) is not WorkflowParallelJoinPolicy:
+            raise ValueError("join_policy must be WorkflowParallelJoinPolicy")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the canonical JSON-compatible group binding."""
+
+        self.validate()
+        return {
+            "group_id": self.group_id,
+            "control_node_id": self.control_node_id,
+            "branch_node_ids": list(self.branch_node_ids),
+            "join_node_id": self.join_node_id,
+            "completion_outcome_id": self.completion_outcome_id,
+            "join_policy": self.join_policy.value,
+        }
+
+    @classmethod
+    def from_dict(
+        cls, payload: Mapping[str, Any]
+    ) -> "WorkflowParallelGroupBinding":
+        """Reconstruct one persisted parallel group binding."""
+
+        return cls(
+            group_id=payload["group_id"],
+            control_node_id=payload["control_node_id"],
+            branch_node_ids=tuple(payload["branch_node_ids"]),
+            join_node_id=payload["join_node_id"],
+            completion_outcome_id=payload["completion_outcome_id"],
+            join_policy=WorkflowParallelJoinPolicy(payload["join_policy"]),
+        )
+
+
+@dataclass(frozen=True)
 class WorkflowRelease:
     """Immutable graph assembled only from exact Runtime Module Releases."""
 
@@ -1377,9 +1451,10 @@ class WorkflowRelease:
     execution_release_ref: str
     execution_release_sha256: str
     release_sha256: str
+    parallel_groups: tuple[WorkflowParallelGroupBinding, ...] = ()
 
     def _payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "workflow_id": self.workflow_id,
             "workflow_version": self.workflow_version,
             "workflow_contract_version": self.workflow_contract_version,
@@ -1396,6 +1471,11 @@ class WorkflowRelease:
             "execution_release_ref": self.execution_release_ref,
             "execution_release_sha256": self.execution_release_sha256,
         }
+        if self.parallel_groups:
+            payload["parallel_groups"] = [
+                group.as_dict() for group in self.parallel_groups
+            ]
+        return payload
 
     def validate(self) -> None:
         """Validate graph closure, terminal reachability surface, and hash."""
@@ -1421,6 +1501,7 @@ class WorkflowRelease:
             require_non_empty=True,
         )
         node_ids = {node.node_id for node in self.nodes}
+        nodes_by_id = {node.node_id: node for node in self.nodes}
         if self.initial_node_id not in node_ids:
             raise ValueError("initial_node_id is not registered in nodes")
         validate_exact_record_tuple(
@@ -1437,6 +1518,76 @@ class WorkflowRelease:
                 raise ValueError("workflow edge has unknown source_node_id")
             if edge.target_node_id is not None and edge.target_node_id not in node_ids:
                 raise ValueError("workflow edge has unknown target_node_id")
+        validate_exact_record_tuple(
+            "parallel_groups",
+            self.parallel_groups,
+            expected_type=WorkflowParallelGroupBinding,
+            item_validator=lambda group: group.validate(),
+            unique_key=lambda group: group.group_id,
+            unique_key_label="group_id",
+            require_non_empty=False,
+        )
+        branch_owner: dict[str, str] = {}
+        control_nodes: set[str] = set()
+        for group in self.parallel_groups:
+            control = nodes_by_id.get(group.control_node_id)
+            if control is None or control.node_kind is not WorkflowNodeKind.CONTROL:
+                raise ValueError("parallel group requires one control node")
+            if group.control_node_id in control_nodes:
+                raise ValueError("parallel control node belongs to several groups")
+            control_nodes.add(group.control_node_id)
+            if group.join_node_id not in nodes_by_id:
+                raise ValueError("parallel group has unknown join_node_id")
+            control_routes = tuple(
+                edge
+                for edge in self.edges
+                if edge.source_node_id == group.control_node_id
+            )
+            completion_routes = tuple(
+                edge
+                for edge in control_routes
+                if edge.outcome_id == group.completion_outcome_id
+            )
+            if (
+                len(control_routes) != 1
+                or len(completion_routes) != 1
+                or completion_routes[0].terminal
+                or completion_routes[0].target_node_id != group.join_node_id
+            ):
+                raise ValueError(
+                    "parallel control must have only its declared join route"
+                )
+            for branch_node_id in group.branch_node_ids:
+                branch = nodes_by_id.get(branch_node_id)
+                if branch is None or branch.node_kind is not WorkflowNodeKind.MODULE:
+                    raise ValueError("parallel branch requires one Module node")
+                if branch_node_id in branch_owner:
+                    raise ValueError("parallel branch belongs to several groups")
+                branch_owner[branch_node_id] = group.group_id
+                branch_routes = tuple(
+                    edge
+                    for edge in self.edges
+                    if edge.source_node_id == branch_node_id
+                )
+                if not branch_routes or any(
+                    edge.terminal or edge.target_node_id != group.join_node_id
+                    for edge in branch_routes
+                ):
+                    raise ValueError(
+                        "every parallel branch route must target its join node"
+                    )
+        if self.initial_node_id in branch_owner:
+            raise ValueError("parallel branch cannot be the initial node")
+        for edge in self.edges:
+            if edge.target_node_id in branch_owner:
+                raise ValueError(
+                    "parallel branch cannot be entered by an ordinary graph edge"
+                )
+        structural_nodes = control_nodes | {
+            group.join_node_id for group in self.parallel_groups
+        }
+        if structural_nodes & set(branch_owner):
+            raise ValueError("parallel branch cannot own group structure")
         routed_node_ids = {edge.source_node_id for edge in self.edges}
         unrouted_node_ids = node_ids - routed_node_ids
         if unrouted_node_ids:
@@ -1448,6 +1599,13 @@ class WorkflowRelease:
         pending = [self.initial_node_id]
         while pending:
             source_node_id = pending.pop()
+            for group in self.parallel_groups:
+                if group.control_node_id != source_node_id:
+                    continue
+                for branch_node_id in group.branch_node_ids:
+                    if branch_node_id not in reachable:
+                        reachable.add(branch_node_id)
+                        pending.append(branch_node_id)
             for edge in self.edges:
                 if edge.source_node_id != source_node_id:
                     continue
@@ -1513,6 +1671,10 @@ class WorkflowRelease:
             execution_release_ref=payload["execution_release_ref"],
             execution_release_sha256=payload["execution_release_sha256"],
             release_sha256=payload["release_sha256"],
+            parallel_groups=tuple(
+                WorkflowParallelGroupBinding.from_dict(group)
+                for group in payload.get("parallel_groups", ())
+            ),
         )
 
 
@@ -1634,5 +1796,7 @@ __all__ = [
     "WorkflowNodeKind",
     "WorkflowNodeBinding",
     "WorkflowNodeExecutionProfileBinding",
+    "WorkflowParallelGroupBinding",
+    "WorkflowParallelJoinPolicy",
     "WorkflowRelease",
 ]

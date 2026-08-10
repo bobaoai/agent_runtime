@@ -25,7 +25,7 @@ from ..registry.registry_release_registration import RuntimeReleaseRegistry
 
 
 INVENTORY_SCHEMA_VERSION = "agent_runtime_inventory_v3"
-RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v2"
+RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v3"
 
 
 def _latest_admission_state(
@@ -249,6 +249,9 @@ def build_runtime_release_inventory(
                 "graph_sha256": release.graph_sha256,
                 "nodes": [node.as_dict() for node in release.nodes],
                 "edges": [edge.as_dict() for edge in release.edges],
+                "parallel_groups": [
+                    group.as_dict() for group in release.parallel_groups
+                ],
                 "latest_admission_state": _latest_admission_state(
                     release_registry,
                     ReleaseSubjectKind.WORKFLOW,
@@ -310,15 +313,16 @@ def render_runtime_release_markdown(
         "",
         (
             "| Workflow | Release version | Contract version | Nodes | Edges | "
-            "Admission | Release |"
+            "Parallel groups | Admission | Release |"
         ),
-        "| --- | --- | --- | ---: | ---: | --- | --- |",
+        "| --- | --- | --- | ---: | ---: | ---: | --- | --- |",
     ]
     for workflow in inventory["workflows"]:
         lines.append(
             f"| `{workflow['workflow_id']}` | `{workflow['version']}` | "
             f"`{workflow['contract_version']}` | `{len(workflow['nodes'])}` | "
             f"`{len(workflow['edges'])}` | "
+            f"`{len(workflow['parallel_groups'])}` | "
             f"`{workflow['latest_admission_state']}` | "
             f"`{workflow['release_ref']}` |"
         )
