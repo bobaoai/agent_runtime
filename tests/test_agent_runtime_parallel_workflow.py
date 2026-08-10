@@ -165,6 +165,36 @@ def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
     )
 
 
+def _workflow_with_prelude(module: RuntimeModuleRelease) -> WorkflowRelease:
+    base = _workflow(module)
+    return WorkflowRelease.build(
+        workflow_id="parallel_review_with_prelude",
+        workflow_version="1.0.0",
+        workflow_contract_version=base.workflow_contract_version,
+        release_ref="runtime-workflow:parallel-review-with-prelude@1",
+        owner_contract_ref=base.owner_contract_ref,
+        owner_contract_sha256=base.owner_contract_sha256,
+        graph_ref="python:tests.parallel_review_with_prelude_graph",
+        graph_sha256="d" * 64,
+        initial_node_id="prelude",
+        nodes=(_module_node("prelude", module), *base.nodes),
+        edges=(
+            WorkflowEdge(
+                source_node_id="prelude",
+                outcome_id="completed",
+                target_node_id="review_parallel",
+                terminal=False,
+            ),
+            *base.edges,
+        ),
+        parallel_groups=base.parallel_groups,
+        authorization_manifest_ref=base.authorization_manifest_ref,
+        authorization_manifest_sha256=base.authorization_manifest_sha256,
+        execution_release_ref=base.execution_release_ref,
+        execution_release_sha256=base.execution_release_sha256,
+    )
+
+
 def _request(workflow: WorkflowRelease) -> RuntimeWorkflowStartRequest:
     return RuntimeWorkflowStartRequest(
         workflow_execution_id="parallel_execution_001",
@@ -302,7 +332,11 @@ class _Bridge:
                     else (
                         RUNTIME_TERMINAL_STATE_ID
                         if request.current_state_id == "review_aggregate"
-                        else "review_aggregate"
+                        else (
+                            "review_parallel"
+                            if request.current_state_id == "prelude"
+                            else "review_aggregate"
+                        )
                     )
                 ),
                 failure_class="provider_timeout" if retryable else None,
@@ -325,7 +359,9 @@ class _Bridge:
 
 
 def _coordinator(
-    *, fail_fidelity_once: bool = False
+    *,
+    fail_fidelity_once: bool = False,
+    max_parallel_dispatches: int = 16,
 ) -> tuple[DurableExecutionCoordinator, RuntimeWorkflowStartRequest, _Cursor, _Bridge]:
     module = _module()
     workflow = _workflow(module)
@@ -338,6 +374,7 @@ def _coordinator(
             cursor=cursor,
             release_registry=registry,
             activity_bridge=bridge,
+            max_parallel_dispatches=max_parallel_dispatches,
         ),
         _request(workflow),
         cursor,
@@ -423,14 +460,178 @@ def test_parallel_group_dispatches_branches_concurrently_and_joins_once() -> Non
     ]
 
 
-def test_parallel_group_does_not_partially_dispatch_below_safety_budget() -> None:
+def test_parallel_group_rejects_call_budget_that_can_never_admit_fanout() -> None:
     coordinator, request, _cursor, bridge = _coordinator()
 
-    progress = asyncio.run(coordinator.drive(request, max_dispatches=1))
-
-    assert progress.stop_reason is DurableExecutionStopReason.DISPATCH_LIMIT
-    assert progress.dispatch_count == 0
+    with pytest.raises(ValueError, match="at least 2 dispatches are required"):
+        asyncio.run(coordinator.drive(request, max_dispatches=1))
     assert bridge.call_count_by_node == {}
+
+
+def test_parallel_group_waits_for_next_drive_instead_of_partial_dispatch() -> None:
+    module = _module()
+    workflow = _workflow_with_prelude(module)
+    registry = RuntimeReleaseRegistry()
+    registry.register_bundle(
+        RuntimeReleaseBundle(modules=(module,), workflows=(workflow,))
+    )
+    cursor = _Cursor(workflow)
+    bridge = _Bridge()
+    coordinator = DurableExecutionCoordinator(
+        cursor=cursor,
+        release_registry=registry,
+        activity_bridge=bridge,
+    )
+    request = _request(workflow)
+
+    first = asyncio.run(coordinator.drive(request, max_dispatches=2))
+
+    assert first.stop_reason is DurableExecutionStopReason.DISPATCH_LIMIT
+    assert first.dispatch_count == 1
+    assert first.snapshot.current_state == "review_parallel"
+    assert bridge.call_count_by_node == {"prelude": 1}
+
+    second = asyncio.run(coordinator.drive(request, max_dispatches=3))
+
+    assert bridge.call_count_by_node == {
+        "prelude": 1,
+        "fidelity_review": 1,
+        "reader_gain_review": 1,
+        "review_aggregate": 1,
+    }
+    assert second.stop_reason is DurableExecutionStopReason.TERMINAL
+
+
+def test_parallel_group_obeys_explicit_concurrency_limit() -> None:
+    coordinator, request, _cursor, bridge = _coordinator(
+        max_parallel_dispatches=1
+    )
+
+    progress = asyncio.run(coordinator.drive(request, max_dispatches=3))
+
+    assert progress.stop_reason is DurableExecutionStopReason.TERMINAL
+    assert bridge.max_active_branches == 1
+
+
+def test_committed_parallel_wait_blocks_persistent_sibling_failure_on_replay() -> None:
+    module = _module()
+    workflow = _workflow(module)
+    registry = RuntimeReleaseRegistry()
+    registry.register_bundle(
+        RuntimeReleaseBundle(modules=(module,), workflows=(workflow,))
+    )
+    cursor = _Cursor(workflow)
+
+    class _WaitBridge(_Bridge):
+        def dispatch(self, request: ModuleDispatchRequest) -> ModuleOutcome:
+            if request.current_state_id == "reader_gain_review":
+                request.validate()
+                with self._lock:
+                    self.call_count_by_node[request.current_state_id] = (
+                        self.call_count_by_node.get(request.current_state_id, 0) + 1
+                    )
+                raise RuntimeError("persistent sibling failure")
+            if request.current_state_id != "fidelity_review":
+                return super().dispatch(request)
+            request.validate()
+            with self._lock:
+                self.call_count_by_node[request.current_state_id] = (
+                    self.call_count_by_node.get(request.current_state_id, 0) + 1
+                )
+            outcome = ModuleOutcome.build(
+                dispatch_id=request.dispatch_id,
+                workflow_execution_id=request.workflow_execution_id,
+                expected_state_id=request.current_state_id,
+                disposition=ModuleOutcomeDisposition.WAIT,
+                wait_policy_ref="wait-policy:external-review@1",
+                outcome_ref=f"module-outcome:{request.dispatch_id}",
+            )
+            with self._lock:
+                self.outcomes[request.dispatch_id] = outcome
+            return outcome
+
+    bridge = _WaitBridge()
+    coordinator = DurableExecutionCoordinator(
+        cursor=cursor,
+        release_registry=registry,
+        activity_bridge=bridge,
+    )
+    request = _request(workflow)
+
+    with pytest.raises(RuntimeError, match="parallel Module dispatch failed"):
+        asyncio.run(coordinator.drive(request, max_dispatches=3))
+    second = asyncio.run(coordinator.drive(request, max_dispatches=3))
+
+    assert second.stop_reason is DurableExecutionStopReason.BLOCKED
+    assert second.dispatch_count == 0
+    assert second.last_outcome is not None
+    assert second.last_outcome.disposition is ModuleOutcomeDisposition.WAIT
+    assert second.snapshot.current_state == "review_parallel"
+    assert bridge.call_count_by_node == {
+        "fidelity_review": 1,
+        "reader_gain_review": 1,
+    }
+
+
+def test_committed_parallel_wait_precedes_sibling_retry_scan_exhaustion() -> None:
+    module = _module()
+    workflow = _workflow(module)
+    registry = RuntimeReleaseRegistry()
+    registry.register_bundle(
+        RuntimeReleaseBundle(modules=(module,), workflows=(workflow,))
+    )
+    cursor = _Cursor(workflow)
+
+    class _RetryAndWaitBridge(_Bridge):
+        def __init__(self) -> None:
+            super().__init__(fail_fidelity_once=True)
+
+        def dispatch(self, request: ModuleDispatchRequest) -> ModuleOutcome:
+            if request.current_state_id != "reader_gain_review":
+                return super().dispatch(request)
+            request.validate()
+            with self._lock:
+                self.call_count_by_node[request.current_state_id] = (
+                    self.call_count_by_node.get(request.current_state_id, 0) + 1
+                )
+            outcome = ModuleOutcome.build(
+                dispatch_id=request.dispatch_id,
+                workflow_execution_id=request.workflow_execution_id,
+                expected_state_id=request.current_state_id,
+                disposition=ModuleOutcomeDisposition.WAIT,
+                wait_policy_ref="wait-policy:external-review@1",
+                outcome_ref=f"module-outcome:{request.dispatch_id}",
+            )
+            with self._lock:
+                self.outcomes[request.dispatch_id] = outcome
+            return outcome
+
+    bridge = _RetryAndWaitBridge()
+    coordinator = DurableExecutionCoordinator(
+        cursor=cursor,
+        release_registry=registry,
+        activity_bridge=bridge,
+    )
+    request = _request(workflow)
+
+    first = asyncio.run(coordinator.drive(request, max_dispatches=3))
+    second = asyncio.run(
+        coordinator.drive(
+            request,
+            max_dispatches=3,
+            max_committed_retry_scan=1,
+        )
+    )
+
+    assert first.stop_reason is DurableExecutionStopReason.BLOCKED
+    assert second.stop_reason is DurableExecutionStopReason.BLOCKED
+    assert second.dispatch_count == 0
+    assert second.last_outcome is not None
+    assert second.last_outcome.expected_state_id == "reader_gain_review"
+    assert bridge.call_count_by_node == {
+        "fidelity_review": 1,
+        "reader_gain_review": 1,
+    }
 
 
 def test_parallel_retry_reuses_successful_sibling_and_advances_only_failed_branch() -> None:

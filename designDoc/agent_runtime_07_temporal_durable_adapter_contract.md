@@ -214,9 +214,19 @@ entitlement snapshot, Module Release, and Execution Profile selection remain
 identical. A retryable technical failure advances only that branch's stable
 retry sequence; it does not rerun successful siblings. Recovery scans committed
 retry identities under a bounded Runtime safety ceiling and fails closed if the
-history exceeds that ceiling. Parallel branches may not enter an external
-wait. A workflow requiring a wait places it after the join or models it outside
-the parallel group.
+history exceeds that ceiling. A coordinator call whose dispatch budget cannot
+admit the group's outstanding fan-out fails loudly before partial dispatch;
+`dispatch_limit` is reserved for a call that can make later progress. Parallel
+branches may not enter an external wait. A workflow requiring a wait places it
+after the join or models it outside the parallel group. If a bridge nevertheless
+commits a branch result that cannot enter the declared join, the coordinator
+returns auditable `blocked` progress with that committed outcome; replay returns
+the same progress and does not trap the execution behind a repeated exception.
+A same-round sibling dispatch exception remains visible to the caller; replay
+then short-circuits on the committed blocking result without redispatching that
+sibling. A committed non-joinable result also takes precedence over sibling
+retry-scan exhaustion. The host may then cancel or repair through an explicitly
+authorized operation.
 
 The first admitted join policy is `all_required`. Runtime dispatches every
 branch and collects every committed outcome before returning a semantic result;
@@ -239,6 +249,12 @@ frozen Workflow Execution. The bridge:
 4. returns only a locally committed `module_outcome` ref, hash, disposition,
    and bounded control fields;
 5. writes no cursor state directly.
+
+The coordinator may call `dispatch` concurrently for branches in one registered
+parallel group. A bridge must isolate dispatch-local mutable state and make
+shared ledger or provider-session access concurrency-safe. Runtime enforces an
+explicit per-group concurrency ceiling; this ceiling bounds technical fan-out
+and does not change graph authority or branch membership.
 
 The Runtime Module path owns Module Run, Variant, Attempt, output, Evaluation,
 Selection, Resolution, usage, Context, and protected-operation lineage. Host

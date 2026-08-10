@@ -41,12 +41,18 @@ class DurableExecutionStopReason(StrEnum):
     CANCELLED = "cancelled"
     WAIT = "wait"
     RETRYABLE_FAILURE = "retryable_failure"
+    BLOCKED = "blocked"
     DISPATCH_LIMIT = "dispatch_limit"
 
 
 @runtime_checkable
 class CellModuleActivityBridge(Protocol):
-    """Cell-local bridge from a ref-only dispatch to one committed outcome."""
+    """Cell-local bridge from a ref-only dispatch to one committed outcome.
+
+    ``dispatch`` may be called concurrently for branches in the same registered
+    parallel group. Implementations must isolate per-dispatch mutable state and
+    make shared ledger or provider-session access concurrency-safe.
+    """
 
     def dispatch(self, request: ModuleDispatchRequest) -> ModuleOutcome:
         """Execute or replay one stable logical dispatch."""
@@ -121,6 +127,17 @@ class DurableExecutionProgress:
                 raise ValueError(
                     "retryable failure progress requires its ModuleOutcome"
                 )
+        if (
+            self.stop_reason is DurableExecutionStopReason.BLOCKED
+            and (
+                self.last_outcome is None
+                or self.last_outcome.disposition
+                is ModuleOutcomeDisposition.RETRYABLE_FAILURE
+            )
+        ):
+            raise ValueError(
+                "blocked progress requires a non-retryable blocking ModuleOutcome"
+            )
 
 
 class DurableExecutionCoordinator:
@@ -134,6 +151,7 @@ class DurableExecutionCoordinator:
         cursor: DurableBackendAdapter,
         release_registry: RuntimeReleaseRegistry,
         activity_bridge: CellModuleActivityBridge,
+        max_parallel_dispatches: int = 16,
     ) -> None:
         if not isinstance(cursor, DurableBackendAdapter):
             raise TypeError("cursor does not implement DurableBackendAdapter")
@@ -141,9 +159,15 @@ class DurableExecutionCoordinator:
             raise TypeError("release_registry must be RuntimeReleaseRegistry")
         if not isinstance(activity_bridge, CellModuleActivityBridge):
             raise TypeError("activity_bridge does not implement CellModuleActivityBridge")
+        if (
+            not isinstance(max_parallel_dispatches, int)
+            or max_parallel_dispatches < 1
+        ):
+            raise ValueError("max_parallel_dispatches must be a positive integer")
         self._cursor = cursor
         self._release_registry = release_registry
         self._activity_bridge = activity_bridge
+        self._max_parallel_dispatches = max_parallel_dispatches
 
     async def drive(
         self,
@@ -200,6 +224,7 @@ class DurableExecutionCoordinator:
                         snapshot=snapshot,
                         request=request,
                         remaining_dispatches=max_dispatches - dispatch_count,
+                        max_dispatches=max_dispatches,
                         max_committed_retry_scan=max_committed_retry_scan,
                     )
                 )
@@ -213,6 +238,24 @@ class DurableExecutionCoordinator:
                     )
                 dispatch_count += new_dispatch_count
                 last_outcome = branch_outcomes[-1]
+                blocked_outcomes = tuple(
+                    outcome
+                    for outcome in branch_outcomes
+                    if outcome.disposition
+                    is not ModuleOutcomeDisposition.RETRYABLE_FAILURE
+                    and not self._parallel_branch_can_join(
+                        parallel_group,
+                        outcome,
+                    )
+                )
+                if blocked_outcomes:
+                    return self._progress(
+                        execution,
+                        snapshot,
+                        DurableExecutionStopReason.BLOCKED,
+                        dispatch_count,
+                        blocked_outcomes[0],
+                    )
                 retryable_failures = tuple(
                     outcome
                     for outcome in branch_outcomes
@@ -332,19 +375,20 @@ class DurableExecutionCoordinator:
         snapshot: ExecutionSnapshot,
         request: RuntimeWorkflowStartRequest,
         remaining_dispatches: int,
+        max_dispatches: int,
         max_committed_retry_scan: int,
     ) -> tuple[tuple[ModuleOutcome, ...] | None, int]:
         """Resolve committed branches and concurrently dispatch missing work."""
 
         resolved: dict[str, ModuleOutcome] = {}
         pending: list[ModuleDispatchRequest] = []
+        retry_scan_exhausted: list[str] = []
         for branch_node_id in group.branch_node_ids:
             retry_sequence = 0
             while True:
                 if retry_sequence >= max_committed_retry_scan:
-                    raise RuntimeError(
-                        "parallel branch committed retry scan exceeded safety bound"
-                    )
+                    retry_scan_exhausted.append(branch_node_id)
+                    break
                 dispatch = self._build_dispatch(
                     release,
                     snapshot,
@@ -367,29 +411,45 @@ class DurableExecutionCoordinator:
                 ):
                     retry_sequence += 1
                     continue
-                self._validate_parallel_branch_outcome(group, committed)
                 resolved[branch_node_id] = committed
                 break
 
+        blocked = self._parallel_blocking_outcomes(group, resolved)
+        if blocked:
+            return blocked, 0
+        if retry_scan_exhausted:
+            raise RuntimeError(
+                "parallel branch committed retry scan exceeded safety bound: "
+                + ", ".join(retry_scan_exhausted)
+            )
+        if len(pending) > max_dispatches:
+            raise ValueError(
+                f"max_dispatches cannot admit parallel group {group.group_id!r}; "
+                f"at least {len(pending)} dispatches are required"
+            )
         if len(pending) > remaining_dispatches:
             return None, 0
         if pending:
+            dispatch_slots = asyncio.Semaphore(self._max_parallel_dispatches)
+
+            async def dispatch_one(
+                dispatch: ModuleDispatchRequest,
+            ) -> ModuleOutcome:
+                async with dispatch_slots:
+                    return await asyncio.to_thread(
+                        self._activity_bridge.dispatch,
+                        dispatch,
+                    )
+
             raw_results = await asyncio.gather(
-                *(
-                    asyncio.to_thread(self._activity_bridge.dispatch, dispatch)
-                    for dispatch in pending
-                ),
+                *(dispatch_one(dispatch) for dispatch in pending),
                 return_exceptions=True,
             )
-            failures = tuple(
-                result for result in raw_results if isinstance(result, BaseException)
-            )
-            if failures:
-                first_failure = failures[0]
-                if not isinstance(first_failure, Exception):
-                    raise first_failure
-                raise RuntimeError("parallel Module dispatch failed") from first_failure
+            failures: list[BaseException] = []
             for dispatch, raw_outcome in zip(pending, raw_results, strict=True):
+                if isinstance(raw_outcome, BaseException):
+                    failures.append(raw_outcome)
+                    continue
                 if type(raw_outcome) is not ModuleOutcome:
                     raise TypeError("Activity bridge returned an invalid ModuleOutcome")
                 outcome = raw_outcome
@@ -403,9 +463,15 @@ class DurableExecutionCoordinator:
                     raise RuntimeError(
                         "Activity bridge returned an uncommitted ModuleOutcome"
                     )
-                if outcome.disposition is not ModuleOutcomeDisposition.RETRYABLE_FAILURE:
-                    self._validate_parallel_branch_outcome(group, outcome)
                 resolved[dispatch.current_state_id] = outcome
+            blocked = self._parallel_blocking_outcomes(group, resolved)
+            if failures:
+                first_failure = failures[0]
+                if not isinstance(first_failure, Exception):
+                    raise first_failure
+                raise RuntimeError("parallel Module dispatch failed") from first_failure
+            if blocked:
+                return blocked, len(pending)
 
         return (
             tuple(resolved[branch_node_id] for branch_node_id in group.branch_node_ids),
@@ -492,17 +558,36 @@ class DurableExecutionCoordinator:
         return None if not groups else groups[0]
 
     @staticmethod
-    def _validate_parallel_branch_outcome(
+    def _parallel_branch_can_join(
         group: WorkflowParallelGroupBinding,
         outcome: ModuleOutcome,
-    ) -> None:
-        if outcome.disposition is ModuleOutcomeDisposition.WAIT:
-            raise ValueError("parallel Module branch cannot enter external wait")
-        if (
+    ) -> bool:
+        """Return whether one committed branch result can enter the join."""
+
+        return (
             outcome.disposition is ModuleOutcomeDisposition.TRANSITION
-            and outcome.target_state_id != group.join_node_id
-        ):
-            raise ValueError("parallel Module branch crossed its declared join")
+            and outcome.target_state_id == group.join_node_id
+        )
+
+    @classmethod
+    def _parallel_blocking_outcomes(
+        cls,
+        group: WorkflowParallelGroupBinding,
+        resolved: dict[str, ModuleOutcome],
+    ) -> tuple[ModuleOutcome, ...]:
+        """Return committed non-joinable outcomes in declared branch order."""
+
+        return tuple(
+            resolved[branch_node_id]
+            for branch_node_id in group.branch_node_ids
+            if branch_node_id in resolved
+            and resolved[branch_node_id].disposition
+            is not ModuleOutcomeDisposition.RETRYABLE_FAILURE
+            and not cls._parallel_branch_can_join(
+                group,
+                resolved[branch_node_id],
+            )
+        )
 
     @staticmethod
     def _validate_start_release(

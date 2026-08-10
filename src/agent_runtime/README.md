@@ -140,7 +140,11 @@ the durable backend cursor at the control node, dispatches missing branches
 concurrently, reuses already committed sibling outcomes after recovery, and
 advances once to the declared join only after all branches succeed. Parallel
 branches cannot wait for external events; waits belong after the join or in a
-separate graph position.
+separate graph position. A committed branch result that cannot enter the join
+returns auditable `blocked` progress instead of wedging replay behind a repeated
+exception. Runtime also enforces an explicit per-group dispatch-concurrency
+limit, and the Cell Activity Bridge contract requires concurrency-safe shared
+state.
 
 ## Naming
 

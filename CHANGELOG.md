@@ -30,6 +30,9 @@ may require a clean development database before the first public release.
   uses a stable keyset cursor.
 - Attempt workspace leases are importable on Windows and lease collisions are
   classified as non-retryable workspace failures by provider adapters.
+- Parallel groups return replayable blocked progress for invalid committed
+  branch results, reject permanently undersized dispatch budgets, bound
+  concurrent bridge calls, and render their topology in the Live Inspector.
 
 ### Breaking development-line changes
 

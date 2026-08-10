@@ -168,6 +168,47 @@ def test_live_inspector_shell_contains_no_execution_data_or_write_controls() -> 
     assert headers["Cache-Control"] == "no-store"
 
 
+def test_live_inspector_graph_renders_registered_parallel_groups() -> None:
+    status, headers, body = _request(
+        _application(_Repository()),
+        "/assets/live-inspector.js",
+    )
+    script = body.decode()
+
+    assert status == "200 OK"
+    assert headers["Content-Type"].startswith("text/javascript")
+    assert "release.parallel_groups??[]" in script
+    assert "parallel_groups:" in script
+
+
+def test_live_inspector_api_carries_parallel_group_release_projection() -> None:
+    group = {
+        "group_id": "overview_review_group",
+        "control_node_id": "review_parallel",
+        "branch_node_ids": ["fidelity_review", "reader_gain_review"],
+        "join_node_id": "review_aggregate",
+        "completion_outcome_id": "all_completed",
+        "join_policy": "all_required",
+    }
+
+    class _Release:
+        def as_dict(self):
+            return {"nodes": [], "edges": [], "parallel_groups": [group]}
+
+    class _ParallelRepository(_Repository):
+        def load_workflow_release(self, trace: RuntimeExecutionTrace):
+            return _Release()
+
+    status, _, body = _request(
+        _application(_ParallelRepository()),
+        f"/api/executions/{EXECUTION.workflow_execution_id}",
+    )
+    payload = json.loads(body)
+
+    assert status == "200 OK"
+    assert payload["workflow_release"]["parallel_groups"] == [group]
+
+
 def test_live_inspector_filters_list_and_denies_trace_before_loading_records() -> None:
     repository = _Repository()
     application = _application(repository)
