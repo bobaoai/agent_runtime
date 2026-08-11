@@ -33,6 +33,7 @@ from ..contracts.execution_module_definition import (
     ModuleOutputBinding,
     ModuleRunResult,
     ModuleVariantRequest,
+    WorkflowModuleExecutionRequest,
 )
 from ..contracts.invocation_adapter_definition import (
     AgentExecutionAdapterDescriptor,
@@ -63,6 +64,9 @@ from ..contracts.ledger_lineage_definition import (
     ModuleUsageObservation,
 )
 from ..invocation.invocation_tool_definition import ModuleArtifactHost
+from ..ledger.ledger_workflow_module_recording import (
+    WorkflowModuleLedgerRecorder,
+)
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .execution_authorization_coordination import ExecutionAuthorizationController
 from .execution_authorization_resolution import ProductOperationAuthorizationClient
@@ -185,6 +189,7 @@ class _AttemptExecutionHost:
         profile: ExecutionProfileRelease,
         purpose: ModuleExecutionPurpose,
         authority: ModuleExecutionAuthority | None,
+        workflow_ledger: WorkflowModuleLedgerRecorder | None,
         clock: Callable[[], str],
     ) -> None:
         self._request = request
@@ -193,6 +198,7 @@ class _AttemptExecutionHost:
         self._profile = profile
         self._purpose = purpose
         self._authority = authority
+        self._workflow_ledger = workflow_ledger
         self._clock = clock
         self._inputs_by_handle = {
             item.local_handle: item for item in request.authorized_inputs
@@ -341,6 +347,11 @@ class _AttemptExecutionHost:
             raise PermissionError(
                 f"dynamic operation denied: {decision.reason_code}"
             )
+        if self._workflow_ledger is not None:
+            self._workflow_ledger.authorize_tool_call(
+                request,
+                recorded_at_utc=observed_at_utc,
+            )
         receipt = AuthorizedOperationReceipt(
             receipt_id=_stable_id(
                 "authorized_operation_receipt",
@@ -405,9 +416,6 @@ def run_module(
     if type(request) is not ModuleExecutionRequest:
         raise ValueError("request must be an exact ModuleExecutionRequest")
     request.validate()
-    existing = ledger.existing_result(request)
-    if existing is not None:
-        return existing
     if request.purpose not in {
         ModuleExecutionPurpose.TEST,
         ModuleExecutionPurpose.EVALUATION,
@@ -415,6 +423,82 @@ def run_module(
         raise NotImplementedError(
             "production Module execution awaits AR09 target authorization admission"
         )
+    return _run_module(
+        request,
+        release_registry=release_registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=ledger,
+        authority=authority,
+        workflow_ledger=None,
+        clock=clock,
+    )
+
+
+def run_workflow_module(
+    request: WorkflowModuleExecutionRequest,
+    *,
+    release_registry: RuntimeReleaseRegistry,
+    adapters: AgentExecutionAdapterRegistry,
+    artifact_host: ModuleArtifactHost,
+    ledger: ModuleExecutionLedger,
+    workflow_ledger: WorkflowModuleLedgerRecorder,
+    authority: ModuleExecutionAuthority | None = None,
+    clock: Callable[[], str] = _utc_now,
+) -> ModuleRunResult:
+    """Run one Module under an admitted Workflow Execution authority.
+
+    The request carries the durable dispatch, Workflow node, and Module Run
+    IDs. The recorder commits start/authorization facts before provider entry,
+    atomically commits the result, and replays an already committed invocation
+    without calling the provider again.
+    """
+
+    if type(request) is not WorkflowModuleExecutionRequest:
+        raise ValueError(
+            "request must be an exact WorkflowModuleExecutionRequest"
+    )
+    request.validate()
+    if len(request.variants) != 1:
+        raise NotImplementedError(
+            "one Workflow Module Activity currently admits one Variant; "
+            "A/B arms use separate durable dispatches"
+        )
+    module = release_registry.get_module(
+        request.module_release_ref,
+        request.module_release_sha256,
+    )
+    replay = workflow_ledger.replay_result(request=request, module=module)
+    if replay is not None:
+        return replay
+    return _run_module(
+        request,
+        release_registry=release_registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=ledger,
+        authority=authority,
+        workflow_ledger=workflow_ledger,
+        clock=clock,
+    )
+
+
+def _run_module(
+    request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
+    *,
+    release_registry: RuntimeReleaseRegistry,
+    adapters: AgentExecutionAdapterRegistry,
+    artifact_host: ModuleArtifactHost,
+    ledger: ModuleExecutionLedger,
+    authority: ModuleExecutionAuthority | None,
+    workflow_ledger: WorkflowModuleLedgerRecorder | None,
+    clock: Callable[[], str],
+) -> ModuleRunResult:
+    """Shared kernel after isolated or Workflow-bound request admission."""
+
+    existing = ledger.existing_result(request)
+    if existing is not None:
+        return existing
 
     module = release_registry.get_module(
         request.module_release_ref,
@@ -451,7 +535,11 @@ def run_module(
         raise ValueError("direct_single Module Run requires exactly one Variant")
 
     started_at = clock()
-    module_run_id = _stable_id("module_run", request.request_id, request.request_sha256)
+    module_run_id = (
+        request.module_run_id
+        if type(request) is WorkflowModuleExecutionRequest
+        else _stable_id("module_run", request.request_id, request.request_sha256)
+    )
     module_run = ModuleRunRecord(
         module_run_id=module_run_id,
         request_id=request.request_id,
@@ -462,9 +550,22 @@ def run_module(
         input_package_ref=request.input_package_ref,
         input_package_sha256=request.input_package_sha256,
         input_closure_sha256=request.input_closure_sha256,
-        isolated_scope_ref=request.isolated_scope_ref,
-        isolated_scope_sha256=request.isolated_scope_sha256,
+        isolated_scope_ref=(
+            None
+            if type(request) is WorkflowModuleExecutionRequest
+            else request.isolated_scope_ref
+        ),
+        isolated_scope_sha256=(
+            None
+            if type(request) is WorkflowModuleExecutionRequest
+            else request.isolated_scope_sha256
+        ),
         recorded_at_utc=started_at,
+        workflow_execution_id=(
+            request.workflow_execution_id
+            if type(request) is WorkflowModuleExecutionRequest
+            else None
+        ),
     )
 
     resolved_profiles: list[ExecutionProfileRelease] = []
@@ -545,6 +646,19 @@ def run_module(
     if concurrent_result is not None:
         return concurrent_result
 
+    if workflow_ledger is not None:
+        if type(request) is not WorkflowModuleExecutionRequest:
+            raise ValueError(
+                "canonical Workflow ledger supplied for an isolated Module Run"
+            )
+        workflow_ledger.record_module_start(
+            request=request,
+            module=module,
+            variants=tuple(variant_records),
+            profiles=tuple(resolved_profiles),
+            recorded_at_utc=started_at,
+        )
+
     attempts: list[ModuleAttemptRecord] = []
     outputs: list[ModuleOutputBinding] = []
     for variant_request, profile, adapter, variant, attempt_start in zip(
@@ -565,6 +679,7 @@ def run_module(
             attempt_start=attempt_start,
             artifact_host=artifact_host,
             authority=authority,
+            workflow_ledger=workflow_ledger,
             ledger=ledger,
             clock=clock,
             release_registry=release_registry,
@@ -579,7 +694,22 @@ def run_module(
         tuple(attempts),
         tuple(outputs),
         clock(),
+        workflow_execution_id=(
+            request.workflow_execution_id
+            if type(request) is WorkflowModuleExecutionRequest
+            else None
+        ),
     )
+    if workflow_ledger is not None:
+        assert type(request) is WorkflowModuleExecutionRequest
+        resolution = workflow_ledger.canonicalize_output_resolution(
+            request=request,
+            resolution=resolution,
+        )
+        workflow_ledger.record_output_resolution(
+            request=request,
+            resolution=resolution,
+        )
     result = ModuleRunResult(
         module_run=module_run,
         variants=tuple(variant_records),
@@ -593,7 +723,7 @@ def run_module(
 
 def _execute_attempt(
     *,
-    run_request: ModuleExecutionRequest,
+    run_request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
     module: RuntimeModuleRelease,
     profile: ExecutionProfileRelease,
     adapter: AuthorizedAgentExecutionAdapter,
@@ -602,11 +732,24 @@ def _execute_attempt(
     attempt_start: ModuleAttemptStartedRecord,
     artifact_host: ModuleArtifactHost,
     authority: ModuleExecutionAuthority | None,
+    workflow_ledger: WorkflowModuleLedgerRecorder | None,
     ledger: ModuleExecutionLedger,
     clock: Callable[[], str],
     release_registry: RuntimeReleaseRegistry,
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Authorize, invoke, and atomically finalize one Attempt."""
+
+    if workflow_ledger is not None:
+        if type(run_request) is not WorkflowModuleExecutionRequest:
+            raise ValueError("Workflow ledger requires a Workflow Module request")
+        workflow_ledger.begin_attempt(
+            request=run_request,
+            variant=variant,
+            profile=profile,
+            attempt_id=attempt_start.attempt_id,
+            attempt_ordinal=attempt_start.attempt_ordinal,
+            recorded_at_utc=attempt_start.recorded_at_utc,
+        )
 
     evidence: _AttemptAuthorizationEvidence | None = None
     if authority is not None:
@@ -634,6 +777,14 @@ def _execute_attempt(
                 },
                 artifact_host=artifact_host,
                 ledger=ledger,
+                workflow_ledger=workflow_ledger,
+                workflow_request=(
+                    run_request
+                    if type(run_request) is WorkflowModuleExecutionRequest
+                    else None
+                ),
+                module=module,
+                profile=profile,
             )
         if evidence.decision.effect is not GatewayDecisionEffect.ALLOW:
             return _record_failed_attempt(
@@ -649,6 +800,29 @@ def _execute_attempt(
                 },
                 artifact_host=artifact_host,
                 ledger=ledger,
+                workflow_ledger=workflow_ledger,
+                workflow_request=(
+                    run_request
+                    if type(run_request) is WorkflowModuleExecutionRequest
+                    else None
+                ),
+                module=module,
+                profile=profile,
+            )
+
+        if workflow_ledger is not None:
+            assert type(run_request) is WorkflowModuleExecutionRequest
+            workflow_ledger.authorize_model_call(
+                request=run_request,
+                profile=profile,
+                variant_id=variant.variant_id,
+                attempt_id=attempt_start.attempt_id,
+                operation_id=next(
+                    operation_id
+                    for operation_id in module.declared_operation_ids
+                    if operation_id in _MODEL_INVOCATION_OPERATION_IDS
+                ),
+                recorded_at_utc=clock(),
             )
 
     canonical_request = _build_canonical_request(
@@ -668,6 +842,7 @@ def _execute_attempt(
         profile=profile,
         purpose=run_request.purpose,
         authority=authority,
+        workflow_ledger=workflow_ledger,
         clock=clock,
     )
 
@@ -714,6 +889,14 @@ def _execute_attempt(
             },
             artifact_host=artifact_host,
             ledger=ledger,
+            workflow_ledger=workflow_ledger,
+            workflow_request=(
+                run_request
+                if type(run_request) is WorkflowModuleExecutionRequest
+                else None
+            ),
+            module=module,
+            profile=profile,
         )
     except Exception as exc:
         return _record_failed_attempt(
@@ -729,6 +912,14 @@ def _execute_attempt(
             },
             artifact_host=artifact_host,
             ledger=ledger,
+            workflow_ledger=workflow_ledger,
+            workflow_request=(
+                run_request
+                if type(run_request) is WorkflowModuleExecutionRequest
+                else None
+            ),
+            module=module,
+            profile=profile,
         )
 
     usage = ModuleUsageObservation(
@@ -761,6 +952,16 @@ def _execute_attempt(
             tool_calls=result.tool_observations,
         )
         ledger.commit_attempt(attempt)
+        if workflow_ledger is not None:
+            assert type(run_request) is WorkflowModuleExecutionRequest
+            workflow_ledger.finalize_attempt(
+                request=run_request,
+                module=module,
+                profile=profile,
+                attempt=attempt,
+                outputs=(),
+                artifact_host=artifact_host,
+            )
         return attempt, ()
 
     # Artifact bytes are committed before the fence critical section: staged
@@ -808,6 +1009,14 @@ def _execute_attempt(
                 },
                 artifact_host=artifact_host,
                 ledger=ledger,
+                workflow_ledger=workflow_ledger,
+                workflow_request=(
+                    run_request
+                    if type(run_request) is WorkflowModuleExecutionRequest
+                    else None
+                ),
+                module=module,
+                profile=profile,
                 tool_calls=result.tool_observations,
             )
         completed = ModuleAttemptRecord(
@@ -826,6 +1035,16 @@ def _execute_attempt(
             prompt_envelope_sha256=variant.prompt_envelope_sha256,
         )
         ledger.commit_attempt(completed)
+        if workflow_ledger is not None:
+            assert type(run_request) is WorkflowModuleExecutionRequest
+            workflow_ledger.finalize_attempt(
+                request=run_request,
+                module=module,
+                profile=profile,
+                attempt=completed,
+                outputs=tuple(committed),
+                artifact_host=artifact_host,
+            )
         return completed, tuple(committed)
 
     if authority is not None:
@@ -921,7 +1140,7 @@ def _authorize_model_attempt(
 
 def _build_canonical_request(
     *,
-    run_request: ModuleExecutionRequest,
+    run_request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
     module: RuntimeModuleRelease,
     profile: ExecutionProfileRelease,
     variant_request: ModuleVariantRequest,
@@ -952,10 +1171,17 @@ def _build_canonical_request(
         )
         for binding in run_request.inputs
     )
+    workflow_bound = type(run_request) is WorkflowModuleExecutionRequest
     return AuthorizedAgentExecutionRequest.build(
-        workflow_execution_id=None,
-        isolated_scope_ref=run_request.isolated_scope_ref,
-        isolated_scope_sha256=run_request.isolated_scope_sha256,
+        workflow_execution_id=(
+            run_request.workflow_execution_id if workflow_bound else None
+        ),
+        isolated_scope_ref=(
+            None if workflow_bound else run_request.isolated_scope_ref
+        ),
+        isolated_scope_sha256=(
+            None if workflow_bound else run_request.isolated_scope_sha256
+        ),
         module_run_id=variant.module_run_id,
         variant_id=variant.variant_id,
         attempt_id=attempt_start.attempt_id,
@@ -1007,13 +1233,17 @@ def _build_canonical_request(
 
 def _assert_authority_binding_closure(
     binding: ExecutionAuthorizationContextBinding,
-    request: ModuleExecutionRequest,
+    request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
 ) -> None:
     """Bind the caller-supplied authority to this exact isolated run."""
 
-    expected_scope_id = isolated_execution_scope_id(
-        request.isolated_scope_ref,
-        request.isolated_scope_sha256,
+    expected_scope_id = (
+        request.workflow_execution_id
+        if type(request) is WorkflowModuleExecutionRequest
+        else isolated_execution_scope_id(
+            request.isolated_scope_ref,
+            request.isolated_scope_sha256,
+        )
     )
     exact = (
         binding.workflow_execution_id == expected_scope_id,
@@ -1084,6 +1314,10 @@ def _record_failed_attempt(
     payload: Mapping[str, Any],
     artifact_host: ModuleArtifactHost,
     ledger: ModuleExecutionLedger,
+    workflow_ledger: WorkflowModuleLedgerRecorder | None = None,
+    workflow_request: WorkflowModuleExecutionRequest | None = None,
+    module: RuntimeModuleRelease | None = None,
+    profile: ExecutionProfileRelease | None = None,
     tool_calls: tuple[ModuleToolCallObservation, ...] = (),
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Commit one kernel-owned failed Attempt with its bounded diagnostic."""
@@ -1104,6 +1338,23 @@ def _record_failed_attempt(
         tool_calls=tool_calls,
     )
     ledger.commit_attempt(attempt)
+    if workflow_ledger is not None:
+        if (
+            workflow_request is None
+            or module is None
+            or profile is None
+        ):
+            raise ValueError(
+                "Workflow failure finalization requires request, Module, and Profile"
+            )
+        workflow_ledger.finalize_attempt(
+            request=workflow_request,
+            module=module,
+            profile=profile,
+            attempt=attempt,
+            outputs=(),
+            artifact_host=artifact_host,
+        )
     return attempt, ()
 
 
@@ -1374,6 +1625,8 @@ def _resolve_shadow_outputs(
     attempts: tuple[ModuleAttemptRecord, ...],
     outputs: tuple[ModuleOutputBinding, ...],
     recorded_at_utc: str,
+    *,
+    workflow_execution_id: str | None = None,
 ) -> ModuleOutputResolutionRecord | None:
     successful = tuple(attempt for attempt in attempts if attempt.status == "completed")
     if len(successful) != len(attempts):
@@ -1387,7 +1640,7 @@ def _resolve_shadow_outputs(
             module_output_resolution_id=_stable_id(
                 "module_resolution", module_run_id, "resolved"
             ),
-            workflow_execution_id=None,
+            workflow_execution_id=workflow_execution_id,
             source_module_run_id=module_run_id,
             resolution_mode=module.output_resolution_policy.value,
             candidate_output_bundle_refs=(candidate_ref,),
@@ -1411,4 +1664,5 @@ __all__ = [
     "ModuleVariantRequest",
     "isolated_execution_scope_id",
     "run_module",
+    "run_workflow_module",
 ]

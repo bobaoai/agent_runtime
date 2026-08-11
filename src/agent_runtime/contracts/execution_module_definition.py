@@ -211,6 +211,122 @@ class ModuleExecutionRequest:
 
 
 @dataclass(frozen=True)
+class WorkflowModuleExecutionRequest:
+    """Content-free request for one Module Run inside a Workflow Execution.
+
+    Unlike :class:`ModuleExecutionRequest`, this request is not an isolated
+    evaluation scope.  Its authority, input package, provider invocation, and
+    resulting lineage are all bound to an already admitted Workflow Execution.
+    The durable Workflow driver owns ``dispatch_id`` and ``workflow_node_id``;
+    Runtime owns provider execution and canonical ledger recording.
+    """
+
+    request_id: str
+    purpose: ModuleExecutionPurpose
+    workflow_execution_id: str
+    dispatch_id: str
+    workflow_node_id: str
+    module_run_id: str
+    module_release_ref: str
+    module_release_sha256: str
+    input_package_ref: str
+    input_package_sha256: str
+    inputs: tuple[ModuleInputBinding, ...]
+    input_closure_sha256: str
+    variants: tuple[ModuleVariantRequest, ...]
+    idempotency_key: str
+    request_sha256: str
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "purpose": self.purpose.value,
+            "workflow_execution_id": self.workflow_execution_id,
+            "dispatch_id": self.dispatch_id,
+            "workflow_node_id": self.workflow_node_id,
+            "module_run_id": self.module_run_id,
+            "module_release_ref": self.module_release_ref,
+            "module_release_sha256": self.module_release_sha256,
+            "input_package_ref": self.input_package_ref,
+            "input_package_sha256": self.input_package_sha256,
+            "inputs": [item.as_dict() for item in self.inputs],
+            "input_closure_sha256": self.input_closure_sha256,
+            "variants": [variant.as_dict() for variant in self.variants],
+            "idempotency_key": self.idempotency_key,
+        }
+
+    def validate(self) -> None:
+        """Validate exact Workflow, Module, input, and Variant identity."""
+
+        for label, value in (
+            ("request_id", self.request_id),
+            ("workflow_execution_id", self.workflow_execution_id),
+            ("dispatch_id", self.dispatch_id),
+            ("workflow_node_id", self.workflow_node_id),
+            ("module_run_id", self.module_run_id),
+            ("idempotency_key", self.idempotency_key),
+        ):
+            validate_id(label, value)
+        if type(self.purpose) is not ModuleExecutionPurpose:
+            raise ValueError("purpose must be a ModuleExecutionPurpose")
+        if self.purpose not in {
+            ModuleExecutionPurpose.WORKFLOW,
+            ModuleExecutionPurpose.EVALUATION,
+            ModuleExecutionPurpose.TEST,
+            ModuleExecutionPurpose.REPLAY,
+        }:
+            raise ValueError(
+                "Workflow Module execution requires a workflow-bound purpose"
+            )
+        validate_opaque_ref("module_release_ref", self.module_release_ref)
+        validate_sha256("module_release_sha256", self.module_release_sha256)
+        validate_opaque_ref("input_package_ref", self.input_package_ref)
+        validate_sha256("input_package_sha256", self.input_package_sha256)
+        validate_exact_record_tuple(
+            "inputs",
+            self.inputs,
+            expected_type=ModuleInputBinding,
+            item_validator=lambda item: item.validate(),
+            unique_key=lambda item: item.logical_name,
+            unique_key_label="logical_name",
+            require_non_empty=False,
+        )
+        validate_sha256("input_closure_sha256", self.input_closure_sha256)
+        if self.input_closure_sha256 != _canonical_sha256(
+            [item.as_dict() for item in self.inputs]
+        ):
+            raise ValueError("Workflow Module input closure hash mismatch")
+        validate_exact_record_tuple(
+            "variants",
+            self.variants,
+            expected_type=ModuleVariantRequest,
+            item_validator=lambda variant: variant.validate(),
+            unique_key=lambda variant: f"{variant.arm_key}:{variant.replicate_index}",
+            unique_key_label="arm/replicate identity",
+            require_non_empty=True,
+        )
+        validate_sha256("request_sha256", self.request_sha256)
+        if self.request_sha256 != _canonical_sha256(self._payload()):
+            raise ValueError("Workflow Module execution request hash mismatch")
+
+    @classmethod
+    def build(cls, **fields: Any) -> "WorkflowModuleExecutionRequest":
+        """Build and validate one content-addressed Workflow Module request."""
+
+        input_closure_sha256 = _canonical_sha256(
+            [item.as_dict() for item in fields["inputs"]]
+        )
+        prepared = {**fields, "input_closure_sha256": input_closure_sha256}
+        provisional = cls(**prepared, request_sha256="0" * 64)
+        record = cls(
+            **prepared,
+            request_sha256=_canonical_sha256(provisional._payload()),
+        )
+        record.validate()
+        return record
+
+
+@dataclass(frozen=True)
 class ModuleOutputBinding:
     """One immutable output reference returned by a Module Executor."""
 
@@ -307,4 +423,5 @@ __all__ = [
     "ModuleOutputBinding",
     "ModuleRunResult",
     "ModuleVariantRequest",
+    "WorkflowModuleExecutionRequest",
 ]

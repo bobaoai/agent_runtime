@@ -442,8 +442,10 @@ sequenceDiagram
     participant gateway as Resource Gateway
     participant backend as Durable Backend
 
-    kernel->>ledger: commit Attempt start and protected-operation intent
+    kernel->>ledger: commit Module/Variant and Attempt start
     ledger-->>kernel: durable begin receipt
+    kernel->>gateway: resolve Product authorization for the exact operation
+    kernel->>ledger: commit operation authorization binding before effect
     kernel->>adapter: context-bound invocation
     opt resource Gateway operation
         adapter->>gateway: operation and execution authorization context
@@ -465,6 +467,16 @@ Ordinary operations require decision evidence but no single-use grant. The
 execution ledger fails finalization when a required decision, pre-materialized
 input reference, effect observation, or high-risk grant disposition is absent
 or belongs to another execution lineage.
+
+`run_workflow_module()` is the public workflow-bound composition of this
+lifecycle. Its `WorkflowModuleExecutionRequest` carries the durable dispatch,
+graph-position, Module Run, frozen input closure, and one Variant. The
+`WorkflowModuleLedgerRecorder` writes the formal Module/Variant, Attempt claim,
+operation, output, call, usage, invocation-commit, and output-resolution rows.
+If the same dispatch already has an `InvocationCommitRecord`, Runtime
+reconstructs the committed inline result and does not call the Provider again.
+Gateway replay remains fail-closed until the dedicated tool content-ref index
+is part of the canonical replay view.
 
 ## 7. Invocation Finalization
 

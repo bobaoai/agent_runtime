@@ -18,6 +18,7 @@ from ..contracts.ledger_lineage_definition import (
 from ..contracts.execution_module_definition import (
     ModuleExecutionRequest,
     ModuleRunResult,
+    WorkflowModuleExecutionRequest,
 )
 
 
@@ -36,7 +37,7 @@ class InMemoryModuleExecutionLedger:
         self._results: dict[str, ModuleRunResult] = {}
 
     def existing_result(
-        self, request: ModuleExecutionRequest
+        self, request: ModuleExecutionRequest | WorkflowModuleExecutionRequest
     ) -> ModuleRunResult | None:
         """Return an identical prior result or reject an ID/hash collision."""
 
@@ -54,7 +55,7 @@ class InMemoryModuleExecutionLedger:
 
     def begin(
         self,
-        request: ModuleExecutionRequest,
+        request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
         module_run: ModuleRunRecord,
         variants: tuple[ModuleExecutionVariantRecord, ...],
         attempt_starts: tuple[ModuleAttemptStartedRecord, ...],

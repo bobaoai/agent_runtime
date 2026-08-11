@@ -7,12 +7,14 @@ from ..contracts.execution_module_definition import (
     ModuleOutputBinding,
     ModuleRunResult,
     ModuleVariantRequest,
+    WorkflowModuleExecutionRequest,
 )
 from .execution_module_invocation import (
     AgentExecutionAdapterRegistry,
     ModuleExecutionAuthority,
     isolated_execution_scope_id,
     run_module,
+    run_workflow_module,
 )
 
 __all__ = [
@@ -24,6 +26,8 @@ __all__ = [
     "ModuleOutputBinding",
     "ModuleRunResult",
     "ModuleVariantRequest",
+    "WorkflowModuleExecutionRequest",
     "isolated_execution_scope_id",
     "run_module",
+    "run_workflow_module",
 ]

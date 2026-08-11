@@ -421,6 +421,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "ledger",
+        "workflow_module",
+        "recording",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+    ),
+    _source(
+        "ledger",
         "record",
         "persistence",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",

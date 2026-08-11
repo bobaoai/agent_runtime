@@ -93,7 +93,7 @@ class ModuleToolCallObservation:
 
 @dataclass(frozen=True)
 class ModuleRunRecord:
-    """Immutable start record for one independently testable Module Run."""
+    """Immutable start record for one isolated or Workflow-bound Module Run."""
 
     module_run_id: str
     request_id: str
@@ -104,9 +104,10 @@ class ModuleRunRecord:
     input_package_ref: str
     input_package_sha256: str
     input_closure_sha256: str
-    isolated_scope_ref: str
-    isolated_scope_sha256: str
+    isolated_scope_ref: str | None
+    isolated_scope_sha256: str | None
     recorded_at_utc: str
+    workflow_execution_id: str | None = None
 
     def validate(self) -> None:
         """Validate Module Run identity, release, input, and scope closure."""
@@ -117,22 +118,46 @@ class ModuleRunRecord:
             raise ValueError("purpose must be a ModuleExecutionPurpose")
         validate_opaque_ref("module_release_ref", self.module_release_ref)
         validate_opaque_ref("input_package_ref", self.input_package_ref)
-        validate_opaque_ref("isolated_scope_ref", self.isolated_scope_ref)
         for label, value in (
             ("request_sha256", self.request_sha256),
             ("module_release_sha256", self.module_release_sha256),
             ("input_package_sha256", self.input_package_sha256),
             ("input_closure_sha256", self.input_closure_sha256),
-            ("isolated_scope_sha256", self.isolated_scope_sha256),
         ):
             validate_sha256(label, value)
+        isolated = (
+            self.isolated_scope_ref is not None
+            or self.isolated_scope_sha256 is not None
+        )
+        workflow_bound = self.workflow_execution_id is not None
+        if isolated == workflow_bound:
+            raise ValueError(
+                "Module Run requires exactly one isolated or Workflow scope"
+            )
+        if isolated:
+            if (
+                self.isolated_scope_ref is None
+                or self.isolated_scope_sha256 is None
+            ):
+                raise ValueError("isolated scope ref and hash must be paired")
+            validate_opaque_ref("isolated_scope_ref", self.isolated_scope_ref)
+            validate_sha256(
+                "isolated_scope_sha256", self.isolated_scope_sha256
+            )
+        else:
+            validate_id(
+                "workflow_execution_id", self.workflow_execution_id
+            )
         validate_utc_timestamp("recorded_at_utc", self.recorded_at_utc)
 
     def as_dict(self) -> dict[str, Any]:
         """Return the validated JSON-ready Module Run record."""
 
         self.validate()
-        return {**asdict(self), "purpose": self.purpose.value}
+        payload = {**asdict(self), "purpose": self.purpose.value}
+        if self.workflow_execution_id is None:
+            payload.pop("workflow_execution_id")
+        return payload
 
 
 @dataclass(frozen=True)

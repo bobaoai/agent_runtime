@@ -17,6 +17,10 @@ from .ledger_postgres_persistence import (
     serialize_runtime_batch,
 )
 from .ledger_usage_aggregation import aggregate_model_usage
+from .ledger_workflow_module_recording import (
+    WorkflowModuleLedgerBinding,
+    WorkflowModuleLedgerRecorder,
+)
 
 __all__ = [
     "aggregate_model_usage",
@@ -28,6 +32,8 @@ __all__ = [
     "RuntimeExecutionDescriptor",
     "RuntimeExecutionPageCursor",
     "RuntimeExecutionRecordStore",
+    "WorkflowModuleLedgerBinding",
+    "WorkflowModuleLedgerRecorder",
     "deserialize_runtime_batch",
     "deserialize_runtime_record",
     "postgres_execution_ledger_ddl",

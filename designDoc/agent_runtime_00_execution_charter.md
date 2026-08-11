@@ -720,7 +720,8 @@ permissions, Executor, Skill, retry defaults, and Evaluation contract are not
 copied into the node.
 
 Every executable graph position resolves one exact `runtime_module_release`.
-Every invocation enters `run_module()` and produces `module_run_record`,
+Every isolated invocation enters `run_module()`; every admitted Workflow
+Module Activity enters `run_workflow_module()`. Both produce `module_run_record`,
 `module_execution_variant_record`, Attempt, and output-resolution lineage. The
 deterministic removed-surface scan must be empty across source, package exports,
 registries, codecs, persistence schemas, workers, and generated inspection.

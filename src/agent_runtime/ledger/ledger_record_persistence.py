@@ -60,6 +60,14 @@ from ..contracts.ledger_record_definition import (
 class RuntimeExecutionRecordStore(Protocol):
     """Atomic persistence boundary consumed by Runtime execution services."""
 
+    def commit(
+        self,
+        batch: RuntimeRecordBatch | LegacyRuntimeRecordBatch,
+    ) -> CommitReceipt:
+        """Atomically append one validated Runtime record batch."""
+
+        ...
+
     def begin_attempt(self, batch: LegacyAttemptBeginBatch) -> AttemptBeginReceipt:
         """Commit an Attempt start and static grants before provider entry."""
 

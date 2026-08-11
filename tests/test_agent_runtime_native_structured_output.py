@@ -23,7 +23,9 @@ from agent_runtime.contracts.execution_authorization_definition import (
 )
 from agent_runtime.contracts.execution_module_definition import (
     ModuleExecutionRequest,
+    ModuleInputBinding,
     ModuleVariantRequest,
+    WorkflowModuleExecutionRequest,
 )
 from agent_runtime.contracts.invocation_adapter_definition import (
     AdapterContextResult,
@@ -36,6 +38,18 @@ from agent_runtime.contracts.invocation_adapter_definition import (
 )
 from agent_runtime.contracts.ledger_lineage_definition import (
     ModuleToolCallObservation,
+)
+from agent_runtime.contracts.ledger_record_definition import (
+    ExecutionInputRef,
+    LegacyModuleCapabilityGrant,
+    ModelCallRecord,
+    RuntimeRecordBatch,
+    UsageEvent,
+    WorkflowAttemptRecord,
+    WorkflowAttemptStartedRecord,
+    WorkflowExecutionRecord,
+    WorkflowModuleExecutionVariantRecord,
+    WorkflowModuleRunRecord,
 )
 from agent_runtime.contracts.registry_release_definition import (
     ModuleExecutionPurpose,
@@ -54,6 +68,7 @@ from agent_runtime.execution.execution_module_invocation import (
     ModuleExecutionAuthority,
     isolated_execution_scope_id,
     run_module,
+    run_workflow_module,
 )
 from agent_runtime.invocation.invocation_codex_module_invocation import (
     CodexCliAgentWorkspaceModuleExecutor,
@@ -80,6 +95,13 @@ from agent_runtime.invocation.invocation_schema_projection import (
 )
 from agent_runtime.ledger.ledger_lineage_recording import (
     InMemoryModuleExecutionLedger,
+)
+from agent_runtime.ledger.ledger_record_persistence import (
+    InMemoryRuntimeExecutionRecordStore,
+)
+from agent_runtime.ledger.ledger_workflow_module_recording import (
+    WorkflowModuleLedgerBinding,
+    WorkflowModuleLedgerRecorder,
 )
 from agent_runtime.registry.registry_release_compilation import (
     AgentModuleReleaseSpec,
@@ -623,6 +645,186 @@ def _assert_completed_provider_run(run, artifact_host) -> dict[str, object]:
             run.outputs[0].output_sha256,
         )
     )
+
+
+def test_workflow_module_records_canonical_ledger_before_and_after_provider(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    artifact_host = InMemoryCellArtifactStore()
+    registry, adapters, adapter = _registered_stub(compiled, artifact_host)
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="workflow_ledger",
+    )
+    input_content = b'{"value":"workflow_input"}'
+    input_ref = artifact_host.put_bytes(
+        artifact_kind_id="native_input",
+        schema_version="v1",
+        schema_ref=compiled.module.input_schema_ref,
+        schema_sha256=compiled.module.input_schema_sha256,
+        media_type="application/json",
+        content=input_content,
+        idempotency_key="workflow_ledger_input",
+        logical_name="task_input",
+    )
+    input_binding = ModuleInputBinding(
+        logical_name="task_input",
+        input_ref=input_ref.artifact_ref,
+        input_sha256=input_ref.artifact_sha256,
+        schema_ref=compiled.module.input_schema_ref,
+        schema_sha256=compiled.module.input_schema_sha256,
+        media_type="application/json",
+    )
+    workflow_request = WorkflowModuleExecutionRequest.build(
+        request_id="request_workflow_ledger",
+        purpose=ModuleExecutionPurpose.EVALUATION,
+        workflow_execution_id="execution_workflow_ledger",
+        dispatch_id="dispatch_workflow_ledger",
+        workflow_node_id="state_native_module",
+        module_run_id="module_run_workflow_ledger",
+        module_release_ref=compiled.module.release_ref,
+        module_release_sha256=compiled.module.release_sha256,
+        input_package_ref=input_ref.artifact_ref,
+        input_package_sha256=input_ref.artifact_sha256,
+        inputs=(input_binding,),
+        variants=(
+            ModuleVariantRequest(
+                arm_key="default",
+                replicate_index=0,
+                execution_profile_ref=compiled.execution_profile.release_ref,
+                execution_profile_sha256=(
+                    compiled.execution_profile.release_sha256
+                ),
+                prompt_envelope_ref=prompt_ref.artifact_ref,
+                prompt_envelope_sha256=prompt_ref.artifact_sha256,
+            ),
+        ),
+        idempotency_key="idempotency_workflow_ledger",
+    )
+    execution = WorkflowExecutionRecord(
+        workflow_execution_id=workflow_request.workflow_execution_id,
+        workflow_id="workflow_native_module",
+        workflow_contract_version="v1",
+        tenant_id="tenant_test",
+        cell_id="cell_test",
+        principal_id="principal_test",
+        execution_release_ref="execution-release:native-workflow@v1",
+        graph_sha256="a" * 64,
+        runtime_execution_binding_ref="runtime-binding:native-workflow@v1",
+        runtime_execution_binding_sha256="b" * 64,
+        authorization_decision_ref="authorization-decision:native-workflow@v1",
+        authorization_decision_sha256="c" * 64,
+        execution_principal_delegation_ref="delegation:native-workflow@v1",
+        execution_principal_delegation_sha256="d" * 64,
+        entitlement_snapshot_ref="entitlement:native-workflow@v1",
+        entitlement_snapshot_hash="e" * 64,
+        execution_input_package_refs=(input_ref.artifact_ref,),
+        execution_input_package_sha256=input_ref.artifact_sha256,
+        recorded_at_utc=_TEST_TIME,
+    )
+    execution_input = ExecutionInputRef(
+        execution_input_id="execution_input_workflow_ledger",
+        workflow_execution_id=workflow_request.workflow_execution_id,
+        input_type_id="native_input",
+        schema_version="v1",
+        input_ref=input_ref.artifact_ref,
+        input_sha256=input_ref.artifact_sha256,
+        byte_size=len(input_content),
+        media_type="application/json",
+        recorded_at_utc=_TEST_TIME,
+        logical_name="task_input",
+    )
+    record_store = InMemoryRuntimeExecutionRecordStore(
+        execution_output_integrity_check=lambda row: (
+            artifact_host.read_bytes(row.output_ref, row.output_sha256)
+            is not None
+        )
+    )
+    record_store.commit(
+        RuntimeRecordBatch(
+            workflow_execution_id=workflow_request.workflow_execution_id,
+            transaction_id="transaction_workflow_ledger_bootstrap",
+            records=(execution, execution_input),
+        )
+    )
+    authority, _ = _evaluation_authority(
+        registry,
+        workflow_request,
+        scope_id=workflow_request.workflow_execution_id,
+        input_package_ref=workflow_request.input_package_ref,
+        input_package_sha256=workflow_request.input_package_sha256,
+    )
+    recorder = WorkflowModuleLedgerRecorder(
+        WorkflowModuleLedgerBinding(
+            record_store=record_store,
+            entitlement_snapshot_hash=execution.entitlement_snapshot_hash,
+            claim_token_secret=b"workflow-ledger-test-secret-32-bytes",
+        )
+    )
+    provider_entry_observation: dict[str, int] = {}
+
+    def observe_provider_entry(_request, _host):
+        current = record_store.load_trace(
+            workflow_request.workflow_execution_id
+        )
+        provider_entry_observation["attempt_starts"] = len(
+            current.records_of_type(WorkflowAttemptStartedRecord)
+        )
+        provider_entry_observation["grants"] = len(
+            current.records_of_type(LegacyModuleCapabilityGrant)
+        )
+        return ()
+
+    adapter._on_execute = observe_provider_entry
+
+    run = run_workflow_module(
+        workflow_request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        workflow_ledger=recorder,
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert adapter.calls == 1
+    assert provider_entry_observation == {"attempt_starts": 1, "grants": 1}
+    assert _assert_completed_provider_run(run, artifact_host) == {
+        "value": "stub"
+    }
+    trace = record_store.load_trace(workflow_request.workflow_execution_id)
+    assert len(trace.records_of_type(WorkflowModuleRunRecord)) == 1
+    assert len(
+        trace.records_of_type(WorkflowModuleExecutionVariantRecord)
+    ) == 1
+    assert len(trace.records_of_type(WorkflowAttemptRecord)) == 1
+    assert len(trace.records_of_type(ModelCallRecord)) == 1
+    usage = trace.records_of_type(UsageEvent)
+    assert len(usage) == 1
+    assert usage[0].input_tokens == 3
+    assert usage[0].output_tokens == 2
+
+    replay = run_workflow_module(
+        workflow_request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        workflow_ledger=WorkflowModuleLedgerRecorder(
+            WorkflowModuleLedgerBinding(
+                record_store=record_store,
+                entitlement_snapshot_hash=execution.entitlement_snapshot_hash,
+                claim_token_secret=b"workflow-ledger-test-secret-32-bytes",
+            )
+        ),
+        authority=authority,
+        clock=lambda: "2026-08-09T13:00:00Z",
+    )
+    assert adapter.calls == 1
+    assert replay == run
 
 
 def _failure_detail(run, artifact_host) -> dict[str, object]:

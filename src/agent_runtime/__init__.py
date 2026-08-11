@@ -116,12 +116,14 @@ from .contracts.execution_module_definition import (
     ModuleOutputBinding,
     ModuleRunResult,
     ModuleVariantRequest,
+    WorkflowModuleExecutionRequest,
 )
 from .execution.execution_module_invocation import (
     AgentExecutionAdapterRegistry,
     ModuleExecutionAuthority,
     isolated_execution_scope_id,
     run_module,
+    run_workflow_module,
 )
 from .contracts.ledger_lineage_definition import ModuleUsageObservation
 from .registry.registry_release_retrieval import RuntimeModuleReleaseClient
@@ -210,6 +212,7 @@ __all__ = [
     "ModuleRunResult",
     "ModuleUsageObservation",
     "ModuleVariantRequest",
+    "WorkflowModuleExecutionRequest",
     "OutputResolutionPolicy",
     "OutputSubmission",
     "OperationAuthorizationRequest",
@@ -262,5 +265,6 @@ __all__ = [
     "register_runtime_plugin",
     "register_runtime_module_plugin",
     "run_module",
+    "run_workflow_module",
     "validate_domain_runtime_manifest",
 ]

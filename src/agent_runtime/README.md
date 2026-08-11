@@ -404,8 +404,11 @@ content verification, provider A/B adapters, Temporal recovery, and an
 authorized read-only Live Inspector over the formal records. These surfaces
 are implemented and tested; they are no longer listed as future work.
 
-The public `run_module()` Test/Evaluation path is one authorization-enforcing
-execution kernel. Every invocation — explicitly registered provider adapters
+The public execution kernel has two entry points over the same registered
+Module and provider-adapter contracts. `run_module()` owns isolated Test or
+Evaluation runs. `run_workflow_module()` owns a durable Module Activity inside
+an admitted Workflow Execution and writes the canonical Execution Ledger
+before and after provider entry. Every invocation — explicitly registered provider adapters
 and in-process test doubles alike — crosses the canonical
 `AuthorizedAgentExecutionAdapter` contract, and a Module that declares a model
 operation requires a `ModuleExecutionAuthority`: its AR09 execution
@@ -426,7 +429,7 @@ dimensions and must not be used interchangeably:
 and admission scope normally entered through `workflow` or `standalone`; those
 purposes are not admitted by the current public entry point.
 
-### Current `run_module()` admission matrix
+### Current Module-execution admission matrix
 
 | Purpose and Module shape | Capability profile | Registered transport | Current result |
 | --- | --- | --- | --- |
@@ -435,12 +438,17 @@ purposes are not admitted by the current public entry point.
 | `test` or `evaluation`, exactly one model operation and no other operation | `agent` + `inline` + workspace `own_draft_read_write` + empty Gateway tool policy + network `denied` | Exact Claude SDK inline-draft adapter revision | Admitted. Every exposed Read/Write/Edit is checked against the Attempt root; the model receives no governed Gateway resource and no general network |
 | `test` or `evaluation`, exactly one model operation plus one or more declared Gateway read operations | `agent` + `gateway_read` + workspace `none` + exact non-empty tool policy and access reason + network `gateway_only` | Claude SDK Gateway adapter with dynamic-operation authorization support | Admitted. Model dispatch is authorized first; every tool call then requires a fresh Stack-A decision and Runtime receipt before the resource callable is entered |
 | `test` or `evaluation`, any other protected-operation/profile conjunction | Any | Any | Rejected before Provider invocation, including `hybrid`, Gateway-plus-draft, attachments, direct egress, Codex workspace/Gateway, or a descriptor without dynamic authorization support |
-| `workflow`, `standalone`, or `replay` | Any | Any | Rejected at the current purpose gate before transport resolution or Provider invocation |
+| Workflow-bound `evaluation`, `test`, `workflow`, or `replay` through `run_workflow_module()` | Same exact reviewed capability conjunctions as above | Same registered adapters | Admitted for one Variant per durable dispatch. Module Run/Variant and Attempt claim precede Provider entry; operation authorization precedes each effect; terminal Attempt/calls/usage/outputs are atomically finalized. A committed invocation replays without a Provider call. |
+| `standalone` through either entry point | Any | Any | Not admitted by the current public entry points |
 
 These rows are exact reviewed conjunctions, not a rule that every
 Test/Evaluation capability may be freely combined. Adapter implementation and
 public-entry admission remain separate facts: adding a representable profile
 dimension or registering an adapter cannot implicitly admit a new hybrid.
+
+One durable Workflow dispatch currently carries exactly one Variant. A/B arms
+therefore use separate dispatches under the same Module Release and frozen
+input closure; evaluation and selection remain downstream Runtime records.
 
 | Capability profile | Semantic input | Attempt workspace | Model-visible tools | Agent network | Adapter status | Model-backed `run_module()` admission |
 | --- | --- | --- | --- | --- | --- | --- |
