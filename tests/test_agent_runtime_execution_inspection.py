@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from agent_runtime.contracts.ledger_record_definition import (
     CommitReceipt,
     ExecutionInputRef,
@@ -12,6 +16,12 @@ from agent_runtime.contracts.ledger_record_definition import (
     WorkflowModuleExecutionVariantRecord,
     WorkflowModuleRunRecord,
     sha256_json,
+)
+from agent_runtime.contracts.registry_release_definition import (
+    WorkflowEdge,
+    WorkflowNodeBinding,
+    WorkflowNodeKind,
+    WorkflowRelease,
 )
 from agent_runtime.inspection import (
     build_runtime_execution_inspection,
@@ -179,6 +189,150 @@ def _trace() -> RuntimeExecutionTrace:
             ),
         ),
     )
+
+
+def _trace_with(base: RuntimeExecutionTrace, records: tuple) -> RuntimeExecutionTrace:
+    """Rebuild one trace around a modified record tuple."""
+
+    receipt = base.commit_receipts[0]
+    return RuntimeExecutionTrace(
+        workflow_execution_id=base.workflow_execution_id,
+        records=records,
+        commit_receipts=(
+            replace(receipt, record_count=len(records)),
+        ),
+    )
+
+
+def _record(base: RuntimeExecutionTrace, record_type: type):
+    return next(row for row in base.records if type(row) is record_type)
+
+
+def test_retry_success_supersedes_the_failed_attempt_status() -> None:
+    base = _trace()
+    completed = _record(base, WorkflowAttemptRecord)
+    failed = replace(
+        completed,
+        attempt_id="attempt_inspection_000",
+        attempt_ordinal=1,
+        status="failed",
+        failure_class="provider",
+        execution_output_refs=(),
+    )
+    retried = replace(
+        completed,
+        parent_attempt_id=failed.attempt_id,
+        attempt_ordinal=2,
+    )
+    records = tuple(
+        row for row in base.records if type(row) is not WorkflowAttemptRecord
+    )
+    index = base.records.index(completed)
+    records = records[: index] + (failed, retried) + records[index:]
+
+    inspection = build_runtime_execution_inspection(_trace_with(base, records))
+
+    module = inspection["modules"][0]
+    assert module["module_run"]["status"] == "completed"
+    assert inspection["trace"]["workflow"]["status"] == "running"
+    assert [row["status"] for row in module["attempts"]] == [
+        "failed",
+        "completed",
+    ]
+
+
+def test_projection_rejects_an_attempt_bound_to_a_foreign_variant() -> None:
+    base = _trace()
+    module = _record(base, WorkflowModuleRunRecord)
+    variant = _record(base, WorkflowModuleExecutionVariantRecord)
+    attempt = _record(base, WorkflowAttemptRecord)
+    foreign_module = replace(
+        module,
+        module_run_id="module_run_inspection_002",
+        state_id="verify_evidence",
+    )
+    cross_attempt = replace(
+        attempt,
+        attempt_id="attempt_inspection_002",
+        module_run_id=foreign_module.module_run_id,
+        variant_id=variant.variant_id,
+    )
+    records = (*base.records, foreign_module, cross_attempt)
+
+    with pytest.raises(ValueError, match="Attempt outside its Variant lineage"):
+        build_runtime_execution_inspection(_trace_with(base, records))
+
+
+@pytest.mark.parametrize(
+    "record_type",
+    (UsageEvent, ModelCallRecord, ExecutionOutputRef),
+)
+def test_projection_rejects_records_off_their_attempt_lineage(
+    record_type: type,
+) -> None:
+    base = _trace()
+    target = _record(base, record_type)
+    detached = replace(target, variant_id="variant_inspection_other")
+    records = tuple(
+        detached if row is target else row for row in base.records
+    )
+
+    with pytest.raises(ValueError, match="outside its Attempt lineage"):
+        build_runtime_execution_inspection(_trace_with(base, records))
+
+
+def test_projection_rejects_usage_without_its_call_record() -> None:
+    base = _trace()
+    usage = _record(base, UsageEvent)
+    detached = replace(usage, operation_id="model_call_missing_001")
+    records = tuple(detached if row is usage else row for row in base.records)
+
+    with pytest.raises(ValueError, match="UsageEvent without its call record"):
+        build_runtime_execution_inspection(_trace_with(base, records))
+
+
+def test_projection_rejects_a_workflow_release_for_another_workflow() -> None:
+    foreign_release = WorkflowRelease.build(
+        workflow_id="workflow_other",
+        workflow_version="1.0.0",
+        workflow_contract_version="v1",
+        release_ref="runtime-workflow:workflow_other@1",
+        owner_contract_ref="design-doc:inspection@1",
+        owner_contract_sha256="7" * 64,
+        graph_ref=(
+            "python:tests.test_agent_runtime_execution_inspection._graph"
+        ),
+        graph_sha256="c" * 64,
+        initial_node_id="produce_evidence",
+        nodes=(
+            WorkflowNodeBinding(
+                node_id="produce_evidence",
+                node_kind=WorkflowNodeKind.MODULE,
+                module_release_ref="runtime-module:inspection@1",
+                module_release_sha256="9" * 64,
+                input_mapping_ref="input-map:inspection@1",
+                input_mapping_sha256="8" * 64,
+            ),
+        ),
+        edges=(
+            WorkflowEdge(
+                source_node_id="produce_evidence",
+                outcome_id="evidence_produced",
+                target_node_id=None,
+                terminal=True,
+            ),
+        ),
+        authorization_manifest_ref="authorization-manifest:inspection@1",
+        authorization_manifest_sha256="a" * 64,
+        execution_release_ref="execution-release:inspection@1",
+        execution_release_sha256="b" * 64,
+    )
+
+    with pytest.raises(ValueError, match="does not match the execution"):
+        build_runtime_execution_inspection(
+            _trace(),
+            workflow_release=foreign_release,
+        )
 
 
 def test_execution_trace_projects_directly_to_portable_inspector_view() -> None:

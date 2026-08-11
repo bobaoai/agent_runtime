@@ -91,12 +91,12 @@ def _module_status(
     )
     if not matching_attempts:
         return "registered"
-    if any(row.status == "failed" for row in matching_attempts):
-        return "failed"
-    if any(row.status == "cancelled" for row in matching_attempts):
-        return "cancelled"
-    if all(row.status == "completed" for row in matching_attempts):
-        return "completed"
+    # Without a committed Outcome, the latest committed Attempt is the current
+    # state: a retry that succeeds supersedes its failed predecessors instead
+    # of leaving the Module marked failed forever.
+    last = matching_attempts[-1]
+    if last.status in {"completed", "failed", "cancelled"}:
+        return last.status
     return "running"
 
 
@@ -153,6 +153,14 @@ def build_runtime_execution_inspection(
     execution = _one(executions, "WorkflowExecutionRecord")
     if execution.workflow_execution_id != trace.workflow_execution_id:
         raise ValueError("Runtime trace and execution identity disagree")
+    if workflow_release is not None and (
+        workflow_release.workflow_id != execution.workflow_id
+        or workflow_release.workflow_contract_version
+        != execution.workflow_contract_version
+    ):
+        raise ValueError(
+            "Runtime inspection workflow release does not match the execution"
+        )
 
     for record in trace.records:
         workflow_execution_id = getattr(record, "workflow_execution_id", None)
@@ -183,19 +191,94 @@ def build_runtime_execution_inspection(
     module_ids = {row.module_run_id for row in module_runs}
     if len(module_ids) != len(module_runs):
         raise ValueError("Runtime inspection requires unique module_run_id values")
-    variant_ids = {row.variant_id for row in variants}
-    if len(variant_ids) != len(variants):
+    variant_by_id = {row.variant_id: row for row in variants}
+    if len(variant_by_id) != len(variants):
         raise ValueError("Runtime inspection requires unique variant_id values")
-    attempt_ids = {row.attempt_id for row in attempts}
-    if len(attempt_ids) != len(attempts):
+    attempt_by_id = {row.attempt_id: row for row in attempts}
+    if len(attempt_by_id) != len(attempts):
         raise ValueError("Runtime inspection requires unique attempt_id values")
+
+    # Existence alone is not lineage: every child record must sit inside the
+    # exact chain of the parents it names, or a mismatched record would be
+    # displayed under the wrong Module as if the ledger had committed it there.
     if any(row.module_run_id not in module_ids for row in variants):
         raise ValueError("Runtime inspection found an orphan Variant")
+    for row in attempts:
+        attempt_variant = variant_by_id.get(row.variant_id)
+        if (
+            attempt_variant is None
+            or attempt_variant.module_run_id != row.module_run_id
+        ):
+            raise ValueError(
+                "Runtime inspection found an Attempt outside its Variant lineage"
+            )
+    operation_ids = {row.model_call_id for row in model_calls} | {
+        row.tool_call_id for row in tool_calls
+    }
+    for row in (*model_calls, *tool_calls, *usage_events):
+        operation_attempt = attempt_by_id.get(row.attempt_id)
+        if (
+            operation_attempt is None
+            or operation_attempt.variant_id != row.variant_id
+            or operation_attempt.module_run_id != row.module_run_id
+        ):
+            raise ValueError(
+                "Runtime inspection found an operation record outside its "
+                "Attempt lineage"
+            )
+    if any(row.operation_id not in operation_ids for row in usage_events):
+        raise ValueError(
+            "Runtime inspection found a UsageEvent without its call record"
+        )
+    for row in outputs:
+        if row.attempt_id is not None:
+            output_attempt = attempt_by_id.get(row.attempt_id)
+            if (
+                output_attempt is None
+                or (
+                    row.variant_id is not None
+                    and output_attempt.variant_id != row.variant_id
+                )
+                or (
+                    row.module_run_id is not None
+                    and output_attempt.module_run_id != row.module_run_id
+                )
+            ):
+                raise ValueError(
+                    "Runtime inspection found an output outside its Attempt "
+                    "lineage"
+                )
+        elif row.module_run_id is not None and row.module_run_id not in module_ids:
+            raise ValueError("Runtime inspection found an orphan output")
+    for row in context_events:
+        if row.module_run_id not in module_ids:
+            raise ValueError("Runtime inspection found an orphan context event")
+        if row.attempt_id is not None:
+            context_attempt = attempt_by_id.get(row.attempt_id)
+            if (
+                context_attempt is None
+                or context_attempt.module_run_id != row.module_run_id
+            ):
+                raise ValueError(
+                    "Runtime inspection found a context event outside its "
+                    "Attempt lineage"
+                )
+    if any(row.module_run_id not in module_ids for row in outcomes):
+        raise ValueError("Runtime inspection found an orphan ModuleOutcome")
+    evaluation_run_ids = {row.evaluation_run_id for row in evaluation_runs}
+    if any(row.source_module_run_id not in module_ids for row in evaluation_runs):
+        raise ValueError("Runtime inspection found an orphan EvaluationRun")
     if any(
-        row.module_run_id not in module_ids or row.variant_id not in variant_ids
-        for row in attempts
+        row.evaluation_run_id not in evaluation_run_ids
+        for row in evaluation_results
     ):
-        raise ValueError("Runtime inspection found an orphan Attempt")
+        raise ValueError("Runtime inspection found an orphan EvaluationResult")
+    if any(row.source_module_run_id not in module_ids for row in selections):
+        raise ValueError("Runtime inspection found an orphan Selection")
+    if any(row.source_module_run_id not in module_ids for row in resolutions):
+        raise ValueError(
+            "Runtime inspection found an orphan output resolution"
+        )
 
     usage_by_attempt: dict[str, list[UsageEvent]] = defaultdict(list)
     for row in usage_events:

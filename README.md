@@ -231,7 +231,8 @@ by a new integration, and retire with the corresponding debt path; a
 structural `__init__.py` does not turn the imported predecessor into target
 implementation.
 
-`0.1.0.dev0` is the first standalone extraction and has no tagged public wheel
+The unreleased `0.x.dev` series is the first standalone extraction and has
+no tagged public wheel
 predecessor. It intentionally does not recreate the former host repository's
 physical `postgres`, `provider`, or `review` packages. A host must migrate
 those vendored imports to the registered `registry`, `invocation`,
@@ -397,7 +398,7 @@ current executable truth.
 
 ## Current maturity
 
-`0.1.0.dev0` now contains working PostgreSQL release registration, an
+`0.2.0.dev0` contains working PostgreSQL release registration, an
 append-only PostgreSQL Execution Ledger with restart recovery and immutable
 content verification, provider A/B adapters, Temporal recovery, and an
 authorized read-only Live Inspector over the formal records. These surfaces

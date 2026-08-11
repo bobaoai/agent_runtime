@@ -596,7 +596,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
 def test_generated_design_contract_bundle_matches_canonical_docs() -> None:
     manifest = build_design_contract_bundle(check=True)
 
-    assert manifest["runtime_release_version"] == "0.1.0.dev0"
+    assert manifest["runtime_release_version"] == "0.2.0.dev0"
     assert [row["source_path"] for row in manifest["documents"]] == list(
         CANONICAL_DOCUMENTS
     )

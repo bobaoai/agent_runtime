@@ -210,7 +210,8 @@ Structural package initializers may temporarily re-export predecessor symbols
 for existing callers. Those exports are compatibility-only, cannot be used by
 new integrations, and retire with the owning debt entry.
 
-This repository is still an unreleased `0.1.0.dev0` extraction with no tagged
+This repository is still an unreleased `0.x.dev` extraction (`0.2.0.dev0`
+at this revision) with no tagged
 public package predecessor. Compatibility applies only to symbols explicitly
 exported by the current package initializers; it does not preserve the former
 host repository's physical `postgres`, `provider`, or `review` package layout.
