@@ -1330,6 +1330,7 @@ class ExecutionOutputRef:
     variant_id: str | None = None
     attempt_id: str | None = None
     logical_name: str | None = None
+    source_artifact_refs: tuple[str, ...] = ()
 
     def validate(self) -> None:
         """Validate metadata while keeping output content outside the ledger."""
@@ -1368,6 +1369,11 @@ class ExecutionOutputRef:
                 raise ValueError(
                     "ExecutionOutputRef logical_name must be a bounded opaque token"
                 )
+        _validate_unique_refs(
+            "source_artifact_refs", self.source_artifact_refs
+        )
+        if self.output_ref in self.source_artifact_refs:
+            raise ValueError("ExecutionOutputRef cannot cite itself as a source")
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
 
     def as_dict(self) -> dict[str, Any]:

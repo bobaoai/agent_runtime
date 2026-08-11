@@ -148,6 +148,11 @@ from .registry.registry_release_registration import (
 )
 from .registry.registry_workflow_registration import WorkflowRuntimeRegistry
 from .ledger.ledger_usage_aggregation import aggregate_model_usage
+from .ledger.ledger_workflow_execution_recording import (
+    WorkflowExecutionArtifactHost,
+    WorkflowExecutionLedgerBinding,
+    WorkflowExecutionLedgerRecorder,
+)
 
 __all__ = [
     "AgenticWorkflowConformancePackage",
@@ -254,6 +259,9 @@ __all__ = [
     "WorkflowRuntimeRegistration",
     "WorkflowEdge",
     "WorkflowExecutionProfileSelection",
+    "WorkflowExecutionArtifactHost",
+    "WorkflowExecutionLedgerBinding",
+    "WorkflowExecutionLedgerRecorder",
     "WorkflowNodeBinding",
     "WorkflowNodeExecutionProfileBinding",
     "WorkflowParallelGroupBinding",

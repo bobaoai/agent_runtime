@@ -418,6 +418,12 @@ entered, and the committed fence is re-read inside the atomic finalization
 that makes outputs authoritative. The following terms describe separate
 dimensions and must not be used interchangeably:
 
+Workflow hosts use `WorkflowExecutionLedgerRecorder` for the surrounding
+execution facts: the frozen execution input package, deterministic derived
+outputs with their source-artifact refs, and each atomic Domain Outcome plus
+recovery checkpoint. Business plugins therefore do not construct ledger rows
+or keep a parallel shadow trace.
+
 | Dimension | Question answered | Current values or examples |
 | --- | --- | --- |
 | Execution purpose | Why is this run being performed? | `test`, `evaluation`, `workflow`, `standalone`, `replay` |

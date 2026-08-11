@@ -21,6 +21,11 @@ from .ledger_workflow_module_recording import (
     WorkflowModuleLedgerBinding,
     WorkflowModuleLedgerRecorder,
 )
+from .ledger_workflow_execution_recording import (
+    WorkflowExecutionArtifactHost,
+    WorkflowExecutionLedgerBinding,
+    WorkflowExecutionLedgerRecorder,
+)
 
 __all__ = [
     "aggregate_model_usage",
@@ -32,6 +37,9 @@ __all__ = [
     "RuntimeExecutionDescriptor",
     "RuntimeExecutionPageCursor",
     "RuntimeExecutionRecordStore",
+    "WorkflowExecutionArtifactHost",
+    "WorkflowExecutionLedgerBinding",
+    "WorkflowExecutionLedgerRecorder",
     "WorkflowModuleLedgerBinding",
     "WorkflowModuleLedgerRecorder",
     "deserialize_runtime_batch",

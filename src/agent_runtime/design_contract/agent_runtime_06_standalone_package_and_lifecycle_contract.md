@@ -482,6 +482,13 @@ dies after atomic invocation finalization but before the separate direct-output
 resolution commit, replay derives that resolution only from the committed
 Attempt output bundle and appends the missing row before returning.
 
+`WorkflowExecutionLedgerRecorder` owns the surrounding Workflow facts that are
+not one provider Attempt: it atomically records the Workflow Execution and its
+frozen input members, appends deterministic derived outputs with their exact
+source-artifact refs, and commits every Domain Outcome with its local recovery
+checkpoint. A domain Runtime Services adapter calls this interface; it does
+not construct ledger rows or maintain a second execution trace.
+
 ## 7. Invocation Finalization
 
 `finalize_attempt(expected_claim_token, batch)` performs one

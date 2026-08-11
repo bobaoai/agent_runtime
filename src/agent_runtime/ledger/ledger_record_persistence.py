@@ -686,6 +686,16 @@ class InMemoryRuntimeExecutionRecordStore:
                 raise ValueError(
                     f"duplicate ExecutionOutputRef reference: {output.output_ref}"
                 )
+        for output in execution_outputs.values():
+            if any(
+                source_ref not in execution_inputs_by_ref
+                and source_ref not in execution_outputs_by_ref
+                for source_ref in output.source_artifact_refs
+            ):
+                raise ValueError(
+                    "ExecutionOutputRef source is outside the frozen execution "
+                    "package and prior outputs"
+                )
             if output.module_run_id is None:
                 continue
             module = module_runs.get(output.module_run_id)
