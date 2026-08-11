@@ -17,6 +17,7 @@ import re
 from types import MappingProxyType, UnionType
 from typing import Any, Callable, Mapping, Union, get_args, get_origin, get_type_hints
 
+from ..contracts.ledger_content_definition import RuntimeExecutionContent
 from ..contracts.ledger_record_definition import (
     AttemptBeginReceipt,
     AttemptClaim,
@@ -44,7 +45,6 @@ from ..contracts.ledger_record_definition import (
     sha256_text,
     stable_runtime_id,
 )
-from ..contracts.ledger_content_definition import RuntimeExecutionContent
 from ..contracts.registry_workflow_definition import ModuleOutcome
 from .ledger_record_persistence import InMemoryRuntimeExecutionRecordStore
 
@@ -521,6 +521,13 @@ class PostgresRuntimeExecutionRecordStore:
         workflow_execution_id: str,
     ) -> tuple[Mapping[str, Any], ...]:
         def load(cursor: Any) -> tuple[Mapping[str, Any], ...]:
+            trace = self._decoder._load_reference(
+                cursor,
+                workflow_execution_id,
+            ).load_trace(workflow_execution_id)
+            declared_refs = _referenced_content_hashes(trace)
+            if not declared_refs:
+                return ()
             cursor.execute(
                 f"""
                 SELECT content_ref, content_sha256, media_type, byte_size,
@@ -542,6 +549,7 @@ class PostgresRuntimeExecutionRecordStore:
                     }
                 )
                 for row in cursor.fetchall()
+                if row[0] in declared_refs
             )
 
         return self._read_transaction(load)
@@ -1022,6 +1030,13 @@ class PostgresRuntimeExecutionQueryStore:
         workflow_execution_id: str,
     ) -> tuple[Mapping[str, Any], ...]:
         def load(cursor: Any) -> tuple[Mapping[str, Any], ...]:
+            trace = self._decoder._load_reference(
+                cursor,
+                workflow_execution_id,
+            ).load_trace(workflow_execution_id)
+            declared_refs = _referenced_content_hashes(trace)
+            if not declared_refs:
+                return ()
             cursor.execute(
                 f"""
                 SELECT content_ref, content_sha256, media_type, byte_size,
@@ -1043,6 +1058,7 @@ class PostgresRuntimeExecutionQueryStore:
                     }
                 )
                 for row in cursor.fetchall()
+                if row[0] in declared_refs
             )
 
         return self._transaction(load)
@@ -1052,13 +1068,20 @@ class PostgresRuntimeExecutionQueryStore:
         workflow_execution_id: str,
         content_ref: str,
     ) -> RuntimeExecutionContent | None:
-        return self._transaction(
-            lambda cursor: self._decoder._load_content(
+        def load(cursor: Any) -> RuntimeExecutionContent | None:
+            trace = self._decoder._load_reference(
+                cursor,
+                workflow_execution_id,
+            ).load_trace(workflow_execution_id)
+            if content_ref not in _referenced_content_hashes(trace):
+                return None
+            return self._decoder._load_content(
                 cursor,
                 workflow_execution_id,
                 content_ref,
             )
-        )
+
+        return self._transaction(load)
 
     def _transaction(self, operation: Callable[[Any], Any]) -> Any:
         return _run_in_transaction(

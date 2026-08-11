@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from ..contracts.ledger_content_definition import RuntimeExecutionContent
 from ..contracts.ledger_record_definition import (
     RuntimeExecutionTrace,
     WorkflowExecutionRecord,
@@ -11,7 +12,6 @@ from ..contracts.ledger_record_definition import (
 from ..contracts.registry_release_definition import WorkflowRelease
 from ..ledger.ledger_postgres_persistence import (
     PostgresRuntimeExecutionQueryStore,
-    RuntimeExecutionContent,
     RuntimeExecutionDescriptor,
     RuntimeExecutionPageCursor,
 )

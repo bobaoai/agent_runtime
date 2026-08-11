@@ -12,6 +12,7 @@ from typing import Any, Callable, Iterable, Mapping, Protocol
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
+from ..contracts.ledger_content_definition import RuntimeExecutionContent
 from ..contracts.ledger_record_definition import (
     CommitReceipt,
     LegacyAuthorizationLedgerRecord,
@@ -22,7 +23,6 @@ from ..contracts.ledger_record_definition import (
 )
 from ..contracts.registry_release_definition import WorkflowRelease
 from ..ledger.ledger_postgres_persistence import (
-    RuntimeExecutionContent,
     RuntimeExecutionDescriptor,
     RuntimeExecutionPageCursor,
 )

@@ -337,6 +337,10 @@ def test_postgres_stages_output_content_before_ledger_reference(
         schema=postgres_test_schema,
     )
     store.initialize_schema()
+    queries = PostgresRuntimeExecutionQueryStore.from_dsn(
+        database_url,
+        schema=postgres_test_schema,
+    )
     store.commit(
         RuntimeRecordBatch(
             workflow_execution_id=EXECUTION_ID,
@@ -361,6 +365,8 @@ def test_postgres_stages_output_content_before_ledger_reference(
     assert store.stage_content(
         replace(content, recorded_at_utc="2026-08-08T12:00:01Z")
     ).body == body
+    assert queries.list_content_metadata(EXECUTION_ID) == ()
+    assert queries.load_content(EXECUTION_ID, content.content_ref) is None
 
     output = ExecutionOutputRef(
         execution_output_id="execution_output_postgres_stage_001",
@@ -384,6 +390,11 @@ def test_postgres_stages_output_content_before_ledger_reference(
     assert store.load_trace(EXECUTION_ID).records_of_type(
         ExecutionOutputRef
     ) == (output,)
+    assert tuple(
+        row["content_ref"]
+        for row in queries.list_content_metadata(EXECUTION_ID)
+    ) == (content.content_ref,)
+    assert queries.load_content(EXECUTION_ID, content.content_ref).body == body
 
 @pytest.mark.skipif(
     not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),

@@ -509,8 +509,11 @@ after this record and before domain Outcome commit reconstructs the same result
 without repeating the provider, tool, Gateway operation, or side effect.
 
 Output bodies reach immutable content-addressed storage before their references
-are committed. An unreferenced staged blob may be garbage-collected. A committed
-output reference with missing bytes is a failed transaction.
+are committed. An unreferenced staged blob is non-authoritative and excluded
+from inspection. The current `0.2.0.dev0` PostgreSQL adapter retains that blob;
+a future controlled-retention migration may delete it only after proving that no
+committed record references it. A committed output reference with missing bytes
+is a failed transaction.
 
 ## 8. Crash, Stale Result, and Recovery
 

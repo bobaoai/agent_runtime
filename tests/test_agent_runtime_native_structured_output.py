@@ -738,11 +738,29 @@ def test_workflow_module_replays_after_resolution_commit_crash(
         recorded_at_utc=_TEST_TIME,
         logical_name="task_input",
     )
+
+    class _AttemptContentStore:
+        def __init__(self) -> None:
+            self.staged = {}
+
+        def stage_content(self, content):
+            content.validate()
+            self.staged[content.content_ref] = content
+            return content
+
+        def commit_content(self, content):
+            raise AssertionError("Attempt outputs must stage before finalization")
+
+        def contains(self, output) -> bool:
+            content = self.staged.get(output.output_ref)
+            return (
+                content is not None
+                and content.content_sha256 == output.output_sha256
+            )
+
+    content_store = _AttemptContentStore()
     record_store = InMemoryRuntimeExecutionRecordStore(
-        execution_output_integrity_check=lambda row: (
-            artifact_host.read_bytes(row.output_ref, row.output_sha256)
-            is not None
-        )
+        execution_output_integrity_check=content_store.contains
     )
     record_store.commit(
         RuntimeRecordBatch(
@@ -767,6 +785,7 @@ def test_workflow_module_replays_after_resolution_commit_crash(
             record_store=record_store,
             entitlement_snapshot_hash=execution.entitlement_snapshot_hash,
             claim_token_secret=b"workflow-ledger-test-secret-32-bytes",
+            content_store=content_store,
         )
     )
     provider_entry_observation: dict[str, int] = {}
@@ -816,6 +835,7 @@ def test_workflow_module_replays_after_resolution_commit_crash(
     assert len(usage) == 1
     assert usage[0].input_tokens == 3
     assert usage[0].output_tokens == 2
+    assert len(content_store.staged) == 1
 
     replay = run_workflow_module(
         workflow_request,
@@ -828,6 +848,7 @@ def test_workflow_module_replays_after_resolution_commit_crash(
                 record_store=record_store,
                 entitlement_snapshot_hash=execution.entitlement_snapshot_hash,
                 claim_token_secret=b"workflow-ledger-test-secret-32-bytes",
+                content_store=content_store,
             )
         ),
         authority=authority,
