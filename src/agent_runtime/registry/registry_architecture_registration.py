@@ -566,6 +566,13 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         source_directory_id="testing",
     ),
     _source(
+        "execution",
+        "module",
+        "evaluation",
+        "designDoc/agent_runtime_00_execution_charter.md",
+        source_directory_id="testing",
+    ),
+    _source(
         "registry",
         "postgres",
         "persistence",
@@ -588,6 +595,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "inspection",
         "record",
         "schema_rendering",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+    ),
+    _source(
+        "inspection",
+        "execution",
+        "projecting",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     ),
     _source(

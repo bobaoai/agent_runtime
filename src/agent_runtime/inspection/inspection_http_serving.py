@@ -26,6 +26,7 @@ from ..ledger.ledger_postgres_persistence import (
     RuntimeExecutionDescriptor,
     RuntimeExecutionPageCursor,
 )
+from .inspection_execution_projecting import build_runtime_execution_inspection
 
 
 class WorkflowInspectionRepository(Protocol):
@@ -278,9 +279,18 @@ class LiveWorkflowInspectorApplication:
             )
         trace = self._repository.load_trace(workflow_execution_id)
         release = self._repository.load_workflow_release(trace)
+        inspection = (
+            build_runtime_execution_inspection(
+                trace,
+                workflow_release=release,
+            )
+            if trace.records
+            else None
+        )
         payload = {
             "execution": execution.as_dict(),
             "workflow_release": None if release is None else release.as_dict(),
+            "inspection": inspection,
             "records": [_record_dict(record) for record in trace.records],
             "commit_receipts": [_receipt_dict(receipt) for receipt in trace.commit_receipts],
             "contents": [

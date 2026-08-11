@@ -12,6 +12,7 @@ from .inspection_snapshot_definition import (
     validate_workflow_review_bundle,
 )
 from .inspection_snapshot_rendering import render_workflow_review_html
+from .inspection_execution_projecting import build_runtime_execution_inspection
 from .inspection_http_serving import (
     LiveInspectionAssembly,
     LiveInspectionAuthorizer,
@@ -25,6 +26,7 @@ from .inspection_postgres_querying import PostgresWorkflowInspectionRepository
 __all__ = [
     "ARCHITECTURE_PROJECTION_SCHEMA_VERSION",
     "build_runtime_architecture_projection",
+    "build_runtime_execution_inspection",
     "build_workflow_review_bundle",
     "LiveInspectionAssembly",
     "LiveInspectionAuthorizer",

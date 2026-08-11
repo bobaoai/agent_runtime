@@ -354,6 +354,15 @@ evaluation, recorded immutably and read back through the same trace. Both are
 normalized atomic records in one ledger; a denormalized read view is the
 sanctioned way to serve variant comparison, not a second storage plane.
 
+`inspection_execution_projecting.build_runtime_execution_inspection`
+mechanically rebuilds that denormalized view from one immutable
+`RuntimeExecutionTrace` plus its optional registered `WorkflowRelease`. It
+persists nothing, accepts no tenant or status overrides, and makes no Product
+authorization decision. Live and offline Inspector surfaces consume this same
+Runtime-owned projection; a host supplies only authenticated request context,
+current read authorization, deployment wiring, and separately authorized
+content dereference.
+
 **Idempotency identity.** Idempotent convergence is keyed on a stable content
 hash of an operation's identity fields; a conflicting retry converges on the
 already-committed fact and is not re-compared field by field. Clock-derived and

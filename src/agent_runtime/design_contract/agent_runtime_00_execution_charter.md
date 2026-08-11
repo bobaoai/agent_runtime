@@ -602,6 +602,17 @@ Testing proves deterministic engineering behavior. Evaluation measures candidate
 
 Shared fixtures use opaque state IDs and synthetic artifacts. Domain fixtures appear only in domain-owned tests.
 
+`agent_runtime.testing.execution_module_evaluation` is the portable isolated
+Module Test/Evaluation entry. Runtime owns input staging, Prompt assembly,
+adapter dispatch, execution ledgering, and result projection. The host must
+supply the exact Product authorization authority; the helper cannot issue an
+Entitlement, manufacture an execution context, or bypass a closed execution
+fence. Domain packages supply only their registered releases, semantic input,
+adapters, authorization composition, and evaluation assertions.
+When a test freezes time, the same injected clock must drive both authority
+issuance/revalidation and Runtime invocation; mixing a frozen authority clock
+with the process clock correctly closes the execution fence.
+
 ## 10. Release and Module Update Management
 
 Every executable Module is versioned independently. Workflow graph, Domain
@@ -726,5 +737,9 @@ registries, codecs, persistence schemas, workers, and generated inspection.
 - `agent_runtime_10` owns host-side `workflow_execution_binding` validation,
   target resolution, compatibility mapping, cutover, and fail-closed admission.
 - `the_agency_platform` owns the enterprise host/product composition around the independently publishable Runtime.
-- [Agency Platform Execution Visibility Service Contract](agency_platform_13_execution_visibility_contract.md) owns product-facing execution projections, authorized queries, and reconstruction views.
+- Agent Runtime owns the mechanical ledger-to-Inspector projection, read-only
+  Runtime query contract, live Inspector application, and portable review
+  bundle. Agency Platform may host those surfaces and supply current Product
+  authentication and authorization; it does not copy the Runtime ledger or
+  maintain a second execution projection model.
 - Each domain Design Doc owns business objects, role names, content-quality criteria, evaluator semantics, revision rules, and domain terminal states.
