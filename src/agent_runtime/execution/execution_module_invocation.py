@@ -350,6 +350,14 @@ class _AttemptExecutionHost:
         if self._workflow_ledger is not None:
             self._workflow_ledger.authorize_tool_call(
                 request,
+                authorization_intent_ref=intent.intent_ref,
+                authorization_intent_sha256=intent.intent_sha256,
+                authorization_decision_ref=decision.decision_ref,
+                authorization_decision_sha256=decision.decision_sha256,
+                authorization_observation_ref=observation.observation_ref,
+                authorization_observation_sha256=(
+                    observation.observation_sha256
+                ),
                 recorded_at_utc=observed_at_utc,
             )
         receipt = AuthorizedOperationReceipt(
@@ -821,6 +829,18 @@ def _execute_attempt(
                     operation_id
                     for operation_id in module.declared_operation_ids
                     if operation_id in _MODEL_INVOCATION_OPERATION_IDS
+                ),
+                authorization_intent_ref=evidence.intent.intent_ref,
+                authorization_intent_sha256=evidence.intent.intent_sha256,
+                authorization_decision_ref=evidence.decision.decision_ref,
+                authorization_decision_sha256=(
+                    evidence.decision.decision_sha256
+                ),
+                authorization_observation_ref=(
+                    evidence.observation.observation_ref
+                ),
+                authorization_observation_sha256=(
+                    evidence.observation.observation_sha256
                 ),
                 recorded_at_utc=clock(),
             )

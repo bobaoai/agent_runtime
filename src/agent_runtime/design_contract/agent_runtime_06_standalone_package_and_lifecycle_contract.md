@@ -445,14 +445,15 @@ sequenceDiagram
     kernel->>ledger: commit Module/Variant and Attempt start
     ledger-->>kernel: durable begin receipt
     kernel->>gateway: resolve Product authorization for the exact operation
-    kernel->>ledger: commit operation authorization binding before effect
+    gateway-->>kernel: committed AR09 intent, decision, and observation refs
+    kernel->>ledger: commit pre-effect operation grant
     kernel->>adapter: context-bound invocation
     opt resource Gateway operation
         adapter->>gateway: operation and execution authorization context
         gateway-->>adapter: result plus decision/effect references
     end
     adapter-->>kernel: normalized result and observations
-    kernel->>ledger: finalize Attempt and InvocationCommitRecord
+    kernel->>ledger: finalize Attempt, calls with AR09 refs, and InvocationCommitRecord
     kernel->>ledger: commit ModuleOutcome and pre-ack checkpoint
     backend->>ledger: append backend acknowledgement
 ```
@@ -474,9 +475,12 @@ graph-position, Module Run, frozen input closure, and one Variant. The
 `WorkflowModuleLedgerRecorder` writes the formal Module/Variant, Attempt claim,
 operation, output, call, usage, invocation-commit, and output-resolution rows.
 If the same dispatch already has an `InvocationCommitRecord`, Runtime
-reconstructs the committed inline result and does not call the Provider again.
-Gateway replay remains fail-closed until the dedicated tool content-ref index
-is part of the canonical replay view.
+reconstructs the committed result and does not call the Provider again. Formal
+tool-call rows carry immutable request and response content refs, so Gateway
+Attempts replay with the same provider-neutral tool observations. If a process
+dies after atomic invocation finalization but before the separate direct-output
+resolution commit, replay derives that resolution only from the committed
+Attempt output bundle and appends the missing row before returning.
 
 ## 7. Invocation Finalization
 

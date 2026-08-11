@@ -26,6 +26,7 @@ from ..contracts.ledger_lineage_definition import (
     ModuleExecutionVariantRecord,
     ModuleOutputResolutionRecord,
     ModuleRunRecord,
+    ModuleToolCallObservation,
     ModuleUsageObservation,
 )
 from ..contracts.ledger_record_definition import (
@@ -98,6 +99,19 @@ class WorkflowModuleLedgerBinding:
             raise ValueError("claim_token_secret must contain at least 32 bytes")
 
 
+@dataclass(frozen=True)
+class _AuthorizedOperationLedgerEvidence:
+    """Compatibility grant plus the current AR09 evidence closure."""
+
+    grant: LegacyModuleCapabilityGrant
+    authorization_intent_ref: str
+    authorization_intent_sha256: str
+    authorization_decision_ref: str
+    authorization_decision_sha256: str
+    authorization_observation_ref: str
+    authorization_observation_sha256: str
+
+
 class WorkflowModuleLedgerRecorder:
     """Write one Workflow-bound Module Activity to the canonical ledger."""
 
@@ -105,9 +119,11 @@ class WorkflowModuleLedgerRecorder:
         binding.validate()
         self._binding = binding
         self._claims: dict[str, AttemptClaim] = {}
-        self._model_grants: dict[str, LegacyModuleCapabilityGrant] = {}
+        self._model_grants: dict[
+            str, _AuthorizedOperationLedgerEvidence
+        ] = {}
         self._tool_grants: dict[
-            str, list[LegacyModuleCapabilityGrant]
+            str, list[_AuthorizedOperationLedgerEvidence]
         ] = {}
 
     @property
@@ -219,13 +235,7 @@ class WorkflowModuleLedgerRecorder:
         request: WorkflowModuleExecutionRequest,
         module: RuntimeModuleRelease,
     ) -> ModuleRunResult | None:
-        """Reconstruct a committed inline result without re-entering a provider.
-
-        Gateway Attempts currently fail closed here because the canonical tool
-        record intentionally does not duplicate request/response content refs.
-        A future replay view can expose those refs through a dedicated content
-        index; silently dropping them would make the replay result untruthful.
-        """
+        """Reconstruct a committed result without re-entering a provider."""
 
         invocation = self.record_store.get_committed_invocation(
             request.workflow_execution_id,
@@ -265,10 +275,9 @@ class WorkflowModuleLedgerRecorder:
             for row in trace.records_of_type(ToolCallRecord)
             if row.attempt_id == formal_attempt.attempt_id
         )
-        if tool_calls:
-            raise NotImplementedError(
-                "durable Gateway replay requires the tool content-ref index"
-            )
+        tool_observations = tuple(
+            _tool_observation_from_record(row) for row in tool_calls
+        )
         requested_variant = next(
             (
                 row
@@ -321,6 +330,23 @@ class WorkflowModuleLedgerRecorder:
         )
         if len(resolutions) > 1:
             raise ValueError("Module Run has multiple output resolutions")
+        resolution = resolutions[0] if resolutions else None
+        if formal_attempt.status == "completed" and resolution is None:
+            if not outputs:
+                raise ValueError(
+                    "completed invocation lacks canonical execution outputs"
+                )
+            resolution = self._direct_output_resolution(
+                request=request,
+                resolved_execution_output_refs=(
+                    formal_attempt.execution_output_refs
+                ),
+                recorded_at_utc=formal_attempt.recorded_at_utc,
+            )
+            self.record_output_resolution(
+                request=request,
+                resolution=resolution,
+            )
         return ModuleRunResult(
             module_run=ModuleRunRecord(
                 module_run_id=request.module_run_id,
@@ -380,6 +406,7 @@ class WorkflowModuleLedgerRecorder:
                     period_start_at_utc=formal_attempt.period_start_at_utc,
                     period_end_at_utc=formal_attempt.period_end_at_utc,
                     recorded_at_utc=formal_attempt.recorded_at_utc,
+                    tool_calls=tool_observations,
                     prompt_envelope_ref=(
                         requested_variant.prompt_envelope_ref
                     ),
@@ -389,7 +416,7 @@ class WorkflowModuleLedgerRecorder:
                 ),
             ),
             outputs=outputs,
-            resolution=resolutions[0] if resolutions else None,
+            resolution=resolution,
         )
 
     def record_output_resolution(
@@ -440,6 +467,29 @@ class WorkflowModuleLedgerRecorder:
                 "evaluated and selected Workflow resolutions require their "
                 "evaluation ledger records before canonicalization"
             )
+        canonical = self._direct_output_resolution(
+            request=request,
+            resolved_execution_output_refs=(
+                resolution.resolved_execution_output_refs
+            ),
+            recorded_at_utc=resolution.recorded_at_utc,
+        )
+        if (
+            canonical.module_output_resolution_id
+            != resolution.module_output_resolution_id
+        ):
+            raise ValueError("provisional output resolution identity changed")
+        return canonical
+
+    def _direct_output_resolution(
+        self,
+        *,
+        request: WorkflowModuleExecutionRequest,
+        resolved_execution_output_refs: tuple[str, ...],
+        recorded_at_utc: str,
+    ) -> ModuleOutputResolutionRecord:
+        """Build direct output authority from the committed Attempt bundle."""
+
         bundles = tuple(
             row
             for row in self.record_store.load_trace(
@@ -452,9 +502,17 @@ class WorkflowModuleLedgerRecorder:
                 "direct_single resolution requires one canonical Attempt bundle"
             )
         bundle = bundles[0]
+        if tuple(resolved_execution_output_refs) != tuple(
+            bundle.execution_output_refs
+        ):
+            raise ValueError(
+                "direct_single resolution differs from its Attempt bundle"
+            )
         return ModuleOutputResolutionRecord.build(
             module_output_resolution_id=(
-                resolution.module_output_resolution_id
+                stable_runtime_id(
+                    "module_resolution", request.module_run_id, "resolved"
+                )
             ),
             workflow_execution_id=request.workflow_execution_id,
             source_module_run_id=request.module_run_id,
@@ -465,11 +523,9 @@ class WorkflowModuleLedgerRecorder:
             candidate_output_bundle_sha256s=(bundle.bundle_sha256,),
             evaluation_set_ref=None,
             selection_ref=None,
-            resolved_execution_output_refs=(
-                resolution.resolved_execution_output_refs
-            ),
+            resolved_execution_output_refs=resolved_execution_output_refs,
             resolution_status="resolved",
-            recorded_at_utc=resolution.recorded_at_utc,
+            recorded_at_utc=recorded_at_utc,
         )
 
     def begin_attempt(
@@ -550,6 +606,12 @@ class WorkflowModuleLedgerRecorder:
         variant_id: str,
         attempt_id: str,
         operation_id: str,
+        authorization_intent_ref: str,
+        authorization_intent_sha256: str,
+        authorization_decision_ref: str,
+        authorization_decision_sha256: str,
+        authorization_observation_ref: str,
+        authorization_observation_sha256: str,
         recorded_at_utc: str,
     ) -> LegacyModuleCapabilityGrant:
         """Record the single model-call grant after Product authorization."""
@@ -575,13 +637,29 @@ class WorkflowModuleLedgerRecorder:
             recorded_at_utc=recorded_at_utc,
         )
         committed = self._authorize_grant(attempt_id, grant)
-        self._model_grants[attempt_id] = committed
+        self._model_grants[attempt_id] = _AuthorizedOperationLedgerEvidence(
+            grant=committed,
+            authorization_intent_ref=authorization_intent_ref,
+            authorization_intent_sha256=authorization_intent_sha256,
+            authorization_decision_ref=authorization_decision_ref,
+            authorization_decision_sha256=authorization_decision_sha256,
+            authorization_observation_ref=authorization_observation_ref,
+            authorization_observation_sha256=(
+                authorization_observation_sha256
+            ),
+        )
         return committed
 
     def authorize_tool_call(
         self,
         intent: ProviderOperationIntent,
         *,
+        authorization_intent_ref: str,
+        authorization_intent_sha256: str,
+        authorization_decision_ref: str,
+        authorization_decision_sha256: str,
+        authorization_observation_ref: str,
+        authorization_observation_sha256: str,
         recorded_at_utc: str,
     ) -> LegacyModuleCapabilityGrant:
         """Record one dynamic tool grant after its Product authorization."""
@@ -609,7 +687,18 @@ class WorkflowModuleLedgerRecorder:
             recorded_at_utc=recorded_at_utc,
         )
         committed = self._authorize_grant(intent.attempt_id, grant)
-        self._tool_grants.setdefault(intent.attempt_id, []).append(committed)
+        evidence = _AuthorizedOperationLedgerEvidence(
+            grant=committed,
+            authorization_intent_ref=authorization_intent_ref,
+            authorization_intent_sha256=authorization_intent_sha256,
+            authorization_decision_ref=authorization_decision_ref,
+            authorization_decision_sha256=authorization_decision_sha256,
+            authorization_observation_ref=authorization_observation_ref,
+            authorization_observation_sha256=(
+                authorization_observation_sha256
+            ),
+        )
+        self._tool_grants.setdefault(intent.attempt_id, []).append(evidence)
         return committed
 
     def finalize_attempt(
@@ -676,8 +765,9 @@ class WorkflowModuleLedgerRecorder:
             failure_class=attempt.failure_class,
         )
         child_records: list[object] = [*execution_outputs]
-        model_grant = self._model_grants.get(attempt.attempt_id)
-        if model_grant is not None:
+        model_evidence = self._model_grants.get(attempt.attempt_id)
+        if model_evidence is not None:
+            model_grant = model_evidence.grant
             model_call = ModelCallRecord(
                 model_call_id=stable_runtime_id(
                     "model_call",
@@ -695,6 +785,24 @@ class WorkflowModuleLedgerRecorder:
                 model_id=profile.model_id,
                 status_id=attempt.status,
                 recorded_at_utc=attempt.recorded_at_utc,
+                authorization_intent_ref=(
+                    model_evidence.authorization_intent_ref
+                ),
+                authorization_intent_sha256=(
+                    model_evidence.authorization_intent_sha256
+                ),
+                authorization_decision_ref=(
+                    model_evidence.authorization_decision_ref
+                ),
+                authorization_decision_sha256=(
+                    model_evidence.authorization_decision_sha256
+                ),
+                authorization_observation_ref=(
+                    model_evidence.authorization_observation_ref
+                ),
+                authorization_observation_sha256=(
+                    model_evidence.authorization_observation_sha256
+                ),
             )
             child_records.extend(
                 (
@@ -730,22 +838,43 @@ class WorkflowModuleLedgerRecorder:
             raise PermissionError(
                 "authorized tool grants differ from provider observations"
             )
-        for observation, grant in zip(
+        for observation, evidence in zip(
             attempt.tool_calls, tool_grants, strict=True
         ):
+            grant = evidence.grant
             tool_call = ToolCallRecord(
-                    tool_call_id=observation.tool_call_id,
-                    workflow_execution_id=request.workflow_execution_id,
-                    module_run_id=attempt.module_run_id,
-                    variant_id=attempt.variant_id,
-                    attempt_id=attempt.attempt_id,
-                    grant_id=grant.grant_id,
-                    resource_id=grant.resource_id,
-                    action_id=grant.action_id,
-                    tool_id=observation.tool_name,
-                    status_id="completed",
-                    recorded_at_utc=attempt.recorded_at_utc,
-                )
+                tool_call_id=observation.tool_call_id,
+                workflow_execution_id=request.workflow_execution_id,
+                module_run_id=attempt.module_run_id,
+                variant_id=attempt.variant_id,
+                attempt_id=attempt.attempt_id,
+                grant_id=grant.grant_id,
+                resource_id=grant.resource_id,
+                action_id=grant.action_id,
+                tool_id=observation.tool_name,
+                status_id="completed",
+                recorded_at_utc=attempt.recorded_at_utc,
+                request_ref=observation.request_ref,
+                request_sha256=observation.request_sha256,
+                response_ref=observation.response_ref,
+                response_sha256=observation.response_sha256,
+                authorization_intent_ref=evidence.authorization_intent_ref,
+                authorization_intent_sha256=(
+                    evidence.authorization_intent_sha256
+                ),
+                authorization_decision_ref=(
+                    evidence.authorization_decision_ref
+                ),
+                authorization_decision_sha256=(
+                    evidence.authorization_decision_sha256
+                ),
+                authorization_observation_ref=(
+                    evidence.authorization_observation_ref
+                ),
+                authorization_observation_sha256=(
+                    evidence.authorization_observation_sha256
+                ),
+            )
             child_records.extend(
                 (
                     tool_call,
@@ -860,6 +989,32 @@ def _one_by_id(rows, field_name: str, expected_id: str):
     if len(matches) > 1:
         raise ValueError(f"duplicate Runtime ledger identity: {expected_id}")
     return matches[0] if matches else None
+
+
+def _tool_observation_from_record(
+    row: ToolCallRecord,
+) -> ModuleToolCallObservation:
+    """Rebuild one provider-neutral tool observation from canonical refs."""
+
+    if (
+        row.request_ref is None
+        or row.request_sha256 is None
+        or row.response_ref is None
+        or row.response_sha256 is None
+    ):
+        raise ValueError(
+            "committed Gateway call lacks request/response content lineage"
+        )
+    observation = ModuleToolCallObservation(
+        tool_call_id=row.tool_call_id,
+        tool_name=row.tool_id,
+        request_ref=row.request_ref,
+        request_sha256=row.request_sha256,
+        response_ref=row.response_ref,
+        response_sha256=row.response_sha256,
+    )
+    observation.validate()
+    return observation
 
 
 def _require_same_without_time(left, right) -> None:

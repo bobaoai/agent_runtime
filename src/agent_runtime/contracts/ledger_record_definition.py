@@ -1430,6 +1430,12 @@ class ModelCallRecord:
     model_id: str
     status_id: str
     recorded_at_utc: str
+    authorization_intent_ref: str | None = None
+    authorization_intent_sha256: str | None = None
+    authorization_decision_ref: str | None = None
+    authorization_decision_sha256: str | None = None
+    authorization_observation_ref: str | None = None
+    authorization_observation_sha256: str | None = None
 
     @property
     def operation_id(self) -> str:
@@ -1454,6 +1460,7 @@ class ModelCallRecord:
             ("status_id", self.status_id),
         ):
             _validate_id(label, value)
+        _validate_optional_authorization_refs(self)
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
 
     def as_dict(self) -> dict[str, Any]:
@@ -1478,6 +1485,16 @@ class ToolCallRecord:
     tool_id: str
     status_id: str
     recorded_at_utc: str
+    request_ref: str | None = None
+    request_sha256: str | None = None
+    response_ref: str | None = None
+    response_sha256: str | None = None
+    authorization_intent_ref: str | None = None
+    authorization_intent_sha256: str | None = None
+    authorization_decision_ref: str | None = None
+    authorization_decision_sha256: str | None = None
+    authorization_observation_ref: str | None = None
+    authorization_observation_sha256: str | None = None
 
     @property
     def operation_id(self) -> str:
@@ -1501,6 +1518,22 @@ class ToolCallRecord:
             ("status_id", self.status_id),
         ):
             _validate_id(label, value)
+        tool_content_values = (
+            self.request_ref,
+            self.request_sha256,
+            self.response_ref,
+            self.response_sha256,
+        )
+        if any(value is not None for value in tool_content_values):
+            if any(value is None for value in tool_content_values):
+                raise ValueError(
+                    "ToolCallRecord request/response lineage is incomplete"
+                )
+            _validate_ref("request_ref", str(self.request_ref))
+            _validate_sha("request_sha256", str(self.request_sha256))
+            _validate_ref("response_ref", str(self.response_ref))
+            _validate_sha("response_sha256", str(self.response_sha256))
+        _validate_optional_authorization_refs(self)
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
 
     def as_dict(self) -> dict[str, Any]:
@@ -1508,6 +1541,44 @@ class ToolCallRecord:
 
         self.validate()
         return asdict(self)
+
+
+def _validate_optional_authorization_refs(record: Any) -> None:
+    """Validate an all-or-none AR09 authorization evidence closure."""
+
+    values = (
+        record.authorization_intent_ref,
+        record.authorization_intent_sha256,
+        record.authorization_decision_ref,
+        record.authorization_decision_sha256,
+        record.authorization_observation_ref,
+        record.authorization_observation_sha256,
+    )
+    if not any(value is not None for value in values):
+        return
+    if any(value is None for value in values):
+        raise ValueError("call authorization evidence closure is incomplete")
+    for label, value in (
+        ("authorization_intent_ref", record.authorization_intent_ref),
+        ("authorization_decision_ref", record.authorization_decision_ref),
+        (
+            "authorization_observation_ref",
+            record.authorization_observation_ref,
+        ),
+    ):
+        _validate_ref(label, str(value))
+    for label, value in (
+        ("authorization_intent_sha256", record.authorization_intent_sha256),
+        (
+            "authorization_decision_sha256",
+            record.authorization_decision_sha256,
+        ),
+        (
+            "authorization_observation_sha256",
+            record.authorization_observation_sha256,
+        ),
+    ):
+        _validate_sha(label, str(value))
 
 
 @dataclass(frozen=True)

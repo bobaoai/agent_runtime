@@ -37,6 +37,7 @@ from agent_runtime.contracts.invocation_adapter_definition import (
     ProviderOperationIntent,
 )
 from agent_runtime.contracts.ledger_lineage_definition import (
+    ModuleOutputResolutionRecord,
     ModuleToolCallObservation,
 )
 from agent_runtime.contracts.ledger_record_definition import (
@@ -44,6 +45,7 @@ from agent_runtime.contracts.ledger_record_definition import (
     LegacyModuleCapabilityGrant,
     ModelCallRecord,
     RuntimeRecordBatch,
+    ToolCallRecord,
     UsageEvent,
     WorkflowAttemptRecord,
     WorkflowAttemptStartedRecord,
@@ -647,7 +649,7 @@ def _assert_completed_provider_run(run, artifact_host) -> dict[str, object]:
     )
 
 
-def test_workflow_module_records_canonical_ledger_before_and_after_provider(
+def test_workflow_module_replays_after_resolution_commit_crash(
     tmp_path: Path,
 ) -> None:
     compiled = _stub_compiled(tmp_path)
@@ -756,7 +758,11 @@ def test_workflow_module_records_canonical_ledger_before_and_after_provider(
         input_package_ref=workflow_request.input_package_ref,
         input_package_sha256=workflow_request.input_package_sha256,
     )
-    recorder = WorkflowModuleLedgerRecorder(
+    class _CrashAfterInvocationRecorder(WorkflowModuleLedgerRecorder):
+        def record_output_resolution(self, *, request, resolution) -> None:
+            raise RuntimeError("simulated crash after invocation commit")
+
+    recorder = _CrashAfterInvocationRecorder(
         WorkflowModuleLedgerBinding(
             record_store=record_store,
             entitlement_snapshot_hash=execution.entitlement_snapshot_hash,
@@ -779,29 +785,33 @@ def test_workflow_module_records_canonical_ledger_before_and_after_provider(
 
     adapter._on_execute = observe_provider_entry
 
-    run = run_workflow_module(
-        workflow_request,
-        release_registry=registry,
-        adapters=adapters,
-        artifact_host=artifact_host,
-        ledger=InMemoryModuleExecutionLedger(),
-        workflow_ledger=recorder,
-        authority=authority,
-        clock=lambda: _TEST_TIME,
-    )
+    with pytest.raises(
+        RuntimeError, match="simulated crash after invocation commit"
+    ):
+        run_workflow_module(
+            workflow_request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            workflow_ledger=recorder,
+            authority=authority,
+            clock=lambda: _TEST_TIME,
+        )
 
     assert adapter.calls == 1
     assert provider_entry_observation == {"attempt_starts": 1, "grants": 1}
-    assert _assert_completed_provider_run(run, artifact_host) == {
-        "value": "stub"
-    }
     trace = record_store.load_trace(workflow_request.workflow_execution_id)
     assert len(trace.records_of_type(WorkflowModuleRunRecord)) == 1
     assert len(
         trace.records_of_type(WorkflowModuleExecutionVariantRecord)
     ) == 1
     assert len(trace.records_of_type(WorkflowAttemptRecord)) == 1
-    assert len(trace.records_of_type(ModelCallRecord)) == 1
+    model_calls = trace.records_of_type(ModelCallRecord)
+    assert len(model_calls) == 1
+    assert model_calls[0].authorization_intent_ref is not None
+    assert model_calls[0].authorization_decision_ref is not None
+    assert model_calls[0].authorization_observation_ref is not None
     usage = trace.records_of_type(UsageEvent)
     assert len(usage) == 1
     assert usage[0].input_tokens == 3
@@ -824,7 +834,14 @@ def test_workflow_module_records_canonical_ledger_before_and_after_provider(
         clock=lambda: "2026-08-09T13:00:00Z",
     )
     assert adapter.calls == 1
-    assert replay == run
+    assert _assert_completed_provider_run(replay, artifact_host) == {
+        "value": "stub"
+    }
+    assert len(
+        record_store.load_trace(
+            workflow_request.workflow_execution_id
+        ).records_of_type(ModuleOutputResolutionRecord)
+    ) == 1
 
 
 def _failure_detail(run, artifact_host) -> dict[str, object]:
@@ -2271,6 +2288,157 @@ def test_gateway_read_authorizes_each_resource_call_and_records_lineage(
     assert len(run.attempts[0].tool_calls) == 1
     assert run.attempts[0].tool_calls[0].tool_name == "read_source"
     assert run.resolution is not None
+
+
+def test_workflow_gateway_call_records_and_replays_exact_content_lineage(
+    tmp_path: Path,
+) -> None:
+    artifact_host = InMemoryCellArtifactStore()
+    resource_calls: list[object] = []
+    (
+        compiled,
+        registry,
+        adapters,
+        adapter,
+        isolated_request,
+        _isolated_authority,
+        _product,
+    ) = _registered_gateway_stub(
+        tmp_path,
+        artifact_host,
+        on_execute=_gateway_tool_callback(artifact_host, resource_calls),
+    )
+    input_content = b'{"value":"gateway_workflow_input"}'
+    input_artifact = artifact_host.put_bytes(
+        artifact_kind_id="gateway_workflow_input",
+        schema_version="v1",
+        schema_ref=compiled.module.input_schema_ref,
+        schema_sha256=compiled.module.input_schema_sha256,
+        media_type="application/json",
+        content=input_content,
+        idempotency_key="gateway_workflow_input",
+        logical_name="task_input",
+    )
+    input_binding = ModuleInputBinding(
+        logical_name="task_input",
+        input_ref=input_artifact.artifact_ref,
+        input_sha256=input_artifact.artifact_sha256,
+        schema_ref=compiled.module.input_schema_ref,
+        schema_sha256=compiled.module.input_schema_sha256,
+        media_type="application/json",
+    )
+    workflow_request = WorkflowModuleExecutionRequest.build(
+        request_id="request_workflow_gateway",
+        purpose=ModuleExecutionPurpose.EVALUATION,
+        workflow_execution_id="execution_workflow_gateway",
+        dispatch_id="dispatch_workflow_gateway",
+        workflow_node_id="state_gateway_module",
+        module_run_id="module_run_workflow_gateway",
+        module_release_ref=isolated_request.module_release_ref,
+        module_release_sha256=isolated_request.module_release_sha256,
+        input_package_ref=input_artifact.artifact_ref,
+        input_package_sha256=input_artifact.artifact_sha256,
+        inputs=(input_binding,),
+        variants=isolated_request.variants,
+        idempotency_key="idempotency_workflow_gateway",
+    )
+    execution = WorkflowExecutionRecord(
+        workflow_execution_id=workflow_request.workflow_execution_id,
+        workflow_id="workflow_gateway_module",
+        workflow_contract_version="v1",
+        tenant_id="tenant_test",
+        cell_id="cell_test",
+        principal_id="principal_test",
+        execution_release_ref="execution-release:gateway-workflow@v1",
+        graph_sha256="a" * 64,
+        runtime_execution_binding_ref="runtime-binding:gateway-workflow@v1",
+        runtime_execution_binding_sha256="b" * 64,
+        authorization_decision_ref=(
+            "authorization-decision:gateway-workflow@v1"
+        ),
+        authorization_decision_sha256="c" * 64,
+        execution_principal_delegation_ref="delegation:gateway-workflow@v1",
+        execution_principal_delegation_sha256="d" * 64,
+        entitlement_snapshot_ref="entitlement:gateway-workflow@v1",
+        entitlement_snapshot_hash="e" * 64,
+        execution_input_package_refs=(
+            workflow_request.input_package_ref,
+        ),
+        execution_input_package_sha256=(
+            workflow_request.input_package_sha256
+        ),
+        recorded_at_utc=_TEST_TIME,
+    )
+    execution_input = ExecutionInputRef(
+        execution_input_id="execution_input_workflow_gateway",
+        workflow_execution_id=workflow_request.workflow_execution_id,
+        input_type_id="gateway_input_package",
+        schema_version="v1",
+        input_ref=workflow_request.input_package_ref,
+        input_sha256=workflow_request.input_package_sha256,
+        byte_size=len(input_content),
+        media_type="application/json",
+        recorded_at_utc=_TEST_TIME,
+        logical_name="input_package",
+    )
+    record_store = InMemoryRuntimeExecutionRecordStore(
+        execution_output_integrity_check=lambda row: (
+            artifact_host.read_bytes(row.output_ref, row.output_sha256)
+            is not None
+        )
+    )
+    record_store.commit(
+        RuntimeRecordBatch(
+            workflow_execution_id=workflow_request.workflow_execution_id,
+            transaction_id="transaction_workflow_gateway_bootstrap",
+            records=(execution, execution_input),
+        )
+    )
+    authority, _ = _evaluation_authority(
+        registry,
+        workflow_request,
+        scope_id=workflow_request.workflow_execution_id,
+        input_package_ref=workflow_request.input_package_ref,
+        input_package_sha256=workflow_request.input_package_sha256,
+    )
+    binding = WorkflowModuleLedgerBinding(
+        record_store=record_store,
+        entitlement_snapshot_hash=execution.entitlement_snapshot_hash,
+        claim_token_secret=b"workflow-gateway-test-secret-32-bytes",
+    )
+
+    run = run_workflow_module(
+        workflow_request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        workflow_ledger=WorkflowModuleLedgerRecorder(binding),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+    replay = run_workflow_module(
+        workflow_request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        workflow_ledger=WorkflowModuleLedgerRecorder(binding),
+        authority=authority,
+        clock=lambda: "2026-08-09T13:00:00Z",
+    )
+
+    assert adapter.calls == 1
+    assert replay == run
+    calls = record_store.load_trace(
+        workflow_request.workflow_execution_id
+    ).records_of_type(ToolCallRecord)
+    assert len(calls) == 1
+    assert calls[0].request_ref == run.attempts[0].tool_calls[0].request_ref
+    assert calls[0].response_ref == run.attempts[0].tool_calls[0].response_ref
+    assert calls[0].authorization_intent_ref is not None
+    assert calls[0].authorization_decision_ref is not None
+    assert calls[0].authorization_observation_ref is not None
 
 
 def test_gateway_read_denial_never_enters_resource_callable(
