@@ -8,13 +8,18 @@ from .ledger_record_persistence import (
 from .ledger_postgres_persistence import (
     PostgresRuntimeExecutionQueryStore,
     PostgresRuntimeExecutionRecordStore,
-    RuntimeExecutionContent,
     RuntimeExecutionDescriptor,
     RuntimeExecutionPageCursor,
     deserialize_runtime_batch,
     deserialize_runtime_record,
     postgres_execution_ledger_ddl,
     serialize_runtime_batch,
+)
+from ..contracts.ledger_content_definition import RuntimeExecutionContent
+from .ledger_execution_content_recording import (
+    RuntimeExecutionContentReader,
+    RuntimeExecutionContentStore,
+    record_execution_content,
 )
 from .ledger_usage_aggregation import aggregate_model_usage
 from .ledger_workflow_module_recording import (
@@ -34,6 +39,8 @@ __all__ = [
     "PostgresRuntimeExecutionRecordStore",
     "PostgresRuntimeExecutionQueryStore",
     "RuntimeExecutionContent",
+    "RuntimeExecutionContentReader",
+    "RuntimeExecutionContentStore",
     "RuntimeExecutionDescriptor",
     "RuntimeExecutionPageCursor",
     "RuntimeExecutionRecordStore",
@@ -46,4 +53,5 @@ __all__ = [
     "deserialize_runtime_record",
     "postgres_execution_ledger_ddl",
     "serialize_runtime_batch",
+    "record_execution_content",
 ]

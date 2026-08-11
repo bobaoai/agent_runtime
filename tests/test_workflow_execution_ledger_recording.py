@@ -27,6 +27,22 @@ _TIME = "2026-08-11T12:00:00Z"
 _EXECUTION_ID = "execution_workflow_artifact_test"
 
 
+class _RecordingContentStore:
+    def __init__(self) -> None:
+        self.staged = []
+        self.committed = []
+
+    def stage_content(self, content):
+        content.validate()
+        self.staged.append(content)
+        return content
+
+    def commit_content(self, content):
+        content.validate()
+        self.committed.append(content)
+        return content
+
+
 def _execution(input_ref: str, input_sha256: str) -> WorkflowExecutionRecord:
     return WorkflowExecutionRecord(
         workflow_execution_id=_EXECUTION_ID,
@@ -53,6 +69,7 @@ def _execution(input_ref: str, input_sha256: str) -> WorkflowExecutionRecord:
 
 def test_execution_recorder_commits_inputs_derived_outputs_and_outcomes() -> None:
     artifact_host = InMemoryCellArtifactStore()
+    content_store = _RecordingContentStore()
     input_content = b'{"source":"canonical"}'
     staged_input = artifact_host.put_bytes(
         artifact_kind_id="canonical_source",
@@ -90,6 +107,7 @@ def test_execution_recorder_commits_inputs_derived_outputs_and_outcomes() -> Non
         WorkflowExecutionLedgerBinding(
             record_store=store,
             artifact_host=artifact_host,
+            content_store=content_store,
         )
     )
     recorder.record_execution_start(
@@ -147,3 +165,10 @@ def test_execution_recorder_commits_inputs_derived_outputs_and_outcomes() -> Non
     assert len(checkpoints) == 1
     assert checkpoints[0].current_state_id == "production"
     assert checkpoints[0].runtime_status_id == "transition_committed"
+    assert [row.content_ref for row in content_store.committed] == [
+        staged_input.artifact_ref
+    ]
+    assert [row.content_ref for row in content_store.staged] == [
+        first.execution_output_ref,
+        first.execution_output_ref,
+    ]

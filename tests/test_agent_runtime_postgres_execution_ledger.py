@@ -14,6 +14,7 @@ from agent_runtime.contracts.ledger_record_definition import (
     EvaluationCoverageBinding,
     EvaluationSet,
     ExecutionInputRef,
+    ExecutionOutputRef,
     RuntimeRecordBatch,
     WorkflowExecutionRecord,
 )
@@ -28,7 +29,10 @@ from agent_runtime.ledger import (
 )
 from agent_runtime.ledger.ledger_postgres_persistence import (
     _canonical_payload,
+    _canonical_sha256,
     _json_bytes,
+    _persisted_record_as_dict,
+    _persisted_record_matches,
 )
 
 
@@ -157,6 +161,39 @@ def test_canonical_payload_bytes_survive_jsonb_numeric_rewriting() -> None:
     assert _canonical_payload(memoryview(canonical)) == payload
 
 
+def test_record_integrity_compares_json_arrays_not_python_tuple_types() -> None:
+    record = ExecutionOutputRef(
+        execution_output_id="output_postgres_001",
+        workflow_execution_id=EXECUTION_ID,
+        output_type_id="task_context",
+        schema_version="v1",
+        output_ref="artifact-ref:postgres-output-001",
+        output_sha256="8" * 64,
+        byte_size=12,
+        media_type="application/json",
+        recorded_at_utc=RECORDED_AT,
+        source_artifact_refs=("artifact-ref:postgres-input-001",),
+    )
+    serialized = _persisted_record_as_dict(record)
+    canonical = _json_bytes(serialized["record"])
+    decoded = _canonical_payload(canonical)
+
+    assert decoded["source_artifact_refs"] == [
+        "artifact-ref:postgres-input-001"
+    ]
+    assert record.source_artifact_refs == (
+        "artifact-ref:postgres-input-001",
+    )
+    assert _persisted_record_matches(
+        record,
+        expected_index=0,
+        persisted_index=0,
+        persisted_record_type="ExecutionOutputRef",
+        persisted_record_sha256=_canonical_sha256(decoded),
+        persisted_payload_canonical=memoryview(canonical),
+    )
+
+
 @pytest.mark.skipif(
     not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),
     reason="requires AGENT_RUNTIME_TEST_DATABASE_URL",
@@ -279,6 +316,74 @@ def test_postgres_execution_store_survives_reopen_and_verifies_content(
     with pytest.raises(RuntimeError, match="record count mismatch"):
         queries.load_trace(EXECUTION_ID)
 
+
+def test_postgres_stages_output_content_before_ledger_reference(
+    postgres_test_schema: str,
+) -> None:
+    database_url = os.environ["AGENT_RUNTIME_TEST_DATABASE_URL"]
+    input_record = ExecutionInputRef(
+        execution_input_id="input_postgres_stage_001",
+        workflow_execution_id=EXECUTION_ID,
+        input_type_id="agent_input",
+        schema_version="v1",
+        input_ref="artifact-ref:postgres-stage-input-001",
+        input_sha256="0" * 64,
+        byte_size=0,
+        media_type="application/json",
+        recorded_at_utc=RECORDED_AT,
+    )
+    store = PostgresRuntimeExecutionRecordStore.from_dsn(
+        database_url,
+        schema=postgres_test_schema,
+    )
+    store.initialize_schema()
+    store.commit(
+        RuntimeRecordBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_postgres_stage_bootstrap",
+            records=(_execution(input_record), input_record),
+        )
+    )
+    body = b'{"result":"staged-before-reference"}'
+    content_hash = hashlib.sha256(body).hexdigest()
+    content = RuntimeExecutionContent(
+        workflow_execution_id=EXECUTION_ID,
+        content_ref="artifact-ref:postgres-staged-output-001",
+        content_sha256=content_hash,
+        media_type="application/json",
+        body=body,
+        recorded_at_utc=RECORDED_AT,
+    )
+
+    with pytest.raises(ValueError, match="not declared"):
+        store.commit_content(content)
+    assert store.stage_content(content) == content
+    assert store.stage_content(
+        replace(content, recorded_at_utc="2026-08-08T12:00:01Z")
+    ).body == body
+
+    output = ExecutionOutputRef(
+        execution_output_id="execution_output_postgres_stage_001",
+        workflow_execution_id=EXECUTION_ID,
+        output_type_id="agent_output",
+        schema_version="v1",
+        output_ref=content.content_ref,
+        output_sha256=content.content_sha256,
+        byte_size=len(body),
+        media_type=content.media_type,
+        recorded_at_utc=RECORDED_AT,
+        logical_name="result",
+    )
+    store.commit(
+        RuntimeRecordBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_postgres_stage_output",
+            records=(output,),
+        )
+    )
+    assert store.load_trace(EXECUTION_ID).records_of_type(
+        ExecutionOutputRef
+    ) == (output,)
 
 @pytest.mark.skipif(
     not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),

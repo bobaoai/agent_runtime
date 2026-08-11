@@ -20,6 +20,10 @@ from ..contracts.registry_workflow_definition import (
     ModuleOutcome,
     ModuleOutcomeDisposition,
 )
+from .ledger_execution_content_recording import (
+    RuntimeExecutionContentStore,
+    record_execution_content,
+)
 from .ledger_record_persistence import RuntimeExecutionRecordStore
 
 
@@ -33,6 +37,9 @@ class WorkflowExecutionArtifactHost(Protocol):
     ) -> ExecutionOutputRegistrationResult:
         """Persist immutable bytes and return their Runtime-facing handle."""
 
+    def read_bytes(self, content_ref: str, content_sha256: str) -> bytes:
+        """Return exact bytes after verifying the declared hash."""
+
 
 @dataclass(frozen=True)
 class WorkflowExecutionLedgerBinding:
@@ -40,6 +47,7 @@ class WorkflowExecutionLedgerBinding:
 
     record_store: RuntimeExecutionRecordStore
     artifact_host: WorkflowExecutionArtifactHost
+    content_store: RuntimeExecutionContentStore | None = None
 
     def validate(self) -> None:
         """Validate the exact persistence and artifact operations used here."""
@@ -60,6 +68,16 @@ class WorkflowExecutionLedgerBinding:
             raise ValueError(
                 "artifact_host must implement record_execution_output"
             )
+        if self.content_store is not None:
+            for method_name in ("stage_content", "commit_content"):
+                if not callable(
+                    getattr(self.content_store, method_name, None)
+                ):
+                    raise ValueError(
+                        f"content_store must implement {method_name}"
+                    )
+            if not callable(getattr(self.artifact_host, "read_bytes", None)):
+                raise ValueError("artifact_host must implement read_bytes")
 
 
 class WorkflowExecutionLedgerRecorder:
@@ -105,6 +123,18 @@ class WorkflowExecutionLedgerRecorder:
                 records=(execution, *inputs),
             )
         )
+        if self._binding.content_store is not None:
+            for row in inputs:
+                record_execution_content(
+                    content_store=self._binding.content_store,
+                    content_reader=self._binding.artifact_host,
+                    workflow_execution_id=execution.workflow_execution_id,
+                    content_ref=row.input_ref,
+                    content_sha256=row.input_sha256,
+                    media_type=row.media_type,
+                    recorded_at_utc=row.recorded_at_utc,
+                    reference_is_committed=True,
+                )
 
     def record_execution_output(
         self,
@@ -145,6 +175,17 @@ class WorkflowExecutionLedgerRecorder:
             source_artifact_refs=request.source_artifact_refs,
         )
         row.validate()
+        if self._binding.content_store is not None:
+            record_execution_content(
+                content_store=self._binding.content_store,
+                content_reader=self._binding.artifact_host,
+                workflow_execution_id=workflow_execution_id,
+                content_ref=row.output_ref,
+                content_sha256=row.output_sha256,
+                media_type=row.media_type,
+                recorded_at_utc=row.recorded_at_utc,
+                reference_is_committed=False,
+            )
         prior = _one_output(
             self.record_store.load_trace(workflow_execution_id),
             row.execution_output_id,

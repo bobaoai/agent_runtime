@@ -44,14 +44,12 @@ from ..contracts.ledger_record_definition import (
     sha256_text,
     stable_runtime_id,
 )
+from ..contracts.ledger_content_definition import RuntimeExecutionContent
 from ..contracts.registry_workflow_definition import ModuleOutcome
 from .ledger_record_persistence import InMemoryRuntimeExecutionRecordStore
 
 
 _SCHEMA_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
-_MEDIA_TYPE_PATTERN = re.compile(
-    r"^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
-)
 _RECORD_TYPES = {
     record_type.__name__: record_type for record_type in get_args(PersistedRuntimeRecord)
 }
@@ -242,51 +240,6 @@ class RuntimeExecutionPageCursor:
             raise ValueError("pagination recorded_at_utc requires a timezone")
 
 
-@dataclass(frozen=True)
-class RuntimeExecutionContent:
-    """One immutable content body referenced by an execution fact."""
-
-    workflow_execution_id: str
-    content_ref: str
-    content_sha256: str
-    media_type: str
-    body: bytes
-    recorded_at_utc: str
-
-    def validate(self) -> None:
-        if type(self.workflow_execution_id) is not str or not self.workflow_execution_id:
-            raise ValueError("workflow_execution_id is required")
-        if type(self.content_ref) is not str or not self.content_ref:
-            raise ValueError("content_ref is required")
-        if type(self.content_sha256) is not str or not re.fullmatch(
-            r"[0-9a-f]{64}", self.content_sha256
-        ):
-            raise ValueError("content_sha256 must be lowercase SHA-256")
-        if type(self.media_type) is not str or not _MEDIA_TYPE_PATTERN.fullmatch(
-            self.media_type
-        ):
-            raise ValueError("media_type must be a normalized MIME type")
-        if type(self.body) is not bytes:
-            raise ValueError("body must be bytes")
-        if hashlib.sha256(self.body).hexdigest() != self.content_sha256:
-            raise ValueError("content body hash mismatch")
-        try:
-            timestamp = datetime.fromisoformat(self.recorded_at_utc.replace("Z", "+00:00"))
-        except (AttributeError, ValueError) as exc:
-            raise ValueError("recorded_at_utc must be an ISO-8601 timestamp") from exc
-        if timestamp.tzinfo is None:
-            raise ValueError("recorded_at_utc must include a timezone")
-
-    def metadata_dict(self) -> dict[str, Any]:
-        self.validate()
-        return {
-            "workflow_execution_id": self.workflow_execution_id,
-            "content_ref": self.content_ref,
-            "content_sha256": self.content_sha256,
-            "media_type": self.media_type,
-            "byte_size": len(self.body),
-            "recorded_at_utc": self.recorded_at_utc,
-        }
 class PostgresRuntimeExecutionRecordStore:
     """Atomic PostgreSQL implementation of the Runtime execution store."""
 
@@ -526,45 +479,42 @@ class PostgresRuntimeExecutionRecordStore:
             expected_hash = known_hashes[content.content_ref]
             if expected_hash is not None and expected_hash != content.content_sha256:
                 raise ValueError("content hash differs from the execution ledger")
-            cursor.execute(
-                f"""
-                INSERT INTO {self.schema}.execution_content
-                    (workflow_execution_id, content_ref, content_sha256,
-                     media_type, byte_size, body, recorded_at_utc)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (workflow_execution_id, content_ref) DO NOTHING
-                RETURNING content_sha256
-                """,
-                (
-                    content.workflow_execution_id,
-                    content.content_ref,
-                    content.content_sha256,
-                    content.media_type,
-                    len(content.body),
-                    content.body,
-                    content.recorded_at_utc,
-                ),
-            )
-            if cursor.fetchone() is None:
-                existing = self._load_content(
-                    cursor,
-                    content.workflow_execution_id,
-                    content.content_ref,
-                )
-                # A byte-identical retry converges idempotently. recorded_at_utc
-                # is a clock-derived staging timestamp and never participates in
-                # content identity, so a later retry with a fresh timestamp is
-                # not a collision.
-                if (
-                    existing is None
-                    or existing.content_sha256 != content.content_sha256
-                    or existing.media_type != content.media_type
-                    or existing.body != content.body
-                ):
-                    raise ValueError("immutable execution content_ref collision")
+            self._insert_content(cursor, content)
             return content
 
         return self._transaction(commit)
+
+    def stage_content(
+        self,
+        content: RuntimeExecutionContent,
+    ) -> RuntimeExecutionContent:
+        """Stage immutable output bytes before their formal reference commit.
+
+        Staged content is non-authoritative until the execution ledger points
+        to it. A crash can therefore leave only a collectible unreferenced body,
+        never an authoritative output reference whose bytes do not exist.
+        """
+
+        content.validate()
+
+        def stage(cursor: Any) -> RuntimeExecutionContent:
+            self._lock_execution(cursor, content.workflow_execution_id)
+            cursor.execute(
+                f"""
+                SELECT 1
+                FROM {self.schema}.workflow_execution
+                WHERE workflow_execution_id = %s
+                """,
+                (content.workflow_execution_id,),
+            )
+            if cursor.fetchone() is None:
+                raise ValueError(
+                    "staged content requires an existing Workflow Execution"
+                )
+            self._insert_content(cursor, content)
+            return content
+
+        return self._transaction(stage)
 
     def list_content_metadata(
         self,
@@ -639,6 +589,49 @@ class PostgresRuntimeExecutionRecordStore:
         except ValueError as exc:
             raise RuntimeError("persisted execution content failed integrity check") from exc
         return content
+
+    def _insert_content(
+        self,
+        cursor: Any,
+        content: RuntimeExecutionContent,
+    ) -> None:
+        """Insert one immutable body or verify a byte-identical replay."""
+
+        cursor.execute(
+            f"""
+            INSERT INTO {self.schema}.execution_content
+                (workflow_execution_id, content_ref, content_sha256,
+                 media_type, byte_size, body, recorded_at_utc)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (workflow_execution_id, content_ref) DO NOTHING
+            RETURNING content_sha256
+            """,
+            (
+                content.workflow_execution_id,
+                content.content_ref,
+                content.content_sha256,
+                content.media_type,
+                len(content.body),
+                content.body,
+                content.recorded_at_utc,
+            ),
+        )
+        if cursor.fetchone() is not None:
+            return
+        existing = self._load_content(
+            cursor,
+            content.workflow_execution_id,
+            content.content_ref,
+        )
+        # A byte-identical retry converges idempotently. recorded_at_utc is a
+        # staging timestamp and never participates in immutable content identity.
+        if (
+            existing is None
+            or existing.content_sha256 != content.content_sha256
+            or existing.media_type != content.media_type
+            or existing.body != content.body
+        ):
+            raise ValueError("immutable execution content_ref collision")
 
     def _mutate(
         self,
@@ -756,13 +749,13 @@ class PostgresRuntimeExecutionRecordStore:
                     record_sha256,
                     record_payload_canonical,
                 ) = persisted
-                expected = _persisted_record_as_dict(record)
-                decoded_payload = _canonical_payload(record_payload_canonical)
-                if (
-                    index != expected_index
-                    or record_type != expected["record_type"]
-                    or record_sha256 != _canonical_sha256(decoded_payload)
-                    or dict(decoded_payload) != expected["record"]
+                if not _persisted_record_matches(
+                    record,
+                    expected_index=expected_index,
+                    persisted_index=index,
+                    persisted_record_type=record_type,
+                    persisted_record_sha256=record_sha256,
+                    persisted_payload_canonical=record_payload_canonical,
                 ):
                     raise RuntimeError("persisted execution record failed integrity check")
             batches.append(batch)
@@ -1223,6 +1216,28 @@ def _persisted_record_as_dict(record: PersistedRuntimeRecord) -> dict[str, Any]:
         "record_type": type(record).__name__,
         "record": record.as_dict(),
     }
+
+
+def _persisted_record_matches(
+    record: PersistedRuntimeRecord,
+    *,
+    expected_index: int,
+    persisted_index: int,
+    persisted_record_type: str,
+    persisted_record_sha256: str,
+    persisted_payload_canonical: Any,
+) -> bool:
+    """Compare storage bytes without confusing JSON arrays with Python tuples."""
+
+    expected = _persisted_record_as_dict(record)
+    decoded_payload = _canonical_payload(persisted_payload_canonical)
+    return (
+        persisted_index == expected_index
+        and persisted_record_type == expected["record_type"]
+        and persisted_record_sha256 == _canonical_sha256(decoded_payload)
+        and bytes(persisted_payload_canonical)
+        == _json_bytes(expected["record"])
+    )
 
 
 def _referenced_content_hashes(

@@ -59,6 +59,10 @@ from ..invocation.invocation_tool_definition import (
     ModuleArtifactHost,
     runtime_package_version,
 )
+from .ledger_execution_content_recording import (
+    RuntimeExecutionContentStore,
+    record_execution_content,
+)
 from .ledger_record_persistence import RuntimeExecutionRecordStore
 
 
@@ -74,6 +78,7 @@ class WorkflowModuleLedgerBinding:
     record_store: RuntimeExecutionRecordStore
     entitlement_snapshot_hash: str
     claim_token_secret: bytes
+    content_store: RuntimeExecutionContentStore | None = None
 
     def validate(self) -> None:
         """Validate the store surface, frozen entitlement, and signing key."""
@@ -97,6 +102,10 @@ class WorkflowModuleLedgerBinding:
             or len(self.claim_token_secret) < 32
         ):
             raise ValueError("claim_token_secret must contain at least 32 bytes")
+        if self.content_store is not None and not callable(
+            getattr(self.content_store, "stage_content", None)
+        ):
+            raise ValueError("content_store must implement stage_content")
 
 
 @dataclass(frozen=True)
@@ -934,6 +943,18 @@ class WorkflowModuleLedgerRecorder:
             commit_transaction_id=transaction_id,
             recorded_at_utc=attempt.recorded_at_utc,
         )
+        if self._binding.content_store is not None:
+            for output in execution_outputs:
+                record_execution_content(
+                    content_store=self._binding.content_store,
+                    content_reader=artifact_host,
+                    workflow_execution_id=request.workflow_execution_id,
+                    content_ref=output.output_ref,
+                    content_sha256=output.output_sha256,
+                    media_type=output.media_type,
+                    recorded_at_utc=output.recorded_at_utc,
+                    reference_is_committed=False,
+                )
         self.record_store.finalize_attempt(
             claim,
             AttemptFinalizationBatch(

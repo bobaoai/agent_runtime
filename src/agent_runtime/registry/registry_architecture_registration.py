@@ -351,6 +351,13 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         source_directory_id="contracts",
     ),
     _source(
+        "ledger",
+        "content",
+        "definition",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+        source_directory_id="contracts",
+    ),
+    _source(
         "execution",
         "host",
         "definition",
@@ -428,6 +435,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     _source(
         "ledger",
         "workflow_execution",
+        "recording",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+    ),
+    _source(
+        "ledger",
+        "execution_content",
         "recording",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     ),
