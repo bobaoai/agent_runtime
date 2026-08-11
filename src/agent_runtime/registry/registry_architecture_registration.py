@@ -573,6 +573,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         source_directory_id="testing",
     ),
     _source(
+        "execution",
+        "context",
+        "resolution",
+        "designDoc/agent_runtime_00_execution_charter.md",
+    ),
+    _source(
         "registry",
         "postgres",
         "persistence",

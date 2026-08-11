@@ -602,6 +602,13 @@ Testing proves deterministic engineering behavior. Evaluation measures candidate
 
 Shared fixtures use opaque state IDs and synthetic artifacts. Domain fixtures appear only in domain-owned tests.
 
+`execution_context_resolution` is the provider-neutral boundary for resolving
+registered task-context slots. The host supplies an authorized content
+resolver and category/key/release selectors; Runtime validates the returned
+immutable releases, applies the registered JSON Schema, freezes provenance,
+and exposes only the semantic content tree to the model. Runtime does not
+interpret domain categories and does not grant content access.
+
 `agent_runtime.testing.execution_module_evaluation` is the portable isolated
 Module Test/Evaluation entry. Runtime owns input staging, Prompt assembly,
 adapter dispatch, execution ledgering, and result projection. The host must
