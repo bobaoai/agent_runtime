@@ -521,7 +521,7 @@ class PostgresRuntimeExecutionRecordStore:
         workflow_execution_id: str,
     ) -> tuple[Mapping[str, Any], ...]:
         def load(cursor: Any) -> tuple[Mapping[str, Any], ...]:
-            trace = self._decoder._load_reference(
+            trace = self._load_reference(
                 cursor,
                 workflow_execution_id,
             ).load_trace(workflow_execution_id)
@@ -559,9 +559,20 @@ class PostgresRuntimeExecutionRecordStore:
         workflow_execution_id: str,
         content_ref: str,
     ) -> RuntimeExecutionContent | None:
-        return self._read_transaction(
-            lambda cursor: self._load_content(cursor, workflow_execution_id, content_ref)
-        )
+        def load(cursor: Any) -> RuntimeExecutionContent | None:
+            trace = self._load_reference(
+                cursor,
+                workflow_execution_id,
+            ).load_trace(workflow_execution_id)
+            if content_ref not in _referenced_content_hashes(trace):
+                return None
+            return self._load_content(
+                cursor,
+                workflow_execution_id,
+                content_ref,
+            )
+
+        return self._read_transaction(load)
 
     def _load_content(
         self,

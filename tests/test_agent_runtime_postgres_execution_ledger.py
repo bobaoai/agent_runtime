@@ -365,6 +365,8 @@ def test_postgres_stages_output_content_before_ledger_reference(
     assert store.stage_content(
         replace(content, recorded_at_utc="2026-08-08T12:00:01Z")
     ).body == body
+    assert store.list_content_metadata(EXECUTION_ID) == ()
+    assert store.load_content(EXECUTION_ID, content.content_ref) is None
     assert queries.list_content_metadata(EXECUTION_ID) == ()
     assert queries.load_content(EXECUTION_ID, content.content_ref) is None
 
@@ -394,6 +396,11 @@ def test_postgres_stages_output_content_before_ledger_reference(
         row["content_ref"]
         for row in queries.list_content_metadata(EXECUTION_ID)
     ) == (content.content_ref,)
+    assert tuple(
+        row["content_ref"]
+        for row in store.list_content_metadata(EXECUTION_ID)
+    ) == (content.content_ref,)
+    assert store.load_content(EXECUTION_ID, content.content_ref).body == body
     assert queries.load_content(EXECUTION_ID, content.content_ref).body == body
 
 @pytest.mark.skipif(
