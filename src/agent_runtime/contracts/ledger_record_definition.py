@@ -334,12 +334,15 @@ class WorkflowModuleExecutionVariantRecord:
     max_attempts: int
     execution_profile_sha256: str
     recorded_at_utc: str
+    prompt_envelope_ref: str | None = None
 
     def validate(self) -> None:
         """Validate complete Variant identity and behavior-affecting hashes."""
 
         _validate_id("workflow_execution_id", self.workflow_execution_id)
         _validate_variant_fields(self)
+        if self.prompt_envelope_ref is not None:
+            _validate_ref("prompt_envelope_ref", self.prompt_envelope_ref)
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
 
     def as_dict(self) -> dict[str, Any]:

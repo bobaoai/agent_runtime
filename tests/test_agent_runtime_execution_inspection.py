@@ -8,6 +8,7 @@ from agent_runtime.contracts.ledger_record_definition import (
     CommitReceipt,
     ExecutionInputRef,
     ExecutionOutputRef,
+    LegacyModuleCapabilityGrant,
     ModelCallRecord,
     RuntimeExecutionTrace,
     UsageEvent,
@@ -22,6 +23,10 @@ from agent_runtime.contracts.registry_release_definition import (
     WorkflowNodeBinding,
     WorkflowNodeKind,
     WorkflowRelease,
+)
+from agent_runtime.contracts.registry_workflow_definition import (
+    ModuleOutcome,
+    ModuleOutcomeDisposition,
 )
 from agent_runtime.inspection import (
     build_runtime_execution_inspection,
@@ -102,6 +107,7 @@ def _trace() -> RuntimeExecutionTrace:
         max_attempts=1,
         execution_profile_sha256="5" * 64,
         recorded_at_utc=UTC_START,
+        prompt_envelope_ref="cell-artifact:prompt_inspection_001",
     )
     attempt = WorkflowAttemptRecord(
         workflow_execution_id=execution_id,
@@ -359,6 +365,9 @@ def test_execution_trace_projects_directly_to_portable_inspector_view() -> None:
     assert module["variants"][0]["execution_profile"][
         "agent_execution_adapter_id"
     ] == "claude_agent_sdk"
+    assert module["variants"][0]["prompt_envelope_ref"] == (
+        "cell-artifact:prompt_inspection_001"
+    )
     assert module["attempts"][0]["input_tokens"] == 120
     assert module["attempts"][0]["tool_calls"][0]["call_kind"] == "model"
     assert module["artifacts"][0]["direction"] == "input"
@@ -366,6 +375,111 @@ def test_execution_trace_projects_directly_to_portable_inspector_view() -> None:
 
     bundle = build_workflow_review_bundle(inspection)
     assert bundle["workflow_execution_id"] == "execution_inspection_001"
+
+
+def test_execution_projection_includes_derived_module_inputs() -> None:
+    base = _trace()
+    module = _record(base, WorkflowModuleRunRecord)
+    variant = _record(base, WorkflowModuleExecutionVariantRecord)
+    derived = ExecutionOutputRef(
+        execution_output_id="execution_output_inspection_context_001",
+        workflow_execution_id=base.workflow_execution_id,
+        output_type_id="task_prompt_context",
+        schema_version="v1",
+        output_ref="output-ref:inspection-context",
+        output_sha256="8" * 64,
+        byte_size=40,
+        media_type="application/json",
+        recorded_at_utc=UTC_START,
+        logical_name="task_prompt_context",
+        source_artifact_refs=("artifact-ref:inspection-source",),
+    )
+    module_with_context = replace(
+        module,
+        input_refs=(*module.input_refs, derived.output_ref),
+        input_closure_sha256=sha256_json(
+            [*module.input_refs, derived.output_ref]
+        ),
+    )
+    variant_with_context = replace(
+        variant,
+        input_closure_sha256=module_with_context.input_closure_sha256,
+    )
+    records = []
+    for row in base.records:
+        if row is module:
+            records.extend((derived, module_with_context))
+        elif row is variant:
+            records.append(variant_with_context)
+        else:
+            records.append(row)
+
+    inspection = build_runtime_execution_inspection(
+        _trace_with(base, tuple(records))
+    )
+
+    inputs = [
+        row
+        for row in inspection["modules"][0]["artifacts"]
+        if row["direction"] == "input"
+    ]
+    assert [row["artifact_ref"] for row in inputs] == [
+        "artifact-ref:inspection-source",
+        derived.output_ref,
+    ]
+
+
+def test_execution_projection_accepts_deterministic_workflow_outcome() -> None:
+    base = _trace()
+    outcome = ModuleOutcome.build(
+        dispatch_id="dispatch_inspection_001",
+        workflow_execution_id=base.workflow_execution_id,
+        expected_state_id="admit_source",
+        disposition=ModuleOutcomeDisposition.TRANSITION,
+        target_state_id="produce_evidence",
+        module_run_id=None,
+        outcome_ref="outcome-ref:inspection-admission",
+    )
+
+    inspection = build_runtime_execution_inspection(
+        _trace_with(base, (*base.records, outcome))
+    )
+
+    assert inspection["trace"]["workflow"]["status"] == "running"
+    assert inspection["records"][-1]["record_type"] == "ModuleOutcome"
+
+
+def test_execution_projection_serializes_committed_legacy_grant() -> None:
+    base = _trace()
+    attempt = _record(base, WorkflowAttemptRecord)
+    model_call = _record(base, ModelCallRecord)
+    execution = _record(base, WorkflowExecutionRecord)
+    grant = LegacyModuleCapabilityGrant(
+        grant_id=model_call.grant_id,
+        workflow_execution_id=base.workflow_execution_id,
+        module_run_id=attempt.module_run_id,
+        variant_id=attempt.variant_id,
+        attempt_id=attempt.attempt_id,
+        capability_id="model_execute",
+        resource_id=model_call.resource_id,
+        action_id=model_call.action_id,
+        entitlement_snapshot_hash=execution.entitlement_snapshot_hash,
+        idempotency_key="grant_inspection_idempotency_001",
+        expires_after_seconds=300,
+        recorded_at_utc=UTC_START,
+    )
+    model_call_index = base.records.index(model_call)
+    records = (
+        *base.records[:model_call_index],
+        grant,
+        *base.records[model_call_index:],
+    )
+
+    inspection = build_runtime_execution_inspection(_trace_with(base, records))
+
+    assert inspection["records"][model_call_index]["record_type"] == (
+        "LegacyModuleCapabilityGrant"
+    )
 
 
 def test_execution_projection_is_rebuilt_without_persisting_a_second_ledger() -> None:

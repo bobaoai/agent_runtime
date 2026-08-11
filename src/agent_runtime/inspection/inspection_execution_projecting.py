@@ -19,6 +19,7 @@ from ..contracts.ledger_record_definition import (
     EvaluationRun,
     ExecutionInputRef,
     ExecutionOutputRef,
+    LegacyAuthorizationLedgerRecord,
     ModelCallRecord,
     RuntimeExecutionTrace,
     Selection,
@@ -28,6 +29,7 @@ from ..contracts.ledger_record_definition import (
     WorkflowExecutionRecord,
     WorkflowModuleExecutionVariantRecord,
     WorkflowModuleRunRecord,
+    legacy_authorization_record_as_dict,
     runtime_record_as_dict,
 )
 from ..contracts.registry_release_definition import WorkflowRelease
@@ -38,6 +40,14 @@ def _one(rows: tuple[Any, ...], label: str) -> Any:
     if len(rows) != 1:
         raise ValueError(f"Runtime inspection requires exactly one {label}")
     return rows[0]
+
+
+def _inspection_record_as_dict(record: Any) -> dict[str, Any]:
+    """Serialize canonical records and explicitly labelled legacy facts."""
+
+    if isinstance(record, LegacyAuthorizationLedgerRecord):
+        return legacy_authorization_record_as_dict(record)
+    return runtime_record_as_dict(record)
 
 
 def _sum_optional_int(rows: Iterable[UsageEvent], field: str) -> int | None:
@@ -169,7 +179,7 @@ def build_runtime_execution_inspection(
             and workflow_execution_id != trace.workflow_execution_id
         ):
             raise ValueError("Runtime inspection rejects cross-execution records")
-        runtime_record_as_dict(record)
+        _inspection_record_as_dict(record)
 
     positions = _record_position(trace)
     module_runs = trace.records_of_type(WorkflowModuleRunRecord)
@@ -263,7 +273,10 @@ def build_runtime_execution_inspection(
                     "Runtime inspection found a context event outside its "
                     "Attempt lineage"
                 )
-    if any(row.module_run_id not in module_ids for row in outcomes):
+    if any(
+        row.module_run_id is not None and row.module_run_id not in module_ids
+        for row in outcomes
+    ):
         raise ValueError("Runtime inspection found an orphan ModuleOutcome")
     evaluation_run_ids = {row.evaluation_run_id for row in evaluation_runs}
     if any(row.source_module_run_id not in module_ids for row in evaluation_runs):
@@ -315,6 +328,9 @@ def build_runtime_execution_inspection(
         module_inputs = tuple(
             row for row in inputs if row.input_ref in module_input_refs
         )
+        module_derived_inputs = tuple(
+            row for row in outputs if row.output_ref in module_input_refs
+        )
         module_release_ref = release_ref_by_node.get(
             module.state_id,
         )
@@ -327,7 +343,7 @@ def build_runtime_execution_inspection(
                         f"execution-profile:{variant.execution_profile_id}"
                     ),
                     "execution_profile_sha256": variant.execution_profile_sha256,
-                    "prompt_envelope_ref": None,
+                    "prompt_envelope_ref": variant.prompt_envelope_ref,
                     "prompt_envelope_sha256": variant.prompt_sha256,
                     "execution_profile": {
                         "provider_id": None,
@@ -367,6 +383,18 @@ def build_runtime_execution_inspection(
             }
             for row in module_inputs
         ]
+        artifact_views.extend(
+            {
+                "artifact_ref": row.output_ref,
+                "artifact_sha256": row.output_sha256,
+                "logical_name": row.logical_name or row.output_type_id,
+                "media_type": row.media_type,
+                "direction": "input",
+                "module_run_id": module.module_run_id,
+                "source_ledger_position": positions[id(row)],
+            }
+            for row in module_derived_inputs
+        )
         artifact_views.extend(
             {
                 "artifact_ref": row.output_ref,
@@ -460,7 +488,7 @@ def build_runtime_execution_inspection(
             "content_included": False,
             "authorization_decision_made": False,
         },
-        "records": [runtime_record_as_dict(row) for row in trace.records],
+        "records": [_inspection_record_as_dict(row) for row in trace.records],
     }
 
 

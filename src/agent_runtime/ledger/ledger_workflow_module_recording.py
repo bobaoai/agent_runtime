@@ -189,6 +189,7 @@ class WorkflowModuleLedgerRecorder:
                 max_attempts=1,
                 execution_profile_sha256=profile.release_sha256,
                 recorded_at_utc=recorded_at_utc,
+                prompt_envelope_ref=variant.prompt_envelope_ref,
             )
             for variant, profile in zip(variants, profiles, strict=True)
         )
