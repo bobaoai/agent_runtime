@@ -542,7 +542,7 @@ def _run_module(
     ):
         raise ValueError("direct_single Module Run requires exactly one Variant")
 
-    started_at = clock()
+    started_at_utc = clock()
     module_run_id = (
         request.module_run_id
         if type(request) is WorkflowModuleExecutionRequest
@@ -568,7 +568,7 @@ def _run_module(
             if type(request) is WorkflowModuleExecutionRequest
             else request.isolated_scope_sha256
         ),
-        recorded_at_utc=started_at,
+        recorded_at_utc=started_at_utc,
         workflow_execution_id=(
             request.workflow_execution_id
             if type(request) is WorkflowModuleExecutionRequest
@@ -632,7 +632,7 @@ def _run_module(
                 prompt_envelope_ref=variant_request.prompt_envelope_ref,
                 prompt_envelope_sha256=variant_request.prompt_envelope_sha256,
                 input_closure_sha256=request.input_closure_sha256,
-                recorded_at_utc=started_at,
+                recorded_at_utc=started_at_utc,
             )
         )
         attempt_starts.append(
@@ -641,7 +641,7 @@ def _run_module(
                 variant_id=variant_id,
                 attempt_id=attempt_id,
                 attempt_ordinal=1,
-                recorded_at_utc=started_at,
+                recorded_at_utc=started_at_utc,
             )
         )
 
@@ -664,7 +664,7 @@ def _run_module(
             module=module,
             variants=tuple(variant_records),
             profiles=tuple(resolved_profiles),
-            recorded_at_utc=started_at,
+            recorded_at_utc=started_at_utc,
         )
 
     attempts: list[ModuleAttemptRecord] = []
@@ -777,7 +777,7 @@ def _execute_attempt(
                 attempt_start=attempt_start,
                 failure_class="authorization",
                 usage=_empty_usage(),
-                ended_at=clock(),
+                ended_at_utc=clock(),
                 payload={
                     "disposition": "authorization_refused_at_dispatch",
                     "exception_type": type(exc).__name__,
@@ -800,7 +800,7 @@ def _execute_attempt(
                 attempt_start=attempt_start,
                 failure_class="authorization",
                 usage=_empty_usage(),
-                ended_at=clock(),
+                ended_at_utc=clock(),
                 payload={
                     "disposition": "product_operation_denied",
                     "reason_code": evidence.decision.reason_code,
@@ -901,7 +901,7 @@ def _execute_attempt(
             attempt_start=attempt_start,
             failure_class="authorization",
             usage=_empty_usage(),
-            ended_at=clock(),
+            ended_at_utc=clock(),
             payload={
                 "disposition": "dynamic_operation_authorization_refused",
                 "exception_type": type(exc).__name__,
@@ -924,7 +924,7 @@ def _execute_attempt(
             attempt_start=attempt_start,
             failure_class="unknown",
             usage=_empty_usage(),
-            ended_at=clock(),
+            ended_at_utc=clock(),
             payload={
                 "disposition": "adapter_conformance_failure",
                 "exception_type": type(exc).__name__,
@@ -948,7 +948,7 @@ def _execute_attempt(
         cache_read_tokens=result.cache_read_tokens,
         cache_creation_tokens=result.cache_creation_tokens,
     )
-    ended_at = clock()
+    ended_at_utc = clock()
 
     if result.terminal_status != "completed":
         assert result.failure is not None
@@ -957,7 +957,7 @@ def _execute_attempt(
             attempt_start=attempt_start,
             failure_class=result.failure.failure_class,
             usage=usage,
-            ended_at=ended_at,
+            ended_at_utc=ended_at_utc,
             status=(
                 "cancelled"
                 if result.terminal_status == "cancelled"
@@ -1021,7 +1021,7 @@ def _execute_attempt(
                 attempt_start=attempt_start,
                 failure_class="authorization",
                 usage=usage,
-                ended_at=ended_at,
+                ended_at_utc=ended_at_utc,
                 payload={
                     "disposition": "stale_result_quarantined",
                     "fence_ref": fence.fence_ref,
@@ -1048,8 +1048,8 @@ def _execute_attempt(
             usage=usage,
             failure_class=None,
             period_start_at_utc=attempt_start.recorded_at_utc,
-            period_end_at_utc=ended_at,
-            recorded_at_utc=ended_at,
+            period_end_at_utc=ended_at_utc,
+            recorded_at_utc=ended_at_utc,
             tool_calls=result.tool_observations,
             prompt_envelope_ref=variant.prompt_envelope_ref,
             prompt_envelope_sha256=variant.prompt_envelope_sha256,
@@ -1330,7 +1330,7 @@ def _record_failed_attempt(
     attempt_start: ModuleAttemptStartedRecord,
     failure_class: str,
     usage: ModuleUsageObservation,
-    ended_at: str,
+    ended_at_utc: str,
     payload: Mapping[str, Any],
     artifact_host: ModuleArtifactHost,
     ledger: ModuleExecutionLedger,
@@ -1347,7 +1347,7 @@ def _record_failed_attempt(
         attempt_start=attempt_start,
         failure_class=failure_class,
         usage=usage,
-        ended_at=ended_at,
+        ended_at_utc=ended_at_utc,
         detail=_commit_kernel_failure_detail(
             artifact_host,
             variant=variant,
@@ -1491,7 +1491,7 @@ def _failed_attempt(
     attempt_start: ModuleAttemptStartedRecord,
     failure_class: str,
     usage: ModuleUsageObservation,
-    ended_at: str,
+    ended_at_utc: str,
     status: str = "failed",
     detail: tuple[str, str] | None = None,
     tool_calls: tuple[ModuleToolCallObservation, ...] = (),
@@ -1505,8 +1505,8 @@ def _failed_attempt(
         usage=usage,
         failure_class=failure_class,
         period_start_at_utc=attempt_start.recorded_at_utc,
-        period_end_at_utc=ended_at,
-        recorded_at_utc=ended_at,
+        period_end_at_utc=ended_at_utc,
+        recorded_at_utc=ended_at_utc,
         tool_calls=tool_calls,
         prompt_envelope_ref=variant.prompt_envelope_ref,
         prompt_envelope_sha256=variant.prompt_envelope_sha256,

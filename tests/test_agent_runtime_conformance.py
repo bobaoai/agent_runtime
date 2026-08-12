@@ -156,3 +156,21 @@ def test_fixture_rejects_one_variant_shared_by_multiple_module_runs() -> None:
 
     with pytest.raises(ValueError, match="variant_id must be unique per module"):
         invalid_case.validate()
+
+
+def test_runtime_wall_clock_strings_carry_the_utc_suffix() -> None:
+    """Every string-typed instant declares its semantics as `*_at_utc`.
+
+    Aware ``datetime`` objects carry their semantics in the type and stay
+    unsuffixed; only the canonical string form is naming-constrained.
+    """
+
+    runtime_root = Path(__file__).resolve().parents[1] / "src" / "agent_runtime"
+    unsuffixed_instant = re.compile(
+        r"^\s+\w*(?:_at|_time|_timestamp|_date): str\b",
+        re.MULTILINE,
+    )
+
+    for runtime_path in sorted(runtime_root.rglob("*.py")):
+        source = runtime_path.read_text(encoding="utf-8")
+        assert unsuffixed_instant.search(source) is None, runtime_path

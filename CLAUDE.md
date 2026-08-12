@@ -17,6 +17,14 @@ business data, or Agency Platform control-plane behavior.
   implementation bindings separate in documents, diagrams, and registries.
 - Use `snake_case`. Runtime source files use
   `module_subject_nominalized_action.py`.
+- Every wall-clock instant is named `*_at_utc` and carries the canonical UTC
+  form `YYYY-MM-DDTHH:MM:SS[.ffffff]Z` (`Z` only, never an offset), enforced
+  through `validate_utc_timestamp` / `parse_utc_timestamp` /
+  `format_utc_timestamp` in `contracts/registry_contract_validation.py`;
+  durations are `*_seconds` integers. Timestamps never enter idempotency
+  identity: deterministic records derive `recorded_at_utc` from durable
+  facts, not caller clocks. Hosts project their own time semantics to this
+  form at the Runtime API boundary.
 - Provider SDKs, CLIs, PostgreSQL, and Temporal are replaceable
   implementations behind Runtime-owned contracts.
 - Do not add a dependency on a host product or domain plugin.
