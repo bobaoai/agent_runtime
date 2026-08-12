@@ -205,7 +205,7 @@ class WorkflowModuleLedgerRecorder:
                 context_mode=profile.semantic_input_delivery_mode,
                 output_schema_sha256=module.output_schema_sha256,
                 timeout_seconds=profile.timeout_seconds,
-                max_attempts=1,
+                max_attempts=profile.max_attempts,
                 execution_profile_sha256=profile.release_sha256,
                 recorded_at_utc=recorded_at_utc,
                 prompt_envelope_ref=variant.prompt_envelope_ref,
@@ -557,6 +557,7 @@ class WorkflowModuleLedgerRecorder:
         attempt_id: str,
         attempt_ordinal: int,
         recorded_at_utc: str,
+        parent_attempt_id: str | None = None,
     ) -> AttemptClaim:
         """Durably claim one Attempt before authorization or provider entry."""
 
@@ -573,7 +574,7 @@ class WorkflowModuleLedgerRecorder:
             module_run_id=request.module_run_id,
             variant_id=variant.variant_id,
             attempt_id=attempt_id,
-            parent_attempt_id=None,
+            parent_attempt_id=parent_attempt_id,
             attempt_ordinal=attempt_ordinal,
             trace_id=stable_runtime_id(
                 "trace", request.workflow_execution_id, attempt_id
@@ -756,6 +757,42 @@ class WorkflowModuleLedgerRecorder:
         self._tool_grants.pop(attempt_id, None)
         return receipt
 
+    def recover_expired_attempts(
+        self,
+        *,
+        workflow_execution_id: str,
+        observed_at_utc: str,
+    ) -> tuple[AttemptOrphaningReceipt, ...]:
+        """Terminalize every expired in-flight lease of one Workflow Execution.
+
+        This is the production recovery entry: one observation instant sweeps
+        the committed starts and recovers each lease that is expired and not
+        yet terminal.  Each recovery reuses the single-Attempt path, so byte
+        determinism and store-side replay arbitration hold per Attempt, and a
+        sweep that races a concurrent recoverer converges as replays.
+        """
+
+        observed_at = parse_utc_timestamp("observed_at_utc", observed_at_utc)
+        trace = self.record_store.load_trace(workflow_execution_id)
+        terminal_attempt_ids = {
+            row.attempt_id
+            for row in trace.records_of_type(WorkflowAttemptRecord)
+        }
+        receipts: list[AttemptOrphaningReceipt] = []
+        for start in trace.records_of_type(WorkflowAttemptStartedRecord):
+            if start.attempt_id in terminal_attempt_ids:
+                continue
+            if not start.lease_expired_at(observed_at):
+                continue
+            receipts.append(
+                self.recover_expired_attempt(
+                    workflow_execution_id=workflow_execution_id,
+                    attempt_id=start.attempt_id,
+                    observed_at_utc=observed_at_utc,
+                )
+            )
+        return tuple(receipts)
+
     def authorize_model_call(
         self,
         *,
@@ -874,9 +911,17 @@ class WorkflowModuleLedgerRecorder:
         claim = self._claims.get(attempt.attempt_id)
         if claim is None:
             raise RuntimeError("Attempt finalization lacks an active claim")
-        trace_id = stable_runtime_id(
-            "trace", request.workflow_execution_id, attempt.attempt_id
+        start = _one_by_id(
+            self.record_store.load_trace(
+                request.workflow_execution_id
+            ).records_of_type(WorkflowAttemptStartedRecord),
+            "attempt_id",
+            attempt.attempt_id,
         )
+        if start is None:
+            raise ValueError(
+                "Attempt finalization requires its durable start record"
+            )
         execution_outputs = tuple(
             ExecutionOutputRef(
                 execution_output_id=stable_runtime_id(
@@ -910,13 +955,16 @@ class WorkflowModuleLedgerRecorder:
             module_run_id=attempt.module_run_id,
             variant_id=attempt.variant_id,
             attempt_id=attempt.attempt_id,
-            parent_attempt_id=None,
-            attempt_ordinal=1,
+            # Retry lineage is owned by the durable start record: a retry
+            # Attempt finalizes with its true ordinal and parent instead of
+            # being rewritten to a first attempt.
+            parent_attempt_id=start.parent_attempt_id,
+            attempt_ordinal=start.attempt_ordinal,
             status=attempt.status,
             period_start_at_utc=attempt.period_start_at_utc,
             period_end_at_utc=attempt.period_end_at_utc,
             recorded_at_utc=attempt.recorded_at_utc,
-            trace_id=trace_id,
+            trace_id=start.trace_id,
             execution_output_refs=tuple(
                 output.output_ref for output in execution_outputs
             ),

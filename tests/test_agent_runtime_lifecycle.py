@@ -8,6 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from agent_runtime.contracts import ModuleOutcome, ModuleOutcomeDisposition
+from agent_runtime.contracts.ledger_lineage_definition import (
+    ModuleAttemptRecord,
+    ModuleUsageObservation,
+)
 from agent_runtime.ledger.ledger_record_persistence import InMemoryRuntimeExecutionRecordStore
 from agent_runtime.ledger.ledger_workflow_module_recording import (
     WorkflowModuleLedgerBinding,
@@ -42,6 +46,7 @@ from agent_runtime.contracts.ledger_record_definition import (
     attempt_output_bundle_sha256,
     sha256_json,
     sha256_text,
+    stable_runtime_id,
 )
 
 
@@ -1273,3 +1278,193 @@ def test_orphan_disposition_vocabulary_is_pinned() -> None:
         ValueError, match="context_disposition_id is outside the contract"
     ):
         _orphaned("attempt_lease_expired", "purge").validate()
+
+
+def _recorder_over(store: InMemoryRuntimeExecutionRecordStore) -> WorkflowModuleLedgerRecorder:
+    return WorkflowModuleLedgerRecorder(
+        WorkflowModuleLedgerBinding(
+            record_store=store,
+            entitlement_snapshot_hash=ENTITLEMENT_HASH,
+            claim_token_secret=b"stable-workflow-execution-secret-32-bytes",
+        )
+    )
+
+
+def _kernel_request() -> SimpleNamespace:
+    # The recorder reads only the identity and closure fields from the
+    # execution request across begin and finalize.
+    return SimpleNamespace(
+        workflow_execution_id=EXECUTION_ID,
+        dispatch_id=DISPATCH_ID,
+        module_run_id=STEP_ID,
+        request_sha256="3" * 64,
+        input_closure_sha256=sha256_json(["artifact-ref:synthetic-input-001"]),
+    )
+
+
+def test_retry_attempt_finalizes_with_its_durable_start_lineage() -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    recorder = _recorder_over(store)
+    request = _kernel_request()
+    variant = SimpleNamespace(variant_id=VARIANT_ID)
+    profile = SimpleNamespace(release_sha256="2" * 64, timeout_seconds=120)
+
+    recorder.begin_attempt(
+        request=request,
+        variant=variant,
+        profile=profile,
+        attempt_id=ATTEMPT_ID,
+        attempt_ordinal=1,
+        recorded_at_utc=START,
+    )
+    recorder.recover_expired_attempt(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id=ATTEMPT_ID,
+        observed_at_utc="2026-08-02T12:02:01Z",
+    )
+    retry_attempt_id = "attempt_synthetic_002"
+    recorder.begin_attempt(
+        request=request,
+        variant=variant,
+        profile=profile,
+        attempt_id=retry_attempt_id,
+        attempt_ordinal=2,
+        recorded_at_utc="2026-08-02T12:03:00Z",
+        parent_attempt_id=ATTEMPT_ID,
+    )
+    recorder.finalize_attempt(
+        request=request,
+        module=SimpleNamespace(
+            module_id="module_synthetic", module_version="v1"
+        ),
+        profile=profile,
+        attempt=ModuleAttemptRecord(
+            module_run_id=STEP_ID,
+            variant_id=VARIANT_ID,
+            attempt_id=retry_attempt_id,
+            status="completed",
+            output_refs=(),
+            usage=ModuleUsageObservation(
+                input_tokens=None,
+                output_tokens=None,
+                cache_read_tokens=None,
+                cache_creation_tokens=None,
+            ),
+            failure_class=None,
+            period_start_at_utc="2026-08-02T12:03:00Z",
+            period_end_at_utc="2026-08-02T12:04:00Z",
+            recorded_at_utc="2026-08-02T12:04:00Z",
+        ),
+        outputs=(),
+        artifact_host=SimpleNamespace(),
+    )
+
+    trace = store.load_trace(EXECUTION_ID)
+    terminals = {
+        row.attempt_id: row
+        for row in trace.records_of_type(WorkflowAttemptRecord)
+    }
+    retry_terminal = terminals[retry_attempt_id]
+    # The retry finalizes with its true durable lineage instead of being
+    # rewritten to a first attempt, so its successful result stays projectable.
+    assert retry_terminal.attempt_ordinal == 2
+    assert retry_terminal.parent_attempt_id == ATTEMPT_ID
+    assert retry_terminal.status == "completed"
+    assert retry_terminal.trace_id == stable_runtime_id(
+        "trace", EXECUTION_ID, retry_attempt_id
+    )
+    assert terminals[ATTEMPT_ID].attempt_ordinal == 1
+    assert [
+        row.attempt_id
+        for row in trace.records_of_type(InvocationCommitRecord)
+    ] == [retry_attempt_id]
+
+
+def test_recovery_sweep_terminalizes_only_expired_unterminal_leases() -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    slow_variant_id = "variant_synthetic_002"
+    store.commit(
+        LegacyRuntimeRecordBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_slow_variant",
+            records=(
+                WorkflowModuleExecutionVariantRecord(
+                    workflow_execution_id=EXECUTION_ID,
+                    module_run_id=STEP_ID,
+                    variant_id=slow_variant_id,
+                    module_id="module_synthetic",
+                    agent_execution_adapter_id="adapter_synthetic",
+                    execution_profile_id="profile_synthetic_slow",
+                    model_id="model_synthetic",
+                    reasoning_profile="effort_synthetic",
+                    prompt_sha256="c" * 64,
+                    static_module_sha256="d" * 64,
+                    input_closure_sha256=sha256_json(
+                        ["artifact-ref:synthetic-input-001"]
+                    ),
+                    entitlement_snapshot_hash=ENTITLEMENT_HASH,
+                    agent_execution_adapter_revision="adapter_revision_v1",
+                    runtime_version="runtime_v1",
+                    tool_policy=("no_tools",),
+                    context_mode="stateless",
+                    output_schema_sha256="f" * 64,
+                    timeout_seconds=3600,
+                    max_attempts=2,
+                    execution_profile_sha256="2" * 64,
+                    recorded_at_utc=START,
+                ),
+            ),
+        )
+    )
+    recorder = _recorder_over(store)
+    request = _kernel_request()
+    recorder.begin_attempt(
+        request=request,
+        variant=SimpleNamespace(variant_id=VARIANT_ID),
+        profile=SimpleNamespace(release_sha256="2" * 64, timeout_seconds=120),
+        attempt_id=ATTEMPT_ID,
+        attempt_ordinal=1,
+        recorded_at_utc=START,
+    )
+    slow_attempt_id = "attempt_synthetic_slow_001"
+    recorder.begin_attempt(
+        request=request,
+        variant=SimpleNamespace(variant_id=slow_variant_id),
+        profile=SimpleNamespace(release_sha256="2" * 64, timeout_seconds=3600),
+        attempt_id=slow_attempt_id,
+        attempt_ordinal=1,
+        recorded_at_utc=START,
+    )
+
+    with pytest.raises(ValueError, match="observed_at_utc"):
+        recorder.recover_expired_attempts(
+            workflow_execution_id=EXECUTION_ID,
+            observed_at_utc="2026-08-02 12:02:01Z",
+        )
+
+    # Observed between the two deadlines: the 120s lease is expired while the
+    # 3600s lease is still active and must not be terminalized by the sweep.
+    receipts = recorder.recover_expired_attempts(
+        workflow_execution_id=EXECUTION_ID,
+        observed_at_utc="2026-08-02T12:02:01Z",
+    )
+
+    assert [row.orphaned_record_id for row in receipts] == [
+        stable_runtime_id("attempt_orphaned", EXECUTION_ID, ATTEMPT_ID)
+    ]
+    trace = store.load_trace(EXECUTION_ID)
+    assert [
+        row.attempt_id for row in trace.records_of_type(AttemptOrphanedRecord)
+    ] == [ATTEMPT_ID]
+
+    # A repeated sweep at the same instant finds the lease already terminal
+    # and recovers nothing further.
+    assert (
+        recorder.recover_expired_attempts(
+            workflow_execution_id=EXECUTION_ID,
+            observed_at_utc="2026-08-02T12:02:01Z",
+        )
+        == ()
+    )

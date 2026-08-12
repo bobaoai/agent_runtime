@@ -6,6 +6,7 @@ import pytest
 
 from agent_runtime.contracts.ledger_record_definition import (
     AttemptOrphanedRecord,
+    CheckpointRecord,
     CommitReceipt,
     ExecutionInputRef,
     ExecutionOutputRef,
@@ -432,7 +433,13 @@ def test_started_attempt_is_visible_and_expiry_requires_explicit_observation() -
         == 1
     )
     assert "incomplete_attempts" not in running_module
+    assert running["trace"]["workflow"]["recovery_required"] is False
+    assert running["trace"]["workflow"]["modules_requiring_recovery"] == []
     assert expired["trace"]["workflow"]["status"] == "recovery_required"
+    assert expired["trace"]["workflow"]["recovery_required"] is True
+    assert expired["trace"]["workflow"]["modules_requiring_recovery"] == [
+        "module_run_inspection_001"
+    ]
     assert expired["modules"][0]["module_run"]["status"] == "recovery_required"
     assert expired["modules"][0]["attempt_starts"][0]["lease_state"] == "expired"
     assert expired["modules"][0]["attempt_starts"][0]["deadline_at_utc"] == (
@@ -711,3 +718,48 @@ def test_projection_rejects_non_canonical_observation_instants(
         build_runtime_execution_inspection(
             _trace(), observed_at_utc=observed_at_utc
         )
+
+
+def test_committed_checkpoint_status_never_masks_the_recovery_signal() -> None:
+    base = _trace()
+    variant = _record(base, WorkflowModuleExecutionVariantRecord)
+    module = _record(base, WorkflowModuleRunRecord)
+    start = _start_for(base, variant, "attempt_inspection_001")
+    checkpoint = CheckpointRecord(
+        checkpoint_id="checkpoint_inspection_001",
+        workflow_execution_id=base.workflow_execution_id,
+        dispatch_id="dispatch_inspection_001",
+        execution_release_ref="workflow-release:inspection@v1",
+        graph_sha256=HASH,
+        entitlement_snapshot_hash="e" * 64,
+        current_state_id=module.state_id,
+        runtime_status_id="running",
+        committed_outcome_ref="outcome-ref:inspection-checkpoint",
+        committed_outcome_sha256=HASH,
+        recorded_at_utc=UTC_END,
+    )
+    removed_types = (
+        WorkflowAttemptRecord,
+        ModelCallRecord,
+        UsageEvent,
+        ExecutionOutputRef,
+    )
+    records = tuple(
+        row for row in base.records if not isinstance(row, removed_types)
+    )
+    records = (*records, start, checkpoint)
+
+    projection = build_runtime_execution_inspection(
+        _trace_with(base, records),
+        observed_at_utc="2026-08-10T12:06:00Z",
+    )
+
+    workflow = projection["trace"]["workflow"]
+    # The checkpoint owns the workflow status; the expired lease travels on
+    # its own field instead of overwriting that committed fact.
+    assert workflow["status"] == "running"
+    assert workflow["recovery_required"] is True
+    assert workflow["modules_requiring_recovery"] == [module.module_run_id]
+    assert projection["modules"][0]["module_run"]["status"] == (
+        "recovery_required"
+    )

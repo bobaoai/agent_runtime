@@ -400,6 +400,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             context_policy_ref="context-policy:opaque@v1",
             context_policy_sha256=HASH,
             timeout_seconds=60,
+            max_attempts=1,
         )
         module = RuntimeModuleRelease.build(
             module_id="module_opaque_test",

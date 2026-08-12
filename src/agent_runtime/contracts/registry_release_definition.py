@@ -707,6 +707,7 @@ class ExecutionProfileRelease:
     context_policy_ref: str
     context_policy_sha256: str
     timeout_seconds: int
+    max_attempts: int
     release_sha256: str
 
     def _payload(self) -> dict[str, Any]:
@@ -730,6 +731,7 @@ class ExecutionProfileRelease:
             "context_policy_ref": self.context_policy_ref,
             "context_policy_sha256": self.context_policy_sha256,
             "timeout_seconds": self.timeout_seconds,
+            "max_attempts": self.max_attempts,
         }
 
     def validate(self) -> None:
@@ -850,6 +852,7 @@ class ExecutionProfileRelease:
         validate_opaque_ref("context_policy_ref", self.context_policy_ref)
         validate_sha256("context_policy_sha256", self.context_policy_sha256)
         validate_int("timeout_seconds", self.timeout_seconds, minimum=1, maximum=86_400)
+        validate_int("max_attempts", self.max_attempts, minimum=1, maximum=100)
         validate_sha256("release_sha256", self.release_sha256)
         if self.release_sha256 != _canonical_sha256(self._payload()):
             raise ValueError("Execution Profile release hash mismatch")
@@ -895,6 +898,7 @@ class ExecutionProfileRelease:
             context_policy_ref=payload["context_policy_ref"],
             context_policy_sha256=payload["context_policy_sha256"],
             timeout_seconds=payload["timeout_seconds"],
+            max_attempts=payload["max_attempts"],
             release_sha256=payload["release_sha256"],
         )
 

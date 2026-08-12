@@ -151,6 +151,7 @@ class ExecutionProfileReleaseSpec:
     tool_policy: tuple[str, ...]
     network_policy: str
     timeout_seconds: int
+    max_attempts: int = 1
     release_version: str = "candidate_v1"
     context_policy_ref: str = "context-policy:workflow_execution_isolated@v1"
 
@@ -220,6 +221,7 @@ def compile_execution_profile_release(
         context_policy_ref=spec.context_policy_ref,
         context_policy_sha256=sha256_text(spec.context_policy_ref),
         timeout_seconds=spec.timeout_seconds,
+        max_attempts=spec.max_attempts,
     )
 
 

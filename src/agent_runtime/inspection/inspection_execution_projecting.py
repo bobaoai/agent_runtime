@@ -380,6 +380,7 @@ def build_runtime_execution_inspection(
     node_occurrences: dict[str, int] = defaultdict(int)
     modules: list[dict[str, Any]] = []
     module_statuses: list[str] = []
+    modules_requiring_recovery: list[str] = []
     for module in module_runs:
         node_occurrences[module.state_id] += 1
         module_variants = tuple(variants_by_module.get(module.module_run_id, ()))
@@ -510,6 +511,8 @@ def build_runtime_execution_inspection(
             module_outcomes,
         )
         module_statuses.append(module_status)
+        if module_status == "recovery_required":
+            modules_requiring_recovery.append(module.module_run_id)
         modules.append(
             {
                 "module_run": {
@@ -575,6 +578,11 @@ def build_runtime_execution_inspection(
                     tuple(module_statuses),
                     checkpoints,
                 ),
+                # Recovery is an orthogonal lease fact carried beside the
+                # checkpoint-owned status, so a committed checkpoint never
+                # masks an expired in-flight lease.
+                "recovery_required": bool(modules_requiring_recovery),
+                "modules_requiring_recovery": modules_requiring_recovery,
                 "source_ledger_position": positions[id(execution)],
             },
             "usage": _usage_view(usage_events),

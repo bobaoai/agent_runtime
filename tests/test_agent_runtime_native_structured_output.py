@@ -1959,6 +1959,7 @@ def _operation_free_release(
         context_policy_ref="context-policy:operation-free@v1",
         context_policy_sha256="a" * 64,
         timeout_seconds=60,
+        max_attempts=1,
     )
     module = RuntimeModuleRelease.build(
         module_id="module_operation_free",
@@ -3491,3 +3492,43 @@ def test_adapters_no_longer_reference_the_removed_prompt_bundle_local() -> None:
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
         }
         assert "prompt_bundle" not in loaded_names, module_name
+
+
+def test_execution_profile_release_pins_bounded_max_attempts() -> None:
+    from agent_runtime.contracts.registry_release_definition import (
+        ExecutionProfileRelease,
+    )
+
+    def _profile_fields(max_attempts: int) -> dict:
+        return dict(
+            execution_profile_id="profile_bounded_attempts",
+            execution_profile_version="v1",
+            release_ref="execution-profile:profile-bounded-attempts@v1",
+            executor_adapter_id="claude_agent_sdk",
+            executor_adapter_revision="v1",
+            transport_kind="in_process",
+            provider_id="anthropic",
+            model_id="model_stub",
+            reasoning_profile="none",
+            execution_mode="tool_free",
+            semantic_input_delivery_mode="inline",
+            attempt_workspace_policy="none",
+            gateway_access_reasons=(),
+            output_constraint_mode="prompt_only_json",
+            tool_policy=(),
+            network_policy="denied",
+            context_policy_ref="context-policy:bounded-attempts@v1",
+            context_policy_sha256="a" * 64,
+            timeout_seconds=60,
+            max_attempts=max_attempts,
+        )
+
+    profile = ExecutionProfileRelease.build(**_profile_fields(3))
+    assert profile.max_attempts == 3
+    rebuilt = ExecutionProfileRelease.from_dict(profile.as_dict())
+    assert rebuilt.max_attempts == 3
+    assert rebuilt.release_sha256 == profile.release_sha256
+
+    for out_of_bounds in (0, 101):
+        with pytest.raises(ValueError, match="max_attempts"):
+            ExecutionProfileRelease.build(**_profile_fields(out_of_bounds))

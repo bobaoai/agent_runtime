@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import importlib
 import json
 import re
@@ -21,6 +22,7 @@ from ..contracts.ledger_record_definition import (
     legacy_authorization_record_as_dict,
     runtime_record_as_dict,
 )
+from ..contracts.registry_contract_validation import format_utc_timestamp
 from ..contracts.registry_release_definition import WorkflowRelease
 from ..ledger.ledger_postgres_persistence import (
     RuntimeExecutionDescriptor,
@@ -75,6 +77,12 @@ class LiveInspectionAuthorizer(Protocol):
     ) -> bool: ...
 
 
+def observed_now_utc() -> str:
+    """Return the canonical UTC observation instant for lease inspection."""
+
+    return format_utc_timestamp(datetime.now(timezone.utc))
+
+
 @dataclass(frozen=True)
 class LiveInspectionAssembly:
     """Explicit secure assembly inputs for the live application."""
@@ -83,6 +91,7 @@ class LiveInspectionAssembly:
     authorizer: LiveInspectionAuthorizer
     request_context_resolver: Callable[[Mapping[str, Any]], Any]
     frame_ancestors: tuple[str, ...] = ("'none'",)
+    observation_clock: Callable[[], str] = observed_now_utc
 
     def build(self) -> "LiveWorkflowInspectorApplication":
         if not callable(self.request_context_resolver):
@@ -92,6 +101,7 @@ class LiveInspectionAssembly:
             authorizer=self.authorizer,
             request_context_resolver=self.request_context_resolver,
             frame_ancestors=self.frame_ancestors,
+            observation_clock=self.observation_clock,
         )
 
 
@@ -105,15 +115,19 @@ class LiveWorkflowInspectorApplication:
         authorizer: LiveInspectionAuthorizer,
         request_context_resolver: Callable[[Mapping[str, Any]], Any],
         frame_ancestors: tuple[str, ...] = ("'none'",),
+        observation_clock: Callable[[], str] = observed_now_utc,
     ) -> None:
         if repository is None or authorizer is None:
             raise ValueError("repository and authorizer are required")
         if not callable(request_context_resolver):
             raise ValueError("request_context_resolver must be callable")
+        if not callable(observation_clock):
+            raise ValueError("observation_clock must be callable")
         self._repository = repository
         self._authorizer = authorizer
         self._request_context_resolver = request_context_resolver
         self._frame_ancestors = _validate_frame_ancestors(frame_ancestors)
+        self._observation_clock = observation_clock
 
     def __call__(
         self,
@@ -283,6 +297,10 @@ class LiveWorkflowInspectorApplication:
             build_runtime_execution_inspection(
                 trace,
                 workflow_release=release,
+                # The request instant is the lease observation: without it a
+                # live reader would never see an expired lease surface as
+                # recovery_required.
+                observed_at_utc=self._observation_clock(),
             )
             if trace.records
             else None

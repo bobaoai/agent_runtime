@@ -476,3 +476,150 @@ def test_live_inspector_embedding_requires_explicit_trusted_origin() -> None:
             request_context_resolver=lambda environ: environ.get("reviewer"),
             frame_ancestors=("https://review.example.com\r\nInjected: true",),
         )
+
+
+def test_live_inspector_observes_lease_expiry_at_the_request_instant() -> None:
+    from agent_runtime.contracts.ledger_record_definition import (
+        ExecutionInputRef,
+        WorkflowAttemptStartedRecord,
+        WorkflowExecutionRecord,
+        WorkflowModuleExecutionVariantRecord,
+        WorkflowModuleRunRecord,
+        sha256_json,
+    )
+
+    recorded_at = EXECUTION.recorded_at_utc
+    execution_id = EXECUTION.workflow_execution_id
+    input_ref = "artifact-ref:live-lease-input"
+    input_record = ExecutionInputRef(
+        execution_input_id="execution_input_live_001",
+        workflow_execution_id=execution_id,
+        input_type_id="agent_input",
+        schema_version="v1",
+        input_ref=input_ref,
+        input_sha256="1" * 64,
+        byte_size=10,
+        media_type="application/json",
+        recorded_at_utc=recorded_at,
+    )
+    module = WorkflowModuleRunRecord(
+        workflow_execution_id=execution_id,
+        module_run_id="module_run_live_001",
+        state_id="state_live",
+        module_id="module_live",
+        input_refs=(input_ref,),
+        input_closure_sha256=sha256_json([input_ref]),
+        recorded_at_utc=recorded_at,
+    )
+    variant = WorkflowModuleExecutionVariantRecord(
+        workflow_execution_id=execution_id,
+        module_run_id=module.module_run_id,
+        variant_id="variant_live_001",
+        module_id=module.module_id,
+        agent_execution_adapter_id="adapter_live",
+        execution_profile_id="profile_live",
+        model_id="model_live",
+        reasoning_profile="effort_live",
+        prompt_sha256="2" * 64,
+        static_module_sha256="3" * 64,
+        input_closure_sha256=module.input_closure_sha256,
+        entitlement_snapshot_hash="e" * 64,
+        agent_execution_adapter_revision="adapter_revision_v1",
+        runtime_version="runtime_v1",
+        tool_policy=("no_tools",),
+        context_mode="stateless",
+        output_schema_sha256="f" * 64,
+        timeout_seconds=300,
+        max_attempts=1,
+        execution_profile_sha256="5" * 64,
+        recorded_at_utc=recorded_at,
+    )
+    records = (
+        WorkflowExecutionRecord(
+            workflow_execution_id=execution_id,
+            workflow_id=EXECUTION.workflow_id,
+            workflow_contract_version="v1",
+            tenant_id=EXECUTION.tenant_id,
+            cell_id=EXECUTION.cell_id,
+            principal_id=EXECUTION.principal_id,
+            execution_release_ref=EXECUTION.execution_release_ref,
+            graph_sha256="a" * 64,
+            runtime_execution_binding_ref="runtime-binding:live@v1",
+            runtime_execution_binding_sha256="b" * 64,
+            authorization_decision_ref="authorization-decision:live@v1",
+            authorization_decision_sha256="c" * 64,
+            execution_principal_delegation_ref="delegation-ref:live@v1",
+            execution_principal_delegation_sha256="d" * 64,
+            entitlement_snapshot_ref="entitlement-ref:live@v1",
+            entitlement_snapshot_hash="e" * 64,
+            execution_input_package_refs=(input_ref,),
+            execution_input_package_sha256="f" * 64,
+            recorded_at_utc=recorded_at,
+        ),
+        input_record,
+        module,
+        variant,
+        WorkflowAttemptStartedRecord(
+            workflow_execution_id=execution_id,
+            dispatch_id="dispatch_live_001",
+            module_run_id=module.module_run_id,
+            variant_id=variant.variant_id,
+            attempt_id="attempt_live_001",
+            parent_attempt_id=None,
+            attempt_ordinal=1,
+            trace_id="trace_live_001",
+            request_sha256="8" * 64,
+            claim_token_hash="9" * 64,
+            input_closure_sha256=module.input_closure_sha256,
+            execution_profile_sha256=variant.execution_profile_sha256,
+            entitlement_snapshot_hash=variant.entitlement_snapshot_hash,
+            timeout_seconds=variant.timeout_seconds,
+            recorded_at_utc=recorded_at,
+        ),
+    )
+
+    class _ExpiredLeaseRepository(_Repository):
+        def load_trace(self, workflow_execution_id: str):
+            return RuntimeExecutionTrace(
+                workflow_execution_id=workflow_execution_id,
+                records=records,
+                commit_receipts=(),
+            )
+
+    application = LiveWorkflowInspectorApplication(
+        repository=_ExpiredLeaseRepository(),
+        authorizer=_Authorizer(),
+        request_context_resolver=lambda environ: environ.get("reviewer"),
+        # Fixed observation instant past the 300s lease deadline.
+        observation_clock=lambda: "2026-08-08T12:10:00Z",
+    )
+    status, _, body = _request(
+        application,
+        f"/api/executions/{EXECUTION.workflow_execution_id}",
+    )
+
+    assert status == "200 OK"
+    payload = json.loads(body)
+    inspection = payload["inspection"]
+    assert inspection["projection_boundary"]["observed_at_utc"] == (
+        "2026-08-08T12:10:00Z"
+    )
+    workflow = inspection["trace"]["workflow"]
+    assert workflow["recovery_required"] is True
+    assert workflow["modules_requiring_recovery"] == ["module_run_live_001"]
+    assert inspection["modules"][0]["attempt_starts"][0]["lease_state"] == (
+        "expired"
+    )
+
+
+def test_default_observation_clock_emits_canonical_utc() -> None:
+    from agent_runtime.contracts.registry_contract_validation import (
+        parse_utc_timestamp,
+    )
+    from agent_runtime.inspection.inspection_http_serving import (
+        observed_now_utc,
+    )
+
+    instant = observed_now_utc()
+    parsed = parse_utc_timestamp("observed_at_utc", instant)
+    assert parsed.utcoffset().total_seconds() == 0
