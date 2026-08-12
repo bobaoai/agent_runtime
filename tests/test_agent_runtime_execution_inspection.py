@@ -13,6 +13,7 @@ from agent_runtime.contracts.ledger_record_definition import (
     RuntimeExecutionTrace,
     UsageEvent,
     WorkflowAttemptRecord,
+    WorkflowAttemptStartedRecord,
     WorkflowExecutionRecord,
     WorkflowModuleExecutionVariantRecord,
     WorkflowModuleRunRecord,
@@ -353,6 +354,7 @@ def test_execution_trace_projects_directly_to_portable_inspector_view() -> None:
         "projection_kind": "rebuildable_read_model",
         "content_included": False,
         "authorization_decision_made": False,
+        "observed_at_utc": None,
     }
     module = inspection["modules"][0]
     assert module["module_run"]["workflow_node_id"] == "produce_evidence"
@@ -375,6 +377,56 @@ def test_execution_trace_projects_directly_to_portable_inspector_view() -> None:
 
     bundle = build_workflow_review_bundle(inspection)
     assert bundle["workflow_execution_id"] == "execution_inspection_001"
+
+
+def test_started_attempt_is_visible_and_expiry_requires_explicit_observation() -> None:
+    base = _trace()
+    module = _record(base, WorkflowModuleRunRecord)
+    variant = _record(base, WorkflowModuleExecutionVariantRecord)
+    terminal = _record(base, WorkflowAttemptRecord)
+    start = WorkflowAttemptStartedRecord(
+        workflow_execution_id=base.workflow_execution_id,
+        dispatch_id="dispatch_inspection_001",
+        module_run_id=module.module_run_id,
+        variant_id=variant.variant_id,
+        attempt_id=terminal.attempt_id,
+        parent_attempt_id=None,
+        attempt_ordinal=1,
+        trace_id=terminal.trace_id,
+        request_sha256="8" * 64,
+        claim_token_hash="9" * 64,
+        input_closure_sha256=module.input_closure_sha256,
+        execution_profile_sha256=variant.execution_profile_sha256,
+        entitlement_snapshot_hash=variant.entitlement_snapshot_hash,
+        timeout_seconds=variant.timeout_seconds,
+        recorded_at_utc=UTC_START,
+    )
+    removed_types = (
+        WorkflowAttemptRecord,
+        ModelCallRecord,
+        UsageEvent,
+        ExecutionOutputRef,
+    )
+    records = tuple(row for row in base.records if not isinstance(row, removed_types))
+    records = (*records, start)
+
+    running = build_runtime_execution_inspection(_trace_with(base, records))
+    expired = build_runtime_execution_inspection(
+        _trace_with(base, records),
+        observed_at_utc="2026-08-10T12:06:00Z",
+    )
+
+    running_module = running["modules"][0]
+    assert running_module["module_run"]["status"] == "running"
+    assert running_module["attempt_starts"][0]["lease_state"] == "unresolved"
+    assert running_module["attempts"] == []
+    assert len(running_module["incomplete_attempts"]) == 1
+    assert expired["trace"]["workflow"]["status"] == "recovery_required"
+    assert expired["modules"][0]["module_run"]["status"] == "recovery_required"
+    assert expired["modules"][0]["attempt_starts"][0]["lease_state"] == "expired"
+    assert expired["modules"][0]["attempt_starts"][0]["deadline_at_utc"] == (
+        "2026-08-10T12:05:00Z"
+    )
 
 
 def test_execution_projection_includes_derived_module_inputs() -> None:

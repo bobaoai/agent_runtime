@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
+import hmac
 
 import pytest
 
 from agent_runtime.contracts import ModuleOutcome, ModuleOutcomeDisposition
 from agent_runtime.ledger.ledger_record_persistence import InMemoryRuntimeExecutionRecordStore
+from agent_runtime.ledger.ledger_workflow_module_recording import (
+    WorkflowModuleLedgerBinding,
+    WorkflowModuleLedgerRecorder,
+)
 from agent_runtime.contracts.ledger_record_definition import (
     LegacyAttemptBeginBatch,
     AttemptClaim,
@@ -661,6 +667,97 @@ def test_orphan_disposition_terminalizes_start_before_next_attempt() -> None:
     assert store.load_trace(EXECUTION_ID).records_of_type(AttemptOrphanedRecord) == (
         orphaned,
     )
+
+
+def test_recorder_recovers_expired_attempt_after_restart_with_stable_secret() -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    secret = b"stable-workflow-execution-secret-32-bytes"
+    claim_token = hmac.new(
+        secret,
+        f"{EXECUTION_ID}\x1f{ATTEMPT_ID}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    claim = _claim(claim_token)
+    store.begin_attempt(
+        LegacyAttemptBeginBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_recovery_begin",
+            start=_start(claim),
+            claim=claim,
+            grants=(_grant(),),
+        )
+    )
+    binding = WorkflowModuleLedgerBinding(
+        record_store=store,
+        entitlement_snapshot_hash=ENTITLEMENT_HASH,
+        claim_token_secret=secret,
+    )
+
+    with pytest.raises(ValueError, match="lease has not expired"):
+        WorkflowModuleLedgerRecorder(binding).recover_expired_attempt(
+            workflow_execution_id=EXECUTION_ID,
+            attempt_id=ATTEMPT_ID,
+            observed_at_utc="2026-08-02T12:01:59Z",
+        )
+
+    first = WorkflowModuleLedgerRecorder(binding).recover_expired_attempt(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id=ATTEMPT_ID,
+        observed_at_utc="2026-08-02T12:02:01Z",
+    )
+    replay = WorkflowModuleLedgerRecorder(binding).recover_expired_attempt(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id=ATTEMPT_ID,
+        observed_at_utc="2026-08-02T12:03:00Z",
+    )
+
+    assert first.commit_receipt.replayed is False
+    assert replay.commit_receipt.replayed is True
+    trace = store.load_trace(EXECUTION_ID)
+    terminal = trace.records_of_type(WorkflowAttemptRecord)[0]
+    orphaned = trace.records_of_type(AttemptOrphanedRecord)[0]
+    assert terminal.period_end_at_utc == "2026-08-02T12:02:00Z"
+    assert terminal.failure_class == "orphaned_attempt"
+    assert orphaned.reason_code == "attempt_lease_expired"
+    assert orphaned.recorded_at_utc == "2026-08-02T12:02:01Z"
+
+
+def test_expired_attempt_recovery_rejects_changed_host_secret() -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    original_secret = b"original-workflow-secret-material-32-bytes"
+    claim_token = hmac.new(
+        original_secret,
+        f"{EXECUTION_ID}\x1f{ATTEMPT_ID}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    claim = _claim(claim_token)
+    store.begin_attempt(
+        LegacyAttemptBeginBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_changed_secret_begin",
+            start=_start(claim),
+            claim=claim,
+            grants=(_grant(),),
+        )
+    )
+    recorder = WorkflowModuleLedgerRecorder(
+        WorkflowModuleLedgerBinding(
+            record_store=store,
+            entitlement_snapshot_hash=ENTITLEMENT_HASH,
+            claim_token_secret=b"different-workflow-secret-material-32-bytes",
+        )
+    )
+
+    with pytest.raises(PermissionError, match="secret differs"):
+        recorder.recover_expired_attempt(
+            workflow_execution_id=EXECUTION_ID,
+            attempt_id=ATTEMPT_ID,
+            observed_at_utc="2026-08-02T12:02:01Z",
+        )
+
+    assert store.load_trace(EXECUTION_ID).records_of_type(WorkflowAttemptRecord) == ()
 
 
 def test_duplicate_live_orphan_does_not_evict_a_newer_retry_claim() -> None:

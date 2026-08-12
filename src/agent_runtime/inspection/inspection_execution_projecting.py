@@ -8,11 +8,13 @@ must authorize the execution and any content dereference before using it.
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Iterable
 
 from ..contracts.ledger_lineage_definition import ModuleOutputResolutionRecord
 from ..contracts.ledger_record_definition import (
+    AttemptOrphanedRecord,
     CheckpointRecord,
     ContextEvent,
     EvaluationResult,
@@ -26,6 +28,7 @@ from ..contracts.ledger_record_definition import (
     ToolCallRecord,
     UsageEvent,
     WorkflowAttemptRecord,
+    WorkflowAttemptStartedRecord,
     WorkflowExecutionRecord,
     WorkflowModuleExecutionVariantRecord,
     WorkflowModuleRunRecord,
@@ -83,8 +86,10 @@ def _record_position(trace: RuntimeExecutionTrace) -> dict[int, int]:
 
 def _module_status(
     module_run_id: str,
+    attempt_starts: tuple[WorkflowAttemptStartedRecord, ...],
     attempts: tuple[WorkflowAttemptRecord, ...],
     outcomes: tuple[ModuleOutcome, ...],
+    observed_at: datetime | None,
 ) -> str:
     matching_outcomes = tuple(
         row for row in outcomes if row.module_run_id == module_run_id
@@ -96,9 +101,21 @@ def _module_status(
             "wait": "waiting",
             "retryable_failure": "failed",
         }.get(disposition, disposition)
+    matching_starts = tuple(
+        row for row in attempt_starts if row.module_run_id == module_run_id
+    )
     matching_attempts = tuple(
         row for row in attempts if row.module_run_id == module_run_id
     )
+    terminal_attempt_ids = {row.attempt_id for row in matching_attempts}
+    incomplete_starts = tuple(
+        row for row in matching_starts if row.attempt_id not in terminal_attempt_ids
+    )
+    if incomplete_starts:
+        last_start = max(incomplete_starts, key=lambda row: row.attempt_ordinal)
+        if observed_at is not None and observed_at >= last_start.deadline_at():
+            return "recovery_required"
+        return "running"
     if not matching_attempts:
         return "registered"
     # Without a committed Outcome, the latest committed Attempt is the current
@@ -112,18 +129,28 @@ def _module_status(
 
 def _workflow_status(
     module_runs: tuple[WorkflowModuleRunRecord, ...],
+    attempt_starts: tuple[WorkflowAttemptStartedRecord, ...],
     attempts: tuple[WorkflowAttemptRecord, ...],
     outcomes: tuple[ModuleOutcome, ...],
     checkpoints: tuple[CheckpointRecord, ...],
+    observed_at: datetime | None,
 ) -> str:
     if checkpoints:
         return str(checkpoints[-1].runtime_status_id)
     if not module_runs:
         return "admitted"
     statuses = {
-        _module_status(row.module_run_id, attempts, outcomes)
+        _module_status(
+            row.module_run_id,
+            attempt_starts,
+            attempts,
+            outcomes,
+            observed_at,
+        )
         for row in module_runs
     }
+    if "recovery_required" in statuses:
+        return "recovery_required"
     if "failed" in statuses:
         return "failed"
     if "cancelled" in statuses:
@@ -150,6 +177,7 @@ def build_runtime_execution_inspection(
     trace: RuntimeExecutionTrace,
     *,
     workflow_release: WorkflowRelease | None = None,
+    observed_at_utc: str | None = None,
 ) -> dict[str, Any]:
     """Build the canonical denormalized view used by live and offline Inspector.
 
@@ -159,6 +187,11 @@ def build_runtime_execution_inspection(
 
     if not isinstance(trace, RuntimeExecutionTrace):
         raise TypeError("trace must be a RuntimeExecutionTrace")
+    observed_at = (
+        None
+        if observed_at_utc is None
+        else _parse_utc_instant("observed_at_utc", observed_at_utc)
+    )
     executions = trace.records_of_type(WorkflowExecutionRecord)
     execution = _one(executions, "WorkflowExecutionRecord")
     if execution.workflow_execution_id != trace.workflow_execution_id:
@@ -184,7 +217,9 @@ def build_runtime_execution_inspection(
     positions = _record_position(trace)
     module_runs = trace.records_of_type(WorkflowModuleRunRecord)
     variants = trace.records_of_type(WorkflowModuleExecutionVariantRecord)
+    attempt_starts = trace.records_of_type(WorkflowAttemptStartedRecord)
     attempts = trace.records_of_type(WorkflowAttemptRecord)
+    orphaned_attempts = trace.records_of_type(AttemptOrphanedRecord)
     inputs = trace.records_of_type(ExecutionInputRef)
     outputs = trace.records_of_type(ExecutionOutputRef)
     usage_events = trace.records_of_type(UsageEvent)
@@ -207,12 +242,27 @@ def build_runtime_execution_inspection(
     attempt_by_id = {row.attempt_id: row for row in attempts}
     if len(attempt_by_id) != len(attempts):
         raise ValueError("Runtime inspection requires unique attempt_id values")
+    attempt_start_by_id = {row.attempt_id: row for row in attempt_starts}
+    if len(attempt_start_by_id) != len(attempt_starts):
+        raise ValueError("Runtime inspection requires unique Attempt starts")
+    orphaned_by_attempt_id = {row.attempt_id: row for row in orphaned_attempts}
+    if len(orphaned_by_attempt_id) != len(orphaned_attempts):
+        raise ValueError("Runtime inspection requires one orphan disposition per Attempt")
 
     # Existence alone is not lineage: every child record must sit inside the
     # exact chain of the parents it names, or a mismatched record would be
     # displayed under the wrong Module as if the ledger had committed it there.
     if any(row.module_run_id not in module_ids for row in variants):
         raise ValueError("Runtime inspection found an orphan Variant")
+    for row in attempt_starts:
+        start_variant = variant_by_id.get(row.variant_id)
+        if (
+            start_variant is None
+            or start_variant.module_run_id != row.module_run_id
+        ):
+            raise ValueError(
+                "Runtime inspection found an Attempt start outside its Variant lineage"
+            )
     for row in attempts:
         attempt_variant = variant_by_id.get(row.variant_id)
         if (
@@ -221,6 +271,29 @@ def build_runtime_execution_inspection(
         ):
             raise ValueError(
                 "Runtime inspection found an Attempt outside its Variant lineage"
+            )
+        start = attempt_start_by_id.get(row.attempt_id)
+        if start is not None and (
+            start.module_run_id != row.module_run_id
+            or start.variant_id != row.variant_id
+            or start.attempt_ordinal != row.attempt_ordinal
+        ):
+            raise ValueError(
+                "Runtime inspection found a terminal Attempt outside its start lineage"
+            )
+    for row in orphaned_attempts:
+        start = attempt_start_by_id.get(row.attempt_id)
+        terminal = attempt_by_id.get(row.attempt_id)
+        if (
+            start is None
+            or terminal is None
+            or start.module_run_id != row.module_run_id
+            or start.variant_id != row.variant_id
+            or terminal.module_run_id != row.module_run_id
+            or terminal.variant_id != row.variant_id
+        ):
+            raise ValueError(
+                "Runtime inspection found an orphan disposition outside its Attempt lineage"
             )
     operation_ids = {row.model_call_id for row in model_calls} | {
         row.tool_call_id for row in tool_calls
@@ -320,6 +393,9 @@ def build_runtime_execution_inspection(
         module_attempts = tuple(
             row for row in attempts if row.variant_id in module_variant_ids
         )
+        module_attempt_starts = tuple(
+            row for row in attempt_starts if row.variant_id in module_variant_ids
+        )
         module_attempt_ids = {row.attempt_id for row in module_attempts}
         module_outputs = tuple(
             row for row in outputs if row.module_run_id == module.module_run_id
@@ -371,6 +447,32 @@ def build_runtime_execution_inspection(
                     "source_ledger_position": positions[id(attempt)],
                 }
             )
+        attempt_start_views = []
+        for start in module_attempt_starts:
+            terminal = attempt_by_id.get(start.attempt_id)
+            orphaned = orphaned_by_attempt_id.get(start.attempt_id)
+            if terminal is not None:
+                lease_state = "terminalized"
+            elif observed_at is None:
+                lease_state = "unresolved"
+            elif observed_at >= start.deadline_at():
+                lease_state = "expired"
+            else:
+                lease_state = "active"
+            attempt_start_views.append(
+                {
+                    **start.as_dict(),
+                    "deadline_at_utc": _format_utc_instant(start.deadline_at()),
+                    "lease_state": lease_state,
+                    "terminal_status": (
+                        None if terminal is None else terminal.status
+                    ),
+                    "orphan_reason_code": (
+                        None if orphaned is None else orphaned.reason_code
+                    ),
+                    "source_ledger_position": positions[id(start)],
+                }
+            )
         artifact_views = [
             {
                 "artifact_ref": row.input_ref,
@@ -416,7 +518,11 @@ def build_runtime_execution_inspection(
                     "workflow_node_id": module.state_id,
                     "module_release_ref": module_release_ref,
                     "status": _module_status(
-                        module.module_run_id, attempts, outcomes
+                        module.module_run_id,
+                        attempt_starts,
+                        attempts,
+                        outcomes,
+                        observed_at,
                     ),
                     "source_ledger_position": positions[id(module)],
                 },
@@ -426,6 +532,12 @@ def build_runtime_execution_inspection(
                     "release_ref": module_release_ref,
                 },
                 "variants": variant_views,
+                "attempt_starts": attempt_start_views,
+                "incomplete_attempts": [
+                    row
+                    for row in attempt_start_views
+                    if row["terminal_status"] is None
+                ],
                 "attempts": attempt_views,
                 "artifacts": artifact_views,
                 "evaluations": [
@@ -472,7 +584,12 @@ def build_runtime_execution_inspection(
             "workflow": {
                 **execution.as_dict(),
                 "status": _workflow_status(
-                    module_runs, attempts, outcomes, checkpoints
+                    module_runs,
+                    attempt_starts,
+                    attempts,
+                    outcomes,
+                    checkpoints,
+                    observed_at,
                 ),
                 "source_ledger_position": positions[id(execution)],
             },
@@ -487,9 +604,30 @@ def build_runtime_execution_inspection(
             "projection_kind": "rebuildable_read_model",
             "content_included": False,
             "authorization_decision_made": False,
+            "observed_at_utc": observed_at_utc,
         },
         "records": [_inspection_record_as_dict(row) for row in trace.records],
     }
 
 
 __all__ = ["build_runtime_execution_inspection"]
+
+
+def _parse_utc_instant(label: str, value: str) -> datetime:
+    """Parse an explicit observation instant without consulting wall time."""
+
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ValueError(f"{label} must be a UTC timestamp ending in Z")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a valid UTC timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise ValueError(f"{label} must be UTC")
+    return parsed
+
+
+def _format_utc_instant(value: datetime) -> str:
+    """Format one derived deadline for the JSON inspection view."""
+
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

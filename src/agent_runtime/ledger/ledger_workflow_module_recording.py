@@ -13,6 +13,7 @@ Those bytes remain behind the Cell-local artifact host.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import hmac
 from ..contracts.execution_module_definition import (
@@ -32,6 +33,9 @@ from ..contracts.ledger_lineage_definition import (
 from ..contracts.ledger_record_definition import (
     AttemptClaim,
     AttemptFinalizationBatch,
+    AttemptOrphanedRecord,
+    AttemptOrphaningBatch,
+    AttemptOrphaningReceipt,
     AttemptOutputBundle,
     ExecutionOutputRef,
     InvocationCommitRecord,
@@ -88,6 +92,7 @@ class WorkflowModuleLedgerBinding:
             "begin_attempt",
             "authorize_operation",
             "finalize_attempt",
+            "orphan_attempt",
             "load_trace",
         ):
             if not callable(getattr(self.record_store, method_name, None)):
@@ -608,6 +613,130 @@ class WorkflowModuleLedgerRecorder:
         self._claims[attempt_id] = receipt.claim
         return receipt.claim
 
+    def recover_expired_attempt(
+        self,
+        *,
+        workflow_execution_id: str,
+        attempt_id: str,
+        observed_at_utc: str,
+        reason_code: str = "attempt_lease_expired",
+        context_disposition_id: str = "invalidate",
+    ) -> AttemptOrphaningReceipt:
+        """Terminalize one expired start without inventing provider results.
+
+        Recovery derives the original active claim from the execution-pinned
+        host secret.  A restarted host must therefore receive the same
+        ``claim_token_secret`` that was used when the Attempt began.  The
+        provider interval ends at the recorded deadline; ``observed_at_utc``
+        records when recovery established that the lease had expired.
+        """
+
+        trace = self.record_store.load_trace(workflow_execution_id)
+        start = _one_by_id(
+            trace.records_of_type(WorkflowAttemptStartedRecord),
+            "attempt_id",
+            attempt_id,
+        )
+        if start is None:
+            raise ValueError("expired Attempt recovery requires a durable start")
+        if start.workflow_execution_id != workflow_execution_id:
+            raise ValueError("Attempt start belongs to another Workflow Execution")
+        if (
+            start.entitlement_snapshot_hash
+            != self._binding.entitlement_snapshot_hash
+        ):
+            raise PermissionError("Attempt recovery entitlement snapshot changed")
+
+        observed_at = _parse_utc_instant("observed_at_utc", observed_at_utc)
+        deadline_at = start.deadline_at()
+        if observed_at < deadline_at:
+            raise ValueError("Attempt lease has not expired")
+
+        claim = AttemptClaim(
+            workflow_execution_id=workflow_execution_id,
+            attempt_id=attempt_id,
+            claim_token=self._claim_token(workflow_execution_id, attempt_id),
+        )
+        if sha256_text(claim.claim_token) != start.claim_token_hash:
+            raise PermissionError(
+                "Attempt recovery claim secret differs from durable start"
+            )
+
+        prior_terminal = _one_by_id(
+            trace.records_of_type(WorkflowAttemptRecord),
+            "attempt_id",
+            attempt_id,
+        )
+        prior_orphaned = _one_by_id(
+            trace.records_of_type(AttemptOrphanedRecord),
+            "attempt_id",
+            attempt_id,
+        )
+        if (prior_terminal is None) != (prior_orphaned is None):
+            raise ValueError("Attempt has an incomplete orphan disposition")
+        if prior_terminal is not None:
+            if (
+                prior_terminal.status != "failed"
+                or prior_terminal.failure_class != "orphaned_attempt"
+                or prior_orphaned.reason_code != reason_code
+                or prior_orphaned.context_disposition_id
+                != context_disposition_id
+            ):
+                raise ValueError("Attempt already has a different terminal result")
+            terminal = prior_terminal
+            orphaned = prior_orphaned
+        else:
+            deadline_at_utc = _format_utc_instant(deadline_at)
+            terminal = WorkflowAttemptRecord(
+                workflow_execution_id=workflow_execution_id,
+                module_run_id=start.module_run_id,
+                variant_id=start.variant_id,
+                attempt_id=start.attempt_id,
+                parent_attempt_id=start.parent_attempt_id,
+                attempt_ordinal=start.attempt_ordinal,
+                status="failed",
+                period_start_at_utc=start.recorded_at_utc,
+                period_end_at_utc=deadline_at_utc,
+                recorded_at_utc=observed_at_utc,
+                trace_id=start.trace_id,
+                execution_output_refs=(),
+                failure_class="orphaned_attempt",
+            )
+            orphaned = AttemptOrphanedRecord(
+                orphaned_record_id=stable_runtime_id(
+                    "attempt_orphaned",
+                    workflow_execution_id,
+                    attempt_id,
+                ),
+                workflow_execution_id=workflow_execution_id,
+                dispatch_id=start.dispatch_id,
+                module_run_id=start.module_run_id,
+                variant_id=start.variant_id,
+                attempt_id=start.attempt_id,
+                reason_code=reason_code,
+                context_disposition_id=context_disposition_id,
+                recorded_at_utc=observed_at_utc,
+            )
+
+        receipt = self.record_store.orphan_attempt(
+            claim,
+            AttemptOrphaningBatch(
+                workflow_execution_id=workflow_execution_id,
+                transaction_id=stable_runtime_id(
+                    "transaction",
+                    workflow_execution_id,
+                    attempt_id,
+                    "attempt_orphan",
+                ),
+                terminal_attempt=terminal,
+                orphaned=orphaned,
+            ),
+        )
+        self._claims.pop(attempt_id, None)
+        self._model_grants.pop(attempt_id, None)
+        self._tool_grants.pop(attempt_id, None)
+        return receipt
+
     def authorize_model_call(
         self,
         *,
@@ -1011,6 +1140,26 @@ def _one_by_id(rows, field_name: str, expected_id: str):
     if len(matches) > 1:
         raise ValueError(f"duplicate Runtime ledger identity: {expected_id}")
     return matches[0] if matches else None
+
+
+def _parse_utc_instant(label: str, value: str) -> datetime:
+    """Parse one canonical UTC instant for recovery comparisons."""
+
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ValueError(f"{label} must be a UTC timestamp ending in Z")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a valid UTC timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise ValueError(f"{label} must be UTC")
+    return parsed
+
+
+def _format_utc_instant(value: datetime) -> str:
+    """Format a deadline as the canonical ledger UTC representation."""
+
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _tool_observation_from_record(
