@@ -717,3 +717,155 @@ def test_postgres_mutations_reconstruct_from_committed_facts(
     assert store.load_trace(EXECUTION_ID).records == (
         first_batch.records + second_batch.records
     )
+
+
+def test_postgres_replayed_recovery_persists_exactly_one_disposition(
+    postgres_test_schema: str,
+) -> None:
+    import hmac as hmac_module
+
+    from agent_runtime.contracts.ledger_record_definition import (
+        AttemptClaim,
+        AttemptOrphanedRecord,
+        LegacyAttemptBeginBatch,
+        WorkflowAttemptRecord,
+        WorkflowAttemptStartedRecord,
+        WorkflowModuleExecutionVariantRecord,
+        WorkflowModuleRunRecord,
+        sha256_json,
+        sha256_text,
+    )
+    from agent_runtime.ledger.ledger_workflow_module_recording import (
+        WorkflowModuleLedgerBinding,
+        WorkflowModuleLedgerRecorder,
+    )
+
+    database_url = os.environ["AGENT_RUNTIME_TEST_DATABASE_URL"]
+    input_record = ExecutionInputRef(
+        execution_input_id="input_postgres_recovery_001",
+        workflow_execution_id=EXECUTION_ID,
+        input_type_id="agent_input",
+        schema_version="v1",
+        input_ref="artifact-ref:postgres-recovery-input-001",
+        input_sha256="1" * 64,
+        byte_size=12,
+        media_type="application/json",
+        recorded_at_utc=RECORDED_AT,
+    )
+    module = WorkflowModuleRunRecord(
+        workflow_execution_id=EXECUTION_ID,
+        module_run_id="module_postgres_recovery_001",
+        state_id="state_postgres",
+        module_id="module_postgres",
+        input_refs=(input_record.input_ref,),
+        input_closure_sha256=sha256_json([input_record.input_ref]),
+        recorded_at_utc=RECORDED_AT,
+    )
+    variant = WorkflowModuleExecutionVariantRecord(
+        workflow_execution_id=EXECUTION_ID,
+        module_run_id=module.module_run_id,
+        variant_id="variant_postgres_recovery_001",
+        module_id=module.module_id,
+        agent_execution_adapter_id="adapter_postgres",
+        execution_profile_id="profile_postgres",
+        model_id="model_postgres",
+        reasoning_profile="effort_postgres",
+        prompt_sha256="2" * 64,
+        static_module_sha256="3" * 64,
+        input_closure_sha256=module.input_closure_sha256,
+        entitlement_snapshot_hash="e" * 64,
+        agent_execution_adapter_revision="adapter_revision_v1",
+        runtime_version="runtime_v1",
+        tool_policy=("no_tools",),
+        context_mode="stateless",
+        output_schema_sha256="f" * 64,
+        timeout_seconds=120,
+        max_attempts=1,
+        execution_profile_sha256="4" * 64,
+        recorded_at_utc=RECORDED_AT,
+    )
+    store = PostgresRuntimeExecutionRecordStore.from_dsn(
+        database_url,
+        schema=postgres_test_schema,
+    )
+    store.initialize_schema()
+    store.commit(
+        RuntimeRecordBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_postgres_recovery_bootstrap",
+            records=(_execution(input_record), input_record, module, variant),
+        )
+    )
+
+    secret = b"stable-postgres-recovery-secret-32-bytes"
+    attempt_id = "attempt_postgres_recovery_001"
+    claim = AttemptClaim(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id=attempt_id,
+        claim_token=hmac_module.new(
+            secret,
+            f"{EXECUTION_ID}\x1f{attempt_id}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest(),
+    )
+    store.begin_attempt(
+        LegacyAttemptBeginBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_postgres_recovery_begin",
+            start=WorkflowAttemptStartedRecord(
+                workflow_execution_id=EXECUTION_ID,
+                dispatch_id="dispatch_postgres_recovery_001",
+                module_run_id=module.module_run_id,
+                variant_id=variant.variant_id,
+                attempt_id=attempt_id,
+                parent_attempt_id=None,
+                attempt_ordinal=1,
+                trace_id="trace_postgres_recovery_001",
+                request_sha256="5" * 64,
+                claim_token_hash=sha256_text(claim.claim_token),
+                input_closure_sha256=module.input_closure_sha256,
+                execution_profile_sha256=variant.execution_profile_sha256,
+                entitlement_snapshot_hash=variant.entitlement_snapshot_hash,
+                timeout_seconds=variant.timeout_seconds,
+                recorded_at_utc=RECORDED_AT,
+            ),
+            claim=claim,
+            grants=(),
+        )
+    )
+
+    def recorder() -> WorkflowModuleLedgerRecorder:
+        return WorkflowModuleLedgerRecorder(
+            WorkflowModuleLedgerBinding(
+                record_store=PostgresRuntimeExecutionRecordStore.from_dsn(
+                    database_url,
+                    schema=postgres_test_schema,
+                ),
+                entitlement_snapshot_hash=variant.entitlement_snapshot_hash,
+                claim_token_secret=secret,
+            )
+        )
+
+    first = recorder().recover_expired_attempt(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id=attempt_id,
+        observed_at_utc="2026-08-08T12:02:01Z",
+    )
+    replay = recorder().recover_expired_attempt(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id=attempt_id,
+        observed_at_utc="2026-08-08T12:07:33Z",
+    )
+
+    assert first.commit_receipt.replayed is False
+    assert replay.commit_receipt.replayed is True
+    trace = PostgresRuntimeExecutionRecordStore.from_dsn(
+        database_url,
+        schema=postgres_test_schema,
+    ).load_trace(EXECUTION_ID)
+    orphans = trace.records_of_type(AttemptOrphanedRecord)
+    terminals = trace.records_of_type(WorkflowAttemptRecord)
+    assert len(orphans) == 1
+    assert len(terminals) == 1
+    assert orphans[0].recorded_at_utc == "2026-08-08T12:02:00Z"
+    assert terminals[0].recorded_at_utc == "2026-08-08T12:02:00Z"

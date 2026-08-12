@@ -377,6 +377,23 @@ class InMemoryRuntimeExecutionRecordStore:
                 or prior_orphaned != batch.orphaned
             ):
                 raise ValueError("Attempt already has a different orphan disposition")
+            else:
+                # The identical disposition is already committed — possibly
+                # under another caller's transaction. Converge on the committed
+                # fact as a replay instead of re-appending records.
+                self._release_claim_if_owned(batch.workflow_execution_id, start)
+                record_batch = batch.as_record_batch()
+                return AttemptOrphaningReceipt(
+                    commit_receipt=CommitReceipt(
+                        workflow_execution_id=batch.workflow_execution_id,
+                        transaction_id=batch.transaction_id,
+                        transaction_sha256=record_batch.transaction_sha256,
+                        record_count=len(record_batch.records),
+                        committed_outcome_refs=(),
+                        replayed=True,
+                    ),
+                    orphaned_record_id=batch.orphaned.orphaned_record_id,
+                )
             receipt = self.commit(batch.as_record_batch())
             self._release_claim_if_owned(batch.workflow_execution_id, start)
             return AttemptOrphaningReceipt(

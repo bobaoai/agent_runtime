@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from agent_runtime.contracts.ledger_record_definition import (
+    AttemptOrphanedRecord,
     CommitReceipt,
     ExecutionInputRef,
     ExecutionOutputRef,
@@ -420,7 +421,17 @@ def test_started_attempt_is_visible_and_expiry_requires_explicit_observation() -
     assert running_module["module_run"]["status"] == "running"
     assert running_module["attempt_starts"][0]["lease_state"] == "unresolved"
     assert running_module["attempts"] == []
-    assert len(running_module["incomplete_attempts"]) == 1
+    assert (
+        len(
+            [
+                row
+                for row in running_module["attempt_starts"]
+                if row["terminal_status"] is None
+            ]
+        )
+        == 1
+    )
+    assert "incomplete_attempts" not in running_module
     assert expired["trace"]["workflow"]["status"] == "recovery_required"
     assert expired["modules"][0]["module_run"]["status"] == "recovery_required"
     assert expired["modules"][0]["attempt_starts"][0]["lease_state"] == "expired"
@@ -550,3 +561,153 @@ def test_execution_projection_is_rebuilt_without_persisting_a_second_ledger() ->
         "UsageEvent",
         "ExecutionOutputRef",
     ]
+
+
+def _start_for(
+    base: RuntimeExecutionTrace,
+    variant: WorkflowModuleExecutionVariantRecord,
+    attempt_id: str,
+    *,
+    attempt_ordinal: int = 1,
+    trace_id: str = "trace_inspection_start",
+) -> WorkflowAttemptStartedRecord:
+    module = _record(base, WorkflowModuleRunRecord)
+    return WorkflowAttemptStartedRecord(
+        workflow_execution_id=base.workflow_execution_id,
+        dispatch_id="dispatch_inspection_001",
+        module_run_id=variant.module_run_id,
+        variant_id=variant.variant_id,
+        attempt_id=attempt_id,
+        parent_attempt_id=None,
+        attempt_ordinal=attempt_ordinal,
+        trace_id=trace_id,
+        request_sha256="8" * 64,
+        claim_token_hash="9" * 64,
+        input_closure_sha256=module.input_closure_sha256,
+        execution_profile_sha256=variant.execution_profile_sha256,
+        entitlement_snapshot_hash=variant.entitlement_snapshot_hash,
+        timeout_seconds=variant.timeout_seconds,
+        recorded_at_utc=UTC_START,
+    )
+
+
+def test_projection_rejects_a_start_outside_its_variant_lineage() -> None:
+    base = _trace()
+    variant = _record(base, WorkflowModuleExecutionVariantRecord)
+    ghost = _start_for(
+        base,
+        replace(variant, variant_id="variant_inspection_ghost"),
+        "attempt_inspection_ghost",
+    )
+    records = (*base.records, ghost)
+
+    with pytest.raises(
+        ValueError, match="Attempt start outside its Variant lineage"
+    ):
+        build_runtime_execution_inspection(_trace_with(base, records))
+
+
+def test_projection_rejects_a_terminal_attempt_off_its_start_lineage() -> None:
+    base = _trace()
+    variant = _record(base, WorkflowModuleExecutionVariantRecord)
+    terminal = _record(base, WorkflowAttemptRecord)
+    drifted_start = _start_for(
+        base,
+        variant,
+        terminal.attempt_id,
+        attempt_ordinal=terminal.attempt_ordinal + 1,
+        trace_id=terminal.trace_id,
+    )
+    records = (*base.records, drifted_start)
+
+    with pytest.raises(
+        ValueError, match="terminal Attempt outside its start lineage"
+    ):
+        build_runtime_execution_inspection(_trace_with(base, records))
+
+
+def test_projection_rejects_an_orphan_disposition_without_its_start() -> None:
+    base = _trace()
+    terminal = _record(base, WorkflowAttemptRecord)
+    orphaned = AttemptOrphanedRecord(
+        orphaned_record_id="attempt_orphaned_inspection_001",
+        workflow_execution_id=base.workflow_execution_id,
+        dispatch_id="dispatch_inspection_001",
+        module_run_id=terminal.module_run_id,
+        variant_id=terminal.variant_id,
+        attempt_id=terminal.attempt_id,
+        reason_code="attempt_lease_expired",
+        context_disposition_id="invalidate",
+        recorded_at_utc=UTC_END,
+    )
+    records = (*base.records, orphaned)
+
+    with pytest.raises(
+        ValueError, match="orphan disposition outside its Attempt lineage"
+    ):
+        build_runtime_execution_inspection(_trace_with(base, records))
+
+
+def test_one_expired_variant_lease_is_not_masked_by_another_active_variant() -> None:
+    base = _trace()
+    variant = _record(base, WorkflowModuleExecutionVariantRecord)
+    slow_variant = replace(
+        variant,
+        variant_id="variant_inspection_002",
+        timeout_seconds=3600,
+    )
+    fast_start = _start_for(
+        base, variant, "attempt_inspection_001", trace_id="trace_inspection_001"
+    )
+    slow_start = _start_for(
+        base,
+        slow_variant,
+        "attempt_inspection_002",
+        trace_id="trace_inspection_002",
+    )
+    removed_types = (
+        WorkflowAttemptRecord,
+        ModelCallRecord,
+        UsageEvent,
+        ExecutionOutputRef,
+    )
+    records = tuple(
+        row for row in base.records if not isinstance(row, removed_types)
+    )
+    records = (*records, slow_variant, fast_start, slow_start)
+
+    # Observed between the two deadlines: the 300s lease is expired while the
+    # 3600s lease is still active.
+    projection = build_runtime_execution_inspection(
+        _trace_with(base, records),
+        observed_at_utc="2026-08-10T12:06:00Z",
+    )
+
+    module = projection["modules"][0]
+    lease_states = {
+        row["attempt_id"]: row["lease_state"]
+        for row in module["attempt_starts"]
+    }
+    assert lease_states == {
+        "attempt_inspection_001": "expired",
+        "attempt_inspection_002": "active",
+    }
+    assert module["module_run"]["status"] == "recovery_required"
+    assert projection["trace"]["workflow"]["status"] == "recovery_required"
+
+
+@pytest.mark.parametrize(
+    "observed_at_utc",
+    [
+        "2026-08-10 12:06:00Z",
+        "2026-08-10T12:06Z",
+        "2026-08-10T12:06:00+00:00",
+    ],
+)
+def test_projection_rejects_non_canonical_observation_instants(
+    observed_at_utc: str,
+) -> None:
+    with pytest.raises(ValueError, match="observed_at_utc"):
+        build_runtime_execution_inspection(
+            _trace(), observed_at_utc=observed_at_utc
+        )

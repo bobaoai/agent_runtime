@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import hmac
+from types import SimpleNamespace
 
 import pytest
 
@@ -669,16 +670,21 @@ def test_orphan_disposition_terminalizes_start_before_next_attempt() -> None:
     )
 
 
-def test_recorder_recovers_expired_attempt_after_restart_with_stable_secret() -> None:
-    store = InMemoryRuntimeExecutionRecordStore()
-    _bootstrap(store)
-    secret = b"stable-workflow-execution-secret-32-bytes"
-    claim_token = hmac.new(
+def _derived_claim_token(secret: bytes) -> str:
+    """Mirror the recorder's HMAC claim derivation for recovery fixtures."""
+
+    return hmac.new(
         secret,
         f"{EXECUTION_ID}\x1f{ATTEMPT_ID}".encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    claim = _claim(claim_token)
+
+
+def test_recorder_recovers_expired_attempt_after_restart_with_stable_secret() -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    secret = b"stable-workflow-execution-secret-32-bytes"
+    claim = _claim(_derived_claim_token(secret))
     store.begin_attempt(
         LegacyAttemptBeginBatch(
             workflow_execution_id=EXECUTION_ID,
@@ -720,19 +726,17 @@ def test_recorder_recovers_expired_attempt_after_restart_with_stable_secret() ->
     assert terminal.period_end_at_utc == "2026-08-02T12:02:00Z"
     assert terminal.failure_class == "orphaned_attempt"
     assert orphaned.reason_code == "attempt_lease_expired"
-    assert orphaned.recorded_at_utc == "2026-08-02T12:02:01Z"
+    # Recovery record timestamps derive from the durable deadline, never the
+    # caller's observation instant, so the disposition is byte-deterministic.
+    assert orphaned.recorded_at_utc == "2026-08-02T12:02:00Z"
+    assert terminal.recorded_at_utc == "2026-08-02T12:02:00Z"
 
 
 def test_expired_attempt_recovery_rejects_changed_host_secret() -> None:
     store = InMemoryRuntimeExecutionRecordStore()
     _bootstrap(store)
     original_secret = b"original-workflow-secret-material-32-bytes"
-    claim_token = hmac.new(
-        original_secret,
-        f"{EXECUTION_ID}\x1f{ATTEMPT_ID}".encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    claim = _claim(claim_token)
+    claim = _claim(_derived_claim_token(original_secret))
     store.begin_attempt(
         LegacyAttemptBeginBatch(
             workflow_execution_id=EXECUTION_ID,
@@ -1036,3 +1040,236 @@ def test_missing_output_bytes_reject_finalization_without_terminal_commit() -> N
     trace = store.load_trace(EXECUTION_ID)
     assert trace.records_of_type(WorkflowAttemptRecord) == ()
     assert trace.records_of_type(InvocationCommitRecord) == ()
+
+
+def test_recovery_after_normal_finalize_is_rejected_as_unnecessary() -> None:
+    store = InMemoryRuntimeExecutionRecordStore(
+        execution_output_integrity_check=lambda _: True
+    )
+    _bootstrap(store)
+    secret = b"stable-workflow-execution-secret-32-bytes"
+    claim = _claim(_derived_claim_token(secret))
+    store.begin_attempt(
+        LegacyAttemptBeginBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_finalized_begin",
+            start=_start(claim),
+            claim=claim,
+            grants=(_grant(),),
+        )
+    )
+    store.finalize_attempt(claim, _finalization())
+    recorder = WorkflowModuleLedgerRecorder(
+        WorkflowModuleLedgerBinding(
+            record_store=store,
+            entitlement_snapshot_hash=ENTITLEMENT_HASH,
+            claim_token_secret=secret,
+        )
+    )
+
+    with pytest.raises(
+        ValueError, match="already finalized with a provider result"
+    ):
+        recorder.recover_expired_attempt(
+            workflow_execution_id=EXECUTION_ID,
+            attempt_id=ATTEMPT_ID,
+            observed_at_utc="2026-08-02T12:02:01Z",
+        )
+
+    assert store.load_trace(EXECUTION_ID).records_of_type(
+        AttemptOrphanedRecord
+    ) == ()
+
+
+def test_cross_writer_identical_orphan_converges_as_replay() -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    secret = b"stable-workflow-execution-secret-32-bytes"
+    claim = _claim(_derived_claim_token(secret))
+    store.begin_attempt(
+        LegacyAttemptBeginBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_cross_writer_begin",
+            start=_start(claim),
+            claim=claim,
+            grants=(_grant(),),
+        )
+    )
+    WorkflowModuleLedgerRecorder(
+        WorkflowModuleLedgerBinding(
+            record_store=store,
+            entitlement_snapshot_hash=ENTITLEMENT_HASH,
+            claim_token_secret=secret,
+        )
+    ).recover_expired_attempt(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id=ATTEMPT_ID,
+        observed_at_utc="2026-08-02T12:02:01Z",
+    )
+    trace = store.load_trace(EXECUTION_ID)
+    committed_terminal = trace.records_of_type(WorkflowAttemptRecord)[0]
+    committed_orphan = trace.records_of_type(AttemptOrphanedRecord)[0]
+
+    # A second writer that derived the same deterministic disposition commits
+    # under its own transaction_id and must converge on the committed fact.
+    receipt = store.orphan_attempt(
+        claim,
+        AttemptOrphaningBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_other_caller_orphan",
+            terminal_attempt=committed_terminal,
+            orphaned=committed_orphan,
+        ),
+    )
+
+    assert receipt.commit_receipt.replayed is True
+    assert receipt.commit_receipt.transaction_id == "transaction_other_caller_orphan"
+    assert receipt.orphaned_record_id == committed_orphan.orphaned_record_id
+    final = store.load_trace(EXECUTION_ID)
+    assert final.records_of_type(AttemptOrphanedRecord) == (committed_orphan,)
+    assert final.records_of_type(WorkflowAttemptRecord) == (committed_terminal,)
+
+
+def test_begin_attempt_rejects_reclaim_of_terminal_attempt() -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    secret = b"stable-workflow-execution-secret-32-bytes"
+    recorder = WorkflowModuleLedgerRecorder(
+        WorkflowModuleLedgerBinding(
+            record_store=store,
+            entitlement_snapshot_hash=ENTITLEMENT_HASH,
+            claim_token_secret=secret,
+        )
+    )
+    # The recorder reads only the identity and closure fields from the
+    # execution request when durably claiming an Attempt.
+    request = SimpleNamespace(
+        workflow_execution_id=EXECUTION_ID,
+        dispatch_id=DISPATCH_ID,
+        module_run_id=STEP_ID,
+        request_sha256="3" * 64,
+        input_closure_sha256=sha256_json(["artifact-ref:synthetic-input-001"]),
+    )
+    variant = SimpleNamespace(variant_id=VARIANT_ID)
+    profile = SimpleNamespace(release_sha256="2" * 64, timeout_seconds=120)
+
+    first = recorder.begin_attempt(
+        request=request,
+        variant=variant,
+        profile=profile,
+        attempt_id=ATTEMPT_ID,
+        attempt_ordinal=1,
+        recorded_at_utc=START,
+    )
+    replayed = recorder.begin_attempt(
+        request=request,
+        variant=variant,
+        profile=profile,
+        attempt_id=ATTEMPT_ID,
+        attempt_ordinal=1,
+        recorded_at_utc="2026-08-02T12:00:05Z",
+    )
+    assert replayed.claim_token == first.claim_token
+
+    recorder.recover_expired_attempt(
+        workflow_execution_id=EXECUTION_ID,
+        attempt_id=ATTEMPT_ID,
+        observed_at_utc="2026-08-02T12:02:01Z",
+    )
+
+    with pytest.raises(
+        PermissionError, match="already terminal and cannot be re-claimed"
+    ):
+        recorder.begin_attempt(
+            request=request,
+            variant=variant,
+            profile=profile,
+            attempt_id=ATTEMPT_ID,
+            attempt_ordinal=1,
+            recorded_at_utc="2026-08-02T12:03:00Z",
+        )
+
+
+@pytest.mark.parametrize(
+    "observed_at_utc",
+    [
+        "2026-08-02 12:02:01Z",
+        "2026-08-02T12:02Z",
+        "20260802T120201Z",
+        "2026-08-02T12:02:01+00:00",
+        "2026-08-02T12:02:01",
+    ],
+)
+def test_recovery_rejects_non_canonical_observed_at(observed_at_utc: str) -> None:
+    store = InMemoryRuntimeExecutionRecordStore()
+    _bootstrap(store)
+    secret = b"stable-workflow-execution-secret-32-bytes"
+    claim = _claim(_derived_claim_token(secret))
+    store.begin_attempt(
+        LegacyAttemptBeginBatch(
+            workflow_execution_id=EXECUTION_ID,
+            transaction_id="transaction_synthetic_observed_at_begin",
+            start=_start(claim),
+            claim=claim,
+            grants=(_grant(),),
+        )
+    )
+    recorder = WorkflowModuleLedgerRecorder(
+        WorkflowModuleLedgerBinding(
+            record_store=store,
+            entitlement_snapshot_hash=ENTITLEMENT_HASH,
+            claim_token_secret=secret,
+        )
+    )
+
+    with pytest.raises(ValueError, match="observed_at_utc"):
+        recorder.recover_expired_attempt(
+            workflow_execution_id=EXECUTION_ID,
+            attempt_id=ATTEMPT_ID,
+            observed_at_utc=observed_at_utc,
+        )
+
+
+def test_ledger_binding_requires_committed_invocation_reader() -> None:
+    class StoreWithoutInvocationReader:
+        commit = staticmethod(lambda batch: None)
+        begin_attempt = staticmethod(lambda batch: None)
+        authorize_operation = staticmethod(lambda batch: None)
+        finalize_attempt = staticmethod(lambda claim, batch: None)
+        orphan_attempt = staticmethod(lambda claim, batch: None)
+        load_trace = staticmethod(lambda workflow_execution_id: None)
+
+    with pytest.raises(
+        ValueError, match="record_store must implement get_committed_invocation"
+    ):
+        WorkflowModuleLedgerBinding(
+            record_store=StoreWithoutInvocationReader(),
+            entitlement_snapshot_hash=ENTITLEMENT_HASH,
+            claim_token_secret=b"stable-workflow-execution-secret-32-bytes",
+        ).validate()
+
+
+def test_orphan_disposition_vocabulary_is_pinned() -> None:
+    def _orphaned(reason_code: str, context_disposition_id: str) -> AttemptOrphanedRecord:
+        return AttemptOrphanedRecord(
+            orphaned_record_id="attempt_orphaned_synthetic_vocab",
+            workflow_execution_id=EXECUTION_ID,
+            dispatch_id=DISPATCH_ID,
+            module_run_id=STEP_ID,
+            variant_id=VARIANT_ID,
+            attempt_id=ATTEMPT_ID,
+            reason_code=reason_code,
+            context_disposition_id=context_disposition_id,
+            recorded_at_utc=END,
+        )
+
+    for reason_code in ("attempt_lease_expired", "worker_lost", "operator_requested"):
+        for context_disposition_id in ("invalidate", "retain"):
+            _orphaned(reason_code, context_disposition_id).validate()
+
+    with pytest.raises(ValueError, match="reason_code is outside the contract"):
+        _orphaned("cosmic_ray", "invalidate").validate()
+    with pytest.raises(
+        ValueError, match="context_disposition_id is outside the contract"
+    ):
+        _orphaned("attempt_lease_expired", "purge").validate()

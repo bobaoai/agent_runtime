@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from agent_runtime.contracts.registry_contract_validation import (
+    format_utc_timestamp,
+    parse_utc_timestamp,
+)
 from agent_runtime.contracts.ledger_record_definition import (
     WorkflowAttemptRecord,
     AttemptOutputBundle,
@@ -110,8 +115,10 @@ def test_module_variant_attempt_and_canonical_output_lineage_validate() -> None:
     assert "usage" not in attempt.as_dict()
     assert "round_index" not in module.as_dict()
 
-    with pytest.raises(ValueError, match="recorded_at_utc must be UTC"):
+    with pytest.raises(ValueError, match="invalid recorded_at_utc"):
         replace(module, recorded_at_utc="2026-08-02T12:00:00+05:30").validate()
+    with pytest.raises(ValueError, match="invalid recorded_at_utc"):
+        replace(module, recorded_at_utc="2026-08-02 12:00:00Z").validate()
 
 
 def test_execution_output_ref_rejects_legacy_constructor_fields() -> None:
@@ -174,3 +181,34 @@ def test_immutable_json_replay_is_noop_and_drift_fails(tmp_path: Path) -> None:
     assert write_immutable_json(path, {"status": "complete"}) is False
     with pytest.raises(FileExistsError, match="immutable"):
         write_immutable_json(path, {"status": "changed"})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-08-02 12:00:00Z",
+        "2026-08-02T12:00Z",
+        "20260802T120000Z",
+        "2026-08-02T12:00:00",
+        "2026-08-02T12:00:00+00:00",
+        "2026-08-02T12:00:00.1234567Z",
+    ],
+)
+def test_canonical_timestamp_parse_rejects_non_canonical_text(value: str) -> None:
+    with pytest.raises(ValueError, match="invalid observed_at_utc"):
+        parse_utc_timestamp("observed_at_utc", value)
+
+
+def test_canonical_timestamp_helpers_round_trip() -> None:
+    for text in ("2026-08-02T12:00:00Z", "2026-08-02T12:00:00.000001Z"):
+        instant = parse_utc_timestamp("recorded_at_utc", text)
+        assert instant.tzinfo is not None
+        assert instant.utcoffset() == timedelta(0)
+        assert format_utc_timestamp(instant) == text
+
+    with pytest.raises(ValueError, match="aware UTC instant"):
+        format_utc_timestamp(datetime(2026, 8, 2, 12, 0, 0))
+    with pytest.raises(ValueError, match="aware UTC instant"):
+        format_utc_timestamp(
+            datetime(2026, 8, 2, 12, 0, 0, tzinfo=timezone(timedelta(hours=2)))
+        )

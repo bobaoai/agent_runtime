@@ -148,17 +148,45 @@ def validate_int(
         raise ValueError(f"{label} must be at most {maximum}")
 
 
+_CANONICAL_UTC_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
+)
+
+
 def validate_utc_timestamp(label: str, value: Any) -> None:
-    """Require an ISO 8601 UTC timestamp with an explicit trailing ``Z``."""
+    """Require one canonical ISO 8601 UTC timestamp: ``YYYY-MM-DDTHH:MM:SS[.ffffff]Z``.
+
+    ``fromisoformat`` alone tolerates space separators, compact forms, and
+    missing seconds; a non-canonical instant committed verbatim into immutable
+    records breaks lexicographic ordering and replay string equality, so the
+    canonical shape is enforced before parsing.
+    """
 
     if type(value) is not str or not value.endswith("Z"):
         raise ValueError(f"invalid {label}: UTC timestamp ending in Z required")
+    if not _CANONICAL_UTC_TIMESTAMP.fullmatch(value):
+        raise ValueError(f"invalid {label}: UTC timestamp required")
     try:
         parsed = datetime.fromisoformat(value[:-1] + "+00:00")
     except ValueError as exc:
         raise ValueError(f"invalid {label}: UTC timestamp required") from exc
     if parsed.utcoffset() is None or parsed.utcoffset().total_seconds() != 0:
         raise ValueError(f"invalid {label}: UTC timestamp required")
+
+
+def parse_utc_timestamp(label: str, value: Any) -> datetime:
+    """Validate one canonical UTC timestamp and return its aware instant."""
+
+    validate_utc_timestamp(label, value)
+    return datetime.fromisoformat(value[:-1] + "+00:00")
+
+
+def format_utc_timestamp(instant: datetime) -> str:
+    """Format one aware UTC instant into the canonical ``Z``-suffixed string."""
+
+    if instant.tzinfo is None or instant.utcoffset().total_seconds() != 0:
+        raise ValueError("format_utc_timestamp requires an aware UTC instant")
+    return instant.isoformat().replace("+00:00", "Z")
 
 
 def validate_usd_amount(label: str, value: Any) -> None:
@@ -244,6 +272,8 @@ def validate_exact_record_tuple(
 
 
 __all__ = [
+    "format_utc_timestamp",
+    "parse_utc_timestamp",
     "validate_bool",
     "validate_enum_string",
     "validate_exact_record_instance",

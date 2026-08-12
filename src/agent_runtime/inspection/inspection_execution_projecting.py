@@ -8,7 +8,7 @@ must authorize the execution and any content dereference before using it.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Iterable
 
@@ -34,6 +34,10 @@ from ..contracts.ledger_record_definition import (
     WorkflowModuleRunRecord,
     legacy_authorization_record_as_dict,
     runtime_record_as_dict,
+)
+from ..contracts.registry_contract_validation import (
+    format_utc_timestamp,
+    parse_utc_timestamp,
 )
 from ..contracts.registry_release_definition import WorkflowRelease
 from ..contracts.registry_workflow_definition import ModuleOutcome
@@ -85,77 +89,54 @@ def _record_position(trace: RuntimeExecutionTrace) -> dict[int, int]:
 
 
 def _module_status(
-    module_run_id: str,
-    attempt_starts: tuple[WorkflowAttemptStartedRecord, ...],
-    attempts: tuple[WorkflowAttemptRecord, ...],
-    outcomes: tuple[ModuleOutcome, ...],
-    observed_at: datetime | None,
+    attempt_start_views: list[dict[str, Any]],
+    module_attempts: tuple[WorkflowAttemptRecord, ...],
+    module_outcomes: tuple[ModuleOutcome, ...],
 ) -> str:
-    matching_outcomes = tuple(
-        row for row in outcomes if row.module_run_id == module_run_id
-    )
-    if matching_outcomes:
-        disposition = str(matching_outcomes[-1].disposition)
+    if module_outcomes:
+        disposition = str(module_outcomes[-1].disposition)
         return {
             "transition": "completed",
             "wait": "waiting",
             "retryable_failure": "failed",
         }.get(disposition, disposition)
-    matching_starts = tuple(
-        row for row in attempt_starts if row.module_run_id == module_run_id
-    )
-    matching_attempts = tuple(
-        row for row in attempts if row.module_run_id == module_run_id
-    )
-    terminal_attempt_ids = {row.attempt_id for row in matching_attempts}
-    incomplete_starts = tuple(
-        row for row in matching_starts if row.attempt_id not in terminal_attempt_ids
-    )
-    if incomplete_starts:
-        last_start = max(incomplete_starts, key=lambda row: row.attempt_ordinal)
-        if observed_at is not None and observed_at >= last_start.deadline_at():
-            return "recovery_required"
+    # Attempt chains are per Variant: one Variant's expired lease must never
+    # be masked by another Variant's active start, and a dangling start on
+    # any Variant keeps the Module unresolved (fan-out semantics) — only a
+    # committed Outcome resolves the Module across Variants.
+    in_flight = [
+        view for view in attempt_start_views if view["terminal_status"] is None
+    ]
+    if any(view["lease_state"] == "expired" for view in in_flight):
+        return "recovery_required"
+    if in_flight:
         return "running"
-    if not matching_attempts:
+    if not module_attempts:
         return "registered"
     # Without a committed Outcome, the latest committed Attempt is the current
     # state: a retry that succeeds supersedes its failed predecessors instead
     # of leaving the Module marked failed forever.
-    last = matching_attempts[-1]
+    last = module_attempts[-1]
     if last.status in {"completed", "failed", "cancelled"}:
         return last.status
     return "running"
 
 
 def _workflow_status(
-    module_runs: tuple[WorkflowModuleRunRecord, ...],
-    attempt_starts: tuple[WorkflowAttemptStartedRecord, ...],
-    attempts: tuple[WorkflowAttemptRecord, ...],
-    outcomes: tuple[ModuleOutcome, ...],
+    module_statuses: tuple[str, ...],
     checkpoints: tuple[CheckpointRecord, ...],
-    observed_at: datetime | None,
 ) -> str:
     if checkpoints:
         return str(checkpoints[-1].runtime_status_id)
-    if not module_runs:
+    if not module_statuses:
         return "admitted"
-    statuses = {
-        _module_status(
-            row.module_run_id,
-            attempt_starts,
-            attempts,
-            outcomes,
-            observed_at,
-        )
-        for row in module_runs
-    }
-    if "recovery_required" in statuses:
+    if "recovery_required" in module_statuses:
         return "recovery_required"
-    if "failed" in statuses:
+    if "failed" in module_statuses:
         return "failed"
-    if "cancelled" in statuses:
+    if "cancelled" in module_statuses:
         return "cancelled"
-    if "waiting" in statuses:
+    if "waiting" in module_statuses:
         return "waiting"
     return "running"
 
@@ -190,7 +171,7 @@ def build_runtime_execution_inspection(
     observed_at = (
         None
         if observed_at_utc is None
-        else _parse_utc_instant("observed_at_utc", observed_at_utc)
+        else parse_utc_timestamp("observed_at_utc", observed_at_utc)
     )
     executions = trace.records_of_type(WorkflowExecutionRecord)
     execution = _one(executions, "WorkflowExecutionRecord")
@@ -283,14 +264,14 @@ def build_runtime_execution_inspection(
             )
     for row in orphaned_attempts:
         start = attempt_start_by_id.get(row.attempt_id)
-        terminal = attempt_by_id.get(row.attempt_id)
+        # The attempts loop above already proved every terminal matches its
+        # start, so the orphan row only needs its start and a terminal to
+        # exist and to match the start's lineage.
         if (
             start is None
-            or terminal is None
+            or attempt_by_id.get(row.attempt_id) is None
             or start.module_run_id != row.module_run_id
             or start.variant_id != row.variant_id
-            or terminal.module_run_id != row.module_run_id
-            or terminal.variant_id != row.variant_id
         ):
             raise ValueError(
                 "Runtime inspection found an orphan disposition outside its Attempt lineage"
@@ -382,20 +363,31 @@ def build_runtime_execution_inspection(
         rows.sort(key=lambda row: int(row["source_ledger_position"]))
 
     release_ref_by_node = _workflow_node_release_refs(workflow_release)
+    # Records are grouped by Module once; the validated lineage closure above
+    # guarantees the module_run_id groupings agree with Variant membership.
+    variants_by_module: dict[str, list] = defaultdict(list)
+    for row in variants:
+        variants_by_module[row.module_run_id].append(row)
+    attempts_by_module: dict[str, list] = defaultdict(list)
+    for row in attempts:
+        attempts_by_module[row.module_run_id].append(row)
+    starts_by_module: dict[str, list] = defaultdict(list)
+    for row in attempt_starts:
+        starts_by_module[row.module_run_id].append(row)
+    outcomes_by_module: dict[str, list] = defaultdict(list)
+    for row in outcomes:
+        outcomes_by_module[row.module_run_id].append(row)
     node_occurrences: dict[str, int] = defaultdict(int)
     modules: list[dict[str, Any]] = []
+    module_statuses: list[str] = []
     for module in module_runs:
         node_occurrences[module.state_id] += 1
-        module_variants = tuple(
-            row for row in variants if row.module_run_id == module.module_run_id
-        )
-        module_variant_ids = {row.variant_id for row in module_variants}
-        module_attempts = tuple(
-            row for row in attempts if row.variant_id in module_variant_ids
-        )
+        module_variants = tuple(variants_by_module.get(module.module_run_id, ()))
+        module_attempts = tuple(attempts_by_module.get(module.module_run_id, ()))
         module_attempt_starts = tuple(
-            row for row in attempt_starts if row.variant_id in module_variant_ids
+            starts_by_module.get(module.module_run_id, ())
         )
+        module_outcomes = tuple(outcomes_by_module.get(module.module_run_id, ()))
         module_attempt_ids = {row.attempt_id for row in module_attempts}
         module_outputs = tuple(
             row for row in outputs if row.module_run_id == module.module_run_id
@@ -451,18 +443,19 @@ def build_runtime_execution_inspection(
         for start in module_attempt_starts:
             terminal = attempt_by_id.get(start.attempt_id)
             orphaned = orphaned_by_attempt_id.get(start.attempt_id)
+            deadline = start.deadline_at()
             if terminal is not None:
                 lease_state = "terminalized"
             elif observed_at is None:
                 lease_state = "unresolved"
-            elif observed_at >= start.deadline_at():
+            elif start.lease_expired_at(observed_at):
                 lease_state = "expired"
             else:
                 lease_state = "active"
             attempt_start_views.append(
                 {
                     **start.as_dict(),
-                    "deadline_at_utc": _format_utc_instant(start.deadline_at()),
+                    "deadline_at_utc": format_utc_timestamp(deadline),
                     "lease_state": lease_state,
                     "terminal_status": (
                         None if terminal is None else terminal.status
@@ -511,19 +504,19 @@ def build_runtime_execution_inspection(
             }
             for row in module_outputs
         )
+        module_status = _module_status(
+            attempt_start_views,
+            module_attempts,
+            module_outcomes,
+        )
+        module_statuses.append(module_status)
         modules.append(
             {
                 "module_run": {
                     **module.as_dict(),
                     "workflow_node_id": module.state_id,
                     "module_release_ref": module_release_ref,
-                    "status": _module_status(
-                        module.module_run_id,
-                        attempt_starts,
-                        attempts,
-                        outcomes,
-                        observed_at,
-                    ),
+                    "status": module_status,
                     "source_ledger_position": positions[id(module)],
                 },
                 "node_occurrence_index": node_occurrences[module.state_id],
@@ -533,11 +526,6 @@ def build_runtime_execution_inspection(
                 },
                 "variants": variant_views,
                 "attempt_starts": attempt_start_views,
-                "incomplete_attempts": [
-                    row
-                    for row in attempt_start_views
-                    if row["terminal_status"] is None
-                ],
                 "attempts": attempt_views,
                 "artifacts": artifact_views,
                 "evaluations": [
@@ -584,12 +572,8 @@ def build_runtime_execution_inspection(
             "workflow": {
                 **execution.as_dict(),
                 "status": _workflow_status(
-                    module_runs,
-                    attempt_starts,
-                    attempts,
-                    outcomes,
+                    tuple(module_statuses),
                     checkpoints,
-                    observed_at,
                 ),
                 "source_ledger_position": positions[id(execution)],
             },
@@ -611,23 +595,3 @@ def build_runtime_execution_inspection(
 
 
 __all__ = ["build_runtime_execution_inspection"]
-
-
-def _parse_utc_instant(label: str, value: str) -> datetime:
-    """Parse an explicit observation instant without consulting wall time."""
-
-    if not isinstance(value, str) or not value.endswith("Z"):
-        raise ValueError(f"{label} must be a UTC timestamp ending in Z")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{label} must be a valid UTC timestamp") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
-        raise ValueError(f"{label} must be UTC")
-    return parsed
-
-
-def _format_utc_instant(value: datetime) -> str:
-    """Format one derived deadline for the JSON inspection view."""
-
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

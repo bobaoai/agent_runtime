@@ -19,7 +19,10 @@ import re
 from typing import Any, Mapping, TypeAlias, TypeVar
 
 from .ledger_lineage_definition import ModuleOutputResolutionRecord
-from .registry_contract_validation import validate_usd_amount
+from .registry_contract_validation import (
+    validate_usd_amount,
+    validate_utc_timestamp,
+)
 from .registry_workflow_definition import ModuleOutcome
 
 
@@ -111,12 +114,10 @@ def _validate_unique_refs(label: str, refs: tuple[str, ...]) -> None:
 
 
 def _validate_utc(label: str, value: str) -> None:
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid {label}: {value!r}") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
-        raise ValueError(f"{label} must be UTC")
+    # Delegates to the single canonical-timestamp rule so a non-canonical
+    # instant (space separator, missing seconds) can never enter an immutable
+    # record and break lexicographic ordering or replay string equality.
+    validate_utc_timestamp(label, value)
 
 
 @dataclass(frozen=True)
@@ -487,6 +488,16 @@ class WorkflowAttemptStartedRecord:
         start = datetime.fromisoformat(self.recorded_at_utc.replace("Z", "+00:00"))
         return start + timedelta(seconds=self.timeout_seconds)
 
+    def lease_expired_at(self, observed_at: datetime) -> bool:
+        """Report whether the lease is expired at one observed instant.
+
+        The boundary rule — ``observed_at == deadline`` counts as expired — is
+        owned here so the Inspector projection and Attempt recovery can never
+        disagree about the same instant.
+        """
+
+        return observed_at >= self.deadline_at()
+
     def as_dict(self) -> dict[str, Any]:
         """Return the canonical JSON-ready Attempt start record."""
 
@@ -639,6 +650,12 @@ class StaleOutputRecord:
         return asdict(self)
 
 
+ATTEMPT_ORPHAN_REASON_CODES = frozenset(
+    {"attempt_lease_expired", "worker_lost", "operator_requested"}
+)
+ATTEMPT_ORPHAN_CONTEXT_DISPOSITION_IDS = frozenset({"invalidate", "retain"})
+
+
 @dataclass(frozen=True)
 class AttemptOrphanedRecord:
     """Bounded recovery disposition for a started Attempt with no result commit."""
@@ -663,10 +680,21 @@ class AttemptOrphanedRecord:
             ("module_run_id", self.module_run_id),
             ("variant_id", self.variant_id),
             ("attempt_id", self.attempt_id),
-            ("reason_code", self.reason_code),
-            ("context_disposition_id", self.context_disposition_id),
         ):
             _validate_id(label, value)
+        # Both vocabularies are load-bearing for recovery replay equality, so
+        # membership is pinned contract-side exactly like failure_class.
+        if self.reason_code not in ATTEMPT_ORPHAN_REASON_CODES:
+            raise ValueError(
+                "orphan reason_code is outside the contract vocabulary"
+            )
+        if (
+            self.context_disposition_id
+            not in ATTEMPT_ORPHAN_CONTEXT_DISPOSITION_IDS
+        ):
+            raise ValueError(
+                "orphan context_disposition_id is outside the contract vocabulary"
+            )
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
 
     def as_dict(self) -> dict[str, Any]:
