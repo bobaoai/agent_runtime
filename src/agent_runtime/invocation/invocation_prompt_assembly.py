@@ -22,6 +22,7 @@ OUTPUT_SCHEMA_MARKER = "\n## Required Output Shape\n"
 _CODEX_NATIVE_UNSUPPORTED_SCHEMA_KEYS = frozenset(
     {
         "allOf",
+        "oneOf",
         "not",
         "dependentRequired",
         "dependentSchemas",

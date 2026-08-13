@@ -72,6 +72,40 @@ def test_codex_projection_does_not_treat_property_maps_as_schema_nodes() -> None
     ]
 
 
+def test_codex_projection_defers_one_of_to_canonical_validation() -> None:
+    canonical_schema = {
+        "type": "object",
+        "properties": {
+            "verdict": {"enum": ["accepted", "revision_required"]},
+            "findings": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["verdict", "findings"],
+        "additionalProperties": False,
+        "oneOf": [
+            {
+                "properties": {
+                    "verdict": {"const": "accepted"},
+                    "findings": {"maxItems": 0},
+                }
+            },
+            {
+                "properties": {
+                    "verdict": {"const": "revision_required"},
+                    "findings": {"minItems": 1},
+                }
+            },
+        ],
+    }
+
+    projected = codex_native_output_schema(canonical_schema)
+
+    assert "oneOf" not in projected
+    assert projected["properties"] == canonical_schema["properties"]
+
+
 def test_claude_projection_does_not_treat_property_maps_as_schema_nodes() -> None:
     pytest.importorskip("claude_agent_sdk")
     from agent_runtime.invocation.invocation_claude_module_invocation import (
