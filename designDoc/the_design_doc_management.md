@@ -7,7 +7,7 @@ canonical_owner: designDoc/the_design_doc_management.md
 owned_system_object: Design Intent
 language: en
 reader_persona:
-  - Principal Manager
+  - Project Owner
   - Design Owner
   - Architecture Reviewer
   - Implementation Owner
@@ -20,7 +20,7 @@ every T0, T1, and T2 Design Doc while keeping human intent separate from code-ow
 implementation truth.
 
 **Required reader gain**: A reader can write the minimum sufficient Design Doc,
-decide whether a proposed change requires approval before implementation,
+decide whether a proposed change requires owner acceptance before implementation,
 identify which facts belong in code, and distinguish Design Doc review from an
 external Independent Review.
 
@@ -44,7 +44,7 @@ non_goals:
   - external Independent Review execution
   - software release admission
 inputs:
-  - Principal Manager or accountable owner intent
+  - Project Owner or delegated design-owner intent
   - proposed T0, T1, or T2 design change and affected contract set
 owned_specialization_contracts:
   - designDoc/the_skill_management.md
@@ -65,9 +65,8 @@ downstream_consumers:
   - every T0, T1, and T2 design owner
   - implementation, Contract Audit, and Software Delivery workflows
 open_decisions:
-  - code-owned DesignApprovalDecision and evidence binding required before approval-order enforcement becomes deterministic
   - one registered T1 lifecycle vocabulary replacing proposal and candidate aliases
-review_gate: Principal Manager or delegated design-owner approval for material changes
+review_gate: Project Owner or delegated design-owner acceptance for material changes
 runtime_surface_ledger: generated from code-owned design registrations after implementation
 verification_hooks:
   - Contract Capsule validation and canonical-owner uniqueness
@@ -77,8 +76,9 @@ verification_hooks:
 ## 1. Authority
 
 Design Doc Management owns the rules for Design Docs as a class. Each Design
-Doc owner owns the intent inside that document. The Principal Manager owns
-material product and architecture decisions.
+Doc owner owns the intent inside that document. The Project Owner or an
+explicitly delegated design owner accepts material product and architecture
+decisions.
 
 Correct system outcomes take precedence over ceremonial process completion.
 Passing an authoring or review sequence does not make an incorrect design
@@ -89,7 +89,7 @@ shadow path is not added merely to preserve the prior process or structure.
 This contract answers:
 
 1. What must a T0, T1, or T2 Design Doc communicate?
-2. Which change is material and therefore requires approval before code work?
+2. Which change is material and therefore requires owner acceptance before code work?
 3. Which statements belong in human-maintained intent and which belong in
    machine-readable or generated surfaces?
 4. How does a candidate become current, become superseded, or retire?
@@ -244,36 +244,42 @@ stateDiagram-v2
 ```
 
 Design lifecycle records whether one Design Contract release is candidate,
-under review, current, superseded, or retired. Design approval is a separate
-decision about whether implementation may begin.
+under review, current, superseded, or retired. Design acceptance is a separate
+decision about whether the reviewed intent may become canonical and guide
+production implementation.
 
 ```mermaid
 stateDiagram-v2
     [*] --> PendingDecision
-    PendingDecision --> ApprovedForImplementation: accountable owner approves
+    PendingDecision --> AcceptedForImplementation: Project Owner accepts
     PendingDecision --> Rejected: owner rejects or redirects
-    ApprovedForImplementation --> SupersededDecision: candidate or scope changes
+    AcceptedForImplementation --> SupersededDecision: candidate or scope changes
 ```
 
-The target code-owned `DesignApprovalDecision` binds the exact candidate hash,
-decision owner, scope, decision time, evidence reference, and supersession. A
-`candidate` may therefore be approved for implementation while still awaiting
-review and current-status admission. Implementation progress belongs to
-Software Delivery and never acts as approval evidence.
+The Project Owner's acceptance is recorded against the exact reviewed candidate
+in the project change record, review artifact, or commit history. This T0 does
+not require a universal approval service or a separate portfolio object.
+Implementation progress belongs to Software Delivery and never acts as design
+acceptance evidence.
 
 The required order for a material design change is:
 
-1. Record the proposed intent and affected authority boundary.
+1. Record the intended result, affected authority boundary, and current code
+   truth.
 2. When the proposal creates, promotes, splits, merges, replaces, or renames a
-   registered structure, consume the System Change Governance-owned
-   `PeerStructureDecision` over the complete same-level Registry. A Design
-   author cannot supply this decision for its own candidate.
-3. Obtain Principal Manager or delegated design-owner approval.
-4. Define or change the machine contract.
-5. Implement code, migrations, tests, and generated inspection.
-6. Run deterministic design and implementation conformance.
-7. Run Contract Audit when the registered profile requires Independent Review.
-8. Admit the design and implementation through their separate owning gates.
+   registered structure, compare the complete same-level peer set and record
+   every keep, merge, move, replace, or retire disposition in the candidate or
+   its rewrite plan. This analysis is part of the design subject, not a separate
+   `PeerStructureDecision` service or approval object.
+3. Freeze the complete Design Intent candidate and run Independent Review when
+   the registered profile requires it.
+4. The Project Owner or delegated design owner accepts, rejects, or redirects
+   the reviewed candidate.
+5. Freeze the Code Design Basis and define or change the machine contract.
+6. Implement code, migrations, tests, and generated inspection.
+7. Run deterministic conformance and independent Engineering Change Review.
+8. Admit the canonical design, implementation, and software release through
+   their separate owning gates.
 
 Implementation work may explore a disposable prototype before approval when it
 is explicitly isolated and cannot become production truth. Production code,
@@ -452,7 +458,8 @@ The implementation of this T0 requires code-owned contracts for:
 - T0, T1, and T2 registration, unique-domain-root, and dependency closure;
 - material-change classification;
 - approved `CodeDesignBasis` identity and its binding to the owning Design Intent;
-- DesignApprovalDecision identity, candidate hash, accountable owner, scope, evidence, and supersession;
+- exact candidate hash and project-owned acceptance evidence when material
+  intent becomes canonical;
 - required scaffold and conformance profile;
 - Design Contract review subject, semantic-check profile, fixed reviewer
   binding, complete check coverage, and immutable review-result reference;
@@ -483,7 +490,7 @@ status.
 | --- | --- |
 | Design Doc class, scaffold, lifecycle, and design audit | Design Doc Management |
 | Intent inside one contract | That T0, T1, or T2 design owner |
-| Product-level material decision | Principal Manager or explicitly delegated owner |
+| Product-level material decision | Project Owner or explicitly delegated design owner |
 | Portable governance package and deployment scaffold | Governance distribution owner |
 | Project Charter and `designDoc/the_*.md` T0 authority | The consuming project |
 | Finite machine representation of approved intent | Owning machine contract and code |
@@ -500,7 +507,8 @@ status.
 3. Every T1 names its inherited T0 constraints.
 4. Every active domain has exactly one active `<domain>_00_*` T1 root.
 5. Every active same-domain non-`00` Design Contract is T2 under that root.
-6. Material design approval precedes production implementation.
+6. Material Design Intent is independently reviewed and accepted before
+   production implementation.
 7. Material production implementation also requires an approved Code Design Basis that converts the accepted intent into independently reviewable logical modules without making physical file layout the design authority.
 8. Machine-decidable obligations are implemented in code.
 9. Current implementation state comes from code and persistent records.

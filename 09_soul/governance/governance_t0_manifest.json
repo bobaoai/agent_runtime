@@ -51,7 +51,7 @@
       "t0_layer_id": "the_design_doc_management",
       "source": "09_soul/governance/t0/the_design_doc_management.md",
       "target": "designDoc/the_design_doc_management.md",
-      "sha256": "74c8be9ea4057d7a64a840f34cf553389f702db5d89d34e40cc83ee898e96dbf"
+      "sha256": "379be6b4eacd40abb531a4c38da888a8ed0d6d6bcf78d88c2753788c049a9a45"
     },
     {
       "t0_layer_id": "the_contract_audit",

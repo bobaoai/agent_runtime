@@ -154,6 +154,10 @@ def test_reviewer_prompts_keep_design_and_implementation_patterns_separate() -> 
         "design_pattern.mutable_truth_leakage",
         "design_pattern.unjustified_abstraction",
         "design_pattern.ceremony_over_result",
+        "design_pattern.portable_projection_authority",
+        "design_pattern.inherited_safety_closure",
+        "design_pattern.namespace_owner_collision",
+        "design_pattern.public_contract_gate_parity",
     }
     assert engineering_patterns == {
         "engineering_pattern.incomplete_subject_closure",
@@ -166,6 +170,11 @@ def test_reviewer_prompts_keep_design_and_implementation_patterns_separate() -> 
         "engineering_pattern.ineffective_test_gate",
         "engineering_pattern.failure_contract_drift",
         "engineering_pattern.failure_misattribution",
+        "engineering_pattern.schema_traversal_semantics",
+        "engineering_pattern.idempotency_contamination",
+        "engineering_pattern.split_public_contract",
+        "engineering_pattern.optional_capability_leakage",
+        "engineering_pattern.orphaned_terminal_state",
     }
     assert "engineering_pattern." not in design_prompt
     assert "design_pattern." not in engineering_prompt

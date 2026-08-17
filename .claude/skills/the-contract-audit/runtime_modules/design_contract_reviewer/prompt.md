@@ -47,6 +47,19 @@ than waiting for the candidate's wording to name them:
   and
 - `design_pattern.ceremony_over_result`: ceremonial process that can pass while
   the required user or system result remains incorrect.
+- `design_pattern.portable_projection_authority`: reusable governance law
+  changed only in one consuming project's projection, or a project authority
+  claiming the portable-source acceptance decision;
+- `design_pattern.inherited_safety_closure`: a protected operation, persistent
+  record family, migration, or other cross-T0 behavior that names its local
+  owner but omits the exact Timestamp, Data Governance, Authorization, or other
+  peer law it must consume;
+- `design_pattern.namespace_owner_collision`: a domain-prefixed T1 or T2
+  identity mechanically bound to one root while another T0 claims it as an
+  owned specialization; and
+- `design_pattern.public_contract_gate_parity`: a Charter completion gate,
+  T0 public contract, and T1 realization enumerating different operations or
+  allowing the gate to pass while a required public result is absent.
 
 Treat these as lenses inside the registered checks, not as additional check
 IDs or automatic findings. Cite an actual defect in the frozen candidate.

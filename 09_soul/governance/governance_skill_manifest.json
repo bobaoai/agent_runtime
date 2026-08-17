@@ -56,7 +56,7 @@
         },
         {
           "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/prompt.md",
-          "sha256": "3ac54b55cd871e120b90a7f2166cbe534efe4ffbb4d4b8082017f0e0a9f41fa7",
+          "sha256": "b0d36b7e80185c8ede25a9ec78fb6ccb62370e0dfd5872adb627d8ea79077eef",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/prompt.md"}
           ]
@@ -116,7 +116,7 @@
         },
         {
           "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/prompt.md",
-          "sha256": "a968e332216bb32c7263292df326e153e250f3d1376cabf14d297f8b019e25fb",
+          "sha256": "1b265cbe27adc7fee7f5711be7f0562fa61a0e1f53be858981ae9d4d23032124",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/prompt.md"}
           ]

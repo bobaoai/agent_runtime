@@ -55,6 +55,21 @@ Actively test these recurrent implementation failure patterns when relevant:
   contract; and
 - `engineering_pattern.failure_misattribution`: candidate, baseline, and
   dirty-working-tree failures attributed to the wrong source.
+- `engineering_pattern.schema_traversal_semantics`: a recursive validator or
+  transformer treating schema-container maps such as `properties` or `$defs`
+  as schema nodes, or silently skipping a legal nested schema position;
+- `engineering_pattern.idempotency_contamination`: timestamps, random workspace
+  paths, regenerated metadata, or other attempt-local values entering an
+  idempotency key, replay identity, or supposedly deterministic record hash;
+- `engineering_pattern.split_public_contract`: two incompatible public type or
+  protocol families claiming the same responsibility, or a bundled adapter
+  that does not satisfy the package's exported contract;
+- `engineering_pattern.optional_capability_leakage`: an optional provider,
+  backend, or integration imported unconditionally by the base package or a
+  supposedly provider-neutral public surface; and
+- `engineering_pattern.orphaned_terminal_state`: identifier grammar, terminal
+  event, cancellation, retry, or acknowledgement paths that can leave a legal
+  execution permanently active, unreachable, or incorrectly failed.
 
 These are defect-search lenses, not automatic findings. Report a finding only
 when the frozen subject contains evidence. Put a repeated cross-change pattern
