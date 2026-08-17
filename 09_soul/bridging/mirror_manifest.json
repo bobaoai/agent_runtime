@@ -1,0 +1,830 @@
+{
+  "mirrors": [
+    {
+      "source": "09_soul/core/SOUL.md",
+      "target": "09_claude/core/SOUL.md",
+      "source_hash": "sha256:6d0dd71ab9f417cde7672e639aa29425f4fe7bd67e55e880b5ea56bea5fc7942",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/core/COMMUNICATION.md",
+      "target": "09_claude/core/COMMUNICATION.md",
+      "source_hash": "sha256:fc0ec62f9712ada8bbc4a2d0a32a08582b1fe443f48c9098574be6320c3448e0",
+      "last_synced": "2026-08-16",
+      "addendum_marker": "## Project-Specific Addendum"
+    },
+    {
+      "source": "09_soul/core/USER.md",
+      "target": "09_claude/core/USER.md",
+      "source_hash": "sha256:7ef32524c56ef27d8921785560987e8be770bff11ffe6a8c72ce4b84f7bc34d6",
+      "last_synced": "2026-08-15",
+      "addendum_marker": "## Project-Specific Addendum"
+    },
+    {
+      "source": "09_soul/axioms/FP_first_principles.md",
+      "target": "09_claude/axioms/FP_first_principles.md",
+      "source_hash": "sha256:5569d2caad343339f55728514152658d96ad932d8845a78f7758d412bf658709",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/INDEX.md",
+      "target": "09_claude/axioms/INDEX.md",
+      "source_hash": "sha256:9ccdee91167063e932c6c8a529b67472416771f27f122144a47972fde8ff0222",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a01_ask_do_paradigm.md",
+      "target": "09_claude/axioms/a01_ask_do_paradigm.md",
+      "source_hash": "sha256:f27f19f62cb3e68961a35781037707b7e81a64337ecd6b4dbdad31502f3f8e86",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a02_multiplier_not_replacement.md",
+      "target": "09_claude/axioms/a02_multiplier_not_replacement.md",
+      "source_hash": "sha256:bece6a4258247586187a63b79cee3d473781d33c3d06fb1e325b64c67eb4b084",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a03_ic_to_manager.md",
+      "target": "09_claude/axioms/a03_ic_to_manager.md",
+      "source_hash": "sha256:ad67d361899fc30f5dd0d6c20f5f7e6881bfe9c353bda37e649fc520b52a951d",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a04_reliability_management.md",
+      "target": "09_claude/axioms/a04_reliability_management.md",
+      "source_hash": "sha256:a9bf6a0eedaa3faae27a0a948da3d3846ab8a41bc578ae12f485aba1bff9d073",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a05_docs_long_term_memory.md",
+      "target": "09_claude/axioms/a05_docs_long_term_memory.md",
+      "source_hash": "sha256:1688ea941f9817750217689d5b2549c7c2313dcc8276410dbcdb11495c093087",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a06_framework_worldview.md",
+      "target": "09_claude/axioms/a06_framework_worldview.md",
+      "source_hash": "sha256:0010668b042580a090ce25240ac17b13c15a162b495eff230e77b8463df9c8d2",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a07_design_philosophy_ceiling.md",
+      "target": "09_claude/axioms/a07_design_philosophy_ceiling.md",
+      "source_hash": "sha256:58a06fed67771425dac28dcc793b2c1709b6b839d07afe43826b8cb39d4bc4ac",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a08_prompt_quality_lever.md",
+      "target": "09_claude/axioms/a08_prompt_quality_lever.md",
+      "source_hash": "sha256:a4fad319dd330b45b9275b06296715fbe8d6096c964d1f64ba2a4d3dde34d903",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a09_builders_mindset_moat.md",
+      "target": "09_claude/axioms/a09_builders_mindset_moat.md",
+      "source_hash": "sha256:baee238193e8716bcf160ed6e2eaa47f0e6b0313717293e2d986f2f2b9d0ef5c",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a10_rapport_over_raw_intelligence.md",
+      "target": "09_claude/axioms/a10_rapport_over_raw_intelligence.md",
+      "source_hash": "sha256:98720426a3a8cd0af29c26da9ed3763dbaf98f592b0a8b578e5c26160b41ebfe",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a11_tool_composition_as_capability_expansion.md",
+      "target": "09_claude/axioms/a11_tool_composition_as_capability_expansion.md",
+      "source_hash": "sha256:2ab357472da37a76b919f8dc2e3345b469db7f30e9f4ae3203cdfcd161ff4ed6",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a12_ai_native_development_paradigm.md",
+      "target": "09_claude/axioms/a12_ai_native_development_paradigm.md",
+      "source_hash": "sha256:0a20d831a477d2d5c29a80fc2f89fb44416012e3fbcd5fc070d8872fb1a24d55",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a13_tech_adoption_stages.md",
+      "target": "09_claude/axioms/a13_tech_adoption_stages.md",
+      "source_hash": "sha256:4b614f23ae8f86385b2cae208c592e79b0a1f1b27d8f8a7d94a60c256a179bd7",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a14_prompt_boundary_hygiene.md",
+      "target": "09_claude/axioms/a14_prompt_boundary_hygiene.md",
+      "source_hash": "sha256:e854d1ed5d69acda7a1ebfd4fa83d65148303b9945b162a5353ad70d417158d4",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a15_path_layer_diagnosis.md",
+      "target": "09_claude/axioms/a15_path_layer_diagnosis.md",
+      "source_hash": "sha256:630dcd81c7fd50c48e8d2570ca0d9bba7be44c2ccb38997cd1a8cac4c754e52e",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a16_hidden_assumption_better_question.md",
+      "target": "09_claude/axioms/a16_hidden_assumption_better_question.md",
+      "source_hash": "sha256:3244e4be888ed507afaba8376de9f426dd6d4ab539528e79fc6343e6f5c41bec",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a20_reader_persona_primacy.md",
+      "target": "09_claude/axioms/a20_reader_persona_primacy.md",
+      "source_hash": "sha256:f4e02beb94e2b7666d1081243abe7470c4035819c6eefa38cda4746f9742d207",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m01_closed_loop_calibration.md",
+      "target": "09_claude/axioms/m01_closed_loop_calibration.md",
+      "source_hash": "sha256:07854a974366115ea417fc6b3d1e0141290837ae770368c4af7b93928a428397",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m02_reverse_debug_mindset.md",
+      "target": "09_claude/axioms/m02_reverse_debug_mindset.md",
+      "source_hash": "sha256:01bbce59c983fa4118e7136304da5dfdde85e82ebcdf38a4d9f36a3ccfe082f0",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m03_quantified_prioritization.md",
+      "target": "09_claude/axioms/m03_quantified_prioritization.md",
+      "source_hash": "sha256:18735efb16681de298f826f55c83716361ff27c9227f30c53fc923192a103fe6",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m04_active_management_over_tool_mentality.md",
+      "target": "09_claude/axioms/m04_active_management_over_tool_mentality.md",
+      "source_hash": "sha256:f253b8871936f56ce765a7707c3ee7a455ef5a12809deed6fc9b2ea7e611541c",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m05_simplicity_cognitive_efficiency.md",
+      "target": "09_claude/axioms/m05_simplicity_cognitive_efficiency.md",
+      "source_hash": "sha256:76a8f374a94638f052f586eb0450a8eca85718f24ecf48ba2376c2b85701707f",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m06_connection_making.md",
+      "target": "09_claude/axioms/m06_connection_making.md",
+      "source_hash": "sha256:30666d637d5dd3410fcbaacd1e4efd3d54cc0061d9c413a9ea7c49d257e186d4",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m07_multi_threading_energy.md",
+      "target": "09_claude/axioms/m07_multi_threading_energy.md",
+      "source_hash": "sha256:b39435e91211dd58cad6d117113b775521db7ffbba3b25a13e8076ea37d940d6",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m08_self_systematization.md",
+      "target": "09_claude/axioms/m08_self_systematization.md",
+      "source_hash": "sha256:f88622d6909569c02887069fdca95c6864f9ee2d1907ad8ae1659f2b377bbbac",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m09_ai_era_management_paradigm.md",
+      "target": "09_claude/axioms/m09_ai_era_management_paradigm.md",
+      "source_hash": "sha256:adeda88658d4385389d6d62df2cc698300fea98af7983720daa19c17d0932d7c",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m10_education_retention_ladder.md",
+      "target": "09_claude/axioms/m10_education_retention_ladder.md",
+      "source_hash": "sha256:41d2331e9add496e494d10d55370d16ea98f580862d5c0e2e2a2c07105cfbe98",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t01_infrastructure_over_components.md",
+      "target": "09_claude/axioms/t01_infrastructure_over_components.md",
+      "source_hash": "sha256:4257bf166190f73f4677a91b1f473cdaae056e73ac37a00c64b17907761e27e5",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t02_results_certainty.md",
+      "target": "09_claude/axioms/t02_results_certainty.md",
+      "source_hash": "sha256:5d0f899abd63fd07b7b08caff4063bfceb8cbbc8b05136d574da65cc584c9600",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t03_context_isolation.md",
+      "target": "09_claude/axioms/t03_context_isolation.md",
+      "source_hash": "sha256:4c776f59cc3b00ffd21c0d9828b3e8891072e4e6bf0f07097d62b02ead2a1393",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t04_data_over_opinion.md",
+      "target": "09_claude/axioms/t04_data_over_opinion.md",
+      "source_hash": "sha256:7c3f1456337695ebeadd2847d951594a8e95f608d77ea6bcf1325a6a7b8f9eed",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t05_cognition_asset.md",
+      "target": "09_claude/axioms/t05_cognition_asset.md",
+      "source_hash": "sha256:f704c514812239174aceeb94701cad34c054810b165eb186310aa7c31d28e993",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t06_dependency_topology.md",
+      "target": "09_claude/axioms/t06_dependency_topology.md",
+      "source_hash": "sha256:4d64d3c012939caf3435921f7ca4c3593ac4746c7bde99ec3637321e7e665e30",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t07_isolation_processing_verification.md",
+      "target": "09_claude/axioms/t07_isolation_processing_verification.md",
+      "source_hash": "sha256:a27dadb04112ed39acf3596fdeb3c408ce7145d6e3771ba7a27189a38d00fde7",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t08_first_principles_methodology.md",
+      "target": "09_claude/axioms/t08_first_principles_methodology.md",
+      "source_hash": "sha256:1059b9d7e22d671ed5d5074ec2359d101d2c958f091d2f5a2222408c722dc924",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t09_data_strategy_mdp.md",
+      "target": "09_claude/axioms/t09_data_strategy_mdp.md",
+      "source_hash": "sha256:05498b4f3680edf11042615ca5774d8ff695d3678efbd738d33b32bad901b4c4",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t10_index_first_ai_for_gaps.md",
+      "target": "09_claude/axioms/t10_index_first_ai_for_gaps.md",
+      "source_hash": "sha256:98f9c5c7fe789f58075236873961e213ebac6d7e8788b99151c94c1d39c3c739",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t11_timestamp_semantics_explicit.md",
+      "target": "09_claude/axioms/t11_timestamp_semantics_explicit.md",
+      "source_hash": "sha256:cd0367e74860187a08e5f1534dcc60eb8358d44ced5bbf06510bf96e501b6fe1",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v01_responsibility.md",
+      "target": "09_claude/axioms/v01_responsibility.md",
+      "source_hash": "sha256:86ed67d5027f00cc666e7b536453a95e116117f0de0b49162e463131b6fc4711",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v02_verifiability.md",
+      "target": "09_claude/axioms/v02_verifiability.md",
+      "source_hash": "sha256:f8b9523aa2599fcc0884ee3f2fed0af5da75ee23b7c5377c410322dc03d63d54",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v03_attribution_shapes_perception.md",
+      "target": "09_claude/axioms/v03_attribution_shapes_perception.md",
+      "source_hash": "sha256:4932bf4e3436389b2f5458c3c459c42814ad43d9960d0a445fafe5cad61e82a9",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v04_temporal_grounding_prevents_hallucination.md",
+      "target": "09_claude/axioms/v04_temporal_grounding_prevents_hallucination.md",
+      "source_hash": "sha256:4469d96c622faf74b404ff46e77748fa5273babcecf9b6ed8e5a86284b910150",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v05_trust_attribution_dual_dimension.md",
+      "target": "09_claude/axioms/v05_trust_attribution_dual_dimension.md",
+      "source_hash": "sha256:c2cf232eed9c832871e7dd72fd2d97c23ac628116a4d85a9436a528af27730cd",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x01_constraint_paradox.md",
+      "target": "09_claude/axioms/x01_constraint_paradox.md",
+      "source_hash": "sha256:aebcbcfeae85020f0c041ce59d2c76fc05b7bca7e64b45d8c99278e5f9097580",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x02_systematic_debugging_hypothesis_testing.md",
+      "target": "09_claude/axioms/x02_systematic_debugging_hypothesis_testing.md",
+      "source_hash": "sha256:382a04f043a09ba3ab5a329258ee5ec272a2e4205ce3cbcc201f3a8d248c060c",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x03_efficiency_determined_by_bottlenecks.md",
+      "target": "09_claude/axioms/x03_efficiency_determined_by_bottlenecks.md",
+      "source_hash": "sha256:d00d1aa2dae2a4dd08ffe5c3d74dadd07e5433e05d6e3e874d8f61d0bfd0e60a",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x04_design_for_actual_use_case.md",
+      "target": "09_claude/axioms/x04_design_for_actual_use_case.md",
+      "source_hash": "sha256:e1b4b9fffc4a9a126f9caa8b0740fb550aa6149559f106b4a3639fddc790b5b0",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x05_precision_cascades_through_systems.md",
+      "target": "09_claude/axioms/x05_precision_cascades_through_systems.md",
+      "source_hash": "sha256:87305159df66f6c19760890b826bb86d9c44e8dc7e3ae3e8be6c007fb211f3ca",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x06_big_picture_system_analysis.md",
+      "target": "09_claude/axioms/x06_big_picture_system_analysis.md",
+      "source_hash": "sha256:51666cdd25f0bf62d3cc62912be37c573d680ba2c0b8267e0ce794864b85a04d",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/core/SOUL.md",
+      "target": "09_codex/core/SOUL.md",
+      "source_hash": "sha256:6d0dd71ab9f417cde7672e639aa29425f4fe7bd67e55e880b5ea56bea5fc7942",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/core/COMMUNICATION.md",
+      "target": "09_codex/core/COMMUNICATION.md",
+      "source_hash": "sha256:fc0ec62f9712ada8bbc4a2d0a32a08582b1fe443f48c9098574be6320c3448e0",
+      "last_synced": "2026-08-16",
+      "addendum_marker": "## Project-Specific Addendum"
+    },
+    {
+      "source": "09_soul/core/USER.md",
+      "target": "09_codex/core/USER.md",
+      "source_hash": "sha256:7ef32524c56ef27d8921785560987e8be770bff11ffe6a8c72ce4b84f7bc34d6",
+      "last_synced": "2026-08-15",
+      "addendum_marker": "## Project-Specific Addendum"
+    },
+    {
+      "source": "09_soul/axioms/FP_first_principles.md",
+      "target": "09_codex/axioms/FP_first_principles.md",
+      "source_hash": "sha256:5569d2caad343339f55728514152658d96ad932d8845a78f7758d412bf658709",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/INDEX.md",
+      "target": "09_codex/axioms/INDEX.md",
+      "source_hash": "sha256:9ccdee91167063e932c6c8a529b67472416771f27f122144a47972fde8ff0222",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a01_ask_do_paradigm.md",
+      "target": "09_codex/axioms/a01_ask_do_paradigm.md",
+      "source_hash": "sha256:f27f19f62cb3e68961a35781037707b7e81a64337ecd6b4dbdad31502f3f8e86",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a02_multiplier_not_replacement.md",
+      "target": "09_codex/axioms/a02_multiplier_not_replacement.md",
+      "source_hash": "sha256:bece6a4258247586187a63b79cee3d473781d33c3d06fb1e325b64c67eb4b084",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a03_ic_to_manager.md",
+      "target": "09_codex/axioms/a03_ic_to_manager.md",
+      "source_hash": "sha256:ad67d361899fc30f5dd0d6c20f5f7e6881bfe9c353bda37e649fc520b52a951d",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a04_reliability_management.md",
+      "target": "09_codex/axioms/a04_reliability_management.md",
+      "source_hash": "sha256:a9bf6a0eedaa3faae27a0a948da3d3846ab8a41bc578ae12f485aba1bff9d073",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a05_docs_long_term_memory.md",
+      "target": "09_codex/axioms/a05_docs_long_term_memory.md",
+      "source_hash": "sha256:1688ea941f9817750217689d5b2549c7c2313dcc8276410dbcdb11495c093087",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a06_framework_worldview.md",
+      "target": "09_codex/axioms/a06_framework_worldview.md",
+      "source_hash": "sha256:0010668b042580a090ce25240ac17b13c15a162b495eff230e77b8463df9c8d2",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a07_design_philosophy_ceiling.md",
+      "target": "09_codex/axioms/a07_design_philosophy_ceiling.md",
+      "source_hash": "sha256:58a06fed67771425dac28dcc793b2c1709b6b839d07afe43826b8cb39d4bc4ac",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a08_prompt_quality_lever.md",
+      "target": "09_codex/axioms/a08_prompt_quality_lever.md",
+      "source_hash": "sha256:a4fad319dd330b45b9275b06296715fbe8d6096c964d1f64ba2a4d3dde34d903",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a09_builders_mindset_moat.md",
+      "target": "09_codex/axioms/a09_builders_mindset_moat.md",
+      "source_hash": "sha256:baee238193e8716bcf160ed6e2eaa47f0e6b0313717293e2d986f2f2b9d0ef5c",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a10_rapport_over_raw_intelligence.md",
+      "target": "09_codex/axioms/a10_rapport_over_raw_intelligence.md",
+      "source_hash": "sha256:98720426a3a8cd0af29c26da9ed3763dbaf98f592b0a8b578e5c26160b41ebfe",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a11_tool_composition_as_capability_expansion.md",
+      "target": "09_codex/axioms/a11_tool_composition_as_capability_expansion.md",
+      "source_hash": "sha256:2ab357472da37a76b919f8dc2e3345b469db7f30e9f4ae3203cdfcd161ff4ed6",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a12_ai_native_development_paradigm.md",
+      "target": "09_codex/axioms/a12_ai_native_development_paradigm.md",
+      "source_hash": "sha256:0a20d831a477d2d5c29a80fc2f89fb44416012e3fbcd5fc070d8872fb1a24d55",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a13_tech_adoption_stages.md",
+      "target": "09_codex/axioms/a13_tech_adoption_stages.md",
+      "source_hash": "sha256:4b614f23ae8f86385b2cae208c592e79b0a1f1b27d8f8a7d94a60c256a179bd7",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a14_prompt_boundary_hygiene.md",
+      "target": "09_codex/axioms/a14_prompt_boundary_hygiene.md",
+      "source_hash": "sha256:e854d1ed5d69acda7a1ebfd4fa83d65148303b9945b162a5353ad70d417158d4",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a15_path_layer_diagnosis.md",
+      "target": "09_codex/axioms/a15_path_layer_diagnosis.md",
+      "source_hash": "sha256:630dcd81c7fd50c48e8d2570ca0d9bba7be44c2ccb38997cd1a8cac4c754e52e",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a16_hidden_assumption_better_question.md",
+      "target": "09_codex/axioms/a16_hidden_assumption_better_question.md",
+      "source_hash": "sha256:3244e4be888ed507afaba8376de9f426dd6d4ab539528e79fc6343e6f5c41bec",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a20_reader_persona_primacy.md",
+      "target": "09_codex/axioms/a20_reader_persona_primacy.md",
+      "source_hash": "sha256:f4e02beb94e2b7666d1081243abe7470c4035819c6eefa38cda4746f9742d207",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m01_closed_loop_calibration.md",
+      "target": "09_codex/axioms/m01_closed_loop_calibration.md",
+      "source_hash": "sha256:07854a974366115ea417fc6b3d1e0141290837ae770368c4af7b93928a428397",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m02_reverse_debug_mindset.md",
+      "target": "09_codex/axioms/m02_reverse_debug_mindset.md",
+      "source_hash": "sha256:01bbce59c983fa4118e7136304da5dfdde85e82ebcdf38a4d9f36a3ccfe082f0",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m03_quantified_prioritization.md",
+      "target": "09_codex/axioms/m03_quantified_prioritization.md",
+      "source_hash": "sha256:18735efb16681de298f826f55c83716361ff27c9227f30c53fc923192a103fe6",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m04_active_management_over_tool_mentality.md",
+      "target": "09_codex/axioms/m04_active_management_over_tool_mentality.md",
+      "source_hash": "sha256:f253b8871936f56ce765a7707c3ee7a455ef5a12809deed6fc9b2ea7e611541c",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m05_simplicity_cognitive_efficiency.md",
+      "target": "09_codex/axioms/m05_simplicity_cognitive_efficiency.md",
+      "source_hash": "sha256:76a8f374a94638f052f586eb0450a8eca85718f24ecf48ba2376c2b85701707f",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m06_connection_making.md",
+      "target": "09_codex/axioms/m06_connection_making.md",
+      "source_hash": "sha256:30666d637d5dd3410fcbaacd1e4efd3d54cc0061d9c413a9ea7c49d257e186d4",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m07_multi_threading_energy.md",
+      "target": "09_codex/axioms/m07_multi_threading_energy.md",
+      "source_hash": "sha256:b39435e91211dd58cad6d117113b775521db7ffbba3b25a13e8076ea37d940d6",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m08_self_systematization.md",
+      "target": "09_codex/axioms/m08_self_systematization.md",
+      "source_hash": "sha256:f88622d6909569c02887069fdca95c6864f9ee2d1907ad8ae1659f2b377bbbac",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m09_ai_era_management_paradigm.md",
+      "target": "09_codex/axioms/m09_ai_era_management_paradigm.md",
+      "source_hash": "sha256:adeda88658d4385389d6d62df2cc698300fea98af7983720daa19c17d0932d7c",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m10_education_retention_ladder.md",
+      "target": "09_codex/axioms/m10_education_retention_ladder.md",
+      "source_hash": "sha256:41d2331e9add496e494d10d55370d16ea98f580862d5c0e2e2a2c07105cfbe98",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t01_infrastructure_over_components.md",
+      "target": "09_codex/axioms/t01_infrastructure_over_components.md",
+      "source_hash": "sha256:4257bf166190f73f4677a91b1f473cdaae056e73ac37a00c64b17907761e27e5",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t02_results_certainty.md",
+      "target": "09_codex/axioms/t02_results_certainty.md",
+      "source_hash": "sha256:5d0f899abd63fd07b7b08caff4063bfceb8cbbc8b05136d574da65cc584c9600",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t03_context_isolation.md",
+      "target": "09_codex/axioms/t03_context_isolation.md",
+      "source_hash": "sha256:4c776f59cc3b00ffd21c0d9828b3e8891072e4e6bf0f07097d62b02ead2a1393",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t04_data_over_opinion.md",
+      "target": "09_codex/axioms/t04_data_over_opinion.md",
+      "source_hash": "sha256:7c3f1456337695ebeadd2847d951594a8e95f608d77ea6bcf1325a6a7b8f9eed",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t05_cognition_asset.md",
+      "target": "09_codex/axioms/t05_cognition_asset.md",
+      "source_hash": "sha256:f704c514812239174aceeb94701cad34c054810b165eb186310aa7c31d28e993",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t06_dependency_topology.md",
+      "target": "09_codex/axioms/t06_dependency_topology.md",
+      "source_hash": "sha256:4d64d3c012939caf3435921f7ca4c3593ac4746c7bde99ec3637321e7e665e30",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t07_isolation_processing_verification.md",
+      "target": "09_codex/axioms/t07_isolation_processing_verification.md",
+      "source_hash": "sha256:a27dadb04112ed39acf3596fdeb3c408ce7145d6e3771ba7a27189a38d00fde7",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t08_first_principles_methodology.md",
+      "target": "09_codex/axioms/t08_first_principles_methodology.md",
+      "source_hash": "sha256:1059b9d7e22d671ed5d5074ec2359d101d2c958f091d2f5a2222408c722dc924",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t09_data_strategy_mdp.md",
+      "target": "09_codex/axioms/t09_data_strategy_mdp.md",
+      "source_hash": "sha256:05498b4f3680edf11042615ca5774d8ff695d3678efbd738d33b32bad901b4c4",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t10_index_first_ai_for_gaps.md",
+      "target": "09_codex/axioms/t10_index_first_ai_for_gaps.md",
+      "source_hash": "sha256:98f9c5c7fe789f58075236873961e213ebac6d7e8788b99151c94c1d39c3c739",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/t11_timestamp_semantics_explicit.md",
+      "target": "09_codex/axioms/t11_timestamp_semantics_explicit.md",
+      "source_hash": "sha256:cd0367e74860187a08e5f1534dcc60eb8358d44ced5bbf06510bf96e501b6fe1",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v01_responsibility.md",
+      "target": "09_codex/axioms/v01_responsibility.md",
+      "source_hash": "sha256:86ed67d5027f00cc666e7b536453a95e116117f0de0b49162e463131b6fc4711",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v02_verifiability.md",
+      "target": "09_codex/axioms/v02_verifiability.md",
+      "source_hash": "sha256:f8b9523aa2599fcc0884ee3f2fed0af5da75ee23b7c5377c410322dc03d63d54",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v03_attribution_shapes_perception.md",
+      "target": "09_codex/axioms/v03_attribution_shapes_perception.md",
+      "source_hash": "sha256:4932bf4e3436389b2f5458c3c459c42814ad43d9960d0a445fafe5cad61e82a9",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v04_temporal_grounding_prevents_hallucination.md",
+      "target": "09_codex/axioms/v04_temporal_grounding_prevents_hallucination.md",
+      "source_hash": "sha256:4469d96c622faf74b404ff46e77748fa5273babcecf9b6ed8e5a86284b910150",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/v05_trust_attribution_dual_dimension.md",
+      "target": "09_codex/axioms/v05_trust_attribution_dual_dimension.md",
+      "source_hash": "sha256:c2cf232eed9c832871e7dd72fd2d97c23ac628116a4d85a9436a528af27730cd",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x01_constraint_paradox.md",
+      "target": "09_codex/axioms/x01_constraint_paradox.md",
+      "source_hash": "sha256:aebcbcfeae85020f0c041ce59d2c76fc05b7bca7e64b45d8c99278e5f9097580",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x02_systematic_debugging_hypothesis_testing.md",
+      "target": "09_codex/axioms/x02_systematic_debugging_hypothesis_testing.md",
+      "source_hash": "sha256:382a04f043a09ba3ab5a329258ee5ec272a2e4205ce3cbcc201f3a8d248c060c",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x03_efficiency_determined_by_bottlenecks.md",
+      "target": "09_codex/axioms/x03_efficiency_determined_by_bottlenecks.md",
+      "source_hash": "sha256:d00d1aa2dae2a4dd08ffe5c3d74dadd07e5433e05d6e3e874d8f61d0bfd0e60a",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x04_design_for_actual_use_case.md",
+      "target": "09_codex/axioms/x04_design_for_actual_use_case.md",
+      "source_hash": "sha256:e1b4b9fffc4a9a126f9caa8b0740fb550aa6149559f106b4a3639fddc790b5b0",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x05_precision_cascades_through_systems.md",
+      "target": "09_codex/axioms/x05_precision_cascades_through_systems.md",
+      "source_hash": "sha256:87305159df66f6c19760890b826bb86d9c44e8dc7e3ae3e8be6c007fb211f3ca",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/x06_big_picture_system_analysis.md",
+      "target": "09_codex/axioms/x06_big_picture_system_analysis.md",
+      "source_hash": "sha256:51666cdd25f0bf62d3cc62912be37c573d680ba2c0b8267e0ce794864b85a04d",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a21_skill_agent_boundary.md",
+      "target": "09_codex/axioms/a21_skill_agent_boundary.md",
+      "source_hash": "sha256:48fe3cf848bbc5312f67669ee377f14fd6fceef414ae51b4616816b0b1dc455a",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a21_skill_agent_boundary.md",
+      "target": "09_claude/axioms/a21_skill_agent_boundary.md",
+      "source_hash": "sha256:48fe3cf848bbc5312f67669ee377f14fd6fceef414ae51b4616816b0b1dc455a",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a17_five_walls_of_agent_reliability.md",
+      "target": "09_claude/axioms/a17_five_walls_of_agent_reliability.md",
+      "source_hash": "sha256:0277927b63b4342a74fe1cef1255eecb1605ccc2c0c7f089bef16e7bed30c5fb",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a17_five_walls_of_agent_reliability.md",
+      "target": "09_codex/axioms/a17_five_walls_of_agent_reliability.md",
+      "source_hash": "sha256:0277927b63b4342a74fe1cef1255eecb1605ccc2c0c7f089bef16e7bed30c5fb",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a18_verification_cost_conservation.md",
+      "target": "09_claude/axioms/a18_verification_cost_conservation.md",
+      "source_hash": "sha256:348b98caa96f946a07b5b3bd58861927c64fb2cb18b6c954e84e7d40c9df0cf5",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a18_verification_cost_conservation.md",
+      "target": "09_codex/axioms/a18_verification_cost_conservation.md",
+      "source_hash": "sha256:348b98caa96f946a07b5b3bd58861927c64fb2cb18b6c954e84e7d40c9df0cf5",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a19_minimize_probabilistic_surface.md",
+      "target": "09_claude/axioms/a19_minimize_probabilistic_surface.md",
+      "source_hash": "sha256:d8e0f45b10bf0a85c29de7dc86a1de6827e3b7b43dda039bd41ca672d0b81eef",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/a19_minimize_probabilistic_surface.md",
+      "target": "09_codex/axioms/a19_minimize_probabilistic_surface.md",
+      "source_hash": "sha256:d8e0f45b10bf0a85c29de7dc86a1de6827e3b7b43dda039bd41ca672d0b81eef",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m11_phase_gate_discipline.md",
+      "target": "09_claude/axioms/m11_phase_gate_discipline.md",
+      "source_hash": "sha256:57d3838057c8c578a64756a91401c0c4f57d644591ede04c25bc72cff40b9379",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    },
+    {
+      "source": "09_soul/axioms/m11_phase_gate_discipline.md",
+      "target": "09_codex/axioms/m11_phase_gate_discipline.md",
+      "source_hash": "sha256:57d3838057c8c578a64756a91401c0c4f57d644591ede04c25bc72cff40b9379",
+      "last_synced": "2026-08-15",
+      "addendum_marker": null
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "_comment": "本机特定的子体物理路径。每台机器上的 Hoveath 母体 clone 后，把本文件复制为 .local_paths.json（已在根 .gitignore 忽略）并填入本机实际路径。母体跨机器一致；本文件不进 git。",
+  "_schema_note": "key = examples/<project>/registry.md 的 project_name 字段；value 是该子体在本机的绝对路径。",
+  "subordinates": {
+    "trading_platform": {
+      "local_path": "/Users/<your-username>/Documents/GitHub/trading_platform",
+      "_note": "子体 repo 在本机的绝对路径。母体 ↔ 子体 message 搬运时使用。"
+    }
+  }
+}

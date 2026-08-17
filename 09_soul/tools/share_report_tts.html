@@ -1,0 +1,134 @@
+<div id="tts-controls" style="
+  position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-color, #fff); border: 1px solid var(--border-color, #ddd);
+  border-radius: 24px; padding: 6px 14px; box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+  font-size: 14px; color: var(--text-color, #333); user-select: none;
+">
+  <button id="tts-btn" title="朗读全文" style="
+    background: none; border: none; cursor: pointer; font-size: 20px; padding: 2px 4px;
+    color: var(--text-color, #333); line-height: 1;
+  ">🔊</button>
+  <span id="tts-status" style="font-size: 12px; color: #999; max-width: 120px; overflow: hidden; white-space: nowrap;"></span>
+</div>
+
+<script>
+(function() {
+  'use strict';
+  if (!('speechSynthesis' in window)) {
+    document.getElementById('tts-controls').style.display = 'none';
+    return;
+  }
+
+  var synth = window.speechSynthesis;
+  var btn = document.getElementById('tts-btn');
+  var status = document.getElementById('tts-status');
+  var CHUNK_SIZE = 200;
+
+  var chunks = [];
+  var currentChunk = 0;
+  var isPlaying = false;
+  var isPaused = false;
+
+  function getArticleText() {
+    var body = document.body.cloneNode(true);
+    body.querySelectorAll('#tts-controls, pre, code, script, style, table').forEach(function(el) { el.remove(); });
+    return body.innerText.trim();
+  }
+
+  function splitText(text) {
+    var result = [];
+    var sentences = text.split(/(?<=[。？！；\n])|(?<=\. )/);
+    var buf = '';
+    for (var i = 0; i < sentences.length; i++) {
+      if ((buf + sentences[i]).length > CHUNK_SIZE && buf.length > 0) {
+        result.push(buf.trim());
+        buf = sentences[i];
+      } else {
+        buf += sentences[i];
+      }
+    }
+    if (buf.trim()) result.push(buf.trim());
+    return result.filter(function(c) { return c.length > 0; });
+  }
+
+  function speakChunk(index) {
+    if (index >= chunks.length) {
+      stop();
+      status.textContent = '播放完毕';
+      setTimeout(function() { status.textContent = ''; }, 2000);
+      return;
+    }
+    currentChunk = index;
+    var utt = new SpeechSynthesisUtterance(chunks[index]);
+    utt.lang = 'zh-CN';
+    utt.rate = 1.05;
+    utt.onend = function() { speakChunk(index + 1); };
+    utt.onerror = function(e) {
+      if (e.error !== 'canceled') speakChunk(index + 1);
+    };
+    status.textContent = (index + 1) + '/' + chunks.length;
+    synth.speak(utt);
+  }
+
+  function play() {
+    if (isPaused) {
+      synth.resume();
+      isPaused = false;
+      isPlaying = true;
+      btn.textContent = '⏸';
+      btn.title = '暂停';
+      return;
+    }
+    chunks = splitText(getArticleText());
+    currentChunk = 0;
+    isPlaying = true;
+    isPaused = false;
+    btn.textContent = '⏸';
+    btn.title = '暂停';
+    speakChunk(0);
+  }
+
+  function pause() {
+    synth.pause();
+    isPaused = true;
+    isPlaying = false;
+    btn.textContent = '▶';
+    btn.title = '继续播放';
+  }
+
+  function stop() {
+    synth.cancel();
+    isPlaying = false;
+    isPaused = false;
+    chunks = [];
+    currentChunk = 0;
+    btn.textContent = '🔊';
+    btn.title = '朗读全文';
+    status.textContent = '';
+  }
+
+  btn.addEventListener('click', function() {
+    if (isPlaying) pause();
+    else play();
+  });
+
+  var holdTimer;
+  btn.addEventListener('mousedown', function() {
+    holdTimer = setTimeout(function() {
+      stop();
+      status.textContent = '已停止';
+      setTimeout(function() { status.textContent = ''; }, 1500);
+    }, 800);
+  });
+  btn.addEventListener('mouseup', function() { clearTimeout(holdTimer); });
+  btn.addEventListener('mouseleave', function() { clearTimeout(holdTimer); });
+
+  setInterval(function() {
+    if (synth.speaking && !synth.paused) {
+      synth.pause();
+      synth.resume();
+    }
+  }, 10000);
+})();
+</script>
