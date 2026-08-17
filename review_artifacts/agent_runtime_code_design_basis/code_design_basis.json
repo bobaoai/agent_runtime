@@ -1,7 +1,7 @@
 {
   "basis_schema_version": "code_design_basis_v1",
   "basis_id": "agent_runtime_architecture_rebuild",
-  "basis_revision": 2,
+  "basis_revision": 3,
   "status": "approved",
   "package_id": "agent_runtime_core",
   "primary_module_id": "runtime_conformance",
@@ -16,6 +16,10 @@
     "runtime_foundation",
     "contracts_compatibility_facade",
     "trading_platform_downstream_consumer_freeze"
+  ],
+  "stable_public_facade_ids": [
+    "agent_runtime",
+    "agent_runtime.testing"
   ],
   "changed_resource_ids": [
     "runtime_source_ownership_manifest",

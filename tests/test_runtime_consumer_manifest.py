@@ -95,8 +95,23 @@ def test_owner_decisions_are_required_before_consumer_retirement(
         consumer_git_commit="c" * 40,
     )
     for site in manifest["sites"]:
+        site["disposition"] = "keep"
+        site["disposition_reason"] = "synthetic owner decision"
         site["disposition_source"] = "owner_decision"
+    manifest["summary"]["disposition_counts"] = {
+        "keep": 1,
+        "replace": 0,
+        "retire": 0,
+    }
+    manifest["summary"]["disposition_source_counts"] = {
+        "derived_default": 0,
+        "owner_decision": 1,
+    }
 
+    assert validate_downstream_consumer_manifest(
+        manifest,
+        consumer_root=tmp_path,
+    ) == ()
     assert validate_downstream_consumer_retirement_readiness(manifest) == ()
 
 
@@ -119,3 +134,6 @@ def test_consumer_manifest_cli_builds_and_checks_the_same_artifact(
 
     assert main([*common, "--output", str(output)]) == 0
     assert main([*common, "--check-manifest", str(output)]) == 0
+    wrong_commit = [*common]
+    wrong_commit[-1] = "e" * 40
+    assert main([*wrong_commit, "--check-manifest", str(output)]) == 1

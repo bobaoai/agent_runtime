@@ -216,6 +216,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
 
         sys.path.insert(0, sys.argv[1])
         import agent_runtime
+        import agent_runtime.conformance as runtime_conformance
         from agent_runtime.contracts import (
             WorkflowAdmissionState,
             WorkflowRuntimeRegistration,
@@ -302,6 +303,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
             "schema_version": inventory["schema_version"],
             "selected_backend_id": inventory["selected_backend_id"],
             "public_namespace": agent_runtime.__name__,
+            "conformance_namespace": runtime_conformance.__name__,
             "driver_result": driver_result,
             "workflow_ids": [row["workflow_id"] for row in inventory["workflows"]],
             "architecture_schema_version": architecture["schema_version"],
@@ -309,10 +311,10 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
                 row["responsibility_id"]
                 for row in architecture["logical_responsibilities"]
             ],
-                "technology_ids": sorted({
-                    row["technology_id"]
-                    for row in architecture["implementation_bindings"]
-                }),
+            "technology_ids": sorted({
+                row["technology_id"]
+                for row in architecture["implementation_bindings"]
+            }),
         }))
         """,
         str(wheel_path),
@@ -324,6 +326,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         "schema_version": "agent_runtime_inventory_v3",
         "selected_backend_id": "temporal",
         "public_namespace": "agent_runtime",
+        "conformance_namespace": "agent_runtime.conformance",
         "driver_result": {"status": "synthetic"},
         "workflow_ids": ["workflow_zeta"],
         "architecture_schema_version": "agent_runtime_architecture_projection_v4",

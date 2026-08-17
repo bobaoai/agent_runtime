@@ -1,0 +1,22 @@
+{
+  "invocation_schema_version": "bootstrap_external_review_invocation_v1",
+  "review_subject": "294a3bd3778c0a6df7adabe2816221e953223e49..893ab3499685b5d3bbb8f838826b7f093ad3af73",
+  "provider": "claude_cli",
+  "model": "claude-opus-5",
+  "effort": "xhigh",
+  "execution_mode": "bootstrap_cli_not_managed_runtime",
+  "terminal_status": "success",
+  "duration_ms": 582815,
+  "api_duration_ms": 575968,
+  "turn_count": 49,
+  "input_tokens": 56,
+  "cache_creation_input_tokens": 140589,
+  "cache_read_input_tokens": 2313286,
+  "output_tokens": 43697,
+  "web_search_requests": 0,
+  "web_fetch_requests": 0,
+  "permission_denial_count": 3,
+  "permission_denial_summary": "Composed ancillary shell commands were denied; every plain SandboxCommandPlan command was rerun and reproduced. No edit, write, network, stage, commit, or push capability was granted.",
+  "total_cost_usd": 3.656592,
+  "terminal_verdict": "changes_required"
+}

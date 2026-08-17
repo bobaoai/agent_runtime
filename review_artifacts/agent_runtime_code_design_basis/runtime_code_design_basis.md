@@ -533,10 +533,11 @@ imports Conformance. Conformance may ship in the standalone wheel so the
 published product can carry its own technical assurance tools, but it never
 enters the product execution import or call path.
 
-The shipped `agent_runtime.testing` package remains a compatibility facade over
-responsibility-owned evaluation and Adapter-conformance entry points. Its
-individual source files retain their registered Registry, Execution, or
-Durability owner; it is not another Conformance implementation namespace.
+The shipped `agent_runtime.testing` package is a stable public facade over
+responsibility-owned evaluation and Adapter-conformance entry points. It is
+not a temporary compatibility slice. Its individual source files retain their
+registered Registry, Execution, or Durability owner; it is not another
+Conformance implementation namespace.
 
 ### 6.3 External authority
 

@@ -333,6 +333,13 @@ def _validate_structural_closure() -> tuple[str, ...]:
         errors.append(
             f"structural Runtime owner lacks a registered source: {source_path}"
         )
+    known_owner_ids = set(RUNTIME_ALLOWED_DEPENDENCY_TARGETS)
+    for module_name, owner_id in sorted(RUNTIME_STRUCTURAL_MODULE_OWNERS.items()):
+        if owner_id not in known_owner_ids:
+            errors.append(
+                f"structural Runtime module has an unknown owner: "
+                f"{module_name} -> {owner_id}"
+            )
     return tuple(errors)
 
 

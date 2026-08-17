@@ -72,7 +72,7 @@ RUNTIME_STRUCTURAL_MODULE_OWNERS = MappingProxyType(
         "agent_runtime.invocation": "invocation",
         "agent_runtime.ledger": "ledger",
         "agent_runtime.registry": "registry",
-        "agent_runtime.testing": "compatibility_facade",
+        "agent_runtime.testing": "public_facade",
     }
 )
 

@@ -1,12 +1,12 @@
 {
   "manifest_schema_version": "agent_runtime_architecture_slice_implementation_v1",
   "slice_id": "agent_runtime_architecture_rebuild_slice_1",
-  "candidate_revision": 2,
+  "candidate_revision": 3,
   "status": "frozen_for_independent_review",
   "implementation_baseline_commit": "294a3bd3778c0a6df7adabe2816221e953223e49",
   "approved_code_design_basis": {
     "path": "review_artifacts/agent_runtime_code_design_basis/code_design_basis.json",
-    "sha256": "2357be9c6667ee01073ec0368743ff9182772c47d64142c8ac1a84982b29cf0d"
+    "sha256": "0a34afdcdf0f8efd2636391110f0efe93d474b0ce021a0ac253ae14975a448ca"
   },
   "approved_design_subject": {
     "path": "review_artifacts/agent_runtime_complete_candidate/subject_manifest.json",
@@ -66,6 +66,17 @@
     "low_findings": 2,
     "nit_findings": 1
   },
+  "latest_independent_review": {
+    "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_2_opus_5_xhigh.json",
+    "sha256": "3a06137563285c8d8308a63262916d48246dcb4468f9237ae71b6e6a97d1fb4d",
+    "invocation_path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_2_invocation.json",
+    "invocation_sha256": "98a024b3c07f2fef7f02229bb5211bdd6c0f5c19d74303d6abad1782149a6575",
+    "terminal_verdict": "changes_required",
+    "blocking_findings": 0,
+    "medium_findings": 2,
+    "low_findings": 1,
+    "nit_findings": 2
+  },
   "review_finding_resolutions": [
     {
       "finding_id": "AR-S1-001",
@@ -101,16 +112,41 @@
       "finding_id": "AR-S1-007",
       "disposition": "closed",
       "resolution": "The unused _RUNTIME_SOURCE_ROOT constant was removed."
+    },
+    {
+      "finding_id": "AR-S1-008",
+      "disposition": "closed",
+      "resolution": "Surface drift is now computed from derived import identity only, while disposition, rationale, source, and their summary counts are independently validated; one owner-decided manifest passes both drift and retirement gates."
+    },
+    {
+      "finding_id": "AR-S1-009",
+      "disposition": "closed",
+      "resolution": "Check mode now compares the supplied consumer ID, Git commit, and optional source roots with the frozen manifest before re-deriving the live import surface; a wrong commit fails in test."
+    },
+    {
+      "finding_id": "AR-S1-010",
+      "disposition": "closed_by_owner_decision",
+      "resolution": "agent_runtime.testing is classified as a stable public facade rather than compatibility_facade and is explicitly excluded from temporary-facade retirement semantics."
+    },
+    {
+      "finding_id": "AR-S1-011",
+      "disposition": "closed",
+      "resolution": "Structural closure now rejects every module owner value absent from the code-owned dependency-owner set, including import-free initializers."
+    },
+    {
+      "finding_id": "AR-S1-012",
+      "disposition": "closed",
+      "resolution": "The isolated-wheel technology projection is correctly aligned, and the same subprocess now imports agent_runtime.conformance from the built wheel."
     }
   ],
   "test_evidence": [
     {
       "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q tests/test_runtime_architecture_validation.py tests/test_runtime_architecture_conformance.py tests/test_runtime_foundation_validation.py tests/test_runtime_consumer_manifest.py tests/test_agent_runtime_packaging_boundary.py",
-      "result": "54 passed"
+      "result": "55 passed"
     },
     {
       "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q",
-      "result": "507 passed, 20 skipped"
+      "result": "508 passed, 20 skipped"
     },
     {
       "command": "git diff --check",

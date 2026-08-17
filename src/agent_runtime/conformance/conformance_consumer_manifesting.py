@@ -19,6 +19,11 @@ _PREDECESSOR_MODULE_PREFIXES = (
     "agent_runtime.execution.execution_operation_authorization",
     "agent_runtime.registry.registry_workflow_registration",
 )
+_SITE_DECISION_KEYS = frozenset(
+    {"disposition", "disposition_reason", "disposition_source"}
+)
+_DISPOSITIONS = ("keep", "replace", "retire")
+_DISPOSITION_SOURCES = ("derived_default", "owner_decision")
 
 
 def _canonical_json(value: Any) -> str:
@@ -148,13 +153,13 @@ def build_downstream_consumer_manifest(
         disposition: sum(
             1 for site in sites if site["disposition"] == disposition
         )
-        for disposition in ("keep", "replace", "retire")
+        for disposition in _DISPOSITIONS
     }
     disposition_source_counts = {
         source: sum(
             1 for site in sites if site["disposition_source"] == source
         )
-        for source in ("derived_default", "owner_decision")
+        for source in _DISPOSITION_SOURCES
     }
     return {
         "manifest_schema_version": "runtime_downstream_consumer_manifest_v2",
@@ -198,9 +203,64 @@ def validate_downstream_consumer_manifest(
         consumer_git_commit=manifest["consumer_git_commit"],
         source_roots=manifest["source_roots"],
     )
-    if rebuilt["sites"] != manifest["sites"]:
+    manifest_sites = manifest["sites"]
+    if not isinstance(manifest_sites, list):
+        return ("downstream consumer manifest sites must be a list",)
+
+    def derived_site(site: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in site.items()
+            if key not in _SITE_DECISION_KEYS
+        }
+
+    if [derived_site(site) for site in rebuilt["sites"]] != [
+        derived_site(site) for site in manifest_sites
+    ]:
         return ("downstream Runtime import surface differs from frozen manifest",)
-    if rebuilt["summary"] != manifest["summary"]:
+
+    errors: list[str] = []
+    for rebuilt_site, site in zip(rebuilt["sites"], manifest_sites, strict=True):
+        disposition = site.get("disposition")
+        disposition_source = site.get("disposition_source")
+        disposition_reason = site.get("disposition_reason")
+        if disposition not in _DISPOSITIONS:
+            errors.append(f"{site['site_id']}: invalid disposition")
+        if disposition_source not in _DISPOSITION_SOURCES:
+            errors.append(f"{site['site_id']}: invalid disposition source")
+        if not isinstance(disposition_reason, str) or not disposition_reason:
+            errors.append(f"{site['site_id']}: disposition reason is required")
+        if disposition_source == "derived_default" and any(
+            site.get(key) != rebuilt_site.get(key)
+            for key in _SITE_DECISION_KEYS
+        ):
+            errors.append(
+                f"{site['site_id']}: derived disposition differs from generator"
+            )
+    if errors:
+        return tuple(errors)
+
+    expected_summary = {
+        "site_count": len(manifest_sites),
+        "source_file_count": len(
+            {site["source_path"] for site in manifest_sites}
+        ),
+        "disposition_counts": {
+            disposition: sum(
+                1 for site in manifest_sites
+                if site["disposition"] == disposition
+            )
+            for disposition in _DISPOSITIONS
+        },
+        "disposition_source_counts": {
+            source: sum(
+                1 for site in manifest_sites
+                if site["disposition_source"] == source
+            )
+            for source in _DISPOSITION_SOURCES
+        },
+    }
+    if expected_summary != manifest["summary"]:
         return ("downstream Runtime import summary differs from frozen manifest",)
     return ()
 
@@ -246,9 +306,20 @@ def main(argv: list[str] | None = None) -> int:
     """Build or reproduce one exact downstream import-surface artifact."""
 
     args = _parse_arguments(argv)
-    source_roots = tuple(args.source_roots or ("src", "tests"))
     if args.check_manifest is not None:
         manifest = json.loads(args.check_manifest.read_text(encoding="utf-8"))
+        if args.consumer_id != manifest.get("consumer_id"):
+            print("consumer id differs from frozen manifest", file=sys.stderr)
+            return 1
+        if args.consumer_git_commit != manifest.get("consumer_git_commit"):
+            print("consumer Git commit differs from frozen manifest", file=sys.stderr)
+            return 1
+        if (
+            args.source_roots is not None
+            and args.source_roots != manifest.get("source_roots")
+        ):
+            print("consumer source roots differ from frozen manifest", file=sys.stderr)
+            return 1
         errors = validate_downstream_consumer_manifest(
             manifest,
             consumer_root=args.consumer_root,
@@ -258,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(error, file=sys.stderr)
             return 1
         return 0
+    source_roots = tuple(args.source_roots or ("src", "tests"))
     manifest = build_downstream_consumer_manifest(
         consumer_id=args.consumer_id,
         consumer_root=args.consumer_root,

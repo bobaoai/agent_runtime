@@ -112,6 +112,25 @@ def test_structural_source_without_owner_fails_conformance(
     assert f"structural Runtime source lacks an owner: {source_path}" in errors
 
 
+def test_structural_module_with_unknown_owner_fails_conformance(
+    monkeypatch,
+) -> None:
+    malformed = dict(conformance.RUNTIME_STRUCTURAL_MODULE_OWNERS)
+    malformed["agent_runtime.durability"] = "durabilty"
+    monkeypatch.setattr(
+        conformance,
+        "RUNTIME_STRUCTURAL_MODULE_OWNERS",
+        malformed,
+    )
+
+    errors = conformance._validate_structural_closure()
+
+    assert (
+        "structural Runtime module has an unknown owner: "
+        "agent_runtime.durability -> durabilty"
+    ) in errors
+
+
 def test_unlisted_package_reexport_fails_conformance(tmp_path: Path) -> None:
     project_root = _copy_runtime_source(tmp_path)
     target = project_root / "src/agent_runtime/durability/__init__.py"

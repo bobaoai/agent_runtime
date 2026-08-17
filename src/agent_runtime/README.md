@@ -224,9 +224,10 @@ and target module. A removed debt edge is accepted; a new debt edge fails CI.
 Runtime execution code never imports Conformance.
 Conformance ships with the standalone wheel so the published package carries
 its own assurance tools; shipping it does not place it on the execution call
-path. `agent_runtime.testing` is a compatibility facade for shipped evaluation
-and Adapter-conformance entry points. Each file below that directory retains
-its registered Registry, Execution, or Durability owner.
+path. `agent_runtime.testing` is a stable public facade for shipped evaluation
+and Adapter-conformance entry points, not a temporary compatibility slice.
+Each file below that directory retains its registered Registry, Execution, or
+Durability owner.
 
 `agent_runtime.foundation` contains responsibility-neutral validation and JSON
 Schema traversal primitives. It imports no Runtime responsibility. Schema
