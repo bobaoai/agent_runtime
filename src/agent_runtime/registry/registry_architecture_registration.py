@@ -405,7 +405,7 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     _source(
         "registry",
         "module",
-        "exporting",
+        "loading",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
     ),
     _source(

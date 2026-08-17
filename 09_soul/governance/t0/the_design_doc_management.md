@@ -379,6 +379,68 @@ correction. The target reviewer executes as a fixed Agent Runtime workflow;
 the bootstrap path may use an approved direct external-review runner. Contract
 Audit does not author or repair the Design Doc.
 
+### 6.1 Independent semantic design review
+
+Independent semantic design review applies to a frozen T0, T1, or T2 Design
+Intent candidate. It is not an Engineering Change Review. A candidate becomes
+an engineering-review subject only after an approved design has been expressed
+as an exact implementation ChangeSet with its own Code Design Basis, paths,
+tests, and rollback boundary.
+
+The Design Contract review subject contains only the semantic material needed
+to judge the design:
+
+- the complete candidate Design Intent set;
+- the applicable Charter, parent, peer, dependency, and inherited-constraint
+  closure;
+- the declared decision being requested and the complete same-level structure
+  when a peer boundary changes;
+- the immutable Code Projection when one is part of the Design Contract
+  identity; and
+- referenced Current Inspection only as evidence of drift or implementability,
+  never as Design Intent.
+
+Subject identity, hashes, profile identity, reviewer release, authorization,
+execution lineage, and admission state remain outside model-authored output.
+The model receives the complete authorized semantic bodies and does not copy or
+invent control-plane metadata.
+
+The semantic reviewer judges:
+
+1. intended user result and reader decision;
+2. T0, T1, or T2 identity, owner, parent, and same-level peer coherence;
+3. owned-object uniqueness, authority direction, inheritance, and dependency
+   closure;
+4. separation of semantic owner, author, operator, reviewer, persistence owner,
+   implementation binding, and approval or admission authority;
+5. separation of stable intent from mutable implementation truth;
+6. completeness of invariants, public handoffs, failure semantics, completion,
+   and rollback obligations at the appropriate layer; and
+7. whether the design can guide implementation without forcing the reviewer to
+   redesign it or infer missing authority.
+
+The reviewer returns a verdict, complete check coverage, evidence-bound
+findings, accountable owner routes, and the smallest safe next step. It never
+edits the candidate. Contract Audit binds that semantic result to the exact
+subject and profile. The Design Doc owner decides and applies any revision.
+
+Every semantic finding distinguishes the candidate whose admission or design
+decision is affected from the document that owns the required correction. The
+correction target may be one supplied parent, peer, dependency, or prior
+decision context only when the candidate cannot safely resolve that
+contradiction itself. Reporting such a conflict does not make the context
+document part of the candidate set, admit it, or claim a comprehensive review
+of it. The recorded accountable owner is always the owner of the correction
+target, while the aggregate verdict remains a verdict on the frozen candidate
+subject.
+
+The portable semantic Module identity is `design_contract_reviewer`. Each
+project Code Projection binds that fixed Module through one Design Contract
+review Workflow to the applicable Design Intent profiles. If that binding is
+missing, the correct outcome is a review-routing gap or advisory-only review.
+The project must not substitute an Engineering Change Reviewer or a nearby
+domain reviewer.
+
 ## 7. Required Machine Contract
 
 The implementation of this T0 requires code-owned contracts for:
@@ -392,6 +454,8 @@ The implementation of this T0 requires code-owned contracts for:
 - approved `CodeDesignBasis` identity and its binding to the owning Design Intent;
 - DesignApprovalDecision identity, candidate hash, accountable owner, scope, evidence, and supersession;
 - required scaffold and conformance profile;
+- Design Contract review subject, semantic-check profile, fixed reviewer
+  binding, complete check coverage, and immutable review-result reference;
 - generated projection routing;
 - User Intent hash, immutable Code Projection hash (the Release Projection), and exact combined review-subject identity;
 - mutable Current Inspection derived from release, lifecycle, admission, implementation, and evidence records;
@@ -446,6 +510,10 @@ status.
 13. The portable governance distribution supplies the reusable T0 baseline; each project supplies its own Charter and local Code Projection.
 14. Installing that baseline does not create an aggregate governance-bundle review or announcement.
 15. Mutable lifecycle, deployment, implementation state, and current pointers never enter immutable Design Intent.
+16. A Design Intent candidate never enters Engineering Change Review unless an
+    exact implementation ChangeSet and approved Code Design Basis also exist.
+17. Missing Design Contract reviewer binding is reported as a routing gap; a
+    nearby reviewer cannot satisfy the independent semantic design-review gate.
 
 ## References
 

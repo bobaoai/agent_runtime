@@ -15,9 +15,9 @@ This is a `review` Skill. It enters only after the owning workflow freezes the
 subject and profile; it never authors, repairs, admits, or publishes that
 subject.
 
-## Runtime Module Exports
+## Runtime Module Registrations
 
-This Skill Package may export fixed independent-review Modules only when each
+This Skill may declare fixed independent-review Module sources only when each
 Module has an owning Design Doc, exact input and output schemas, and the
 standard `runtime_modules/<module_id>/module_registration.json + prompt.md`
 source.
@@ -25,9 +25,14 @@ source.
 Project bindings may register fixed reviewer Modules for system-change or
 other contract subjects. Each prompt owns only the stable review method. The
 exact case, candidate set, Registry projections, and prior findings arrive as
-Runtime-frozen task input. Do not replace an admitted export with a
+Runtime-frozen task input. Do not replace an admitted Module Release with a
 conversation-written review brief or copy dynamic candidate content into its
 static prompt.
+
+A project may bind a fixed `design_contract_reviewer` Module for T0, T1, and
+T2 Design Intent subjects. Design Doc Management owns that Module's semantic
+review method; this Skill supplies the independent Contract Audit entry and may
+declare the Module source without taking ownership of the candidate design.
 
 ## Identity
 
@@ -45,6 +50,17 @@ commit, including a change that happens to modify contracts, registries, or
 schemas. Contract Assurance enters when the contract subject itself has the
 manifest/profile identity above. Do not run both review Skills merely because
 an engineering change contains a contract file.
+
+Use the subject identity rather than the filename to choose the reviewer:
+
+| Subject | Review method |
+| --- | --- |
+| Frozen T0, T1, or T2 Design Intent plus its declared semantic closure | fixed Design Contract reviewer declared by this Skill |
+| Frozen System Change Governance candidate | its registered System Change Governance reviewer |
+| Frozen implementation diff or commit with an approved Code Design Basis | `engineering-change-review` |
+
+If the required reviewer binding does not exist, return a blocked or
+advisory-only audit. Never choose the nearest registered reviewer.
 
 Do not assume every subject has a Design Doc, Python registry, `SKILL.md`,
 Runtime registration, or implementation. Required surfaces come only from the

@@ -7,23 +7,22 @@ parent: designDoc/the_agent_runtime.md
 reader_persona:
   - Workflow Designer
   - Runtime Maintainer
-  - Skill Package Owner
+  - Skill Author
   - Evaluation Engineer
   - Engineering Reviewer
 ---
 
 # Agent Runtime Module Registration and Workflow Assembly
 
-**Purpose**: Define how a Skill Package exports independently executable
-Runtime Modules, how Workflow Releases connect registered Module Releases, how
+**Purpose**: Define how fixed Skill authoring sources become independently
+registered Runtime Modules, how Workflow Releases connect Module Releases, how
 Prompt and execution configuration are versioned, and how every Module Run is
 tested, evaluated, audited, and reproduced.
 
-**Required reader gain**: A reader can register one Skill Package that exports
-one or many Runtime Modules, run each Module independently, assemble those
-Modules into a workflow without creating a second Step or Component registry,
-and identify which facts belong in Git, Postgres, a Cell-local execution store,
-or generated inspection.
+**Required reader gain**: A reader can register each Module authored under a
+Skill independently, run it independently, assemble it into a Workflow without
+creating a second Step or Component registry, and identify which facts belong
+in Git, PostgreSQL, a Cell-local execution store, or generated inspection.
 
 ## 0. Contract Capsule
 
@@ -33,7 +32,7 @@ status: proposal
 canonical_owner: designDoc/agent_runtime_01_module_contract_and_assembly.md
 parent: designDoc/the_agent_runtime.md
 scope:
-  - Skill Package Release and zero-to-many Module export binding
+  - fixed Skill-authored Module registration sources
   - Runtime Module identity, release, admission, and direct execution
   - Workflow Release assembly from exact Module Release references
   - Prompt Bundle and Execution Profile release binding
@@ -51,7 +50,6 @@ inputs:
   - designDoc/the_skill_management.md
   - owning T1 Intent Contract and typed Workflow Graph
 outputs:
-  - skill_package_release and module_export_binding
   - runtime_module_release, prompt_bundle_release, and execution_profile_release
   - workflow_release and release_admission_record
   - runtime_release_bundle, runtime_module_plugin, and runtime_release_registry
@@ -78,27 +76,25 @@ The design uses four distinct views. Each section stays within one view.
 
 | View | Question | Canonical objects |
 | --- | --- | --- |
-| Definition and release | What can execute? | Skill Package Release, Runtime Module Release, Prompt Bundle Release, Execution Profile Release, Workflow Release |
+| Definition and release | What can execute? | Runtime Module Release, Prompt Bundle Release, Execution Profile Release, Workflow Release |
 | Graph assembly | How are executable units connected? | Workflow node bindings, edges, input mappings, waits, terminal conditions |
 | Execution | What happened in one run? | Workflow Execution, Module Run, Execution Variant, Attempt, output, Evaluation, Resolution |
 | Persistence and authority | Where does each fact live? | Git authoring source, Postgres registries, Cell-local execution store, generated inspection |
 
 These views interact through immutable references and hashes. They do not
 create authority rank. A graph node references a Module Release. A Module Run
-records one execution of that release. Neither fact changes the Skill Package
-that supplied its instructions.
+records one execution of that release. Neither fact changes the Skill
+authoring source recorded only as provenance.
 
 ## 2. Canonical Object Model
 
 ```mermaid
 flowchart TB
-    SP["Skill Package Release"] --> E1["Module Export A"]
-    SP --> E2["Module Export B"]
-    SP --> EN["Module Export N"]
+    S["Skill authoring source"] --> A["Module registration source A"]
+    S --> B["Module registration source B"]
 
-    E1 --> M1["Runtime Module Release A"]
-    E2 --> M2["Runtime Module Release B"]
-    EN --> MN["Runtime Module Release N"]
+    A --> M1["Runtime Module Release A"]
+    B --> M2["Runtime Module Release B"]
 
     M1 --> W1["Workflow Release 1"]
     M2 --> W1
@@ -111,9 +107,9 @@ flowchart TB
 
 The cardinality is intentional:
 
-- one Skill Package Release exports zero, one, or many Runtime Modules;
-- one Runtime Module Release has one owning Skill export when its Executor is
-  an Agent;
+- one Skill may author zero, one, or many Module registration sources;
+- every Runtime Module Release is registered, owned, versioned, and admitted
+  independently;
 - one Runtime Module Release may be referenced by many Workflow Releases;
 - one Workflow Release references many Runtime Module Releases;
 - one Module Run may have one or many sibling Execution Variants;
@@ -123,39 +119,35 @@ There is no separate Step Registry or Component Registry. `node_id` is a
 workflow-local graph-position identifier used only when the same Module appears
 more than once or a stable position identity is required.
 
-## 3. Skill Package and Module Export Contract
+## 3. Skill-authored Module Registration Contract
 
-### 3.1 Skill Package role
+### 3.1 Skill role
 
-A Skill Package is an authoring, review, and distribution unit governed by
-Skill Governance. It may contain:
+A Skill is an authoring and operator-facing surface governed by Skill
+Governance. It may contain one provider-neutral `SKILL.md`, shared authoring
+assets, zero-to-many Module registration sources, and local projections for
+supported Agent interfaces. The Skill and its candidate revision grant no
+Runtime execution authority. Runtime registers and admits each Module Release
+independently.
 
-- one provider-neutral `SKILL.md` entry;
-- shared instruction assets and examples;
-- zero-to-many Module export declarations;
-- Module-specific instruction assets;
-- local development projections for Codex, Claude, or another Agent interface;
-- optional workflow-entry projections that route to an admitted Workflow
-  Release.
+### 3.2 Module registration manifest
 
-The package itself grants no execution authority. Runtime admits each Module
-export independently.
-
-### 3.2 Module export manifest
-
-A product-facing Skill Package declares each executable export through one
-fixed directory and one machine-readable manifest:
+A product-facing Skill declares each executable Module through one fixed
+directory and one machine-readable manifest:
 
 ```text
 .claude/skills/<skill_id>/runtime_modules/<module_id>/
 ├── module_registration.json
 ├── prompt.md          # fixed prompt authoring source
+├── schemas/
+│   ├── input.schema.json
+│   └── output.schema.json
 └── tests/
 ```
 
-The Runtime registration builder discovers only
-`runtime_modules/*/module_registration.json`. The directory name, `export_id`,
-and `module_id` must be identical `snake_case` values. `prompt.md` is the
+The Runtime registration builder reads only an explicitly selected
+`runtime_modules/<module_id>/module_registration.json`. The directory name and
+`module_id` must be identical `snake_case` values. `prompt.md` is the
 fixed UTF-8 authoring source of the Module's task instruction: registration
 reads exactly this file, mints its content into an immutable Prompt Component
 release, and compiles the Prompt Bundle from registered components. After
@@ -164,19 +156,33 @@ execution resolves the registered Prompt Bundle and never reads the
 repository file. Ambient Markdown, sibling Module files, `SKILL.md` sections,
 and strings embedded in Adapter code are not instruction members.
 
-The logical manifest shape is:
+Each Agent Module registration must close three authoring surfaces before the
+Runtime compiler accepts it:
+
+1. the canonical `.claude/skills/<skill_id>/SKILL.md` declares the exact
+   `module_id` and explains how a caller reaches the managed Module;
+2. the Module owner Design Doc declares the exact `module_id` and explains its
+   semantic purpose, boundary, input/output meaning, permissions, and workflow
+   position;
+3. the fixed Module directory owns the executable manifest, prompt, schemas,
+   and tests described above.
+
+The registration preflight verifies the paths and exact identifier closure
+deterministically. Independent review judges whether the Skill and Design Doc
+explanations are semantically sufficient. Neither surface may duplicate the
+model-ready prompt, select a provider, or override immutable release metadata.
+
+The current logical manifest shape is:
 
 ```yaml
-schema_version: runtime_module_registration_v1
-skill_package_id: research_theme_writing
+schema_version: runtime_module_registration_v2
 skill_id: research-theme-writing
-export_id: research_theme_report_writer
 module_id: research_theme_report_writer
 owner_contract_path: designDoc/research_13_theme_report_writing_pipeline.md
 input_schema_ref: schema:research_theme_report_writer_input@v1
-input_schema_path: src/research_theme_report_workflow/schemas/writer_input.schema.json
+input_schema_path: schemas/input.schema.json
 output_schema_ref: schema:research_theme_report_writer_output@v1
-output_schema_path: src/research_theme_report_workflow/schemas/writer_output.schema.json
+output_schema_path: schemas/output.schema.json
 declared_operation_ids: [model_execute]
 compatible_transport_kinds: [claude_agent_sdk, codex_cli]
 context_policy_ref: context-policy:workflow_execution_isolated@v1
@@ -186,34 +192,41 @@ entry_policy: workflow_bound
 output_resolution_policy: evaluated_single
 ```
 
-`owner_contract_path`, `input_schema_path`, and `output_schema_path` are
-registration-time authoring locators. The compiler resolves them inside the
-authoring repository, validates their declared identities, and imports their
-exact bytes into immutable Runtime releases. They are never persisted as
-production read instructions and are never resolved by a Module Run.
+`owner_contract_path` is a repository-relative authoring locator.
+`input_schema_path` and `output_schema_path` are portable paths relative to the
+Module directory and must remain inside `schemas/`. The compiler resolves all
+three paths inside the authoring repository, validates their declared
+identities, and imports their exact bytes or hashes into immutable Runtime
+releases. They are never persisted as production read instructions and are
+never resolved by a Module Run.
 
-`export_id` is unique inside one Skill Package Release and equals `module_id`,
-so one global executable identity survives Skill packaging without an alias
-map. `module_id` is the stable identity carried by every release of that Module
-in the Runtime Release Registry. Prompt membership is the ordered set of exact
-Prompt Component Release refs and hashes. Runtime rejects an unregistered
-component, another root-level Markdown authority, a path escaping the Module
-directory, or an ambient package file absent from the export closure.
+Every closed Module directory keeps its input and output schema authoring files
+inside that Module's `schemas/` directory. Runtime permits the directory only
+when every contained file is one of the exact schema paths declared by the
+Module registration; an external, undeclared, or unrelated schema entry is
+rejected.
 
-Changing one Module export creates a new Skill Package Release. The admission
-compiler compares export closures independently. An unchanged export may keep
-its existing Runtime Module Release when its selected instruction content,
-dependencies, contract, and hashes remain byte-identical.
+`module_id` is the stable executable identity carried by every release of that
+Module in the Runtime Release Registry. `source_skill_id` records only the
+stable authoring Skill identity. It never records a Skill candidate revision,
+hash, admission state, or version dependency. Prompt membership is the ordered
+set of exact Prompt Component Release refs and hashes. Runtime rejects an
+unregistered component, another root-level Markdown authority, a path escaping
+the Module directory, or an undeclared file absent from the Module closure.
+
+Changing one Module's instruction, schema, owner, or Runtime policy creates a
+new candidate release for that Module and its affected dependencies. Sibling
+Modules do not change and are not read merely because they share a Skill.
 
 ### 3.3 Skill classification and Runtime effect
 
-| Skill class | Module export rule | Runtime entry |
+| Skill class | Module registration rule | Runtime entry |
 | --- | --- | --- |
-| `primary_agent_development` | No product Module export | Direct development use under repository policy |
-| `product_agentic` | One or more Agent Module exports | Runtime Module or admitted Workflow |
+| `primary_agent_development` | May declare a fixed development or governance Module; never a tenant product executor | Direct repository use or an admitted governance/development Workflow |
+| `product_agentic` | One or more Agent Module registration sources | Runtime Module or admitted Workflow |
 | `product_deterministic` | Usually a workflow-entry projection; deterministic Modules are code-owned | Dagster or Runtime binding selected by product design |
-| `product_hybrid` | Every Agent execution is a Runtime Module export | Fixed outer graph plus Runtime Module execution |
-| `projection_only` | No Executor export | Routes to an already admitted Module or Workflow |
+| `product_hybrid` | Every Agent execution is a registered Runtime Module | Fixed outer graph plus Runtime Module execution |
+| `projection_only` | Declares no executable Module | Routes to an already admitted Module or Workflow |
 
 A workflow-entry Skill points to `workflow_release_ref`. It does not become an
 orchestrator Module merely because it helps a user start the workflow.
@@ -222,7 +235,7 @@ orchestrator Module merely because it helps a user start the workflow.
 
 | `module_kind` | Required executable binding | Skill requirement |
 | --- | --- | --- |
-| `agent` | One exact Skill export and Prompt Bundle loaded by an Agent Executor Adapter | One exact Skill export binding |
+| `agent` | One exact Prompt Bundle loaded by an Agent Executor Adapter | Stable `source_skill_id` provenance |
 | `deterministic` | Immutable code entry ref and code-release hash | Optional explanatory Skill projection |
 | `human_task` | Immutable human-task service entry ref and service-release hash | Optional task instruction release |
 | `external_service` | Immutable Gateway operation entry ref and Gateway-release hash | Optional explanatory Skill projection |
@@ -249,8 +262,7 @@ module_release_ref
 module_release_sha256
 module_kind
 owner_contract_ref and hash
-source_skill_package_ref and hash when module_kind=agent
-source_export_id and export instruction ref/hash when module_kind=agent
+source_skill_id when module_kind=agent
 executable_ref and executable_sha256 when module_kind is not agent
 input_schema refs/hashes
 output_schema refs/hashes
@@ -279,7 +291,7 @@ closed independently:
 | Input contract | Input Schema Asset Release ref and content hash |
 | Output contract | Output Schema Asset Release ref and content hash |
 | Provider execution | Execution Profile Release selected per Variant |
-| Skill provenance | Skill Package Release and export ID |
+| Skill provenance | Stable `source_skill_id`; no Skill release dependency |
 | Runtime policy | Context, Evaluation, retry, entry, and output-resolution refs and hashes |
 
 The dimensions remain separate so a provider or model A/B test can change only
@@ -327,11 +339,11 @@ Managed execution uses the following authority split:
 | --- | --- |
 | Product and architecture intent | Design Doc |
 | Schema authoring file, validator, compiler, and seed declaration | Code and Git |
-| Skill Package and Module instruction candidate | Skill Management authoring workflow |
-| Registered Schema Asset, Skill Package, Prompt Component, Module, Prompt Bundle, Execution Profile, and Workflow release | Postgres control-plane registry |
+| Skill and Module instruction candidate | Skill Management authoring workflow |
+| Registered Schema Asset, Prompt Component, Module, Prompt Bundle, Execution Profile, and Workflow release | Postgres control-plane registry |
 | Active release pointer and admission state | Postgres control-plane registry |
 | Local `.claude/skills/<skill_id>/runtime_modules/<module_id>` files | Registration manifest plus generated human-review and recovery projections; no post-registration authority |
-| Local `.claude/skills/*/SKILL.md` files | Skill Package authoring candidate; never duplicate Module prompt text or override a registered release |
+| Local `.claude/skills/*/SKILL.md` files | Skill authoring candidate; never duplicate Module prompt text or override a registered release |
 | Local `.agents/skills/*/SKILL.md` files | Codex host-interface projections; never own Module registration or duplicate Module prompt text |
 | Authorized dynamic task input and final provider request | Cell-local execution store |
 | Shared execution ledger | IDs, refs, hashes, status, timing, and usage only |
@@ -541,8 +553,8 @@ authorize execution.
 
 | Change | Required new release or record |
 | --- | --- |
-| Shared Skill instruction changes | Skill Package Release; recompile affected Module exports |
-| One Module instruction changes | Skill Package Release and affected Prompt Bundle and Module Release |
+| Shared Skill guidance changes | Skill review candidate only; no Runtime release unless a Module prompt changes |
+| One Module instruction changes | Affected Prompt Component, Prompt Bundle, and Module Release |
 | Input JSON Schema changes | Input Schema Asset Release plus every dependent Runtime Module Release |
 | Output JSON Schema changes | Output Schema Asset Release plus every dependent Prompt Bundle and Runtime Module Release |
 | Operation, Context, Evaluation, retry, entry, or output-resolution contract changes | Runtime Module Release |
@@ -860,13 +872,12 @@ failure classifications.
 The control-plane schema contains these code-owned table families:
 
 ```text
-skill_package_release
 schema_asset_release
+prompt_component_release
 prompt_bundle_release
 execution_profile_release
 runtime_module_release
 workflow_release
-skill_module_export_binding
 workflow_node_binding
 workflow_edge
 release_admission
@@ -912,8 +923,8 @@ Release admission preserves this order:
 
 ```mermaid
 flowchart LR
-    SKILL["Skill Package Release"] --> EXPORT["Module export candidates"]
-    EXPORT --> COMPILE["Schema import plus Module and Prompt compilation"]
+    SKILL["Skill authoring source"] --> SOURCE["Selected Module registration source"]
+    SOURCE --> COMPILE["Schema import plus Module and Prompt compilation"]
     COMPILE --> BUNDLE["runtime_release_bundle"]
     BUNDLE --> CANDIDATE["Candidate registry records"]
     CANDIDATE --> MODULE_TEST["Direct Module tests and Evaluation"]
@@ -922,12 +933,12 @@ flowchart LR
     ACTIVE --> ROUTE["Managed product routing"]
 ```
 
-1. Skill Management admits or identifies one immutable Skill Package Release.
-2. The Package exports zero-to-many Module candidates with closed instruction
-   assets.
-3. The Module compiler validates the owner contract, imports exact input and
-   output files as immutable Schema Asset Releases, and validates operations,
-   Context, Evaluation, entry policy, and Skill export closure.
+1. Skill Management admits or identifies the authoring Skill candidate.
+2. Registration selects one closed Module source without reading sibling
+   Modules.
+3. The Module compiler validates that Module's exact owner, imports exact input and output files as
+   immutable Schema Asset Releases, and validates operations, Context,
+   Evaluation, entry policy, Prompt, and Schema closure.
 4. The Prompt compiler creates immutable Prompt Bundle Releases from the same
    registered output Schema Asset projection.
 5. One `runtime_module_plugin` submits a dependency-closed
@@ -951,7 +962,7 @@ flowchart LR
    exact input and output Schema Asset bodies are registered and hash-closed.
 9. Product routing moves to the managed entry.
 10. Skill Governance retires legacy direct execution while preserving managed
-    Skill Package and local development projections.
+    Skill and local development projections.
 
 Failure at any gate leaves the current active releases unchanged.
 
@@ -969,7 +980,7 @@ workflow_graph
 module_release_index
 module_input_projection_index
 artifact_schema_index
-skill_package_and_export_index
+module_source_provenance_index
 prompt_bundle_index
 execution_profile_index
 evaluation_binding_index
@@ -988,9 +999,9 @@ materials into every Agent context.
 
 ## 13. Theme Report Registration Example
 
-One Skill Package may export the Theme Agent Modules, or existing focused Skill
-Packages may each export one Module. The Workflow contract is unchanged by
-that packaging choice. The minimum Agent Module set is:
+One Skill may author several Theme Agent Modules, or focused Skills may each
+author one Module. The Workflow contract is unchanged by that authoring
+choice. The minimum Agent Module set is:
 
 ```text
 research_theme_report_context_curator
@@ -1027,25 +1038,25 @@ flowchart LR
     P -->|pass| H["Authorized PM wait"]
 ```
 
-Theme is admitted only after every graph node resolves an
-exact Module Release, every Agent Module resolves an admitted Skill export and
-Prompt Bundle, and provider calls enter through `run_module()`.
+Theme is admitted only after every graph node resolves an exact Module Release,
+every Agent Module resolves its exact Prompt Bundle, and provider calls enter
+through `run_module()`.
 
 ## 14. Risks and Required Controls
 
 | Risk | Failure signal | Required control |
 | --- | --- | --- |
-| Skill Package becomes execution authority | Runtime starts a Skill path without an admitted Module Release | Module Release and authorization are mandatory for every invocation |
-| Skill and Prompt become two editable truths | Adapter Prompt differs from the admitted Skill export | Deterministic Prompt compiler and exact member hashes |
-| Package sharing leaks irrelevant instructions | Writer receives verifier or debater instructions | Closed Module export and Prompt Bundle membership validation |
+| Skill becomes execution authority | Runtime starts a Skill path without an admitted Module Release | Module Release and authorization are mandatory for every invocation |
+| Skill and Prompt become two editable truths | Adapter Prompt differs from the registered Module prompt | Deterministic Prompt compiler and exact member hashes |
+| Shared Skill leaks irrelevant instructions | Writer receives verifier or debater instructions | Single-Module source loading and Prompt Bundle membership validation |
 | Active release mutates | The same release ID loads different bytes | Append-only releases and content-addressed validation |
 | Workflow adopts latest Module | Replay changes behavior after a Module promotion | Exact Module Release refs in every Workflow Release and execution |
 | Global Prompt release store receives customer content | Source or draft text appears in a control-plane row | Static release validator plus Cell-local Prompt Envelope storage |
 | Model receives Runtime bookkeeping | Provider prompt or readable input contains refs, hashes, release/schema identity, Entitlement evidence, tenant/Cell, execution, or billing fields | Declared task-plane projection, no provider-readable manifest, and representative-data prompt inspection |
 | A/B arms share mutable context | One provider workspace affects a sibling Variant | Variant-scoped Context identity and isolation tests |
 | Direct execution bypasses product entry policy | A workflow-bound Module runs as a production product action | Purpose and entry-policy validation before Module Run creation |
-| Module count expands without governance | Duplicate Modules differ only by names | Contract-hash comparison and duplicate-export review |
-| Package update causes unnecessary release churn | Unchanged exports are rebuilt without semantic change | Export-closure hashing and reuse of byte-identical Module Releases |
+| Module count expands without governance | Duplicate Modules differ only by names | Semantic-owner and release-hash comparison before Module admission |
+| One Module update causes sibling release churn | An unchanged sibling Module is rebuilt | Single-Module loading and reuse of byte-identical Module Releases |
 
 ## 15. Canonical Runtime Vocabulary
 
@@ -1076,8 +1087,8 @@ Run outside `run_module()`, or makes output consumable without an exact
 
 The design is implemented only when all of the following hold:
 
-- one Skill Package exports at least two independently admitted Modules;
-- each exported Module runs directly through `run_module()` with complete
+- one Skill authors at least two independently admitted Modules;
+- each registered Module runs directly through `run_module()` with complete
   authorization, Prompt, Context, usage, output, and Attempt lineage;
 - one Workflow Release chains those exact Module Releases and exercises a
   revision loop;
@@ -1085,10 +1096,10 @@ The design is implemented only when all of the following hold:
 - Codex and Claude profiles execute as sibling Variants with isolated Context;
 - Prompt Bundle and Schema Asset releases load from Postgres, while dynamic
   Prompt Envelopes remain Cell-local;
-- missing Skill export, Prompt Bundle, schema, operation declaration,
+- missing Prompt Bundle, schema, operation declaration,
   authorization, or release hash fails closed;
 - replay never resolves `latest` or repeats a committed provider call;
-- generated inspection reproduces the active Skill Package, Module, Prompt,
+- generated inspection reproduces the active Module, Prompt,
   profile, Workflow, admission, and active-release bindings;
 - deterministic inspection proves that `runtime_release_registry` is the only
   Module, Workflow, admission, and active-release registration authority.

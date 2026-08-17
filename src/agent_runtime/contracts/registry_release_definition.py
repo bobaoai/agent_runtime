@@ -27,6 +27,7 @@ from .registry_contract_validation import (
 
 
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}$")
+_SKILL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _MEDIA_TYPE_PATTERN = re.compile(
     r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$"
 )
@@ -119,7 +120,6 @@ class OutputResolutionPolicy(StrEnum):
 class ReleaseSubjectKind(StrEnum):
     """Persisted release family governed by an admission record."""
 
-    SKILL_PACKAGE = "skill_package"
     PROMPT_COMPONENT = "prompt_component"
     PROMPT_BUNDLE = "prompt_bundle"
     EXECUTION_PROFILE = "execution_profile"
@@ -195,138 +195,6 @@ class ReleaseMember:
             member_ref=payload["member_ref"],
             member_sha256=payload["member_sha256"],
             media_type=payload["media_type"],
-        )
-
-
-@dataclass(frozen=True)
-class SkillModuleExport:
-    """Closed instruction selection for one Module exported by a Skill Package."""
-
-    record_type: ClassVar[str] = "skill_module_export"
-
-    export_id: str
-    module_id: str
-    instruction_members: tuple[ReleaseMember, ...]
-
-    def validate(self) -> None:
-        """Validate export identity and its closed instruction membership."""
-
-        validate_snake_case_name("export_id", self.export_id)
-        validate_snake_case_name("module_id", self.module_id)
-        validate_exact_record_tuple(
-            "instruction_members",
-            self.instruction_members,
-            expected_type=ReleaseMember,
-            item_validator=lambda member: member.validate(),
-            unique_key=lambda member: member.member_ref,
-            unique_key_label="member_ref",
-            require_non_empty=True,
-        )
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return the canonical JSON-compatible export body."""
-
-        self.validate()
-        return {
-            "export_id": self.export_id,
-            "module_id": self.module_id,
-            "instruction_members": [
-                member.as_dict() for member in self.instruction_members
-            ],
-        }
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "SkillModuleExport":
-        """Reconstruct one Module export from persisted canonical JSON."""
-
-        return cls(
-            export_id=payload["export_id"],
-            module_id=payload["module_id"],
-            instruction_members=tuple(
-                ReleaseMember.from_dict(member)
-                for member in payload["instruction_members"]
-            ),
-        )
-
-
-@dataclass(frozen=True)
-class SkillPackageRelease:
-    """Provider-neutral Skill Package release exporting zero-to-many Modules."""
-
-    record_type: ClassVar[str] = "skill_package_release"
-
-    skill_package_id: str
-    skill_package_version: str
-    release_ref: str
-    owner_contract_ref: str
-    owner_contract_sha256: str
-    module_exports: tuple[SkillModuleExport, ...]
-    release_sha256: str
-
-    def _payload(self) -> dict[str, Any]:
-        return {
-            "skill_package_id": self.skill_package_id,
-            "skill_package_version": self.skill_package_version,
-            "release_ref": self.release_ref,
-            "owner_contract_ref": self.owner_contract_ref,
-            "owner_contract_sha256": self.owner_contract_sha256,
-            "module_exports": [export.as_dict() for export in self.module_exports],
-        }
-
-    def validate(self) -> None:
-        """Validate Skill Package identity, export closure, and release hash."""
-
-        validate_snake_case_name("skill_package_id", self.skill_package_id)
-        _validate_token("skill_package_version", self.skill_package_version)
-        validate_opaque_ref("release_ref", self.release_ref)
-        validate_opaque_ref("owner_contract_ref", self.owner_contract_ref)
-        validate_sha256("owner_contract_sha256", self.owner_contract_sha256)
-        validate_exact_record_tuple(
-            "module_exports",
-            self.module_exports,
-            expected_type=SkillModuleExport,
-            item_validator=lambda export: export.validate(),
-            unique_key=lambda export: export.export_id,
-            unique_key_label="export_id",
-            require_non_empty=False,
-        )
-        module_ids = tuple(export.module_id for export in self.module_exports)
-        if len(module_ids) != len(set(module_ids)):
-            raise ValueError("module_exports must have unique module_id values")
-        validate_sha256("release_sha256", self.release_sha256)
-        if self.release_sha256 != _canonical_sha256(self._payload()):
-            raise ValueError("Skill Package release hash mismatch")
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return the canonical JSON-compatible Skill Package release."""
-
-        self.validate()
-        return {**self._payload(), "release_sha256": self.release_sha256}
-
-    @classmethod
-    def build(cls, **fields: Any) -> "SkillPackageRelease":
-        """Build a hash-complete immutable Skill Package Release."""
-
-        provisional = cls(**fields, release_sha256="0" * 64)
-        record = cls(**fields, release_sha256=_canonical_sha256(provisional._payload()))
-        record.validate()
-        return record
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "SkillPackageRelease":
-        """Reconstruct and defer validation of a persisted Skill Package."""
-
-        return cls(
-            skill_package_id=payload["skill_package_id"],
-            skill_package_version=payload["skill_package_version"],
-            release_ref=payload["release_ref"],
-            owner_contract_ref=payload["owner_contract_ref"],
-            owner_contract_sha256=payload["owner_contract_sha256"],
-            module_exports=tuple(
-                SkillModuleExport.from_dict(export)
-                for export in payload["module_exports"]
-            ),
-            release_sha256=payload["release_sha256"],
         )
 
 
@@ -1067,9 +935,7 @@ class RuntimeModuleRelease:
     module_kind: ModuleKind
     owner_contract_ref: str
     owner_contract_sha256: str
-    source_skill_package_ref: str | None
-    source_skill_package_sha256: str | None
-    source_export_id: str | None
+    source_skill_id: str | None
     executable_ref: str | None
     executable_sha256: str | None
     input_schema_ref: str
@@ -1098,9 +964,7 @@ class RuntimeModuleRelease:
             "module_kind": self.module_kind.value,
             "owner_contract_ref": self.owner_contract_ref,
             "owner_contract_sha256": self.owner_contract_sha256,
-            "source_skill_package_ref": self.source_skill_package_ref,
-            "source_skill_package_sha256": self.source_skill_package_sha256,
-            "source_export_id": self.source_export_id,
+            "source_skill_id": self.source_skill_id,
             "executable_ref": self.executable_ref,
             "executable_sha256": self.executable_sha256,
             "input_schema_ref": self.input_schema_ref,
@@ -1131,24 +995,17 @@ class RuntimeModuleRelease:
             raise ValueError("module_kind must be a ModuleKind")
         validate_opaque_ref("owner_contract_ref", self.owner_contract_ref)
         validate_sha256("owner_contract_sha256", self.owner_contract_sha256)
-        _validate_optional_opaque_ref(
-            "source_skill_package_ref", self.source_skill_package_ref
-        )
-        _validate_optional_sha256(
-            "source_skill_package_sha256", self.source_skill_package_sha256
-        )
-        if self.source_export_id is not None:
-            validate_snake_case_name("source_export_id", self.source_export_id)
-        skill_binding = (
-            self.source_skill_package_ref,
-            self.source_skill_package_sha256,
-            self.source_export_id,
-        )
+        if self.source_skill_id is not None and not _SKILL_ID_PATTERN.fullmatch(
+            self.source_skill_id
+        ):
+            raise ValueError("source_skill_id must use canonical kebab-case")
         prompt_binding = (self.prompt_bundle_ref, self.prompt_bundle_sha256)
         executable_binding = (self.executable_ref, self.executable_sha256)
         if self.module_kind is ModuleKind.AGENT:
-            if any(value is None for value in skill_binding + prompt_binding):
-                raise ValueError("Agent Module requires Skill export and Prompt Bundle")
+            if self.source_skill_id is None or any(
+                value is None for value in prompt_binding
+            ):
+                raise ValueError("Agent Module requires source Skill and Prompt Bundle")
             if any(value is not None for value in executable_binding):
                 raise ValueError("Agent Module cannot own a direct executable binding")
             if not self.declared_operation_ids:
@@ -1156,7 +1013,9 @@ class RuntimeModuleRelease:
                     "Agent Module must declare its protected operations"
                 )
         else:
-            if any(value is not None for value in skill_binding + prompt_binding):
+            if self.source_skill_id is not None or any(
+                value is not None for value in prompt_binding
+            ):
                 raise ValueError(
                     "non-Agent Module cannot own an Agent Skill or Prompt binding"
                 )
@@ -1229,9 +1088,7 @@ class RuntimeModuleRelease:
             module_kind=ModuleKind(payload["module_kind"]),
             owner_contract_ref=payload["owner_contract_ref"],
             owner_contract_sha256=payload["owner_contract_sha256"],
-            source_skill_package_ref=payload.get("source_skill_package_ref"),
-            source_skill_package_sha256=payload.get("source_skill_package_sha256"),
-            source_export_id=payload.get("source_export_id"),
+            source_skill_id=payload.get("source_skill_id"),
             executable_ref=payload.get("executable_ref"),
             executable_sha256=payload.get("executable_sha256"),
             input_schema_ref=payload["input_schema_ref"],
@@ -1793,8 +1650,6 @@ __all__ = [
     "ReleaseSubjectKind",
     "RuntimeModuleRelease",
     "SchemaAssetRelease",
-    "SkillModuleExport",
-    "SkillPackageRelease",
     "WorkflowEdge",
     "WorkflowExecutionProfileSelection",
     "WorkflowNodeKind",

@@ -15,7 +15,7 @@ reader_persona:
 # Agent Runtime Contract
 
 **Purpose**: Define a standalone, business-neutral infrastructure product for
-registering Skill Package exports as Runtime Modules, assembling Workflow
+registering independently owned Runtime Modules from fixed authoring sources, assembling Workflow
 Graphs from those Modules, and executing, evaluating, observing, recovering,
 and evolving each Module independently.
 
@@ -35,7 +35,7 @@ canonical_owner: designDoc/the_agent_runtime.md
 owned_system_object: provider-neutral Agent execution
 scope:
   - standalone public Runtime contracts and plugin SDK
-  - Runtime admission of Module candidates exported by Skill Packages
+  - Runtime admission of independently registered Module candidates
   - dependency-closed Runtime Module and Workflow Release admission
   - Workflow Execution, Module Run, Execution Variant, Attempt, Execution Output, Evaluation, Selection, and Resolution lineage
   - provider-neutral Module invocation
@@ -76,7 +76,7 @@ adjacent_contracts:
   - designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md
 outputs:
   - public Runtime contract and plugin seam
-  - registered Schema Asset, Skill Package, Prompt Component, Prompt Bundle, Execution Profile, Module, and Workflow Releases
+  - registered Schema Asset, Prompt Component, Prompt Bundle, Execution Profile, Module, and Workflow Releases
   - immutable execution, output-reference, evaluation, resolution, context, telemetry, and recovery lineage
   - provider-neutral conformance and standalone-distribution requirements
 truth_surfaces:
@@ -140,9 +140,8 @@ authority from a working-tree Skill or provider session.
 
 ```mermaid
 flowchart LR
-    INTENT["Domain intent and Module contracts"] --> SKILL["Immutable Skill Package Release"]
-    SKILL --> EXPORT["Zero-to-many Module exports"]
-    EXPORT --> COMPILE["Import Schema Assets and compile Module, Prompt, Profile, and Workflow releases"]
+    INTENT["Domain intent and Module contracts"] --> SOURCE["Selected Module authoring source"]
+    SOURCE --> COMPILE["Import Schema Assets and compile Module, Prompt, Profile, and Workflow releases"]
     COMPILE --> BUNDLE["Dependency-closed runtime_release_bundle"]
     BUNDLE --> REGISTRY_CANDIDATE["Runtime Release Registry<br/>candidate"]
     REGISTRY_CANDIDATE --> TEST["Direct Module tests, Evaluation, and workflow shadow run"]
@@ -187,7 +186,7 @@ only the capabilities admitted by the exact Execution Profile.
 | Physical placement, residency, retention, backup, export, and destruction | [Data Governance](the_data_governance.md) | Uses registered storage bindings and preserves isolation |
 | Build, package, release admission, deployment, rollback, and retirement evidence | [Software Delivery](the_software_delivery.md) | Exposes versioned Runtime release units and conformance evidence |
 | Product composition, deployment topology, and operator experience | [Agency Platform](the_agency_platform.md) | Is loaded and operated by the host without importing the host into core |
-| Provider-neutral Skill Package semantics, exports, and lifecycle | [Skill Governance](the_skill_management.md) | Runtime owns executable Module admission plus provider-facing loading, packaging, translation, invocation, and telemetry adapters |
+| Skill semantics, authoring, review identity, and lifecycle | [Skill Governance](the_skill_management.md) | Runtime receives fixed Module sources, records stable `source_skill_id` provenance, and owns executable Module admission and invocation |
 
 Domain workflow admission, product authorization, Runtime admission, domain acceptance, and canonical mutation are separate decisions. No record from one authority substitutes for another.
 
@@ -249,8 +248,8 @@ architecture projection enumerates the current binding set. Physical source
 directories likewise do not become logical responsibilities.
 
 A domain plugin submits one dependency-closed `runtime_release_bundle` through a
-`runtime_module_plugin`. The bundle may contain Schema Asset, Skill Package,
-Prompt Component, Prompt Bundle, Execution Profile, Runtime Module,
+`runtime_module_plugin`. The bundle may contain Schema Asset, Prompt
+Component, Prompt Bundle, Execution Profile, Runtime Module,
 Workflow, and admission
 releases. Runtime
 validates identity, uniqueness, exact hash closure, declared operation closure,
@@ -321,11 +320,11 @@ evidence. It is outside formal managed execution and cannot be relabeled by
 adding a log after the call. Promotion to `managed` requires the conformance
 package, Runtime lineage, required tests and evaluations, and admitted adapter
 bindings. `direct_entry_retired` isolates the direct execution entry while
-retaining the managed Skill Package and interface projections.
+retaining the managed Skill and interface projections.
 
 Agentic workflow authoring is registration-first. Before a model-backed graph
 node is accepted as a workflow candidate, its owning plugin declares the exact
-Skill Package export, concrete input and output schema assets, declared
+Module authoring source and stable source Skill ID, concrete input and output schema assets, declared
 operations, Context policy, Evaluation policy, retry policy, output-resolution
 policy, Prompt Bundle closure, and focused conformance fixtures needed for one
 Runtime Module Release. A Workflow candidate references exact Module Release
@@ -435,8 +434,8 @@ Module Run receives the same domain context bytes.
 An Agent Execution Adapter receives one frozen Variant-bound request and
 returns a structured terminal result, immutable output reference, normalized
 failure class, Context event, and usage fields available from the provider. It
-loads the admitted Skill Package export and Prompt Bundle bound by the Module
-Release and produces the exact provider request pinned to that Variant. A
+loads the admitted Prompt Bundle bound by the Module Release and produces the
+exact provider request pinned to that Variant. A
 content-bearing final provider request is committed in the Cell-local Prompt
 Envelope before invocation. The Executor reads that committed UTF-8 body and
 sends it unchanged; it must not privately append, reconstruct, or replace
@@ -472,7 +471,7 @@ tree, repository candidate, or build package. The tree is resolved before
 invocation, bound by manifest and hash, and mounted only inside that Attempt.
 It is not an ambient repository checkout and does not grant access to the host
 workspace. A Profile may also expose a sandbox command capability, including a
-provider-native `Bash` tool, when Runtime can enforce its declared filesystem,
+provider-native `bash` tool, when Runtime can enforce its declared filesystem,
 command or executable, cwd, environment, network, timeout, and writable-root
 boundary. Such execution is a protected operation and is recorded by Runtime.
 The ordinary research/content Profile continues to receive neither capability.
@@ -508,7 +507,7 @@ conformant through a handwritten log.
 Context is task-scoped, Module-Run-scoped, Variant-scoped, and
 data-scope-scoped. Native continuation is an optimization permitted only while
 the complete compatibility tuple remains unchanged. That tuple includes
-Workflow and Module releases, Skill export and Prompt Bundle, provider-facing
+Workflow and Module releases, Prompt Bundle, provider-facing
 profile, adapter revision, Context type, resume and read-isolation policies,
 execution mode, tool policy, network policy, input-package and Prompt Envelope
 hashes, authorization closure, and contract versions.
@@ -685,7 +684,7 @@ contracts.
 | Contract | Owner | Responsibility |
 | --- | --- | --- |
 | [agent_runtime_00](agent_runtime_00_execution_charter.md) | Agent Runtime | Workflow and Module execution lifecycle, Context, telemetry, recovery, Evaluation, testing, and Module evolution |
-| [agent_runtime_01](agent_runtime_01_module_contract_and_assembly.md) | Agent Runtime | Skill Package exports, Module and Workflow Releases, Prompt releases, graph assembly, execution records, and generated architecture reports |
+| [agent_runtime_01](agent_runtime_01_module_contract_and_assembly.md) | Agent Runtime | Module registration sources, Module and Workflow Releases, Prompt releases, graph assembly, execution records, and generated architecture reports |
 | [agent_runtime_02](agent_runtime_02_product_target_topology.md) | Agency Platform | Deployment topology, Cell placement, and backend deployment conformance |
 | [agent_runtime_03](agent_runtime_03_authorized_external_event_ingress.md) | Agent Runtime | Authorized external-event ingress and acknowledged application |
 | `publication transaction specialization` | Owning product or domain | Protected canonical publication and idempotent recovery outside Runtime |
@@ -722,7 +721,7 @@ An implementation is non-conformant when any of these signals is present:
 
 Human Design Docs own purpose, boundaries, and invariants. Code-owned schemas
 and validators plus the persisted Runtime Release Registry are the sole authority for
-whichever Skill Package, Module, Prompt, Workflow, execution-release, adapter,
+whichever Module, Prompt, Workflow, execution-release, adapter,
 and admission facts are currently implemented. Runtime inspection is their
 deterministic human-readable projection.
 

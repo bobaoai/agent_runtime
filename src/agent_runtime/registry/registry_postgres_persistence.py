@@ -21,7 +21,6 @@ from ..contracts.registry_release_definition import (
     ReleaseAdmissionRecord,
     RuntimeModuleRelease,
     SchemaAssetRelease,
-    SkillPackageRelease,
     WorkflowRelease,
 )
 from ..registry.registry_release_registration import (
@@ -33,7 +32,6 @@ from ..registry.registry_release_registration import (
 
 _SCHEMA_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 _RELEASE_TABLES = (
-    "skill_package_release",
     "schema_asset_release",
     "prompt_component_release",
     "prompt_bundle_release",
@@ -80,19 +78,6 @@ def postgres_release_ddl(schema: str = "agent_runtime_control") -> tuple[str, ..
     return (
         f"CREATE SCHEMA IF NOT EXISTS {schema}",
         *release_table_ddl,
-        f"""
-        CREATE TABLE IF NOT EXISTS {schema}.skill_module_export_binding (
-            skill_package_release_ref TEXT NOT NULL REFERENCES
-                {schema}.skill_package_release(release_ref),
-            export_id TEXT NOT NULL,
-            module_id TEXT NOT NULL,
-            row_sha256 CHAR(64) NOT NULL,
-            payload JSONB NOT NULL,
-            PRIMARY KEY (skill_package_release_ref, export_id),
-            UNIQUE (skill_package_release_ref, module_id),
-            CHECK (row_sha256 ~ '^[0-9a-f]{{64}}$')
-        )
-        """.strip(),
         f"""
         CREATE TABLE IF NOT EXISTS {schema}.workflow_node_binding (
             workflow_release_ref TEXT NOT NULL REFERENCES
@@ -170,14 +155,6 @@ def serialize_registry_tables(
     """Project one validated release_registry snapshot into normalized Postgres rows."""
 
     release_rows: dict[str, tuple[Mapping[str, Any], ...]] = {
-        "skill_package_release": tuple(
-            _release_row(
-                record.skill_package_id,
-                record.skill_package_version,
-                record,
-            )
-            for record in snapshot.skill_packages
-        ),
         "schema_asset_release": tuple(
             _release_row(
                 record.schema_asset_id,
@@ -219,17 +196,6 @@ def serialize_registry_tables(
             for record in snapshot.workflows
         ),
     }
-    export_rows = tuple(
-        {
-            "skill_package_release_ref": package.release_ref,
-            "export_id": export.export_id,
-            "module_id": export.module_id,
-            "row_sha256": _canonical_sha256(export.as_dict()),
-            "payload": export.as_dict(),
-        }
-        for package in snapshot.skill_packages
-        for export in package.module_exports
-    )
     node_rows = tuple(
         {
             "workflow_release_ref": workflow.release_ref,
@@ -283,7 +249,6 @@ def serialize_registry_tables(
     release_hashes = {
         record.release_ref: record.release_sha256
         for records in (
-            snapshot.skill_packages,
             snapshot.prompt_components,
             snapshot.prompt_bundles,
             snapshot.execution_profiles,
@@ -304,7 +269,6 @@ def serialize_registry_tables(
     return MappingProxyType(
         {
             **release_rows,
-            "skill_module_export_binding": export_rows,
             "workflow_node_binding": node_rows,
             "workflow_edge": edge_rows,
             "workflow_parallel_group_binding": parallel_group_rows,
@@ -421,7 +385,6 @@ class PostgresRuntimeReleaseStore:
 
         records: dict[str, list[Any]] = {}
         decoders = {
-            "skill_package_release": SkillPackageRelease.from_dict,
             "schema_asset_release": SchemaAssetRelease.from_dict,
             "prompt_component_release": (
                 PromptComponentRelease.from_dict
@@ -449,7 +412,6 @@ class PostgresRuntimeReleaseStore:
         ]
         release_registry = RuntimeReleaseRegistry()
         bundle = RuntimeReleaseBundle(
-            skill_packages=tuple(records["skill_package_release"]),
             schema_assets=tuple(records["schema_asset_release"]),
             prompt_components=tuple(
                 records["prompt_component_release"]
@@ -491,8 +453,6 @@ class PostgresRuntimeReleaseStore:
         for table in _RELEASE_TABLES:
             for row in rows[table]:
                 self._put_release(cursor, table, row)
-        for row in rows["skill_module_export_binding"]:
-            self._put_export(cursor, row)
         for row in rows["workflow_node_binding"]:
             self._put_node(cursor, row)
         for row in rows["workflow_edge"]:
@@ -541,15 +501,6 @@ class PostgresRuntimeReleaseStore:
         returned = cursor.fetchone()
         if returned is None:
             raise ValueError(f"immutable {table} release_ref collision")
-
-    def _put_export(self, cursor: Any, row: Mapping[str, Any]) -> None:
-        self._put_child(
-            cursor,
-            table="skill_module_export_binding",
-            key_columns=("skill_package_release_ref", "export_id"),
-            row=row,
-            additional_columns=("module_id",),
-        )
 
     def _put_node(self, cursor: Any, row: Mapping[str, Any]) -> None:
         self._put_child(

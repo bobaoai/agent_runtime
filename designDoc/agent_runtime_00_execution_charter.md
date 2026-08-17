@@ -148,29 +148,32 @@ the logical owner from a Skill name. The exact Workflow Release, Module
 Releases, execution release, and authorization binding are pinned when
 the Workflow Execution starts.
 
-A product-facing Skill is an authoring and distribution package. One immutable
-Skill Package Release may export zero, one, or many Runtime Modules. Writer,
-Verifier, Debater, Reviewer, Router, and Expert Modules may therefore share one
-Skill Package while preserving independent input/output, authorization,
-Prompt, Evaluation, release, and execution contracts.
+A product-facing Skill is an authoring surface. It may declare zero, one, or
+many Runtime Module registration sources. Writer, Verifier, Debater, Reviewer,
+Router, and Expert Modules may share one Skill while each source compiles into
+an independent Module Release with its own input/output, authorization, Prompt,
+Evaluation, release, and execution contracts. The Skill itself is not a
+Runtime Release.
 
 ```mermaid
 flowchart LR
-    SKILL["Skill Package Release"] --> M1["Module Export A"]
-    SKILL --> M2["Module Export B"]
-    SKILL --> M3["Module Export N"]
+    SKILL["Skill authoring source"] --> S1["Module registration source A"]
+    SKILL --> S2["Module registration source B"]
+    S1 --> M1["Module Release A"]
+    S2 --> M2["Module Release B"]
     M1 --> WF1["Workflow Release 1"]
     M2 --> WF1
     M2 --> WF2["Workflow Release 2"]
 ```
 
-Skill Governance owns the provider-neutral Skill Package and its module-export
-instructions. Runtime owns each exported Module's executable contract,
-admission, exact Skill Package and export hashes, Prompt Bundle, Executor
-binding, authorization requirements, Evaluation, and execution lineage. A
-Workflow references `module_release_ref`, never a Skill path. A Primary Agent
-development Skill may export no product Module. A workflow-entry Skill may
-project one `workflow_release_ref` without itself becoming a Module.
+Skill Governance owns the provider-neutral Skill authoring source and its
+Module declarations. Runtime owns each compiled Module's executable contract,
+admission, exact Prompt and Schema hashes, Executor binding, authorization
+requirements, Evaluation, and execution lineage. A Module may retain only the
+stable `source_skill_id` as provenance. A Workflow references
+`module_release_ref`, never a Skill path or Skill candidate revision. A Primary
+Agent development Skill may declare no product Module. A workflow-entry Skill
+may project one `workflow_release_ref` without itself becoming a Module.
 
 ### 1.1 Runtime subsystem index
 
@@ -682,7 +685,7 @@ Runtime does not interpret content quality or finding prose. Domain contracts an
 The machine contract has four surfaces joined through immutable refs and
 hashes:
 
-1. **Runtime Release Registry**: Skill Package, Prompt Component, Prompt
+1. **Runtime Release Registry**: Prompt Component, Prompt
    Bundle, Execution Profile, Runtime Module, Workflow, admission, and
    active-release records.
    `workflow_release` owns its graph; `runtime_module_release` owns its executable
@@ -690,15 +693,16 @@ hashes:
 2. **Module Execution Ledger**: Module Run, Variant, Attempt, outputs,
    Evaluation, Selection, Resolution, Context, authorization, usage, and
    recovery lineage.
-3. **Skill Governance authority**: provider-neutral Skill Package authoring,
-   review, lifecycle, and zero-to-many Module export declarations. Runtime
-   consumes admitted immutable exports and cannot rewrite them.
+3. **Skill Governance authority**: provider-neutral Skill authoring, review,
+   lifecycle, and zero-to-many Module registration sources. Runtime compiles
+   one selected source into an immutable Module Release and cannot rewrite the
+   Skill candidate.
 4. **Cell-local execution content**: dynamic input packages, Prompt Envelopes,
    provider inputs and outputs, and governed content. The shared Runtime ledger
    retains bounded refs, hashes, status, time, and usage.
 
-For managed execution, Postgres is the system of record for admitted Skill
-Package, Prompt Component, Prompt Bundle, Execution Profile, Module, and Workflow Release
+For managed execution, Postgres is the system of record for admitted Prompt
+Component, Prompt Bundle, Execution Profile, Module, and Workflow Release
 instances and their active pointers. Code owns their schemas, validators, compiler, seed
 manifests, and deterministic inspection. Repository Skill and prompt files are
 authoring or compatibility projections after managed cutover; Runtime does not

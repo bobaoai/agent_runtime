@@ -1596,16 +1596,6 @@ def _assert_module_dependencies_shadow_executable(
     module: RuntimeModuleRelease,
 ) -> None:
     dependencies: list[tuple[ReleaseSubjectKind, str]] = []
-    if module.source_skill_package_ref is not None:
-        if module.source_skill_package_sha256 is None:
-            raise ValueError("Module source Skill Package hash is missing")
-        release_registry.get_skill_package(
-            module.source_skill_package_ref,
-            module.source_skill_package_sha256,
-        )
-        dependencies.append(
-            (ReleaseSubjectKind.SKILL_PACKAGE, module.source_skill_package_ref)
-        )
     if module.prompt_bundle_ref is not None:
         if module.prompt_bundle_sha256 is None:
             raise ValueError("Module Prompt Bundle hash is missing")

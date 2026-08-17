@@ -62,7 +62,7 @@ Resolve and read:
    when present;
 7. the target host's Skill interface constraints;
 8. the registered Dagster or Agent Runtime workflow and migration evidence when the Skill is product-facing;
-9. for each product Agent Module export, the proposed `module_id`, exact input
+9. for each product Agent Module registration, the proposed `module_id`, exact input
    and output schema assets, operation set, context/evaluation/retry/output
    policies, workflow node binding, and positive/negative/schema-drift fixtures;
 10. the applicable Contract Audit profile when Independent Review is required.
@@ -71,7 +71,7 @@ The two Axioms are the provider-neutral authoring judgment basis: A14 keeps
 control-plane explanation out of the execution prompt, while A21 defines the
 Skill capability contract and separates Tool, Skill, Workflow, and Agent. They
 do not replace the governing Design Contract or code truth. Host-specific
-guidance supplements this package only for interface format and validation.
+guidance supplements this authoring basis only for interface format and validation.
 
 Missing ownership, conflicting class, or an unresolved product execution target
 blocks product migration. Do not infer authority from a directory name, prompt,
@@ -93,17 +93,33 @@ A Primary Agent development Skill cannot process tenant product work. A product
 Skill cannot invoke a provider, unmanaged subprocess, or canonical writer
 directly.
 
+## Skill Candidate Identity
+
+Every Skill review and revision identifies its subject with three separate
+fields:
+
+```yaml
+skill_id: the-contract-audit
+candidate_revision: 33
+candidate_sha256: <sha256 of the exact Skill candidate>
+```
+
+`candidate_revision` belongs only to Skill authoring lineage. Never encode a
+Skill candidate as `<skill_id>@candidate_vN`, and never copy the Skill candidate
+revision into a Runtime Module or Workflow Release. Runtime may keep the stable
+`source_skill_id` only as provenance.
+
 ## Owned Workflow
 
 ```mermaid
 flowchart LR
-    RESOLVE["Resolve owner, class, and workflow need"] --> WRITE["Write Skill candidate or package export"]
+    RESOLVE["Resolve owner, class, and workflow need"] --> WRITE["Write Skill candidate or Module source"]
     WRITE --> CHECK["Deterministic registration and Skill checks"]
     CHECK --> REVIEW["Independent review when required"]
     REVIEW -->|"accepted"| REGISTER["Admit or update the Skill artifact"]
-    REGISTER --> EXPORT{"Runtime Module export changed?"}
-    EXPORT -->|"yes"| BUILDER["Route to agent-runtime-registration"]
-    EXPORT -->|"no"| DONE["Complete Skill lifecycle change"]
+    REGISTER --> MODULE{"Runtime Module source changed?"}
+    MODULE -->|"yes"| BUILDER["Route to agent-runtime-registration"]
+    MODULE -->|"no"| DONE["Complete Skill lifecycle change"]
     REVIEW -->|"revision"| PACKET["Immutable revision packet"]
     PACKET --> WRITE
     REVIEW -->|"upstream conflict"| OWNER["Return to owning Design Contract or workflow"]
@@ -119,21 +135,21 @@ flowchart LR
    `prompt.md` is the complete provider-neutral static instruction source. A
    symbolic schema ref, alternate prompt filename, or example JSON is not a
    closed registration.
-3. Create one candidate `SKILL.md` that identifies the package, exported
+3. Create one candidate `SKILL.md` that identifies the Skill, declared
    Modules, managed entry, and current code-owned registration. Do not repeat
-   any exported Module prompt in `SKILL.md`, a host projection, or domain code.
+   any Module prompt in `SKILL.md`, a host projection, or domain code.
    Keep governance and Axiom explanation in the authoring evidence rather than
    copying it into the task-plane prompt. The prompt may only require and emit
    fields declared by the exact registered schemas.
 4. Run syntax, identity, reference, class, forbidden-direct-entry, schema,
    registration-closure, positive, negative, and schema-drift checks.
 5. Run Independent Review when the registered profile requires it. The reviewer
-   receives the frozen package and exact candidate, reports findings, and does
+   receives the frozen review input and exact candidate, reports findings, and does
    not edit the candidate.
 6. Apply findings through a new candidate and preserve revision lineage.
 7. Admit or update the exact Skill artifact and regenerate Skill inspection.
-   When a product-facing Module export is added or changed, hand the approved
-   package to `agent-runtime-registration`; Skill Management does not
+   When a product-facing Module source is added or changed, hand the approved
+   registration source to `agent-runtime-registration`; Skill Management does not
    register or admit the Runtime Module Release.
 8. Advance migration state only when the state-specific evidence is complete.
 
@@ -184,7 +200,8 @@ A completed change identifies:
 - Skill ID, owner, class, and target path;
 - owning Design Contract and code registration;
 - migration state and managed workflow binding when applicable;
-- candidate hash and deterministic check results;
+- separate `skill_id`, `candidate_revision`, and `candidate_sha256` values plus
+  deterministic check results;
 - Independent Review result and revision packets when required;
 - direct-entry disposition and tombstone when retiring a legacy path;
 - focused tests and regenerated inspection.
@@ -212,9 +229,19 @@ Stop with one of these outcomes:
 - Product-agentic Skill drafting is registration-first: a concrete Module
   candidate and its schema assets exist before task-plane instructions are
   accepted.
-- Every product-agentic Module export uses the fixed
+- Every product-agentic Module registration uses the fixed
   `runtime_modules/<module_id>/module_registration.json` and `prompt.md` read
-  channel; the directory name, `export_id`, and `module_id` are identical.
+  channel; the directory name and `module_id` are identical.
+- A portable governance Skill owns its stable `SKILL.md` and any fixed
+  governance Module prompt, semantic schema, and provider-neutral Module
+  registration source in the installed governance distribution. Those files
+  are projected exactly into each consuming project. A project binding may choose Workflow topology,
+  authorization, Execution Profile, release version, Code Projection, and
+  Runtime admission, but it cannot fork or duplicate the portable prompt or
+  semantic schema.
+- Skill review uses separate `skill_id`, `candidate_revision`, and
+  `candidate_sha256` fields. `<skill_id>@candidate_vN` is invalid Skill-review
+  identity and cannot become a Runtime dependency.
 - `prompt.md` is the only editable prompt source. The registered Runtime store
   retains the immutable copy used by production; `SKILL.md`, host projections,
   Runtime code, domain code, and Adapter code do not duplicate its body.

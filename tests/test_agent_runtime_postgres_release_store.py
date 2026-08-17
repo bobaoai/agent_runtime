@@ -96,14 +96,12 @@ def test_postgres_projection_has_all_normalized_registry_tables() -> None:
     rows = serialize_registry_tables(RuntimeReleaseRegistry().snapshot())
 
     assert set(rows) == {
-        "skill_package_release",
         "schema_asset_release",
         "prompt_component_release",
         "prompt_bundle_release",
         "execution_profile_release",
         "runtime_module_release",
         "workflow_release",
-        "skill_module_export_binding",
         "workflow_node_binding",
         "workflow_edge",
         "workflow_parallel_group_binding",

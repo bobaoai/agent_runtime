@@ -15,7 +15,7 @@
       "t0_layer_id": "the_agent_runtime",
       "source": "09_soul/governance/t0/the_agent_runtime.md",
       "target": "designDoc/the_agent_runtime.md",
-      "sha256": "69a9c2e56474594c191ee301b2cce8cba3b9836fa2104110432094e23429d0b8"
+      "sha256": "824920e0f796fe3771198b777c222d60a39415a40653b2737a08f6d319a6637d"
     },
     {
       "t0_layer_id": "the_product_authorization",
@@ -51,13 +51,13 @@
       "t0_layer_id": "the_design_doc_management",
       "source": "09_soul/governance/t0/the_design_doc_management.md",
       "target": "designDoc/the_design_doc_management.md",
-      "sha256": "8d25f74dfdd7b197f7a33588bb31b2a71325f902b5238dde3a6a426df96d8daf"
+      "sha256": "74c8be9ea4057d7a64a840f34cf553389f702db5d89d34e40cc83ee898e96dbf"
     },
     {
       "t0_layer_id": "the_contract_audit",
       "source": "09_soul/governance/t0/the_contract_audit.md",
       "target": "designDoc/the_contract_audit.md",
-      "sha256": "fba8a4e4878b9f1569334aa55b29f6873667688ce86141e5380509d135160158"
+      "sha256": "6e3636c1fbfc49b708cff01778058d21f6fc2eb8dca1cfa39a67cc21d5150ed8"
     },
     {
       "t0_layer_id": "the_software_delivery",

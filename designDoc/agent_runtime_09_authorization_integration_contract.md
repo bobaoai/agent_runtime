@@ -168,7 +168,7 @@ dispatch new work.
 
 ## 5. Protected Operation Boundary
 
-Agent registration compiles each Skill Package export into an exact Runtime
+Agent registration compiles one selected Module source into an exact Runtime
 Module Release. Its declared operation IDs are the Module permission source.
 Runtime resolves the registered release by ref and hash before it constructs a
 `protected_operation_context` from trusted execution and Module state:

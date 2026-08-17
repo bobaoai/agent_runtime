@@ -24,7 +24,6 @@ from ..contracts.registry_release_definition import (
     ReleaseSubjectKind,
     RuntimeModuleRelease,
     SchemaAssetRelease,
-    SkillPackageRelease,
     WorkflowNodeKind,
     WorkflowRelease,
     is_prompt_component_member_ref,
@@ -33,7 +32,6 @@ from ..contracts.registry_release_definition import (
 
 _ReleaseT = TypeVar(
     "_ReleaseT",
-    SkillPackageRelease,
     PromptComponentRelease,
     PromptBundleRelease,
     ExecutionProfileRelease,
@@ -83,7 +81,6 @@ class RuntimeReleaseBundle:
 
     record_type: ClassVar[str] = "runtime_release_bundle"
 
-    skill_packages: tuple[SkillPackageRelease, ...] = ()
     schema_assets: tuple[SchemaAssetRelease, ...] = ()
     prompt_components: tuple[PromptComponentRelease, ...] = ()
     prompt_bundles: tuple[PromptBundleRelease, ...] = ()
@@ -97,7 +94,6 @@ class RuntimeReleaseBundle:
 
         return not any(
             (
-                self.skill_packages,
                 self.schema_assets,
                 self.prompt_components,
                 self.prompt_bundles,
@@ -115,7 +111,6 @@ class RuntimeReleaseRegistrySnapshot:
 
     record_type: ClassVar[str] = "runtime_release_registry_snapshot"
 
-    skill_packages: tuple[SkillPackageRelease, ...]
     schema_assets: tuple[SchemaAssetRelease, ...]
     prompt_components: tuple[PromptComponentRelease, ...]
     prompt_bundles: tuple[PromptBundleRelease, ...]
@@ -133,7 +128,6 @@ class RuntimeReleaseRegistry:
 
     def __init__(self) -> None:
         self._registration_lock = RLock()
-        self._skill_packages: dict[str, SkillPackageRelease] = {}
         self._schema_assets: dict[str, SchemaAssetRelease] = {}
         self._schema_version_keys: dict[tuple[str, str], str] = {}
         self._prompt_components: dict[
@@ -164,7 +158,6 @@ class RuntimeReleaseRegistry:
         if type(bundle) is not RuntimeReleaseBundle or bundle.is_empty():
             raise ValueError("register_bundle requires a non-empty RuntimeReleaseBundle")
         for field_name in (
-            "skill_packages",
             "schema_assets",
             "prompt_components",
             "prompt_bundles",
@@ -179,14 +172,6 @@ class RuntimeReleaseRegistry:
         staged = self._clone()
         for record in bundle.schema_assets:
             staged._register_schema_asset(record)
-        for record in bundle.skill_packages:
-            staged._register_release(
-                record,
-                kind=ReleaseSubjectKind.SKILL_PACKAGE,
-                stable_id=record.skill_package_id,
-                version=record.skill_package_version,
-                target=staged._skill_packages,
-            )
         for record in bundle.prompt_components:
             staged._register_release(
                 record,
@@ -234,18 +219,6 @@ class RuntimeReleaseRegistry:
             staged._register_admission(admission)
 
         self._replace_with(staged)
-
-    def get_skill_package(
-        self, release_ref: str, release_sha256: str
-    ) -> SkillPackageRelease:
-        """Resolve one exact Skill Package Release."""
-
-        return self._get_exact(
-            self._skill_packages,
-            release_ref,
-            release_sha256,
-            "Skill Package",
-        )
 
     def get_prompt_bundle(
         self, release_ref: str, release_sha256: str
@@ -420,9 +393,6 @@ class RuntimeReleaseRegistry:
                 )
             }
             return RuntimeReleaseRegistrySnapshot(
-                skill_packages=tuple(
-                    self._skill_packages[key] for key in sorted(self._skill_packages)
-                ),
                 schema_assets=tuple(
                     self._schema_assets[key] for key in sorted(self._schema_assets)
                 ),
@@ -451,7 +421,6 @@ class RuntimeReleaseRegistry:
 
     def _clone(self) -> "RuntimeReleaseRegistry":
         staged = RuntimeReleaseRegistry()
-        staged._skill_packages = dict(self._skill_packages)
         staged._schema_assets = dict(self._schema_assets)
         staged._schema_version_keys = dict(self._schema_version_keys)
         staged._prompt_components = dict(
@@ -470,7 +439,6 @@ class RuntimeReleaseRegistry:
         return staged
 
     def _replace_with(self, staged: "RuntimeReleaseRegistry") -> None:
-        self._skill_packages = staged._skill_packages
         self._schema_assets = staged._schema_assets
         self._schema_version_keys = staged._schema_version_keys
         self._prompt_components = staged._prompt_components
@@ -493,7 +461,6 @@ class RuntimeReleaseRegistry:
         target: dict[str, _ReleaseT],
     ) -> None:
         if type(record) not in {
-            SkillPackageRelease,
             PromptComponentRelease,
             PromptBundleRelease,
             ExecutionProfileRelease,
@@ -571,22 +538,6 @@ class RuntimeReleaseRegistry:
 
     def _validate_module_closure(self, module: RuntimeModuleRelease) -> None:
         module.validate()
-        if module.source_skill_package_ref is not None:
-            if module.source_skill_package_sha256 is None:
-                raise ValueError("Module source Skill Package hash is missing")
-            package = self.get_skill_package(
-                module.source_skill_package_ref,
-                module.source_skill_package_sha256,
-            )
-            matching_exports = tuple(
-                export
-                for export in package.module_exports
-                if export.export_id == module.source_export_id
-            )
-            if len(matching_exports) != 1:
-                raise ValueError("Module source export is absent or ambiguous")
-            if matching_exports[0].module_id != module.module_id:
-                raise ValueError("Module source export targets another module_id")
         if module.prompt_bundle_ref is not None:
             if module.prompt_bundle_sha256 is None:
                 raise ValueError("Module Prompt Bundle hash is missing")
@@ -699,9 +650,7 @@ class RuntimeReleaseRegistry:
 
     def _release_for_admission(self, admission: ReleaseAdmissionRecord) -> Any:
         table: Mapping[str, Any]
-        if admission.subject_kind is ReleaseSubjectKind.SKILL_PACKAGE:
-            table = self._skill_packages
-        elif admission.subject_kind is ReleaseSubjectKind.PROMPT_COMPONENT:
+        if admission.subject_kind is ReleaseSubjectKind.PROMPT_COMPONENT:
             table = self._prompt_components
         elif admission.subject_kind is ReleaseSubjectKind.PROMPT_BUNDLE:
             table = self._prompt_bundles
@@ -723,7 +672,6 @@ class RuntimeReleaseRegistry:
     @staticmethod
     def _stable_id(record: Any) -> str:
         for field_name in (
-            "skill_package_id",
             "prompt_component_id",
             "prompt_bundle_id",
             "execution_profile_id",

@@ -75,16 +75,20 @@ def _write_fixture_project(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(target_payload)
     manifest = {
-        "manifest_version": "governance_skill_manifest_v1",
+        "manifest_version": "governance_skill_manifest_v2",
         "portable_governance_skills": [
             {
                 "skill_id": "engineering-example",
-                "source": source,
-                "sha256": declared_hash or _hash(payload),
                 "required_t0_layer_ids": [required_t0],
                 "primary_agent_entry_role": "authoring",
                 "primary_agent_entry_subject": "engineering_change_candidate",
-                "projections": projections,
+                "source_files": [
+                    {
+                        "source": source,
+                        "sha256": declared_hash or _hash(payload),
+                        "projections": projections,
+                    }
+                ],
             }
         ],
     }
@@ -120,7 +124,7 @@ def test_production_governance_skill_release_is_clean() -> None:
 
     assert report.is_clean
     assert report.skill_count == 5
-    assert report.projection_count == 10
+    assert report.projection_count == 14
 
 
 def test_check_reports_missing_projections(tmp_path: Path) -> None:
@@ -158,6 +162,132 @@ def test_apply_writes_exact_host_projections(tmp_path: Path) -> None:
     assert (
         tmp_path / ".agents/skills/engineering-example/SKILL.md"
     ).read_bytes() == payload
+
+
+def test_apply_projects_declared_runtime_assets_only_to_declared_host(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _write_fixture_project(tmp_path)
+    asset = b"Review exactly one frozen candidate.\n"
+    asset_source = (
+        tmp_path
+        / "09_soul/governance/skills/engineering-example"
+        / "runtime_modules/example_reviewer/prompt.md"
+    )
+    asset_source.parent.mkdir(parents=True)
+    asset_source.write_bytes(asset)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["portable_governance_skills"][0]["source_files"].append(
+        {
+            "source": (
+                "09_soul/governance/skills/engineering-example/"
+                "runtime_modules/example_reviewer/prompt.md"
+            ),
+            "sha256": _hash(asset),
+            "projections": [
+                {
+                    "host_id": "claude",
+                    "target": (
+                        ".claude/skills/engineering-example/"
+                        "runtime_modules/example_reviewer/prompt.md"
+                    ),
+                }
+            ],
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = release.apply_governance_skill_release(tmp_path)
+
+    assert report.is_clean
+    assert report.skill_count == 1
+    assert report.projection_count == 3
+    assert (
+        tmp_path
+        / ".claude/skills/engineering-example/"
+        "runtime_modules/example_reviewer/prompt.md"
+    ).read_bytes() == asset
+    assert not (
+        tmp_path
+        / ".agents/skills/engineering-example/"
+        "runtime_modules/example_reviewer/prompt.md"
+    ).exists()
+
+
+def test_check_rejects_undeclared_runtime_projection_file(tmp_path: Path) -> None:
+    _write_fixture_project(tmp_path)
+    assert release.apply_governance_skill_release(tmp_path).is_clean
+    orphan = (
+        tmp_path
+        / ".claude/skills/engineering-example/runtime_modules/"
+        "example_reviewer/tests/orphan.json"
+    )
+    orphan.parent.mkdir(parents=True)
+    orphan.write_text("{}\n", encoding="utf-8")
+
+    report = release.check_governance_skill_release(tmp_path)
+
+    assert [issue.code for issue in report.issues] == [
+        "governance_skill_runtime_projection_orphan"
+    ]
+    assert report.issues[0].path.endswith("example_reviewer/tests/orphan.json")
+
+
+def test_check_rejects_runtime_projection_symlink(tmp_path: Path) -> None:
+    _write_fixture_project(tmp_path)
+    assert release.apply_governance_skill_release(tmp_path).is_clean
+    link = (
+        tmp_path
+        / ".claude/skills/engineering-example/runtime_modules/"
+        "example_reviewer/prompt.md"
+    )
+    link.parent.mkdir(parents=True)
+    link.symlink_to(tmp_path / ".claude/skills/engineering-example/SKILL.md")
+
+    report = release.check_governance_skill_release(tmp_path)
+
+    assert [issue.code for issue in report.issues] == [
+        "governance_skill_runtime_projection_invalid"
+    ]
+    assert report.issues[0].path.endswith("example_reviewer/prompt.md")
+
+
+def test_manifest_rejects_runtime_asset_projected_to_codex(tmp_path: Path) -> None:
+    manifest_path = _write_fixture_project(tmp_path)
+    asset = b"Review.\n"
+    asset_source = (
+        tmp_path
+        / "09_soul/governance/skills/engineering-example/"
+        "runtime_modules/example_reviewer/prompt.md"
+    )
+    asset_source.parent.mkdir(parents=True)
+    asset_source.write_bytes(asset)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["portable_governance_skills"][0]["source_files"].append(
+        {
+            "source": (
+                "09_soul/governance/skills/engineering-example/"
+                "runtime_modules/example_reviewer/prompt.md"
+            ),
+            "sha256": _hash(asset),
+            "projections": [
+                {
+                    "host_id": "codex",
+                    "target": (
+                        ".agents/skills/engineering-example/"
+                        "runtime_modules/example_reviewer/prompt.md"
+                    ),
+                }
+            ],
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(
+        release.GovernanceSkillReleaseError,
+        match="cannot project Runtime Module assets",
+    ):
+        release.load_governance_skill_manifest(tmp_path, manifest_path)
 
 
 def test_apply_composes_registered_project_binding_after_portable_method(

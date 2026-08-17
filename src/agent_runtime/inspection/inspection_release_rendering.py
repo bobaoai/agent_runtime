@@ -134,27 +134,6 @@ def build_runtime_release_inventory(
     snapshot = release_registry.snapshot()
     return {
         "schema_version": RELEASE_INVENTORY_SCHEMA_VERSION,
-        "skill_packages": [
-            {
-                "skill_package_id": release.skill_package_id,
-                "version": release.skill_package_version,
-                "release_ref": release.release_ref,
-                "release_sha256": release.release_sha256,
-                "latest_admission_state": _latest_admission_state(
-                    release_registry,
-                    ReleaseSubjectKind.SKILL_PACKAGE,
-                    release.release_ref,
-                ),
-                "exports": [
-                    {
-                        "export_id": export.export_id,
-                        "module_id": export.module_id,
-                    }
-                    for export in release.module_exports
-                ],
-            }
-            for release in snapshot.skill_packages
-        ],
         "schema_assets": [
             {
                 "schema_asset_id": release.schema_asset_id,
@@ -225,7 +204,7 @@ def build_runtime_release_inventory(
                 "release_ref": release.release_ref,
                 "release_sha256": release.release_sha256,
                 "module_kind": release.module_kind.value,
-                "source_export_id": release.source_export_id,
+                "source_skill_id": release.source_skill_id,
                 "entry_policy": release.entry_policy.value,
                 "declared_operation_ids": list(
                     release.declared_operation_ids
@@ -299,7 +278,6 @@ def render_runtime_release_markdown(
         "",
         "| Release kind | Count |",
         "| --- | ---: |",
-        f"| Skill Package | `{len(inventory['skill_packages'])}` |",
         f"| Schema Asset | `{len(inventory['schema_assets'])}` |",
         f"| Prompt Component | `{len(inventory['prompt_components'])}` |",
         f"| Prompt Bundle | `{len(inventory['prompt_bundles'])}` |",
@@ -332,18 +310,18 @@ def render_runtime_release_markdown(
             "## Runtime Modules",
             "",
             (
-                "| Module | Version | Kind | Entry policy | Source export | "
+                "| Module | Version | Kind | Entry policy | Source Skill | "
                 "Admission |"
             ),
             "| --- | --- | --- | --- | --- | --- |",
         ]
     )
     for module in inventory["modules"]:
-        source_export_id = module["source_export_id"] or "deterministic_code"
+        source_skill_id = module["source_skill_id"] or "deterministic_code"
         lines.append(
             f"| `{module['module_id']}` | `{module['version']}` | "
             f"`{module['module_kind']}` | `{module['entry_policy']}` | "
-            f"`{source_export_id}` | "
+            f"`{source_skill_id}` | "
             f"`{module['latest_admission_state']}` |"
         )
     lines.extend(

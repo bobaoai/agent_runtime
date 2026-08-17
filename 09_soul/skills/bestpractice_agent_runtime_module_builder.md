@@ -3,8 +3,8 @@
 ## Metadata
 
 - **Type**: BestPractice
-- **Applies to**: Runtime Module and Workflow registration; Skill Package
-  export binding; provider, durable-backend, and persistence adapters; conversion
+- **Applies to**: Runtime Module and Workflow registration; fixed Module
+  authoring sources; provider, durable-backend, and persistence adapters; conversion
   of direct model workers into auditable Runtime executions
 - **Canonical system boundary**: `designDoc/the_agent_runtime.md`
 
@@ -18,9 +18,9 @@ Skill file, or a `latest` lookup.
 The target object chain is:
 
 ```text
-Skill Package Release
-  -> zero-to-many Module exports
-    -> Runtime Module Releases
+Skill authoring source
+  -> zero-to-many Module registration sources
+    -> independent Runtime Module Releases
       -> zero-to-many Workflow Release bindings
 
 Module Run
@@ -39,7 +39,7 @@ exact Module Release inside one graph.
 | Fact | Owner |
 | --- | --- |
 | Business role, edge meaning, content rubric, revision, terminal outcome | Domain contract and typed graph |
-| Skill Package content and export declaration | Skill Governance |
+| Skill content, review identity, lifecycle, and Module source declaration | Skill Governance |
 | Module and Workflow release, execution lineage, Context, Evaluation mechanics, telemetry | Agent Runtime |
 | Principal, Entitlement, policy, delegation, decision, grant | Product Authorization |
 | Model invocation and native continuation | Agent Execution Adapter |
@@ -54,11 +54,12 @@ and execution mechanics.
 
 ## Release Registration
 
-A product-facing Skill Package may export zero, one, or many independently
-executable Modules. Each export selects only its closed instruction-member set.
-An Agent Module Release binds exactly one Skill Package release and export plus
-its Prompt Bundle, schemas, operations, Context, Evaluation, retry, compatible
-transport, entry, and output-resolution policies.
+A product-facing Skill may declare zero, one, or many independently executable
+Module sources. Runtime loads one selected source without reading siblings and
+compiles one Module Release with its exact Prompt Bundle, schemas, operations,
+Context, Evaluation, retry, compatible transport, entry, and output-resolution
+policies. The Module may retain stable `source_skill_id` provenance; Skill
+revision, hash, admission, or version never becomes a Runtime dependency.
 
 A Workflow Release references exact Module Release refs and hashes. It never
 points to a mutable Skill path or copies Module purpose, Prompt, schemas, and
@@ -131,7 +132,7 @@ imports neither domain plugins nor optional database/provider clients.
 
 Use opaque synthetic fixtures for shared Runtime tests. Verify:
 
-- package-export-Module and Workflow-Module closure;
+- Module-source-to-Release and Workflow-to-Module closure;
 - exact hashes, duplicate rejection, and atomic registration;
 - independent direct Module tests and A/B Variants;
 - Attempt idempotency and crash-window recovery;

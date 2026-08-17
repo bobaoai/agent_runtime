@@ -15,7 +15,7 @@ reader_persona:
 # Agent Runtime Contract
 
 **Purpose**: Define a standalone, business-neutral infrastructure product for
-registering Skill Package exports as Runtime Modules, assembling Workflow
+registering independently owned Runtime Modules from fixed authoring sources, assembling Workflow
 Graphs from those Modules, and executing, evaluating, observing, recovering,
 and evolving each Module independently.
 
@@ -35,7 +35,7 @@ canonical_owner: designDoc/the_agent_runtime.md
 owned_system_object: provider-neutral Agent execution
 scope:
   - standalone public Runtime contracts and plugin SDK
-  - Runtime admission of Module candidates exported by Skill Packages
+  - Runtime admission of independently registered Module candidates
   - dependency-closed Runtime Module and Workflow Release admission
   - Workflow Execution, Module Run, Execution Variant, Attempt, Execution Output, Evaluation, Selection, and Resolution lineage
   - provider-neutral Module invocation
@@ -66,7 +66,6 @@ owned_specialization_contracts:
   - designDoc/agent_runtime_00_execution_charter.md
   - designDoc/agent_runtime_01_module_contract_and_assembly.md
   - designDoc/agent_runtime_03_authorized_external_event_ingress.md
-  - designDoc/agent_runtime_04_publication_transaction_contract.md
   - designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md
   - designDoc/agent_runtime_07_temporal_durable_adapter_contract.md
   - designDoc/agent_runtime_08_agent_execution_adapter_contract.md
@@ -77,22 +76,12 @@ adjacent_contracts:
   - designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md
 outputs:
   - public Runtime contract and plugin seam
-  - registered Schema Asset, Skill Package, Prompt Component, Prompt Bundle, Execution Profile, Module, and Workflow Releases
+  - registered Schema Asset, Prompt Component, Prompt Bundle, Execution Profile, Module, and Workflow Releases
   - immutable execution, output-reference, evaluation, resolution, context, telemetry, and recovery lineage
   - provider-neutral conformance and standalone-distribution requirements
 truth_surfaces:
-  - designDoc/the_agent_runtime.md
-  - src/agent_runtime/registry/registry_architecture_registration.py
-  - src/agent_runtime/contracts/
-  - src/agent_runtime/registry/
-  - src/agent_runtime/execution/
-  - src/agent_runtime/invocation/
-  - src/agent_runtime/durability/
-  - src/agent_runtime/ledger/
-  - src/agent_runtime/inspection/
-generated_projection_surfaces:
-  - agent_runtime.inspection.inspection_architecture_rendering:build_runtime_architecture_projection
-  - agent_runtime.inspection.inspection_architecture_rendering:render_runtime_architecture_markdown
+  - logical:agent_runtime_release_registry
+  - logical:agent_runtime_architecture_registry
 runtime_triggers:
   - admitted Workflow Execution request
   - admitted external event or protected-operation request through a Runtime service boundary
@@ -104,8 +93,8 @@ downstream_consumers:
 open_decisions: []
 review_gate: design_doc_review, standalone import-boundary conformance, and independent engineering review
 runtime_surface_ledger:
-  - generated from registry_architecture_registration and the Runtime Release Registry; never maintained manually in this document
-  - inspection_architecture_rendering is the deterministic current architecture projection in source checkouts and installed wheels
+  - generated from the project-local Runtime architecture registry and Runtime Release Registry
+  - never maintained manually in this portable T0 contract
 verification_hooks:
   - Release Registry and generated architecture-report parity
   - single-registration-authority enforcement
@@ -151,9 +140,8 @@ authority from a working-tree Skill or provider session.
 
 ```mermaid
 flowchart LR
-    INTENT["Domain intent and Module contracts"] --> SKILL["Immutable Skill Package Release"]
-    SKILL --> EXPORT["Zero-to-many Module exports"]
-    EXPORT --> COMPILE["Import Schema Assets and compile Module, Prompt, Profile, and Workflow releases"]
+    INTENT["Domain intent and Module contracts"] --> SOURCE["Selected Module authoring source"]
+    SOURCE --> COMPILE["Import Schema Assets and compile Module, Prompt, Profile, and Workflow releases"]
     COMPILE --> BUNDLE["Dependency-closed runtime_release_bundle"]
     BUNDLE --> REGISTRY_CANDIDATE["Runtime Release Registry<br/>candidate"]
     REGISTRY_CANDIDATE --> TEST["Direct Module tests, Evaluation, and workflow shadow run"]
@@ -198,7 +186,7 @@ only the capabilities admitted by the exact Execution Profile.
 | Physical placement, residency, retention, backup, export, and destruction | [Data Governance](the_data_governance.md) | Uses registered storage bindings and preserves isolation |
 | Build, package, release admission, deployment, rollback, and retirement evidence | [Software Delivery](the_software_delivery.md) | Exposes versioned Runtime release units and conformance evidence |
 | Product composition, deployment topology, and operator experience | [Agency Platform](the_agency_platform.md) | Is loaded and operated by the host without importing the host into core |
-| Provider-neutral Skill Package semantics, exports, and lifecycle | [Skill Governance](the_skill_management.md) | Runtime owns executable Module admission plus provider-facing loading, packaging, translation, invocation, and telemetry adapters |
+| Skill semantics, authoring, review identity, and lifecycle | [Skill Governance](the_skill_management.md) | Runtime receives fixed Module sources, records stable `source_skill_id` provenance, and owns executable Module admission and invocation |
 
 Domain workflow admission, product authorization, Runtime admission, domain acceptance, and canonical mutation are separate decisions. No record from one authority substitutes for another.
 
@@ -256,13 +244,12 @@ Database engines, durable backends, provider SDKs and CLIs, and renderers become
 implementation bindings only through the code-owned architecture registry.
 Each registered binding implements exactly one logical responsibility and
 cannot become a peer responsibility or record authority. The generated
-architecture projection enumerates the current binding set. Physical
-`contracts/` and `testing/` directories likewise do not become logical
-responsibilities.
+architecture projection enumerates the current binding set. Physical source
+directories likewise do not become logical responsibilities.
 
 A domain plugin submits one dependency-closed `runtime_release_bundle` through a
-`runtime_module_plugin`. The bundle may contain Schema Asset, Skill Package,
-Prompt Component, Prompt Bundle, Execution Profile, Runtime Module,
+`runtime_module_plugin`. The bundle may contain Schema Asset, Prompt
+Component, Prompt Bundle, Execution Profile, Runtime Module,
 Workflow, and admission
 releases. Runtime
 validates identity, uniqueness, exact hash closure, declared operation closure,
@@ -289,7 +276,7 @@ projection during production execution. The host installs compatible Runtime,
 provider, durability, and domain-plugin releases explicitly. Discovery alone
 grants no execution authority.
 
-A code-owned `registry_architecture_registration` separately registers logical
+A code-owned Runtime architecture registration separately registers logical
 responsibilities, physical source directories, and concrete implementation
 bindings. Every shipped source file maps to exactly one logical responsibility,
 one physical directory, and one canonical Design Contract. Only a concrete
@@ -333,11 +320,11 @@ evidence. It is outside formal managed execution and cannot be relabeled by
 adding a log after the call. Promotion to `managed` requires the conformance
 package, Runtime lineage, required tests and evaluations, and admitted adapter
 bindings. `direct_entry_retired` isolates the direct execution entry while
-retaining the managed Skill Package and interface projections.
+retaining the managed Skill and interface projections.
 
 Agentic workflow authoring is registration-first. Before a model-backed graph
 node is accepted as a workflow candidate, its owning plugin declares the exact
-Skill Package export, concrete input and output schema assets, declared
+Module authoring source and stable source Skill ID, concrete input and output schema assets, declared
 operations, Context policy, Evaluation policy, retry policy, output-resolution
 policy, Prompt Bundle closure, and focused conformance fixtures needed for one
 Runtime Module Release. A Workflow candidate references exact Module Release
@@ -447,8 +434,8 @@ Module Run receives the same domain context bytes.
 An Agent Execution Adapter receives one frozen Variant-bound request and
 returns a structured terminal result, immutable output reference, normalized
 failure class, Context event, and usage fields available from the provider. It
-loads the admitted Skill Package export and Prompt Bundle bound by the Module
-Release and produces the exact provider request pinned to that Variant. A
+loads the admitted Prompt Bundle bound by the Module Release and produces the
+exact provider request pinned to that Variant. A
 content-bearing final provider request is committed in the Cell-local Prompt
 Envelope before invocation. The Executor reads that committed UTF-8 body and
 sends it unchanged; it must not privately append, reconstruct, or replace
@@ -475,6 +462,19 @@ delivery plus an isolated Attempt work root to write, reread, revise, and
 validate its own draft inside one provider invocation. Governed research data
 stays behind the PG-backed Data Access Gateway. Local attachments are an
 exceptional transport for exact binary objects, not a search surface.
+
+Filesystem and command access are also Profile capabilities; they are not
+globally forbidden merely because most content Modules do not need them. A
+Module may receive an exact `managed_read_only_tree` execution input when its
+registered task must inspect a multi-file artifact such as a frozen source
+tree, repository candidate, or build package. The tree is resolved before
+invocation, bound by manifest and hash, and mounted only inside that Attempt.
+It is not an ambient repository checkout and does not grant access to the host
+workspace. A Profile may also expose a sandbox command capability, including a
+provider-native `bash` tool, when Runtime can enforce its declared filesystem,
+command or executable, cwd, environment, network, timeout, and writable-root
+boundary. Such execution is a protected operation and is recorded by Runtime.
+The ordinary research/content Profile continues to receive neither capability.
 
 Network is an independent profile dimension: `denied`, `gateway_only`, or
 `direct_sandboxed`. Some Verifier, Reviewer, and research Modules require
@@ -507,7 +507,7 @@ conformant through a handwritten log.
 Context is task-scoped, Module-Run-scoped, Variant-scoped, and
 data-scope-scoped. Native continuation is an optimization permitted only while
 the complete compatibility tuple remains unchanged. That tuple includes
-Workflow and Module releases, Skill export and Prompt Bundle, provider-facing
+Workflow and Module releases, Prompt Bundle, provider-facing
 profile, adapter revision, Context type, resume and read-isolation policies,
 execution mode, tool policy, network policy, input-package and Prompt Envelope
 hashes, authorization closure, and contract versions.
@@ -518,6 +518,46 @@ state, and a typed task or revision packet. When an input is an Artifact Graph
 object, its exact admitted `artifact_instance` ref and authorization evidence
 are pinned. Opaque provider state never crosses Variants, executions, tenants,
 Cells, providers, or authorization closures.
+
+### 5.1 Task-specific semantic context assembly
+
+Static Prompt Components define reusable Module instructions and output
+constraints. Execution-specific domain knowledge is a separate, schema-bound
+Module input. It is not copied into a global Prompt Component merely because a
+model needs it for one task.
+
+The host integration may resolve task context through a generic selector:
+
+```yaml
+category: expertise
+content_key: optical_interconnect
+release_id: optical_interconnect.v3
+```
+
+`category`, `content_key`, and `release_id` are opaque domain identifiers. The
+generic interface assigns no parent-child meaning to categories: `expertise`
+and `lens`, for example, may occupy peer keys in one task schema. A different
+workflow may declare entirely different keys through its own registered Schema
+Asset without changing Runtime core.
+
+An authorized domain resolver reads each exact immutable content release from
+its PG-backed owner. The resulting `task_prompt_context_resolution` contains:
+
+- a task-schema ref and hash;
+- the schema-shaped semantic `content_tree`;
+- private selector, release, ordinal, and content-hash bindings; and
+- a hash of the complete frozen resolution.
+
+Runtime carries this resolution inside the immutable Module input closure and
+validates it against the registered task-context Schema Asset. The model-visible
+projection contains only `content_tree`; selector provenance, release refs,
+hashes, authorization evidence, tenant data, and storage identity stay in the
+private execution closure. Neither the model nor its provider process receives
+a raw PG credential or an ambient Skill/repository checkout. An exact frozen
+tree may be exposed only through a separately declared `managed_read_only_tree`
+execution input and matching Execution Profile. Changing selected content
+creates a new input closure and Module Run; changing Module instruction or
+schema creates a new Module Release.
 
 ## 6. Authorization and Data Isolation
 
@@ -623,8 +663,8 @@ Standalone conformance requires:
 - explicit extension loading by the host;
 - synthetic opaque-plugin execution and failure tests;
 - no built-in business role, graph, rubric, artifact meaning, or provider choice;
-- every shipped source file mapped by `registry_architecture_registration` to one
-  logical responsibility and one canonical Design Contract;
+- every shipped source file mapped by the Runtime architecture registration to
+  one logical responsibility and one canonical Design Contract;
 - packaged Design Contract hashes equal the canonical Runtime-owned contract
   sources; and
 - the Workflow Inspector lists and renders authorized formal PostgreSQL records
@@ -644,10 +684,10 @@ contracts.
 | Contract | Owner | Responsibility |
 | --- | --- | --- |
 | [agent_runtime_00](agent_runtime_00_execution_charter.md) | Agent Runtime | Workflow and Module execution lifecycle, Context, telemetry, recovery, Evaluation, testing, and Module evolution |
-| [agent_runtime_01](agent_runtime_01_module_contract_and_assembly.md) | Agent Runtime | Skill Package exports, Module and Workflow Releases, Prompt releases, graph assembly, execution records, and generated architecture reports |
+| [agent_runtime_01](agent_runtime_01_module_contract_and_assembly.md) | Agent Runtime | Module registration sources, Module and Workflow Releases, Prompt releases, graph assembly, execution records, and generated architecture reports |
 | [agent_runtime_02](agent_runtime_02_product_target_topology.md) | Agency Platform | Deployment topology, Cell placement, and backend deployment conformance |
 | [agent_runtime_03](agent_runtime_03_authorized_external_event_ingress.md) | Agent Runtime | Authorized external-event ingress and acknowledged application |
-| [agent_runtime_04](agent_runtime_04_publication_transaction_contract.md) | Agent Runtime | Protected publication transaction and idempotent recovery |
+| `publication transaction specialization` | Owning product or domain | Protected canonical publication and idempotent recovery outside Runtime |
 | [agent_runtime_05](agent_runtime_05_delivery_roadmap.md) | Software Delivery | Delivery sequencing and current engineering status |
 | [agent_runtime_06](agent_runtime_06_standalone_package_and_lifecycle_contract.md) | Agent Runtime | Standalone package boundary and append-only execution lifecycle |
 | [agent_runtime_07](agent_runtime_07_temporal_durable_adapter_contract.md) | Agent Runtime | One concrete durable-backend adapter specialization and its conformance |
@@ -681,7 +721,7 @@ An implementation is non-conformant when any of these signals is present:
 
 Human Design Docs own purpose, boundaries, and invariants. Code-owned schemas
 and validators plus the persisted Runtime Release Registry are the sole authority for
-whichever Skill Package, Module, Prompt, Workflow, execution-release, adapter,
+whichever Module, Prompt, Workflow, execution-release, adapter,
 and admission facts are currently implemented. Runtime inspection is their
 deterministic human-readable projection.
 
@@ -691,11 +731,10 @@ maturity, or delivery status. Those facts belong to code-owned registries,
 generated architecture reports, deployment composition, and Software Delivery
 records. A manually edited inventory cannot override them.
 
-`inspection_architecture_rendering.build_runtime_architecture_projection`
-projects the current architecture from the code-owned architecture registry.
-`inspection_release_rendering.build_runtime_release_inventory` projects the
-registered Runtime releases and their admission status from an explicit
-Release Registry.
+Each product-local Runtime implementation publishes its own generated
+architecture and release inspection from its code-owned registries. This T0
+contract defines portable law; it does not supply or override local
+implementation facts.
 
 ## 13. References
 

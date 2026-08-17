@@ -103,7 +103,7 @@
 - [分析写作质量标准](./bestpractice_analytical_writing.md) ✅ — 分析 prose 的正面质量标准：因果链、alternative、judgment transfer、so-what、calibration、narrative arc、冷读概念顺序与分析语义保护
 - [Prose Without Editorial Meta（写关于世界，不写关于稿件）](./bestpractice_prose_without_editorial_meta.md) ✅ — sentence-level 守门：reader-facing 报告与 stable AI-facing artifact 都禁止 editorial meta / conversation attribution / workflow time-window deictics / rule invocation as endorsement
 - [Prompt Boundary（task-plane vs control-plane）](./bestpractice_prompt_boundary.md) ✅ — A14 的 canonical 操作路径：下游 prompt 只放改变 worker 输出质量的信息，编排 / persona-source label / 已被结构性保证的 guardrail 一律删
-- [Agent Runtime Module Builder](./bestpractice_agent_runtime_module_builder.md) ✅ — 把 Skill Package 导出的 Module 与 domain-owned Workflow 注册为 provider-neutral、可评估、可审计、可版本演进的 Runtime release；SDK、API、CLI 与 durable backend 均为 adapter
+- [Agent Runtime Module Builder](./bestpractice_agent_runtime_module_builder.md) ✅ — 把 Skill 声明的独立 Module source 与 domain-owned Workflow 注册为 provider-neutral、可评估、可审计、可版本演进的 Runtime release；SDK、API、CLI 与 durable backend 均为 adapter
 - [Agent Module General Module](./bestpractice_agent_module_general_module.md) ✅ — worker stable prefix 的去重 `WORKER_CHARTER / GENERAL_MODULE`；只能提供通用工作方式，不能替代任务专属 `CUSTOMIZE_MODULE` 或 source-family `DATA_DEPENDENT_MODULE`
 - [External Writer Merge Rule](./external_writer_merge_rule.md) ✅ — caller-side 合并规则；external draft 只作 advisory，merge 后重建连续推理并保护事实、因果与不确定性
 - [外部中文 Prose 诊断词汇表](./bestpractice_external_prose.md) ✅ — 对外中文行文的教材声、认知负荷、段落连续性、定义例外和语义保护诊断

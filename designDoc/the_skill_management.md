@@ -14,13 +14,13 @@ reader_persona:
 # Skill Governance
 
 **Purpose**: Govern repository Skills as Primary Agent development tools,
-product-facing Skill Packages that export zero-to-many Runtime Modules, or
-managed Workflow entry projections.
+product-facing Skills that define zero-to-many Runtime Module registration
+sources, or managed Workflow entry projections.
 
 **Required reader gain**: A reader can decide whether a Skill remains a direct
-Primary Agent tool, exports one or many Runtime Modules, routes to a managed
-Workflow, or serves only as an interface projection, and can retire legacy
-direct execution without deleting the managed Skill Package.
+Primary Agent tool, defines one or many Runtime Module registration sources,
+routes to a managed Workflow, or serves only as an interface projection, and
+can retire legacy direct execution without deleting the managed Skill.
 
 ## 0. Intent Capsule
 
@@ -33,7 +33,7 @@ scope:
   - Skill identity, ownership, classification, projection, migration, and retirement
   - Primary Agent development Skills
   - Dagster-managed and Agent-Runtime-managed product Skills
-  - zero-to-many Skill Package Module exports
+  - zero-to-many Skill-owned Runtime Module registration sources
   - managed Skill and Workflow entry projections and legacy direct-entry isolation
 non_goals:
   - domain workflow behavior or business quality rules
@@ -53,16 +53,17 @@ registry_path: src/audit/modules/the_skill_management/registry.py
 
 | Class | Direct use | Product execution |
 | --- | --- | --- |
-| `primary_agent_development` | Primary Agent may invoke `SKILL.md` directly for design, coding, migration, repository review, and external-review coordination | Direct `SKILL.md` product execution is forbidden; separately registered Runtime Module exports are allowed |
+| `primary_agent_development` | Primary Agent may invoke `SKILL.md` directly for design, coding, migration, repository review, and external-review coordination | Direct `SKILL.md` product execution is forbidden; separately registered Runtime Modules are allowed |
 | `product_deterministic` | Skill routes to the registered workflow | Dagster |
-| `product_agentic` | Skill Package exports one or more Runtime Modules or routes to one admitted Workflow | Agent Runtime |
-| `product_hybrid` | Skill Package exports every Agent Module used by the hybrid graph | Fixed outer graph with Agent Runtime Modules |
+| `product_agentic` | Skill defines one or more Runtime Module registration sources or routes to one admitted Workflow | Agent Runtime |
+| `product_hybrid` | Skill defines every Agent Module registration source used by the hybrid graph | Fixed outer graph with Agent Runtime Modules |
 | `projection_only` | Skill explains or invokes an already managed target | No direct executor |
 
-One Skill Package has one class. One immutable Skill Package Release may export
-zero, one, or many Runtime Modules. Shared deterministic behavior belongs in
-code; shared Agent instructions belong in explicit package assets selected by
-each Module export.
+One Skill has one class and may define zero, one, or many Runtime Module
+registration sources. Every resulting Runtime Module Release is registered,
+versioned, tested, and admitted independently. Shared deterministic behavior
+belongs in code; shared Agent instructions must be selected explicitly by each
+Module registration source.
 
 Every governance meta Skill that is directly callable by the Primary Agent
 declares exactly one `primary_agent_entry_role` and one
@@ -81,8 +82,8 @@ they control where the Skill may appear in an `EngineeringChangeRoute`:
 An authoring workflow may invoke a separately bound reviewer, but its own role
 remains `authoring`. A Skill name, directory, or bundled checklist cannot grant
 another entry role. These entry fields do not define or limit product Runtime
-exports. A Skill Package may export zero, one, or many Runtime Modules, and
-every real export is declared only by its own fixed
+registrations. A Skill may define zero, one, or many Runtime Modules, and
+every real Module source is declared only by its own fixed
 `runtime_modules/<module_id>/module_registration.json` plus `prompt.md`.
 
 The registered governance subjects are `task_request`, `skill_candidate`,
@@ -112,7 +113,7 @@ The containing Engineering Change Batch must first route the Skill surface to
 this authoring workflow. `the-skill-management` is not a general project
 reviewer, and its independent reviewer component is a separate review identity.
 
-The authoring package, review package, and release evidence identify these
+The authoring record, frozen review input, and acceptance evidence identify these
 surfaces by path and freeze their exact content or hash. A manually written
 `SKILL.md` that bypasses this basis is an unadmitted candidate even when its
 syntax is valid.
@@ -144,24 +145,47 @@ numbers, authority direction, compatibility, uncertainty, failure, and stop
 semantics are protected meaning. The Reviewer reports findings and never
 rewrites the candidate.
 
-### 2.2 New Skill and product projection rule
+### 2.2 Skill candidate review identity
+
+Skill review uses structured authoring fields. It never borrows Runtime Release
+syntax:
+
+```yaml
+skill_id: the-contract-audit
+candidate_revision: 33
+candidate_sha256: <sha256 of the exact Skill candidate>
+```
+
+The tuple `skill_id`, `candidate_revision`, and `candidate_sha256` identifies
+the exact Skill candidate under review. `candidate_revision` is a Skill
+authoring counter only. It does not enter Agent Runtime, alter a Module or
+Workflow version, or become an execution dependency.
+
+Composite identities such as `the-contract-audit@candidate_v33` are invalid for
+Skill review. Runtime keeps its own typed release references, such as
+`runtime-module:<module_id>@candidate_vN` and
+`workflow:<workflow_id>@candidate_vN`. A Runtime Module may retain the stable
+`source_skill_id` for provenance, but it never retains the Skill candidate
+revision.
+
+### 2.3 New Skill and product projection rule
 
 A Primary Agent development Skill may be created directly when its durable
 output is a design, code change, migration, test, engineering review, or
 external-review package. It cannot become a product route or process tenant
 work.
 
-A product Skill Package starts from an owning T1 contract and its intended
-Module or Workflow exports. Module input and output schemas, authorization
+A product Skill starts from an owning T1 contract and its intended
+Module or Workflow registrations. Module input and output schemas, authorization
 boundary, Artifact lineage, tests, Evaluation, logging, and Runtime binding
 precede managed admission. A standalone `SKILL.md` cannot admit a Runtime
 Module, product Workflow, or action.
 
 Skill Governance owns the provider-neutral Skill artifact and its lifecycle.
 Agent Runtime owns every executable adapter that loads, packages, translates,
-or invokes an admitted Module's Skill export for a provider. This includes
+or invokes an admitted Module's registered Prompt for a provider. This includes
 Claude SDK, Claude Skill, Codex CLI, and future model or host adapters. A Skill
-Package may declare compatible interfaces for its exports, but it cannot
+may declare compatible interfaces for its Module sources, but it cannot
 define the Adapter protocol, select an unregistered implementation, or carry
 provider credentials and execution policy.
 
@@ -178,72 +202,82 @@ mutate the projected logical object.
 
 In enterprise boundary language, Agent Runtime owns provider-facing Skill and model adapters; Skill Governance owns the provider-neutral instruction artifact.
 
-### 2.3 Skill Package Module exports
+### 2.4 Skill Module registration sources
 
-A product-facing Skill Package may export multiple independently executable
-Modules. Each export declares one local `export_id`, one target `module_id`, and
-the closed instruction assets intended for that Module. Runtime registration
-adds the owner contract, schemas, operations, Context, Evaluation, Prompt
-Bundle, entry policy, release, and admission required to make that export
-executable.
+A product-facing Skill may define multiple independently executable Modules.
+Each Module directory declares one target `module_id` and the closed instruction
+assets intended for that Module. Runtime registration adds the owner contract,
+schemas, operations, Context, Evaluation, Prompt Bundle, entry policy, release,
+and admission required to make that Module executable.
 
 ```mermaid
 flowchart LR
-    S["Skill Package Release"] --> W["Module export: Writer"]
-    S --> V["Module export: Verifier"]
-    S --> D["Module export: Debater"]
-    W --> R1["Runtime Module Release"]
-    V --> R2["Runtime Module Release"]
-    D --> R3["Runtime Module Release"]
+    S["Skill authoring source"] --> W["Writer Module source"]
+    S --> V["Verifier Module source"]
+    S --> D["Debater Module source"]
+    W --> R1["Writer Module Release"]
+    V --> R2["Verifier Module Release"]
+    D --> R3["Debater Module Release"]
 ```
 
-The Skill Package is the authoring and distribution unit. Runtime Module
-Release is the execution and admission unit. A Workflow references exact
-Module Releases rather than the Skill Package or a filesystem path.
+The Skill is the authoring surface. Runtime Module Release is the execution and
+admission unit. A Workflow references exact Module Releases rather than the
+Skill candidate or a filesystem path.
 
-Every Skill Package that exports Runtime Modules uses one canonical
-Module-export layout, including a `primary_agent_development` package that also
-offers a direct host entry:
+Every Skill that defines Runtime Modules uses one registry-declared canonical
+source root. The layout is the same whether the Skill also offers a direct
+Primary Agent host entry:
 
 ```text
-.claude/skills/<skill_id>/
+<registered_skill_source_root>/<skill_id>/
 ├── SKILL.md
 └── runtime_modules/
     └── <module_id>/
         ├── module_registration.json
         ├── prompt.md              # editable next-release candidate and recovery copy
+        ├── schemas/
+        │   ├── input.schema.json
+        │   └── output.schema.json
         └── tests/                 # optional admission fixtures
             ├── positive_cases.json
             └── negative_cases.json
 ```
 
-The Module directory name, manifest `export_id`, and manifest `module_id` are
-identical `snake_case` values. `module_registration.json` conforms to the
-code-owned `runtime_module_registration_v1` shape and contains no provider
-prompt prose. `prompt.md` is the only editable static prompt candidate for that
-Module and also serves as a recovery copy. It has no post-registration or
+The Module directory name and manifest `module_id` are identical `snake_case`
+values. `module_registration.json` conforms to the code-owned
+`runtime_module_registration_v2` shape and contains no provider prompt prose.
+`prompt.md` is the only editable static prompt candidate for that Module and
+also serves as a recovery copy. It has no post-registration or
 production authority. The optional `tests` directory contains authoring and
 admission fixtures and is not model input.
 
-`SKILL.md` describes the package, its exported Modules, and the managed entry
-or registration workflow. It does not repeat an exported Module's prompt. A
-Skill exporting several Modules gives each Module its own directory and prompt;
-one Module export cannot read a sibling directory or ambient package file.
+`SKILL.md` describes the Skill, its declared Modules, and the managed entry
+or registration workflow. It does not repeat a Module's prompt. A
+Skill defining several Modules gives each Module its own directory and prompt;
+one Module registration cannot read a sibling directory or ambient Skill file.
 
-Every fixed model-backed Module export must also name one owning Design Doc in
+Every fixed model-backed Module registration must also name one owning Design Doc in
 `module_registration.json`. The canonical `SKILL.md` and that Design Doc both
-declare the exact `module_id`: the Skill explains the managed entry/export, and
+declare the exact `module_id`: the Skill explains the managed entry, and
 the Design Doc explains the Module's semantic purpose and responsibility
-boundary. Skill review must reject an export when either surface is missing or
+boundary. Skill review must reject a registration when either surface is missing or
 uses only a generic role name that cannot be joined mechanically to the
 manifest. Neither surface duplicates `prompt.md`.
 
-`.claude/skills/<skill_id>/` is the repository editing surface for Skill
-Package and Module candidates. Host interfaces may project `SKILL.md` into
-locations such as `.agents/skills/<skill_id>/SKILL.md`, but those projections
-never own a `runtime_modules/` tree and never duplicate Module prompt text.
+The Skill Registry names the canonical source file for every declared asset.
+For portable Hoveath Governance Skills, that source is
+`09_soul/governance/skills/<skill_id>/`; `.claude/skills/<skill_id>/` and
+`.agents/skills/<skill_id>/` are generated host projections. Other projects may
+declare a different canonical source root, but no path becomes authoritative by
+convention alone.
 
-### 2.4 External review instruction intake
+A host projection may include `runtime_modules/` only when the Registry
+declares each projected file, its hash, and its target. The projection is then
+a registration input for that host, not an editing authority or production
+Runtime state. Module prompt text has exactly one canonical source and one
+registered Runtime release after admission.
+
+### 2.5 External review instruction intake
 
 Primary Agent may ask many independent Claude, Codex, or future provider
 Agents to review different frozen subjects. Those calls do not justify a
@@ -308,19 +342,19 @@ Bundle is the sole ordered static assembly. The committed Prompt Envelope is
 the sole record of the final complete provider-visible Context for one
 Attempt.
 
-Each Module receives only its selected instruction closure. Shared package
-assets must be explicitly referenced by the export. A Writer export receiving
+Each Module receives only its selected instruction closure. Shared Skill
+assets must be explicitly referenced by the Module source. A Writer receiving
 Verifier or Debater instructions is a failed projection even when all content
-comes from the same Skill Package.
+comes from the same Skill.
 
 A workflow-entry Skill may point to one admitted `workflow_release_ref` and
-export no Module. A `primary_agent_development` Skill may also export zero or
-more separately registered Runtime Modules. Those exports are independent
+define no Module. A `primary_agent_development` Skill may also define zero or
+more separately registered Runtime Modules. Those Modules are independent
 product execution units and never inherit the Skill's direct host-entry
 authority.
 
 Product-agentic Skill authoring is registration-first. Before drafting the
-task-plane instructions for an export, the authoring package must contain:
+task-plane instructions for a Module, the authoring record must contain:
 
 - the target `module_id`, owning contract, and intended workflow node;
 - concrete input and output schema assets with content hashes;
@@ -339,7 +373,7 @@ string, a Skill output field absent from the registered schema, and a Reviewer
 finding that requires an undeclared candidate field.
 
 `agent-runtime-registration` is the Primary Agent development workflow for
-this registration boundary only: Skill Package export to Runtime Module
+this registration boundary only: Skill Module source to Runtime Module
 Release, exact Module assembly into a Workflow Release, release registration,
 admission evidence, and managed migration. General Agent Runtime architecture,
 core, adapter, authorization, ingress, persistence, and observability
@@ -366,7 +400,7 @@ design are approved.
 ### 3.2 `migration_planned`
 
 This is an executable validation stage. Agent Runtime registers candidate
-Module exports and runs automated tests, Evaluations, A/B Variants, replay,
+Module registrations and runs automated tests, Evaluations, A/B Variants, replay,
 failure injection, authorization negatives, and observability checks. Fixed
 and hybrid workflows also validate their outer-graph binding. The direct entry
 remains the production comparison path.
@@ -374,7 +408,7 @@ remains the production comparison path.
 ### 3.3 `managed`
 
 Product routing switches to the admitted fixed workflow, Runtime Module, or
-Runtime Workflow target. The Skill Package remains active as the managed
+Runtime Workflow target. The Skill remains active as the managed
 instruction source and Agent-facing projection. It contains no direct provider
 call, unmanaged subprocess, or canonical write.
 
@@ -404,12 +438,13 @@ gates rather than additional lifecycle states.
 
 ## 5. Required Machine Contract
 
-Code-owned Skill registration records the Skill Package ID, owner, class,
-Primary Agent role when applicable, T1
-contract, zero-to-many Module export declarations, optional Workflow entry
-binding, product exposure, migration state, active projection, direct-entry
-disposition, and retirement tombstone. Postgres persists immutable admitted
-Skill Package Releases and exact Skill-to-Module export bindings. Generated
+Code-owned Skill registration records the stable Skill ID, owner, class,
+Primary Agent role when applicable, T1 contract, zero-to-many Module source
+declarations, optional Workflow entry binding, product exposure, migration
+state, active projection, direct-entry disposition, and retirement tombstone.
+Skill review records preserve the structured candidate identity from section
+2.2. Agent Runtime independently persists immutable Module Releases and their
+exact prompt, schema, policy, profile, and provenance hashes. Generated
 inspection shows the current inventory and flags unclassified, unbound, or
 directly executed product Skills.
 
@@ -440,13 +475,17 @@ absent or if the registered review-check range drifts from either package.
    before authoring; host guidance supplements but never replaces them.
 10. Authoring control-plane material remains in authoring and review evidence,
     not in the task-plane Skill projection unless it changes task execution.
-11. One Skill Package Release may export multiple Modules, and each export has
-    an independently testable instruction closure and Runtime admission.
+11. One Skill may define multiple Modules, and each Module has an independently
+    testable instruction closure, release identity, and Runtime admission.
 12. A Workflow references exact Module Release refs and hashes rather than a
     Skill path or package name.
-13. Every product-agentic Skill export is drafted from a complete candidate
+13. Every product-agentic Module source is drafted from a complete candidate
     Module registration and validated against the same concrete schemas used
     by execution and Evaluation.
+14. Skill review identifies candidates with separate `skill_id`,
+    `candidate_revision`, and `candidate_sha256` fields. The
+    `<skill_id>@candidate_vN` shape is invalid for Skill review and cannot
+    become a Runtime dependency.
 
 ## References
 

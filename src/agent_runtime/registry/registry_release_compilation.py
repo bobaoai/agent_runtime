@@ -27,12 +27,10 @@ from ..contracts.registry_release_definition import (
     ReleaseSubjectKind,
     RuntimeModuleRelease,
     SchemaAssetRelease,
-    SkillModuleExport,
-    SkillPackageRelease,
 )
-from .registry_module_exporting import (
+from .registry_module_loading import (
     MODULE_PROMPT_FILENAME,
-    load_skill_runtime_module_exports,
+    load_runtime_module_registration,
 )
 from ..invocation.invocation_schema_projection import task_plane_output_schema
 
@@ -66,7 +64,7 @@ def managed_skill_projection(path: Path) -> str:
 
 def _instruction_member_ref(
     *,
-    skill_package_id: str,
+    skill_id: str,
     module_id: str,
     release_version: str,
     fragment: str | None = None,
@@ -74,7 +72,7 @@ def _instruction_member_ref(
     """Return a repository-independent instruction identity."""
 
     ref = (
-        f"skill-instruction:{skill_package_id}/{module_id}"
+        f"skill-instruction:{skill_id}/{module_id}"
         f"@{release_version}"
     )
     return f"{ref}#{fragment}" if fragment is not None else ref
@@ -124,7 +122,6 @@ class AgentModuleReleaseSpec:
 class CompiledAgentModuleRelease:
     """Dependency-closed records produced for one Agent Module."""
 
-    skill_package: SkillPackageRelease
     schema_assets: tuple[SchemaAssetRelease, ...]
     prompt_components: tuple[PromptComponentRelease, ...]
     prompt_bundle: PromptBundleRelease
@@ -285,27 +282,51 @@ def compile_agent_module_release(
 ) -> CompiledAgentModuleRelease:
     """Compile one exact Skill projection into candidate Runtime releases."""
 
-    owner_path = project_root / spec.owner_contract_path
-    owner_sha256 = sha256_file(owner_path)
-    package_sources = load_skill_runtime_module_exports(
+    target_source = load_runtime_module_registration(
         project_root,
         skill_id=spec.skill_id,
+        module_id=spec.module_id,
     )
-    target_sources = tuple(
-        source
-        for source in package_sources
-        if source.module_id == spec.module_id
-    )
-    if len(target_sources) != 1:
-        raise ValueError("Module prompt has no unique package export")
-    target_source = target_sources[0]
+    expected_registration = {
+        "owner_contract_ref": spec.owner_contract_ref,
+        "owner_contract_path": spec.owner_contract_path,
+        "input_schema_ref": spec.input_schema_ref,
+        "input_schema_path": spec.input_schema_path,
+        "output_schema_ref": spec.output_schema_ref,
+        "output_schema_path": spec.output_schema_path,
+        "declared_operation_ids": spec.declared_operation_ids,
+        "compatible_transport_kinds": spec.compatible_transport_kinds,
+        "context_policy_ref": spec.context_policy_ref,
+        "evaluation_policy_ref": spec.evaluation_policy_ref,
+        "retry_policy_ref": spec.retry_policy_ref,
+        "entry_policy": spec.entry_policy,
+        "output_resolution_policy": spec.output_resolution_policy,
+    }
+    observed_registration = {
+        "owner_contract_ref": target_source.owner_contract_ref,
+        "owner_contract_path": target_source.owner_contract_path,
+        "input_schema_ref": target_source.input_schema_ref,
+        "input_schema_path": target_source.input_schema_path,
+        "output_schema_ref": target_source.output_schema_ref,
+        "output_schema_path": target_source.output_schema_path,
+        "declared_operation_ids": target_source.declared_operation_ids,
+        "compatible_transport_kinds": target_source.compatible_transport_kinds,
+        "context_policy_ref": target_source.context_policy_ref,
+        "evaluation_policy_ref": target_source.evaluation_policy_ref,
+        "retry_policy_ref": target_source.retry_policy_ref,
+        "entry_policy": target_source.entry_policy,
+        "output_resolution_policy": target_source.output_resolution_policy,
+    }
+    if expected_registration != observed_registration:
+        raise ValueError("Module spec differs from module_registration.json")
     if target_source.prompt_path != spec.skill_projection_path:
         raise ValueError("Module spec does not use the fixed prompt read channel")
-    package_id = target_source.skill_package_id
+    module_owner_path = project_root / target_source.owner_contract_path
+    module_owner_sha256 = sha256_file(module_owner_path)
     instructions = target_source.prompt_text
     instruction_member = ReleaseMember(
         member_ref=_instruction_member_ref(
-            skill_package_id=package_id,
+            skill_id=spec.skill_id,
             module_id=spec.module_id,
             release_version=spec.release_version,
         ),
@@ -368,64 +389,6 @@ def compile_agent_module_release(
     input_schema_sha256 = input_schema_asset.schema_sha256
     output_schema_sha256 = output_schema_asset.schema_sha256
 
-    expected_registration = {
-        "owner_contract_ref": spec.owner_contract_ref,
-        "owner_contract_path": spec.owner_contract_path,
-        "input_schema_ref": spec.input_schema_ref,
-        "input_schema_path": spec.input_schema_path,
-        "output_schema_ref": spec.output_schema_ref,
-        "output_schema_path": spec.output_schema_path,
-        "declared_operation_ids": spec.declared_operation_ids,
-        "compatible_transport_kinds": spec.compatible_transport_kinds,
-        "context_policy_ref": spec.context_policy_ref,
-        "evaluation_policy_ref": spec.evaluation_policy_ref,
-        "retry_policy_ref": spec.retry_policy_ref,
-        "entry_policy": spec.entry_policy,
-        "output_resolution_policy": spec.output_resolution_policy,
-    }
-    observed_registration = {
-        "owner_contract_ref": target_source.owner_contract_ref,
-        "owner_contract_path": target_source.owner_contract_path,
-        "input_schema_ref": target_source.input_schema_ref,
-        "input_schema_path": target_source.input_schema_path,
-        "output_schema_ref": target_source.output_schema_ref,
-        "output_schema_path": target_source.output_schema_path,
-        "declared_operation_ids": target_source.declared_operation_ids,
-        "compatible_transport_kinds": target_source.compatible_transport_kinds,
-        "context_policy_ref": target_source.context_policy_ref,
-        "evaluation_policy_ref": target_source.evaluation_policy_ref,
-        "retry_policy_ref": target_source.retry_policy_ref,
-        "entry_policy": target_source.entry_policy,
-        "output_resolution_policy": target_source.output_resolution_policy,
-    }
-    if expected_registration != observed_registration:
-        raise ValueError("Module spec differs from module_registration.json")
-    module_exports = tuple(
-        SkillModuleExport(
-            export_id=source.export_id,
-            module_id=source.module_id,
-            instruction_members=(
-                ReleaseMember(
-                    member_ref=_instruction_member_ref(
-                        skill_package_id=package_id,
-                        module_id=source.module_id,
-                        release_version=spec.release_version,
-                    ),
-                    member_sha256=sha256_text(source.prompt_text),
-                    media_type="text/markdown",
-                ),
-            ),
-        )
-        for source in package_sources
-    )
-    package = SkillPackageRelease.build(
-        skill_package_id=package_id,
-        skill_package_version=spec.release_version,
-        release_ref=f"skill-package:{package_id}@{spec.release_version}",
-        owner_contract_ref=spec.owner_contract_ref,
-        owner_contract_sha256=owner_sha256,
-        module_exports=module_exports,
-    )
     prompt_id = f"{spec.module_id}_prompt_bundle"
     prompt = compile_prompt_bundle_release(
         prompt_bundle_id=prompt_id,
@@ -463,10 +426,8 @@ def compile_agent_module_release(
         release_ref=f"runtime-module:{spec.module_id}@{spec.release_version}",
         module_kind=ModuleKind.AGENT,
         owner_contract_ref=spec.owner_contract_ref,
-        owner_contract_sha256=owner_sha256,
-        source_skill_package_ref=package.release_ref,
-        source_skill_package_sha256=package.release_sha256,
-        source_export_id=spec.module_id,
+        owner_contract_sha256=module_owner_sha256,
+        source_skill_id=spec.skill_id,
         executable_ref=None,
         executable_sha256=None,
         input_schema_ref=spec.input_schema_ref,
@@ -490,7 +451,6 @@ def compile_agent_module_release(
         output_resolution_policy=spec.output_resolution_policy,
     )
     return CompiledAgentModuleRelease(
-        skill_package=package,
         schema_assets=schema_assets,
         prompt_components=prompt_components,
         prompt_bundle=prompt,
@@ -530,9 +490,7 @@ def compile_non_agent_module_release(
         owner_contract_sha256=sha256_file(
             project_root / owner_contract_path
         ),
-        source_skill_package_ref=None,
-        source_skill_package_sha256=None,
-        source_export_id=None,
+        source_skill_id=None,
         executable_ref=executable_ref,
         executable_sha256=sha256_file(project_root / executable_path),
         input_schema_ref=input_schema_ref,
@@ -562,10 +520,7 @@ def candidate_admission_record(
 ) -> ReleaseAdmissionRecord:
     """Build one initial candidate admission for an exact release record."""
 
-    if isinstance(record, SkillPackageRelease):
-        kind = ReleaseSubjectKind.SKILL_PACKAGE
-        subject_id = record.skill_package_id
-    elif isinstance(record, PromptComponentRelease):
+    if isinstance(record, PromptComponentRelease):
         kind = ReleaseSubjectKind.PROMPT_COMPONENT
         subject_id = record.prompt_component_id
     elif isinstance(record, PromptBundleRelease):

@@ -4,7 +4,6 @@ from agent_runtime.contracts.registry_release_definition import (
     PromptComponentKind,
     PromptComponentRelease,
     ReleaseMember,
-    SkillPackageRelease,
 )
 from agent_runtime.inspection.inspection_release_rendering import (
     RELEASE_INVENTORY_SCHEMA_VERSION,
@@ -63,20 +62,12 @@ def test_release_inventory_projects_prompt_components_under_schema_v3() -> None:
     assert "inventory_task_instruction" in markdown
 
 
-def test_release_inventory_renders_candidate_without_admission_record() -> None:
-    package = SkillPackageRelease.build(
-        skill_package_id="demo_package",
-        skill_package_version="candidate_v1",
-        release_ref="skill-package:demo_package@candidate_v1",
-        owner_contract_ref="design-doc:demo_package@v1",
-        owner_contract_sha256="a" * 64,
-        module_exports=(),
-    )
+def test_release_inventory_has_no_skill_release_family() -> None:
     registry = RuntimeReleaseRegistry()
-    registry.register_bundle(RuntimeReleaseBundle(skill_packages=(package,)))
 
     inventory = build_runtime_release_inventory(registry)
     markdown = render_runtime_release_markdown(registry)
 
-    assert inventory["skill_packages"][0]["latest_admission_state"] is None
+    assert "skill_packages" not in inventory
+    assert "Skill Package" not in markdown
     assert markdown.startswith("# Agent Runtime Release Inventory")

@@ -409,9 +409,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             module_kind=ModuleKind.DETERMINISTIC,
             owner_contract_ref="contract:opaque@v1",
             owner_contract_sha256=HASH,
-            source_skill_package_ref=None,
-            source_skill_package_sha256=None,
-            source_export_id=None,
+            source_skill_id=None,
             executable_ref="callable:opaque@v1",
             executable_sha256=HASH,
             input_schema_ref="schema:opaque_input@v1",
@@ -711,7 +709,7 @@ def test_canonical_runtime_truth_surface_paths_exist() -> None:
         if not (REPO_ROOT / path).exists()
     ]
 
-    assert len(declared) == 72
+    assert len(declared) == 63
     assert missing == []
 
 

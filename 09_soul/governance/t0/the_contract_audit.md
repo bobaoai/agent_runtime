@@ -145,6 +145,14 @@ A profile may mark a non-applicable layer `not_required`. A code release does
 not need a prose layer merely because a Design Doc does. Silence and omitted
 results are not valid substitutes for an explicit profile decision.
 
+For a T0, T1, or T2 Design Intent subject, Design Doc Management owns the
+semantic check method and Contract Audit owns the immutable subject, profile,
+reviewer binding, execution, findings, and result. The profile binds a fixed
+Design Contract reviewer Workflow. It does not reuse an Engineering Change
+Reviewer, because a Design candidate has no implementation diff, test plan, or
+Code Design Basis to reproduce. The later implementation ChangeSet is a
+separate subject with a separate engineering-review result.
+
 Engineering Change Governance may reuse this T0 layer's independence, evidence,
 finding, and verdict rules for `engineering-change-review`. That reuse does not
 make Contract Audit the owner of the engineering workflow or its frozen change
@@ -264,6 +272,8 @@ The implementation of this T0 requires code-owned contracts for:
 - `AuditTargetType` and declaring Registry binding;
 - `AuditSubject` and immutable package closure;
 - `AuditProfile` and check selection;
+- subject-kind-to-reviewer-Workflow binding, including the fixed Design
+  Contract reviewer for Design Intent profiles;
 - per-layer `required` or `not_required` applicability;
 - `ReviewerBinding` and independence policy;
 - `AuditRun`, layer result, finding, and aggregate verdict;
@@ -286,6 +296,8 @@ them for operators and reviewers.
 8. AuditResult is bound to exact subject, profile, and reviewer evidence.
 9. Admission remains with the owning authority.
 10. Every correction creates a new subject version and re-audit record.
+11. A reviewer binding must match the subject kind and semantic-review gate;
+    selecting a nearby reviewer is a blocked routing defect, not a valid audit.
 
 ## References
 

@@ -214,10 +214,10 @@ classes and their failure meaning.
 | Test class | Required proof |
 | --- | --- |
 | Removed-surface scan | Forbidden former symbols are absent from active source, public imports, Registries, generated inspection, built wheel, and product Runtime packages. |
-| Contract construction | Every Skill Package, Prompt Bundle, Execution Profile, Module Release, Workflow Release, admission, Module Run, Variant, Attempt, outcome, and resolution accepts valid exact-hash input. |
+| Contract construction | Every Prompt Bundle, Execution Profile, Module Release, Workflow Release, admission, Module Run, Variant, Attempt, outcome, and resolution accepts valid exact-hash input. |
 | Contract rejection | Missing, mutable, duplicate, stale, unhashed, cross-release, unknown, extra-field, and wrong-type inputs fail closed. |
 | Graph closure | Linear, branch, fan-out, fan-in, loop, external wait, and terminal graphs validate; unreachable nodes, missing routes, forged targets, and ambiguous outcome routes fail. |
-| Registration and release | Multi-Module Skill export, Module reuse across workflows, atomic promotion, supersession, rollback, duplicate registration, and dependency closure behave deterministically. |
+| Registration and release | Independent Module sources from one Skill, Module reuse across workflows, atomic promotion, supersession, rollback, duplicate registration, and dependency closure behave deterministically. |
 | Execution lineage | Standalone and graph-bound Module Runs record sibling Variants, Attempt-start-before-call, terminal Attempts, outputs, usage, evaluation, Selection, and resolution. |
 | Idempotency and recovery | Duplicate request, payload collision, crash before/after provider call, response loss, stale claim, late result, replay, cancellation, and retry never duplicate a committed effect. |
 | Authorization and isolation | Missing or stale decision, grant mismatch, invalidation, cross-tenant, cross-Cell, cross-execution, and entitlement change fail closed. |

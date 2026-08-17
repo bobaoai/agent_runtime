@@ -153,8 +153,20 @@ def _compile_native_module(
 ):
     owner = tmp_path / "designDoc" / "owner.md"
     owner.parent.mkdir()
-    owner.write_text("# Owner\n", encoding="utf-8")
-    schema_root = tmp_path / "schemas"
+    owner.write_text(
+        "# Owner\n\nRegistered Module: `native_module`.\n",
+        encoding="utf-8",
+    )
+    module_root = (
+        tmp_path
+        / ".claude"
+        / "skills"
+        / "native-skill"
+        / "runtime_modules"
+        / "native_module"
+    )
+    module_root.mkdir(parents=True)
+    schema_root = module_root / "schemas"
     schema_root.mkdir()
     (schema_root / "input.schema.json").write_text(
         json.dumps(
@@ -173,15 +185,10 @@ def _compile_native_module(
         json.dumps(_OUTPUT_SCHEMA),
         encoding="utf-8",
     )
-    module_root = (
-        tmp_path
-        / ".claude"
-        / "skills"
-        / "native-skill"
-        / "runtime_modules"
-        / "native_module"
+    (module_root.parent.parent / "SKILL.md").write_text(
+        "# Native Skill\n\nManaged Module: `native_module`.\n",
+        encoding="utf-8",
     )
-    module_root.mkdir(parents=True)
     (module_root / "prompt.md").write_text(
         "Produce the native result.\n",
         encoding="utf-8",
@@ -189,10 +196,8 @@ def _compile_native_module(
     (module_root / "module_registration.json").write_text(
         json.dumps(
             {
-                "schema_version": "runtime_module_registration_v1",
-                "skill_package_id": "native_skill_package",
+                "schema_version": "runtime_module_registration_v2",
                 "skill_id": "native-skill",
-                "export_id": "native_module",
                 "module_id": "native_module",
                 "owner_contract_path": "designDoc/owner.md",
                 "input_schema_ref": "schema:native_input@v1",
@@ -241,8 +246,14 @@ def _compile_native_module(
             gateway_access_reasons=gateway_access_reasons,
             tool_policy=tool_policy,
             network_policy=network_policy,
-            input_schema_path="schemas/input.schema.json",
-            output_schema_path="schemas/output.schema.json",
+            input_schema_path=(
+                ".claude/skills/native-skill/runtime_modules/native_module/"
+                "schemas/input.schema.json"
+            ),
+            output_schema_path=(
+                ".claude/skills/native-skill/runtime_modules/native_module/"
+                "schemas/output.schema.json"
+            ),
             compatible_transport_kinds=(transport_kind,),
             evaluation_policy_ref="evaluation-policy:native@v1",
             retry_policy_ref="retry-policy:bounded@v1",
@@ -259,7 +270,6 @@ def _register_compiled_for_evaluation(compiled) -> RuntimeReleaseRegistry:
     admissions = tuple(
         candidate_admission_record(record, recorded_at_utc=_TEST_TIME)
         for record in (
-            compiled.skill_package,
             *compiled.prompt_components,
             compiled.prompt_bundle,
             compiled.execution_profile,
@@ -269,7 +279,6 @@ def _register_compiled_for_evaluation(compiled) -> RuntimeReleaseRegistry:
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(
         RuntimeReleaseBundle(
-            skill_packages=(compiled.skill_package,),
             schema_assets=compiled.schema_assets,
             prompt_components=compiled.prompt_components,
             prompt_bundles=(compiled.prompt_bundle,),
@@ -1968,9 +1977,7 @@ def _operation_free_release(
         module_kind=ModuleKind.DETERMINISTIC,
         owner_contract_ref="contract:operation-free@v1",
         owner_contract_sha256="a" * 64,
-        source_skill_package_ref=None,
-        source_skill_package_sha256=None,
-        source_export_id=None,
+        source_skill_id=None,
         executable_ref="callable:operation-free@v1",
         executable_sha256="a" * 64,
         input_schema_ref="schema:operation_free_input@v1",
@@ -3311,7 +3318,6 @@ def test_codex_native_structured_output_executes_end_to_end(
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(
         RuntimeReleaseBundle(
-            skill_packages=(compiled.skill_package,),
             schema_assets=compiled.schema_assets,
             prompt_components=compiled.prompt_components,
             prompt_bundles=(compiled.prompt_bundle,),

@@ -30,8 +30,8 @@ Runtime, not for preserving the current document split.
   Runtime implementation lane.
 - Pre-existing dirty implementation lane:
   `src/agent_runtime/contracts/registry_release_definition.py`,
-  `src/agent_runtime/registry/registry_module_exporting.py`,
-  `tests/test_agent_runtime_module_exporting.py`, and
+  `src/agent_runtime/registry/registry_module_loading.py`,
+  `tests/test_agent_runtime_module_loading.py`, and
   `tests/test_agent_runtime_native_structured_output.py`.
 - Pre-existing generated-file edit:
   `src/agent_runtime/design_contract/agent_runtime_01_module_contract_and_assembly.md`.

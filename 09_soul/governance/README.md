@@ -134,8 +134,12 @@ those local actions and must supply a project-specific Charter before treating
 the released files as a complete local T0 system.
 
 `governance_skill_release.py` validates Skill identity, role, subject, T0
-dependency closure, source hash, host target, and exact projection bytes. A
-project may declare a hash-bound addendum in
+dependency closure, every declared source-file hash, host target, and exact
+projection bytes. `SKILL.md` projects to both Primary Agent hosts. A portable
+governance Runtime Module may additionally release its fixed prompt, semantic
+schemas, and provider-neutral Module registration to a Registry-declared host
+surface; those files remain governed source projections, not project-local
+copies. A project may declare a hash-bound addendum in
 `governance_bindings/governance_skill_binding_manifest.json`; the release
 mechanically composes the portable method followed by that project binding.
 This keeps a local Runtime Module ID or workflow entry out of portable Hoveath
@@ -143,8 +147,10 @@ while leaving both host projections reproducible. The addendum may explain
 reachability and binding; it cannot duplicate the model-ready prompt or grant
 execution authority.
 
-The release module does not register product Skills, create Runtime Modules,
+The release module does not register product Skills, admit Runtime releases,
 choose a provider, or copy project-local business instructions into Hoveath.
+Workflow topology, authorization, Execution Profiles, release versions, Code
+Projections, and PostgreSQL admission remain consuming-project bindings.
 
 A Governance Release is mechanically clean only when both release modules
 report clean. Their manifests remain separate because law and operating method
