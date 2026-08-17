@@ -1,0 +1,606 @@
+{
+  "base_ref": "294a3bd3778c0a6df7adabe2816221e953223e49",
+  "candidate_diff_sha256": "5380d2dcf1ffb1450276a545d2e8eb656216d35113f8334377226ceb0fe604cc",
+  "candidate_revision": 3,
+  "claimed_validation_commands": [
+    {
+      "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python .scratch/reviews/verify_engineering_review_package.py .scratch/reviews/runtime_slice_1_revision_3_engineering_review_package.json",
+      "cwd": "/Users/bokanbao/Documents/GitHub/the_agent_runtime",
+      "expected_result": "path_count 97, exact diff and per-path SHA-256, no errors"
+    },
+    {
+      "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q tests/test_runtime_architecture_validation.py tests/test_runtime_architecture_conformance.py tests/test_runtime_foundation_validation.py tests/test_runtime_consumer_manifest.py tests/test_agent_runtime_packaging_boundary.py",
+      "cwd": "/Users/bokanbao/Documents/GitHub/the_agent_runtime",
+      "expected_result": "55 passed"
+    },
+    {
+      "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q",
+      "cwd": "/Users/bokanbao/Documents/GitHub/the_agent_runtime",
+      "expected_result": "508 passed, 20 skipped"
+    },
+    {
+      "command": "git diff --check 294a3bd3778c0a6df7adabe2816221e953223e49..944414b0f4dac968c03bfe3eaed9603e3294f3cd",
+      "cwd": "/Users/bokanbao/Documents/GitHub/the_agent_runtime",
+      "expected_result": "exit 0 with no output"
+    },
+    {
+      "command": "PYTHONPATH=src /Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -c 'from agent_runtime.conformance.conformance_consumer_manifesting import main; raise SystemExit(main())' --consumer-id trading_platform --consumer-root /Users/bokanbao/Documents/GitHub/trading_platform --consumer-git-commit bdaf1391453a7ab3ad9ec0e8c8a45e026cee2f50 --check-manifest review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json",
+      "cwd": "/Users/bokanbao/Documents/GitHub/the_agent_runtime",
+      "expected_result": "exit 0 with no output"
+    }
+  ],
+  "code_design_basis": {
+    "approval_status": "approved",
+    "basis_revision": 3,
+    "path": "review_artifacts/agent_runtime_code_design_basis/code_design_basis.json",
+    "sha256": "0a34afdcdf0f8efd2636391110f0efe93d474b0ce021a0ac253ae14975a448ca"
+  },
+  "commit_range": "294a3bd3778c0a6df7adabe2816221e953223e49..944414b0f4dac968c03bfe3eaed9603e3294f3cd",
+  "commit_ref": "944414b0f4dac968c03bfe3eaed9603e3294f3cd",
+  "engineering_change_route": {
+    "affected_surfaces": [
+      "runtime_conformance",
+      "runtime_foundation",
+      "runtime_registry_architecture_registration",
+      "runtime_inspection_architecture_projection",
+      "contracts_compatibility_facade",
+      "standalone_wheel",
+      "trading_platform_consumer_surface"
+    ],
+    "assurance_route": "engineering_change_review",
+    "authoring_route": "engineering_code_design",
+    "primary_owner": "agent_runtime_source_architecture",
+    "route_id": "agent_runtime_architecture_rebuild"
+  },
+  "implementation_manifest": {
+    "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_implementation_manifest.json",
+    "sha256": "2177cf35051dec21f3ae19a999d2393076ed70e465d95b2c3692f0c25d4aa238"
+  },
+  "migration_work": false,
+  "path_count": 97,
+  "path_manifest": [
+    {
+      "path": ".gitignore",
+      "sha256": "e7083002f9cf37aeaef2f0c9bf144598a3dcbaacb76ac027eca67ce4dbaf68f2",
+      "state": "modified"
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "f05f471007af24d683ddcb1140c37b7533a0a10b9e7bbb1dbf273162dc2985f9",
+      "state": "modified"
+    },
+    {
+      "path": "README.md",
+      "sha256": "b3b58685e1dd96db5c222b35fb59f613ba5734333a909600429f7a421292c460",
+      "state": "modified"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "73d74c58f0e1a4f0d3f12161061bfd34886be73e533a1e1051fa689e8b213fb5",
+      "state": "modified"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_architecture_audit.md",
+      "sha256": "e558c73561a078dcac4ddf70a07e93d6b3afa46ba2187559fc679c13a907dc93",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_design_basis/code_design_basis.json",
+      "sha256": "0a34afdcdf0f8efd2636391110f0efe93d474b0ce021a0ac253ae14975a448ca",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json",
+      "sha256": "d1890bb88bf93943dc06456c28cf05ac60f7f4592d4fc5a43351c65164eee097",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_design_basis/runtime_code_design_basis.md",
+      "sha256": "a683f9792c8bd0a859e4ec96d51ff6fe00f9093b4603e27ed7db125f8923311d",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_implementation_manifest.json",
+      "sha256": "2177cf35051dec21f3ae19a999d2393076ed70e465d95b2c3692f0c25d4aa238",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_1_invocation.json",
+      "sha256": "f47157e8569f644177726746d3204c2fb5c2ca52f9988b98b73441390bd26953",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_1_opus_5_xhigh.json",
+      "sha256": "f0241735a0f4fe88cbafc9338611a463bae93cce3abf2aa3652089c6205082ec",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_2_invocation.json",
+      "sha256": "98a024b3c07f2fef7f02229bb5211bdd6c0f5c19d74303d6abad1782149a6575",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_2_opus_5_xhigh.json",
+      "sha256": "3a06137563285c8d8308a63262916d48246dcb4468f9237ae71b6e6a97d1fb4d",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/REVIEW_BRIEF.md",
+      "sha256": "c3ca94cee8e582a024fbe00fbf036ae6315739059fde0cad7e2ed2e3495e5160",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "e5f2176370e57443b94dcac653a04cb3ef8f91d3a88b64e627ea17539cb778e9",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "e1359738cc94c69c81d28f1e5a8c959918368d4fb1290d89e04f5bcd0ecc003f",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/review_revision_3_opus_5_xhigh.advisory.json",
+      "sha256": "8501eaadea982b89dc04629bd618383e7f6257b3236f8fe1030b167e60525c8c",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/subject_manifest.json",
+      "sha256": "09ee88f6751bee4db1a259a27a08822e4900c1d62af2ce16cb406c2b34e4954a",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_design_system_review.md",
+      "sha256": "77950fa374ea0299aabcbbc0ebddb337b3de3db7ecc38f83768260c345a6dbb1",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/REVIEW_BRIEF.md",
+      "sha256": "108efbf35b27d3cd6fb4afe5042a1bae8b231e8cb0eb24fb9523a885986e04f9",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/agent_runtime_00_runtime_domain_contract.md",
+      "sha256": "dc8e416171fca596ff5aad7e4ef04f83b172cee345a1b8a4c033bf44855a7eba",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/rewrite_matrix.md",
+      "sha256": "568ea73d058f628b8696e6f24dc3252963f32f7caa71bbe0bbbd35fbe98f4da4",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/subject_manifest.json",
+      "sha256": "010b9b14e6de27fe4ca44c1cf45ee31deb804ed2bc73fd36dc0a276ffbe9bba1",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/the_agent_runtime.md",
+      "sha256": "d4169c9eb20d2946d56bf58097034b83778d6d9eff3a1501d3d35f84b68f7629",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/the_charter.md",
+      "sha256": "5d9fec0586c7e635be7282ce356a9799ee50b093a4594f633f6c945f158d7a92",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/REVIEW_BRIEF.md",
+      "sha256": "7d75190483b8a7bd6721c4639c0509f161d7ec62cd65dc5627fbcaa070cc5a07",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/agent_runtime_01_registry_contract.md",
+      "sha256": "ae2494182454423a79da31a3ae60cb8c1c69f2aef827c6816913275a5e058c5d",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/agent_runtime_02_source_architecture_contract.md",
+      "sha256": "711866a5ea0895f8bff3b6e323f7302efbf419f5e9cd4190e8f2725da64dc265",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "0310101d463f4783f15395837d3dfa8aca0dc5ea57064400e38017f55cb6a3a5",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "8882f1bb5b47b91a64519e2adde06fd9081eaa4a1732e0b52bb807fb464ec31b",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_3_opus_5_xhigh.advisory.json",
+      "sha256": "187402c89012e7c9a6b88070d1b783a8540e70be6cd8438f2aafd43d4cb7bb20",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_4_opus_5_xhigh.advisory.json",
+      "sha256": "1d90f9c022b13e97853891b9612739e03824bb6f96d8809e00f94cf8dc194c3c",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_5_opus_5_xhigh.advisory.json",
+      "sha256": "73d5aa1f8104e1cc22cfe90d65f85d1be0a29e9a81561157ee1f8bcdd26d66fe",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_6_opus_5_xhigh.advisory.json",
+      "sha256": "8c63da091c57b49f2970beb41dc7e22d986694208c1aa03d04eadf4548139806",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_7_opus_5_xhigh.advisory.json",
+      "sha256": "f6767fa68dfa9fda19c17e00be357faaa851fcf719335e413c6622a12b907932",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_8_opus_5_xhigh.advisory.json",
+      "sha256": "0547400425777bba85eb7a92e7a9edfb73de9992b6dfce3b790132297b8d546a",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/subject_manifest.json",
+      "sha256": "e3af7a53bf0fad5a72725240215fdcebbf89a29a8111a13801864316083ab6ed",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/REVIEW_BRIEF.md",
+      "sha256": "188de99773e6b43bbba546dcd21b7156d409a5f0fa17fe0b3fc90569fe6feb5e",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/agent_runtime_03_external_event_ingress_contract.md",
+      "sha256": "28ad9d5c79af13c54dc53f57648ff4c81f0dcb54b7f75c07b6ee73b8e1c16bf6",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/agent_runtime_09_external_authority_integration_contract.md",
+      "sha256": "7542f863d10666c34da40ea5cd01b93dac728d2c75e09b8cdd394ff94534ece8",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/agent_runtime_10_execution_contract.md",
+      "sha256": "9f95d8b96b05cd8b8073bd9f77a1bf2fc8d79ba4c86b494b4969fe263519a582",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "7c30b45e60baf257f5a9662b14a2c1fa96aa475f853bfc51fa3d5a304b84683d",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/subject_manifest.json",
+      "sha256": "aa9128dced5e6596670e967c325025137a534b1aea7dced79e206231e059b542",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/REVIEW_BRIEF.md",
+      "sha256": "f985a854dff73abe1a6eaf1dd8b537ee72da5894b341a53896b524fd10796015",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/agent_runtime_04_execution_ledger_contract.md",
+      "sha256": "9dd3d4c681bd9cb16f66203a864c1b06869bfd71d7a3a966d70ae1f8821aefd5",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/agent_runtime_07_durability_contract.md",
+      "sha256": "f6e67ed616d29b1b7a195cf55b01b34e02785f61d815135157713ac41bd3be80",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/agent_runtime_08_invocation_contract.md",
+      "sha256": "fa21de04295d339e4930be6c274e37bf5a8682151d85c983f0c5c801b002651a",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "f5e3f317b872f6e570eea7f9eda37fec3834fb09e64ba7f5ed5735f99332abac",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/subject_manifest.json",
+      "sha256": "82467ed000e29067b607ca7675f317d51a7ce3f81617e1a6c3fb119d40b576c2",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/REVIEW_BRIEF.md",
+      "sha256": "ecd1306bdf44bdcd05a8fa5ad63e300d332410fb8828e141c48e4ed94a8a8b93",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/agent_runtime_05_standalone_release_conformance_contract.md",
+      "sha256": "ac58e0cefba8ed10f4beb554a792a6a8ff0d7c95b40d79871a508032b96a0ba2",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/agent_runtime_06_inspection_contract.md",
+      "sha256": "b0d36545232e806623df4ebdc0b5ff34a40e1bff39230ca2f91915b016dbac89",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "0f41dfe55bf7d3c8c45c7617b57c97d29e5b40069eb15e7c09ea8177f4f5266d",
+      "state": "added"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/subject_manifest.json",
+      "sha256": "1058a063dea74776373c31fdfa597ff770a07a157cbe770dd2cfeca7af447900",
+      "state": "added"
+    },
+    {
+      "path": "src/agent_runtime/README.md",
+      "sha256": "b3b58685e1dd96db5c222b35fb59f613ba5734333a909600429f7a421292c460",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/conformance/__init__.py",
+      "sha256": "4d6da405ed27053113cb047237168843eeada02fca48623237cb686a9604a98b",
+      "state": "added"
+    },
+    {
+      "path": "src/agent_runtime/conformance/conformance_architecture_manifest.py",
+      "sha256": "47d99e46112d9b6ed2b0d8f7fbfb5d420950adb2c35551cd1c4c957dabec32cc",
+      "state": "added"
+    },
+    {
+      "path": "src/agent_runtime/conformance/conformance_architecture_validation.py",
+      "sha256": "555e024f5d9644579785e5b96ed261b4a817c8cbc3300a376d3832f641614388",
+      "state": "added"
+    },
+    {
+      "path": "src/agent_runtime/conformance/conformance_consumer_manifesting.py",
+      "sha256": "1fc14e2b5da80f8ab10e3ce54fa04d31224d20b04ee87a7f13caafc093d7a710",
+      "state": "added"
+    },
+    {
+      "path": "src/agent_runtime/contracts/__init__.py",
+      "sha256": "a136a17ec837fa9b5a22f4ca1e0e779bc86374f1e4c17304cef34414d98f82ae",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/durability_topology_definition.py",
+      "sha256": "f5171a70f95cbf266bd762f7340c877d685a1f5ee47914c1349a7f53ada91d9b",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/execution_authorization_definition.py",
+      "sha256": "2fe65336a6b8b8a4deeef8bde06d5d1216895bbc59e004839e8dea24e41e9c0a",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/execution_event_definition.py",
+      "sha256": "4286c7a2c4c06537fbd837b5c67851a6ecdaf0b49f6f9ada4af67cc44f6a859b",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/execution_host_definition.py",
+      "sha256": "e9e09dd37f11a8e1c05f7750ddc6340e8404cdbb8927fc3f20950f1f94a24f9e",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/execution_module_definition.py",
+      "sha256": "ee5011b3d8e6dd0192e9dded334c8a11cf3e7ead1c1b2ccb44fcf9616e29efb2",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/execution_operation_definition.py",
+      "sha256": "36e6e7caac61d646e9b5d46f842c3987fc63fb31d4c7a73790ea6eec0eabcfa6",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/invocation_adapter_definition.py",
+      "sha256": "437cc3b7bdabf16e8c9e2eeb7ccc96125d53b3d30c283307943b2007784d4a05",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/ledger_lineage_definition.py",
+      "sha256": "b5137141c87f7fc447ff088aa24b238e6e68e4fc8b2f0fe3b8b73c297f459099",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/ledger_record_definition.py",
+      "sha256": "10dea11b631205b99596b825db9170ddabddd3d3fe4aadb87283282d0962302e",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/contracts/registry_contract_validation.py",
+      "sha256": "b7fa7937c03ae51f289cf585665d4a9fbe0d96c646ada365c46b7f35abbc404d",
+      "state": "deleted"
+    },
+    {
+      "path": "src/agent_runtime/contracts/registry_release_definition.py",
+      "sha256": "f0c53ed4c3a0460c5c83e35cff8024452b936cde3e70ef4b6cffbdbc0a9bb627",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/durability/__init__.py",
+      "sha256": "366ddb21684ff4df74221ae2f56a910a789a474f6d8214d8c97bf2db693afdf0",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/execution/execution_authorization_coordination.py",
+      "sha256": "015ee0536898cea0f2342435cf8720790629671d29598be06f3b4dece4d6ecba",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/execution/execution_event_ingestion.py",
+      "sha256": "b01999274e33804412646847263e70b4c1089dced05ca589324a071552c04e4b",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/execution/execution_module_invocation.py",
+      "sha256": "23a62fc8183461eef17a0c88d3d812ce60101f61118dde943e76a377a19e5f20",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/foundation/__init__.py",
+      "sha256": "cac117a4ca27d7a31d3d506ac4a1a951fd7d8e97847419103b311bd3f4ca9b30",
+      "state": "added"
+    },
+    {
+      "path": "src/agent_runtime/foundation/foundation_contract_validation.py",
+      "sha256": "7a11c1a7cb818377ca6c81d03bc17e3220b842cd5daf45bb562977d6708f5385",
+      "state": "added"
+    },
+    {
+      "path": "src/agent_runtime/foundation/foundation_schema_traversal.py",
+      "sha256": "e08720313f3e89fc851755173f00a1517766d2c0b26a40de5a60efebb2fdc169",
+      "state": "added"
+    },
+    {
+      "path": "src/agent_runtime/inspection/inspection_architecture_rendering.py",
+      "sha256": "df96d0aea1ddd737a61b5a9e02612b77b8b10e3753acbb1ae9d1505f6692a244",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/inspection/inspection_execution_projecting.py",
+      "sha256": "8bf11e49a5b838a9f3347e27cf332b568daa2ab825ed610a8c56751e7555992b",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/inspection/inspection_http_serving.py",
+      "sha256": "9e599462f6bc727a78b686be0b4ffb5992df1c0b17587c6584082d6f6f1d35e4",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/invocation/invocation_claude_module_invocation.py",
+      "sha256": "5298b9e6dc9c660fce82a945bd464ed43d7128e5615b51ea4e915e96e131ac70",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/invocation/invocation_prompt_assembly.py",
+      "sha256": "6e2c69ea217bc39e72023d63f738d9ef8f3d8315dc7d244d7881fdebc4359b54",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/invocation/invocation_schema_projection.py",
+      "sha256": "4c20fd500b2b7ef124c3a34377f937c529ef6a775e5d2c415d81b1d9a736ef71",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/invocation/invocation_tool_definition.py",
+      "sha256": "01e23bbc5d93d83fd3ece46a98ca392257e8700378c3dbdb43431f5b81704097",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/invocation/invocation_workspace_preparation.py",
+      "sha256": "cd69e4fc6ae4a7ce0474ee4183ae2e6cd4760ef06579eeb5ac87f1375465070b",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/ledger/ledger_workflow_module_recording.py",
+      "sha256": "7a92b02f1daff5fe3f4e8ab3a258708608ece7884d4ef1fedadcdb230861684f",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/registry/registry_architecture_registration.py",
+      "sha256": "3f40b441b206778e292eebc043f3dfbb87da8e670627f8ff6728b2d0eb3c40bc",
+      "state": "modified"
+    },
+    {
+      "path": "src/agent_runtime/registry/registry_module_loading.py",
+      "sha256": "cf0b67e940e298d9261a378a1786337e2781c8487ec289c79c42caf0f1630714",
+      "state": "modified"
+    },
+    {
+      "path": "tests/test_agent_runtime_execution_records.py",
+      "sha256": "07c6f08e69bb203b1f036a72e8926694995be3af59f5a5377fc2f4d2ce3e8c39",
+      "state": "modified"
+    },
+    {
+      "path": "tests/test_agent_runtime_live_inspection.py",
+      "sha256": "ae22e79d090e53ab68ba1ef0bdb18b04d4c81f538efe9298eeaf9b357a5928a3",
+      "state": "modified"
+    },
+    {
+      "path": "tests/test_agent_runtime_naming_contract.py",
+      "sha256": "f6efa9e9ab3b2b9cc661841029ad844b908a4245c42a3da514672e2576cb2135",
+      "state": "modified"
+    },
+    {
+      "path": "tests/test_agent_runtime_packaging_boundary.py",
+      "sha256": "57b41c8a68ce02ed01340b4e348aa472465d23dc2351c049ef2068b3e742ce18",
+      "state": "modified"
+    },
+    {
+      "path": "tests/test_runtime_architecture_conformance.py",
+      "sha256": "6744c40874a5a84f8b2f2bbfd37f58f771e39909a0a124972cd03dba5660bbf1",
+      "state": "added"
+    },
+    {
+      "path": "tests/test_runtime_architecture_validation.py",
+      "sha256": "36761df8400e761ba236d7a46821095c69bf2d47c6b43195ea0bdc7f17b6129a",
+      "state": "modified"
+    },
+    {
+      "path": "tests/test_runtime_consumer_manifest.py",
+      "sha256": "164e291e93f26a291c891bf2710148490ab9753f4d31585dfa731c3ba5c3c100",
+      "state": "added"
+    },
+    {
+      "path": "tests/test_runtime_foundation_validation.py",
+      "sha256": "f7d87cf78aa38bcefa39167665f1b082ca6d5dec710da59e2d489d5d0f5fad9e",
+      "state": "added"
+    }
+  ],
+  "prior_findings": "Revision 3 claims closure of AR-S1-008 through AR-S1-012 and retains closure of AR-S1-001 through AR-S1-007. Verify all prior resolutions and full package closure.",
+  "prior_review": {
+    "finding_ids": [
+      "AR-S1-008",
+      "AR-S1-009",
+      "AR-S1-010",
+      "AR-S1-011",
+      "AR-S1-012"
+    ],
+    "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_2_opus_5_xhigh.json",
+    "sha256": "3a06137563285c8d8308a63262916d48246dcb4468f9237ae71b6e6a97d1fb4d",
+    "terminal_verdict": "changes_required"
+  },
+  "review_output_contract": {
+    "finding_severities": [
+      "BLOCKING",
+      "MEDIUM",
+      "LOW",
+      "NIT"
+    ],
+    "required_order": [
+      "subject_closure",
+      "gate_reproduction",
+      "prior_finding_follow_up",
+      "vertical_findings",
+      "longitudinal_observations",
+      "prioritized_punch_list",
+      "terminal_verdict"
+    ],
+    "terminal_verdicts": [
+      "accepted",
+      "changes_required",
+      "not_reproducible"
+    ]
+  },
+  "review_package_id": "agent_runtime_architecture_rebuild_slice_1_revision_3_review",
+  "review_package_schema_version": "engineering_change_review_package_v1",
+  "sandbox_command_plan": [
+    "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python .scratch/reviews/verify_engineering_review_package.py .scratch/reviews/runtime_slice_1_revision_3_engineering_review_package.json",
+    "git diff --check 294a3bd3778c0a6df7adabe2816221e953223e49..944414b0f4dac968c03bfe3eaed9603e3294f3cd",
+    "git diff 294a3bd3778c0a6df7adabe2816221e953223e49..944414b0f4dac968c03bfe3eaed9603e3294f3cd",
+    "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q tests/test_runtime_architecture_validation.py tests/test_runtime_architecture_conformance.py tests/test_runtime_foundation_validation.py tests/test_runtime_consumer_manifest.py tests/test_agent_runtime_packaging_boundary.py",
+    "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q",
+    "PYTHONPATH=src /Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -c 'from agent_runtime.conformance.conformance_consumer_manifesting import main; raise SystemExit(main())' --consumer-id trading_platform --consumer-root /Users/bokanbao/Documents/GitHub/trading_platform --consumer-git-commit bdaf1391453a7ab3ad9ec0e8c8a45e026cee2f50 --check-manifest review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json"
+  ],
+  "subject_mode": "commit_ref",
+  "working_tree_inventory_outside_subject": [
+    {
+      "path": "review_artifacts/runtime_module_owned_schema_code_design.md",
+      "state": "untracked",
+      "subject_status": "excluded_preexisting_material"
+    },
+    {
+      "path": "review_artifacts/systematic_rebuild_e8366e7/",
+      "state": "untracked",
+      "subject_status": "excluded_preexisting_material"
+    }
+  ]
+}

@@ -2,7 +2,7 @@
   "manifest_schema_version": "agent_runtime_architecture_slice_implementation_v1",
   "slice_id": "agent_runtime_architecture_rebuild_slice_1",
   "candidate_revision": 3,
-  "status": "frozen_for_independent_review",
+  "status": "independently_accepted",
   "implementation_baseline_commit": "294a3bd3778c0a6df7adabe2816221e953223e49",
   "approved_code_design_basis": {
     "path": "review_artifacts/agent_runtime_code_design_basis/code_design_basis.json",
@@ -66,7 +66,7 @@
     "low_findings": 2,
     "nit_findings": 1
   },
-  "latest_independent_review": {
+  "second_independent_review": {
     "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_2_opus_5_xhigh.json",
     "sha256": "3a06137563285c8d8308a63262916d48246dcb4468f9237ae71b6e6a97d1fb4d",
     "invocation_path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_2_invocation.json",
@@ -77,6 +77,33 @@
     "low_findings": 1,
     "nit_findings": 2
   },
+  "latest_independent_review": {
+    "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_3_opus_5_xhigh.raw.json",
+    "sha256": "128ee57e002012940bda6eee1b927c8107cba6b2c596e97b8372b814856a7b02",
+    "invocation_path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_3_invocation.json",
+    "invocation_sha256": "2d3852fe47849dddaa65bc3769f0eddafc5d909844c5f6b5e465c73a2cb49aeb",
+    "review_package_path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_3_package.json",
+    "review_package_sha256": "4432717c2e14496382dbf7c0ae04bce485f1b9d419e21456876d75aa118a122b",
+    "terminal_verdict": "accepted",
+    "blocking_findings": 0,
+    "medium_findings": 0,
+    "low_findings": 1,
+    "nit_findings": 1
+  },
+  "accepted_non_blocking_follow_up": [
+    {
+      "finding_id": "AR-S1-013",
+      "severity": "LOW",
+      "disposition": "carry_to_next_touch",
+      "boundary": "Remove the unused Foundation traversal alias from invocation_schema_projection when that file is next changed. No current consumer imports the alias."
+    },
+    {
+      "finding_id": "AR-S1-014",
+      "severity": "NIT",
+      "disposition": "carry_to_next_touch",
+      "boundary": "Return typed validation errors for malformed consumer-manifest site objects when the consumer manifest gate is next changed."
+    }
+  ],
   "review_finding_resolutions": [
     {
       "finding_id": "AR-S1-001",
