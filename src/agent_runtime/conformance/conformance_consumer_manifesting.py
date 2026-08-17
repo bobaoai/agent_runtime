@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import ast
 import hashlib
 import json
+import sys
 import warnings
 from pathlib import Path
 from typing import Any, Iterable
@@ -65,6 +67,7 @@ def _site_record(
         **identity_payload,
         "disposition": disposition,
         "disposition_reason": reason,
+        "disposition_source": "derived_default",
     }
 
 
@@ -147,8 +150,14 @@ def build_downstream_consumer_manifest(
         )
         for disposition in ("keep", "replace", "retire")
     }
+    disposition_source_counts = {
+        source: sum(
+            1 for site in sites if site["disposition_source"] == source
+        )
+        for source in ("derived_default", "owner_decision")
+    }
     return {
-        "manifest_schema_version": "runtime_downstream_consumer_manifest_v1",
+        "manifest_schema_version": "runtime_downstream_consumer_manifest_v2",
         "consumer_id": consumer_id,
         "consumer_git_commit": consumer_git_commit,
         "source_roots": list(normalized_roots),
@@ -157,6 +166,7 @@ def build_downstream_consumer_manifest(
             "site_count": len(sites),
             "source_file_count": len({site["source_path"] for site in sites}),
             "disposition_counts": disposition_counts,
+            "disposition_source_counts": disposition_source_counts,
         },
     }
 
@@ -179,7 +189,7 @@ def validate_downstream_consumer_manifest(
     if set(manifest) != required_keys:
         return ("downstream consumer manifest has invalid top-level keys",)
     if manifest["manifest_schema_version"] != (
-        "runtime_downstream_consumer_manifest_v1"
+        "runtime_downstream_consumer_manifest_v2"
     ):
         return ("downstream consumer manifest has unsupported schema version",)
     rebuilt = build_downstream_consumer_manifest(
@@ -195,7 +205,80 @@ def validate_downstream_consumer_manifest(
     return ()
 
 
+def validate_downstream_consumer_retirement_readiness(
+    manifest: dict[str, Any],
+) -> tuple[str, ...]:
+    """Reject facade retirement until every site has an owner decision."""
+
+    undecided_site_ids = sorted(
+        site["site_id"]
+        for site in manifest.get("sites", ())
+        if site.get("disposition_source") != "owner_decision"
+    )
+    if not undecided_site_ids:
+        return ()
+    return (
+        "downstream Runtime consumer dispositions still require owner decisions: "
+        + ", ".join(undecided_site_ids),
+    )
+
+
+def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build or check one downstream Runtime consumer manifest."
+    )
+    parser.add_argument("--consumer-id", required=True)
+    parser.add_argument("--consumer-root", required=True, type=Path)
+    parser.add_argument("--consumer-git-commit", required=True)
+    parser.add_argument(
+        "--source-root",
+        action="append",
+        dest="source_roots",
+        default=None,
+    )
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--output", type=Path)
+    action.add_argument("--check-manifest", type=Path)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Build or reproduce one exact downstream import-surface artifact."""
+
+    args = _parse_arguments(argv)
+    source_roots = tuple(args.source_roots or ("src", "tests"))
+    if args.check_manifest is not None:
+        manifest = json.loads(args.check_manifest.read_text(encoding="utf-8"))
+        errors = validate_downstream_consumer_manifest(
+            manifest,
+            consumer_root=args.consumer_root,
+        )
+        if errors:
+            for error in errors:
+                print(error, file=sys.stderr)
+            return 1
+        return 0
+    manifest = build_downstream_consumer_manifest(
+        consumer_id=args.consumer_id,
+        consumer_root=args.consumer_root,
+        consumer_git_commit=args.consumer_git_commit,
+        source_roots=source_roots,
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return 0
+
+
 __all__ = [
     "build_downstream_consumer_manifest",
+    "main",
     "validate_downstream_consumer_manifest",
+    "validate_downstream_consumer_retirement_readiness",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

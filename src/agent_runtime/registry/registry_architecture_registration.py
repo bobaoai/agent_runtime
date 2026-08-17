@@ -232,7 +232,10 @@ RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS = (
     RuntimeSourceDirectoryRegistration(
         source_directory_id="testing",
         source_directory=f"{_RUNTIME_SOURCE_ROOT}/testing",
-        purpose="standalone architecture and conformance implementations",
+        purpose=(
+            "shipped Runtime evaluation and Adapter-conformance entry points; "
+            "each source retains its registered responsibility owner"
+        ),
     ),
     RuntimeSourceDirectoryRegistration(
         source_directory_id="foundation",

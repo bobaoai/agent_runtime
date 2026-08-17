@@ -72,7 +72,7 @@ RUNTIME_STRUCTURAL_MODULE_OWNERS = MappingProxyType(
         "agent_runtime.invocation": "invocation",
         "agent_runtime.ledger": "ledger",
         "agent_runtime.registry": "registry",
-        "agent_runtime.testing": "conformance",
+        "agent_runtime.testing": "compatibility_facade",
     }
 )
 
@@ -362,6 +362,7 @@ RUNTIME_PUBLIC_SURFACE_MANIFEST = MappingProxyType(
         "agent_runtime.conformance": (
             "build_downstream_consumer_manifest",
             "validate_downstream_consumer_manifest",
+            "validate_downstream_consumer_retirement_readiness",
             "validate_runtime_architecture",
         ),
         "agent_runtime.contracts": (

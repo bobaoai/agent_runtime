@@ -1,0 +1,147 @@
+{
+  "gate_reproduction": [
+    {
+      "attribution": "match; no mismatch to attribute",
+      "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q tests/test_runtime_architecture_validation.py tests/test_runtime_architecture_conformance.py tests/test_runtime_foundation_validation.py tests/test_runtime_consumer_manifest.py tests/test_agent_runtime_packaging_boundary.py",
+      "expected_result": "49 passed",
+      "reproduced_result": "49 passed in 3.25s"
+    },
+    {
+      "attribution": "match. The 20 skips are environment-gated and consistent with the declared integration_skip_boundary (RUN_PROVIDER_INTEGRATION, AGENT_RUNTIME_TEST_DATABASE_URL, RUN_TEMPORAL_INTEGRATION were all unset). They are reported as genuine skips, not passes; real PostgreSQL and Temporal behavior was therefore NOT exercised by this review. Slice 1 changes no persistent schema and no durable coordination code, so this gap does not touch the reviewed surface.",
+      "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q",
+      "expected_result": "502 passed, 20 skipped",
+      "reproduced_result": "502 passed, 20 skipped in 5.60s"
+    },
+    {
+      "attribution": "match; no mismatch to attribute",
+      "command": "git diff --check 294a3bd3778c0a6df7adabe2816221e953223e49..f0a2a6a2d661692ebc4972e42cb15b18f675894a",
+      "expected_result": "exit 0 with no output",
+      "reproduced_result": "no output"
+    }
+  ],
+  "longitudinal_observations": [
+    "EXECUTION-MODE DISCLOSURE, required by the Skill's Execution Environment section: this was an isolated bootstrap Claude CLI run, NOT a managed Agent Runtime execution. The engineering_change_reviewer Runtime Module has not passed Adapter conformance or managed admission, so no Runtime-recorded Execution Ledger, Execution Profile, subject-hash-before-and-after verification, or technically enforced command allowlist backed this review. Isolation was procedural: the frozen review package was used verbatim, only the five SandboxCommandPlan commands plus read-only Read/Glob/Grep were executed, and no subject path was written, staged, or committed. This report must not be presented as managed Runtime output.",
+    "SANDBOX CAPABILITY GAP affecting every review run in this environment: SHA-256 utilities are denied, so the mandatory 'recompute content hashes and candidate diff hash' step of subject closure cannot be performed. This review substituted exact path-set and path-state recomputation, which is weaker. Owner: whoever provisions the review sandbox — the SandboxCommandPlan should either declare a permitted digest command or the packaging step should provide a git-native equivalent, otherwise every bootstrap review silently downgrades its own closure evidence.",
+    "PATTERN — split architecture authority without closure. Architecture facts now live in two code-owned manifests split across owners: registry_architecture_registration.py (registry responsibility) and conformance_architecture_manifest.py (conformance plane). The split itself is correct — Registry owns the registration records, Conformance owns the constraint baselines. What is missing is a closure assertion between them. AR-S1-001 is the first concrete instance; AR-S1-003 is a second (a directory owned one way by the registry and another way by the conformance manifest). A single bidirectional closure check between the two manifests would foreclose the whole class. Owner: the agent_runtime_architecture_rebuild lane.",
+    "PATTERN — high-water baselines that can be raised in the same edit that violates them. RUNTIME_MIGRATION_DEBT_HIGH_WATER is derived from RUNTIME_MIGRATION_DEBT_OWNERS in the same file (conformance_architecture_manifest.py:91), and RUNTIME_DEPENDENCY_DEBT_HIGH_WATER is a literal frozenset in that file, so raising either baseline is a two-line edit. This is reviewer-visible rather than machine-blocked, which is a legitimate design; it is noted because the ratchet's strength depends entirely on human diff attention. Mitigating credit: test_dependency_debt_is_exact_and_reviewable (tests/test_runtime_architecture_conformance.py:25-38) asserts exact set equality between observed forbidden edges and the baseline, which is stronger than the validator's own subset check and forces the baseline to shrink in lockstep with real removals. The migration-debt baseline has no equivalent exact-equality test.",
+    "POSITIVE, recorded so a later slice does not re-litigate it. Review questions 1, 2, 3, 7 and 9 verify cleanly. (1) RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS remains exactly registry, execution, invocation, durability, ledger, inspection, pinned by an exact tuple comparison at registry_architecture_registration.py:854-858. (2) Foundation and Conformance are registered through a distinct RuntimeSupportingPlaneRegistration record type with its own exact-tuple gate at :861-865, and are projected under a separate `supporting_planes` key rather than appended to the peer list. (3) inspection_architecture_rendering.py keeps logical_responsibilities, supporting_planes, physical_source_directories and implementation_bindings as four independent projection keys, with the schema version bumped v3 -> v4 and asserted in two tests; the latent duplicate-'postgresql' bug in RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS was fixed via set deduplication. (4) forbidden dependencies are frozen as 35 exact (source_path, imported_module) pairs and migration debt as 5 exact paths — no wildcards, prefixes or globs anywhere. (7) foundation_schema_traversal.py is a byte-faithful move of the prior invocation implementation (docstring shortening only), and tests/test_runtime_foundation_validation.py:120-150 is a genuine negative test that a field literally named `items` or `properties` under a `properties` container is not misread as a keyword, asserting the exact JSON Pointer sequence including a `$defs/items/properties/title` node. (9) the diff over src/ contains only import rewires plus additive registration and projection code — no DDL, no attempt/lifecycle logic, no persistent schema, and the deleted contracts/registry_contract_validation.py has no remaining live referent anywhere in src/ or tests/."
+  ],
+  "prior_finding_follow_up": [
+    "The review package declares no carried actionable predecessor findings. Its prior_findings field states only that design-review lineage is committed under review_artifacts/agent_runtime_*_candidate and that this implementation claims Slice 1 of the approved basis. Nothing in this candidate is presented as closing an earlier engineering finding, so there is no prior-finding closure to verify.",
+    "The committed design-review lineage (review_artifacts/agent_runtime_t0_t1_candidate, _t2_candidate, _t2_candidate_execution, _t2_candidate_next, _t2_candidate_read_release, _complete_candidate) enters this subject as added files only. It was treated as owning-design evidence, not reopened. Per the Skill's 'keep design authority upstream' boundary, no approved product semantics from that lineage were re-litigated here.",
+    "review_artifacts/whole_repo_review_0652c05/ (pre-existing, outside this subject) contains CONFIRMED findings about validator duplication that the Foundation extraction partially addresses (whole_repo_review_008/011/016 name registry_contract_validation.py). Those are not declared as in-scope for Slice 1 and remain open; the duplicate private validators inside contracts/execution_host_definition.py, contracts/ledger_record_definition.py and contracts/registry_release_definition.py were not consolidated by this commit. This is consistent with the declared explicit_non_scope and is recorded, not charged against this candidate."
+  ],
+  "prioritized_punch_list": [
+    {
+      "action": "AR-S1-001: cross-validate the two structural manifests. Assert {_structural_source_path(m) for m in RUNTIME_STRUCTURAL_MODULE_OWNERS} == set(RUNTIME_STRUCTURAL_SOURCE_PATHS) inside conformance_architecture_validation.py (the symbol is already imported at line 20 and unused), and add one negative test that a new package initializer registered only in the registry tuple fails validate_runtime_architecture.",
+      "blocking": true,
+      "effort": "small",
+      "priority": 1
+    },
+    {
+      "action": "AR-S1-002: make the export freeze compare against the actual package namespace, not only the __all__ literal. AST-collect top-level non-underscore bound names per structural __init__.py and require set equality with RUNTIME_PUBLIC_SURFACE_MANIFEST, plus a negative test for an unlisted re-export.",
+      "blocking": false,
+      "effort": "small",
+      "priority": 2
+    },
+    {
+      "action": "AR-S1-003: resolve the two-axis ownership of src/agent_runtime/testing/. Narrow RUNTIME_STRUCTURAL_MODULE_OWNERS['agent_runtime.testing'] to a product owner consistent with its file registrations, then route to the basis owner whether testing/*.py remains a declared runtime_conformance implementation binding.",
+      "blocking": false,
+      "effort": "small",
+      "priority": 3
+    },
+    {
+      "action": "AR-S1-004: add disposition_source (derived_default vs owner_decision) to consumer-manifest site records and require owner_decision at the compatibility-facade retirement gate, so the basis rule cannot be satisfied by a generated default.",
+      "blocking": false,
+      "effort": "small",
+      "priority": 4
+    },
+    {
+      "action": "AR-S1-005: record the exact downstream-manifest reproduction command and consumer commit in slice_1_implementation_manifest.json, or add an env-var-gated test that validates the committed artifact and skips when the consumer root is absent.",
+      "blocking": false,
+      "effort": "small",
+      "priority": 5
+    },
+    {
+      "action": "AR-S1-006: route the conformance-in-the-product-wheel question to the CodeDesignBasis owner — amend the future_capabilities wording or drop agent_runtime.conformance from tool.setuptools.packages. Do not decide this inside a review turn.",
+      "blocking": false,
+      "effort": "small",
+      "priority": 6
+    },
+    {
+      "action": "AR-S1-007: delete the unused _RUNTIME_SOURCE_ROOT constant at conformance_architecture_validation.py:26.",
+      "blocking": false,
+      "effort": "small",
+      "priority": 7
+    }
+  ],
+  "review_mode": "bootstrap_claude_cli_post_commit_review",
+  "subject_closure": {
+    "base_ref": "294a3bd3778c0a6df7adabe2816221e953223e49",
+    "candidate_diff_sha256": "e08b2fa4b1b747d07712b5cafc7ba3eb49456172c2a2ab75eac7bba31563db22 (author-declared; NOT independently recomputed — see dirty_tree_separation)",
+    "claimed_path_count": 93,
+    "closure_verdict": "closed",
+    "commit_ref": "f0a2a6a2d661692ebc4972e42cb15b18f675894a",
+    "dirty_tree_separation": "git status --porcelain reports exactly the two declared untracked paths (review_artifacts/runtime_module_owned_schema_code_design.md, review_artifacts/systematic_rebuild_e8366e7/); both are excluded from the candidate and were not read as subject material. No tracked path is modified, so the working tree equals f0a2a6a and the subject was hash-stable for the whole review. CAPABILITY LIMIT: this sandbox denied every SHA-256 utility (shasum, and piping git diff into a digest), so the declared candidate_diff_sha256 and the five declared artifact content hashes (code_design_basis.json, slice_1_implementation_manifest.json, downstream_consumer_manifest.json, agent_runtime_code_architecture_audit.md, agent_runtime_complete_candidate/subject_manifest.json) could not be recomputed. Closure was instead established structurally: `git diff --name-status --no-renames` over the exact range yields 93 paths, matching path_count=93 and matching the path_manifest one-for-one on path and state (4 modified root files, 45 added review_artifacts, 1 deleted src/agent_runtime/contracts/registry_contract_validation.py, all remaining added/modified src and tests entries). The approved CodeDesignBasis resolves, is status=approved, and its module_paths, compatibility_slice_ids, changed_resource_ids and shared_projection_paths close over exactly this subject.",
+    "observed_path_count": 93
+  },
+  "terminal_verdict": "changes_required",
+  "vertical_findings": [
+    {
+      "evidence": "Two code-owned structural manifests exist and are never cross-validated. The registry owns RUNTIME_STRUCTURAL_SOURCE_PATHS (11 entries, registry_architecture_registration.py:791-803) and uses it only for filesystem path closure (`declared_paths` at :1062-1066). Conformance owns RUNTIME_STRUCTURAL_MODULE_OWNERS (11 entries, conformance_architecture_manifest.py:63-77); `_source_owner_map()` (validation.py:57-75) derives structural owners exclusively from it, and `_validate_public_surfaces` (:300-314) only asserts `set(RUNTIME_PUBLIC_SURFACE_MANIFEST) == set(RUNTIME_STRUCTURAL_MODULE_OWNERS)`. No check compares either conformance map with the registry tuple. Direct corroborating evidence: `RUNTIME_STRUCTURAL_SOURCE_PATHS` is imported at conformance_architecture_validation.py:20 and never referenced in the file body — the cross-check was evidently intended and omitted. Consequence: a new package `src/agent_runtime/<new>/__init__.py` added only to RUNTIME_STRUCTURAL_SOURCE_PATHS passes `validate_registry_architecture_registration` path closure (:1073-1076 sees it as declared) while (a) `collect_runtime_imports` never parses it, because it has no entry in `_source_owner_map()`, so its own imports are never checked against the one-way graph, and (b) its `__all__` is never compared to any frozen manifest. Secondarily, `_resolve_target_owner` (:135-149) longest-prefix-matches any unknown `agent_runtime.<new>.x` to the `agent_runtime` root entry and labels it `public_facade`, so the resulting violation is reported under the wrong owner rather than as `unclassified`. Grep confirms no test in the repository asserts any relation between the two structural lists.",
+      "finding_id": "AR-S1-001",
+      "impact": "Slice 1's declared purpose (code_design_basis.json future_capability_impact) is that later slices can move one responsibility at a time 'under deterministic import, export, source-ownership, and shrinking-debt gates'. A responsibility split is precisely the change that introduces a new package `__init__.py`, and `__init__.py` is exactly the file that carries a package's public export surface. The export freeze and the import-direction gate therefore both have a hole at the one file type a later slice is most likely to add. This defeats review question 5: the public export freeze CAN be bypassed by adding a new Runtime source, provided that source is a package initializer. It is a next-phase entry condition failure, not a current violation — the committed tree has zero such paths and all 81 Runtime .py files are correctly owned today.",
+      "path": "src/agent_runtime/conformance/conformance_architecture_validation.py:20,57-75,300-314 and src/agent_runtime/registry/registry_architecture_registration.py:791-803,1062-1076",
+      "severity": "BLOCKING",
+      "smallest_correct_resolution": "In `_validate_public_surfaces` (or a new `_validate_structural_closure`), assert `{_structural_source_path(m) for m in RUNTIME_STRUCTURAL_MODULE_OWNERS} == set(RUNTIME_STRUCTURAL_SOURCE_PATHS)` and append an exact violation identity for each side's difference. Add one negative test in tests/test_runtime_architecture_conformance.py that writes a new package initializer into the copied tree, registers it only in RUNTIME_STRUCTURAL_SOURCE_PATHS, and asserts validate_runtime_architecture reports the missing structural owner. This uses the already-imported symbol and adds no new manifest."
+    },
+    {
+      "evidence": "`_read_literal_all` (:278-297) parses only a top-level literal `__all__` assignment via `ast.literal_eval`, and `_validate_public_surfaces` (:300-314) compares that literal tuple with RUNTIME_PUBLIC_SURFACE_MANIFEST. Nothing compares the manifest with the module's actual importable top-level names. `__all__` governs only `from pkg import *`; `from agent_runtime.contracts import NewThing` resolves against the module namespace regardless. A re-export added to any structural `__init__.py` without a matching `__all__` entry therefore becomes a de-facto public symbol that passes conformance unchanged. I hand-verified src/agent_runtime/contracts/__init__.py:9-143 against its `__all__` at :145-255 — every imported name is currently listed, so this is a latent bypass, not an existing drift. The positive control test test_public_surface_addition_fails_conformance (tests/test_runtime_architecture_conformance.py:75-92) only exercises the case where `__all__` itself is edited, so it cannot reach this failure mode.",
+      "finding_id": "AR-S1-002",
+      "impact": "The basis acceptance criterion 'exact public exports' (runtime_conformance.required_tests) is enforced against a declaration rather than against the surface consumers actually import. Because the frozen downstream manifest shows the trading_platform consumer using both package-level and module-level imports, an unlisted re-export would silently widen the frozen public surface between slices and would not appear in any gate.",
+      "path": "src/agent_runtime/conformance/conformance_architecture_validation.py:278-314",
+      "severity": "MEDIUM",
+      "smallest_correct_resolution": "Extend `_validate_public_surfaces` to AST-collect the top-level non-underscore bound names of each structural `__init__.py` (ImportFrom/Import aliases, Assign/AnnAssign targets, FunctionDef/ClassDef names) and require that set to equal the manifest tuple's set, keeping the existing ordered `__all__` comparison. Add one negative test that appends an unlisted re-export and asserts the violation."
+    },
+    {
+      "evidence": "One physical directory is classified on two different owner axes. RUNTIME_STRUCTURAL_MODULE_OWNERS maps `agent_runtime.testing` to `conformance` (manifest.py:75), which grants src/agent_runtime/testing/__init__.py the widest allowed-dependency set in the graph — foundation, registry, invocation, durability, ledger, execution, inspection, public_facade and compatibility_facade (manifest.py:23-35). Its five sibling files are simultaneously registered as target sources owned by logical responsibilities: registry_migration_validation.py -> registry, durability_backend_conformance.py / durability_temporal_conformance.py / durability_hatchet_evaluation.py / durability_native_evaluation.py -> durability, execution_module_evaluation.py -> execution (registration.py:349-355, 624-658). Because `_module_owner_map()` builds target owners from those file registrations, `agent_runtime.testing.execution_module_evaluation` resolves to owner `execution`, so a product module importing it scores as a product-to-product edge and never trips the seam. Only the new `agent_runtime/conformance/` package (registered as supporting sources at registration.py:732-786) is actually protected. Grep confirms no src/agent_runtime source imports agent_runtime.testing today, so this is a latent gap with no current violation.",
+      "finding_id": "AR-S1-003",
+      "impact": "The approved basis declares the cross_module_seam 'Product code never imports Conformance' and names `src/agent_runtime/testing/*.py` among runtime_conformance's implementation_bindings. That seam is unenforceable for agent_runtime.testing.*, and the widest permission in the dependency graph is granted to a package whose own docstring and agent_runtime_00_execution_charter.md describe it as a portable, host-facing evaluation entry shipped in the product wheel. This is a boundary/axis conflation of the kind R02 and the Skill's architecture-classification check exist to catch.",
+      "path": "src/agent_runtime/conformance/conformance_architecture_manifest.py:75,23-35 and src/agent_runtime/registry/registry_architecture_registration.py:624-658,732-786",
+      "severity": "MEDIUM",
+      "smallest_correct_resolution": "Pick one axis for src/agent_runtime/testing/. Smallest code change: set RUNTIME_STRUCTURAL_MODULE_OWNERS['agent_runtime.testing'] to `execution` (its __init__ re-exports only execution_module_evaluation), which narrows the permission to a correct product owner and makes any future testing/__init__ import of a non-execution responsibility a visible debt edge. Then route the residual question — whether src/agent_runtime/testing/*.py is a conformance binding at all — back to the CodeDesignBasis owner, since the basis and the code currently disagree about it."
+    },
+    {
+      "evidence": "`_disposition_for` is a pure function of the imported module name: it returns `retire` for five hard-coded predecessor prefixes (:13-19) and `replace` for every other agent_runtime import (:40-43). The frozen manifest's summary reports keep 0 / replace 832 / retire 4 across 836 sites, i.e. every one of the 832 `replace` values is a machine default with the boilerplate reason 'current import is frozen until the target responsibility-owned public surface is admitted'. No site carries an owner decision, and `keep` is structurally unreachable. Separately I confirmed the freeze itself is complete and honest: 109 trading_platform files contain agent_runtime imports and all of them fall under src/ or tests/, exactly matching the declared source_roots ['src','tests'] and source_file_count 109.",
+      "finding_id": "AR-S1-004",
+      "impact": "The basis's migration_and_compatibility rule 'Remove compatibility facades only after every downstream import has keep, replace, or retire disposition' becomes satisfiable by construction, because the generator can never emit a site without a disposition. A later slice reading disposition_counts as evidence of decided closure would retire a compatibility facade on the strength of a default value. The freeze (the actual declared Slice 1 scope) is sound; the disposition field is what over-claims.",
+      "path": "src/agent_runtime/conformance/conformance_consumer_manifesting.py:13-19,31-43 and review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json:8371-8379",
+      "severity": "MEDIUM",
+      "smallest_correct_resolution": "Add a `disposition_source` field to `_site_record` with values `derived_default` and `owner_decision`, emit `derived_default` for everything the current rule produces, and state in the facade-retirement gate that only `owner_decision` sites count. No re-freeze of the 836 sites is required."
+    },
+    {
+      "evidence": "Both consumer-manifest tests build and validate synthetic manifests under tmp_path; neither loads the committed downstream_consumer_manifest.json. Nothing in this repository or in the declared SandboxCommandPlan re-derives the frozen artifact, and its recorded consumer_git_commit (bdaf1391453a7ab3ad9ec0e8c8a45e026cee2f50) is not asserted against anything. The implementation manifest's downstream_consumer_evidence block records counts and a hash but no reproduction command.",
+      "finding_id": "AR-S1-005",
+      "impact": "Correctly refusing a Runtime-to-host dependency (R06) has the side effect that the frozen artifact's reproducibility rests on an unrecorded manual run. Drift in the consumer tree, or a stale consumer commit, is invisible to CI in either repository. The builder and validator logic themselves are well covered by the two synthetic tests, including a real symbol-drift negative case.",
+      "path": "tests/test_runtime_consumer_manifest.py:16-69 and review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json:2",
+      "severity": "LOW",
+      "smallest_correct_resolution": "Record the exact `build_downstream_consumer_manifest` invocation and the consumer commit in slice_1_implementation_manifest.json's test_evidence, or add one opt-in test that runs `validate_downstream_consumer_manifest` against the committed artifact when an env var such as AGENT_RUNTIME_CONSUMER_ROOT is set and skips otherwise."
+    },
+    {
+      "evidence": "The approved basis states runtime_conformance gains 'additional adapter and distribution checks without entering the product wheel path'. Slice 1 adds `agent_runtime.conformance` to tool.setuptools.packages, so every present and future conformance check ships in the product distribution. The clean-wheel tests in tests/test_agent_runtime_packaging_boundary.py (:176-332, :335-594, :718-752, :755-791) never import agent_runtime.conformance, so nothing asserts the packaged copy is even functional; conversely, agent_runtime.foundation is transitively proven by the wheel import path because agent_runtime.contracts imports it. The wheel boundary itself verifies clean: all members start with agent_runtime/, no src/ members, no domain packages, no predecessor postgres/provider/review packages, and no agency_platform/dagster/temporalio module loads.",
+      "finding_id": "AR-S1-006",
+      "impact": "Mild tension with the approved basis wording rather than a correctness defect, and it follows the existing agent_runtime.testing precedent. It does not introduce a Runtime dependency on the host repository — review question 8 is otherwise satisfied.",
+      "path": "pyproject.toml (tool.setuptools.packages) and review_artifacts/agent_runtime_code_design_basis/code_design_basis.json (runtime_conformance.future_capabilities)",
+      "severity": "LOW",
+      "smallest_correct_resolution": "Route to the CodeDesignBasis owner for a one-line decision: either amend the runtime_conformance.future_capabilities wording to admit conformance in the wheel alongside agent_runtime.testing, or drop `agent_runtime.conformance` from tool.setuptools.packages and run it from the source tree. Do not resolve this inside the review."
+    },
+    {
+      "evidence": "`_RUNTIME_SOURCE_ROOT = \"src/agent_runtime\"` is defined and never referenced; `_structural_source_path` (:51-54) builds paths from module names directly. (The companion unused import of RUNTIME_STRUCTURAL_SOURCE_PATHS at :20 is carried as evidence under AR-S1-001 rather than here, because closing that finding will consume it.)",
+      "finding_id": "AR-S1-007",
+      "impact": "Dead constant in a new file; no behavioral effect.",
+      "path": "src/agent_runtime/conformance/conformance_architecture_validation.py:26",
+      "severity": "NIT",
+      "smallest_correct_resolution": "Delete line 26."
+    }
+  ]
+}

@@ -23,9 +23,6 @@ from ..registry.registry_architecture_registration import (
 )
 
 
-_RUNTIME_SOURCE_ROOT = "src/agent_runtime"
-
-
 @dataclass(frozen=True, order=True)
 class RuntimeImportObservation:
     """One Runtime-owned import edge observed in a source checkout."""
@@ -141,6 +138,7 @@ def _resolve_target_owner(
     candidates = (
         (module_name, owner_id)
         for module_name, owner_id in module_owners.items()
+        if module_name != "agent_runtime"
         if imported_module.startswith(module_name + ".")
     )
     try:
@@ -297,6 +295,47 @@ def _read_literal_all(path: Path) -> tuple[str, ...] | None:
     return None
 
 
+def _read_top_level_public_bindings(path: Path) -> tuple[str, ...]:
+    """Return importable non-private names bound by one package initializer."""
+
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".", maxsplit=1)[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "__future__":
+                continue
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return tuple(sorted(name for name in names if not name.startswith("_")))
+
+
+def _validate_structural_closure() -> tuple[str, ...]:
+    registered_paths = set(RUNTIME_STRUCTURAL_SOURCE_PATHS)
+    owned_paths = {
+        _structural_source_path(module_name)
+        for module_name in RUNTIME_STRUCTURAL_MODULE_OWNERS
+    }
+    errors: list[str] = []
+    for source_path in sorted(registered_paths - owned_paths):
+        errors.append(f"structural Runtime source lacks an owner: {source_path}")
+    for source_path in sorted(owned_paths - registered_paths):
+        errors.append(
+            f"structural Runtime owner lacks a registered source: {source_path}"
+        )
+    return tuple(errors)
+
+
 def _validate_public_surfaces(project_root: Path) -> tuple[str, ...]:
     errors: list[str] = []
     if set(RUNTIME_PUBLIC_SURFACE_MANIFEST) != set(RUNTIME_STRUCTURAL_MODULE_OWNERS):
@@ -311,6 +350,13 @@ def _validate_public_surfaces(project_root: Path) -> tuple[str, ...]:
             errors.append(f"{module_name}: public surface differs from manifest")
         if len(actual_symbols) != len(set(actual_symbols)):
             errors.append(f"{module_name}: public surface contains duplicates")
+        actual_bindings = _read_top_level_public_bindings(
+            project_root / source_path
+        )
+        if set(actual_bindings) != set(expected_symbols):
+            errors.append(
+                f"{module_name}: importable package names differ from public surface"
+            )
     return tuple(errors)
 
 
@@ -331,6 +377,7 @@ def validate_runtime_architecture(project_root: Path) -> tuple[str, ...]:
     errors: list[str] = []
     errors.extend(validate_registry_architecture_registration(project_root))
     errors.extend(_validate_allowed_graph())
+    errors.extend(_validate_structural_closure())
     errors.extend(_validate_dependencies(project_root))
     errors.extend(_validate_public_surfaces(project_root))
     errors.extend(_validate_migration_debt())

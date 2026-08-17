@@ -529,7 +529,14 @@ Conformance is build/test tooling, not a peer service. It owns:
 - downstream consumer closure before public cutover.
 
 Conformance code may inspect all responsibility surfaces. Product code never
-imports Conformance.
+imports Conformance. Conformance may ship in the standalone wheel so the
+published product can carry its own technical assurance tools, but it never
+enters the product execution import or call path.
+
+The shipped `agent_runtime.testing` package remains a compatibility facade over
+responsibility-owned evaluation and Adapter-conformance entry points. Its
+individual source files retain their registered Registry, Execution, or
+Durability owner; it is not another Conformance implementation namespace.
 
 ### 6.3 External authority
 
@@ -588,7 +595,12 @@ Before behavioral code moves, Conformance must generate and enforce:
 5. a migration-debt manifest whose count and path set may only shrink unless
    this Code Design Basis is revised;
 6. a symbol-level downstream consumer manifest for `trading_platform`, with
-   `keep`, `replace`, or `retire` assigned to every imported Runtime symbol.
+   `keep`, `replace`, or `retire` assigned to every imported Runtime symbol and
+   an explicit distinction between generated defaults and owner decisions.
+
+Compatibility-facade retirement requires an owner decision for every consumer
+site. A mechanically derived default freezes the current surface but cannot
+satisfy that retirement gate.
 
 The top-level `agent_runtime` package may expose a deliberately small host
 surface. It must not re-export concrete in-memory stores, provider adapters,

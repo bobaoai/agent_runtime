@@ -4,7 +4,9 @@ from pathlib import Path
 
 from agent_runtime.conformance.conformance_consumer_manifesting import (
     build_downstream_consumer_manifest,
+    main,
     validate_downstream_consumer_manifest,
+    validate_downstream_consumer_retirement_readiness,
 )
 
 
@@ -32,6 +34,10 @@ def test_consumer_manifest_records_each_imported_symbol(tmp_path: Path) -> None:
         "site_count": 2,
         "source_file_count": 1,
         "disposition_counts": {"keep": 0, "replace": 1, "retire": 1},
+        "disposition_source_counts": {
+            "derived_default": 2,
+            "owner_decision": 0,
+        },
     }
     assert [site["imported_symbol"] for site in manifest["sites"]] == [
         "RuntimeReleaseRegistry",
@@ -41,10 +47,17 @@ def test_consumer_manifest_records_each_imported_symbol(tmp_path: Path) -> None:
         "replace",
         "retire",
     ]
+    assert {
+        site["disposition_source"] for site in manifest["sites"]
+    } == {"derived_default"}
     assert validate_downstream_consumer_manifest(
         manifest,
         consumer_root=tmp_path,
     ) == ()
+    assert validate_downstream_consumer_retirement_readiness(manifest) == (
+        "downstream Runtime consumer dispositions still require owner decisions: "
+        + ", ".join(sorted(site["site_id"] for site in manifest["sites"])),
+    )
 
 
 def test_consumer_manifest_detects_symbol_drift(tmp_path: Path) -> None:
@@ -67,3 +80,42 @@ def test_consumer_manifest_detects_symbol_drift(tmp_path: Path) -> None:
         manifest,
         consumer_root=tmp_path,
     ) == ("downstream Runtime import surface differs from frozen manifest",)
+
+
+def test_owner_decisions_are_required_before_consumer_retirement(
+    tmp_path: Path,
+) -> None:
+    _write_consumer(
+        tmp_path / "src/product/runtime_client.py",
+        "from agent_runtime.registry import RuntimeReleaseRegistry\n",
+    )
+    manifest = build_downstream_consumer_manifest(
+        consumer_id="synthetic_host",
+        consumer_root=tmp_path,
+        consumer_git_commit="c" * 40,
+    )
+    for site in manifest["sites"]:
+        site["disposition_source"] = "owner_decision"
+
+    assert validate_downstream_consumer_retirement_readiness(manifest) == ()
+
+
+def test_consumer_manifest_cli_builds_and_checks_the_same_artifact(
+    tmp_path: Path,
+) -> None:
+    _write_consumer(
+        tmp_path / "src/product/runtime_client.py",
+        "from agent_runtime.registry import RuntimeReleaseRegistry\n",
+    )
+    output = tmp_path / "manifest.json"
+    common = [
+        "--consumer-id",
+        "synthetic_host",
+        "--consumer-root",
+        str(tmp_path),
+        "--consumer-git-commit",
+        "d" * 40,
+    ]
+
+    assert main([*common, "--output", str(output)]) == 0
+    assert main([*common, "--check-manifest", str(output)]) == 0

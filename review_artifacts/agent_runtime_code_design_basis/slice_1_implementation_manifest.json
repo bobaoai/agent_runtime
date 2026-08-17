@@ -1,11 +1,12 @@
 {
   "manifest_schema_version": "agent_runtime_architecture_slice_implementation_v1",
   "slice_id": "agent_runtime_architecture_rebuild_slice_1",
+  "candidate_revision": 2,
   "status": "frozen_for_independent_review",
   "implementation_baseline_commit": "294a3bd3778c0a6df7adabe2816221e953223e49",
   "approved_code_design_basis": {
     "path": "review_artifacts/agent_runtime_code_design_basis/code_design_basis.json",
-    "sha256": "6dcb12efcd0ff5c32a97f73d9595cdac98944ea32f7c1504a993da07fc26234a"
+    "sha256": "2357be9c6667ee01073ec0368743ff9182772c47d64142c8ac1a84982b29cf0d"
   },
   "approved_design_subject": {
     "path": "review_artifacts/agent_runtime_complete_candidate/subject_manifest.json",
@@ -42,7 +43,7 @@
   "downstream_consumer_evidence": {
     "consumer_id": "trading_platform",
     "path": "review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json",
-    "sha256": "35d5b8b41cfee49fc6911c08f99f3f1765db79055de8c4173dce8e601dbd6e6d",
+    "sha256": "d1890bb88bf93943dc06456c28cf05ac60f7f4592d4fc5a43351c65164eee097",
     "source_file_count": 109,
     "symbol_site_count": 836,
     "disposition_counts": {
@@ -50,19 +51,77 @@
       "replace": 832,
       "retire": 4
     },
+    "disposition_source_counts": {
+      "derived_default": 836,
+      "owner_decision": 0
+    },
     "validation_errors": 0
   },
+  "prior_independent_review": {
+    "path": "review_artifacts/agent_runtime_code_design_basis/slice_1_review_revision_1_opus_5_xhigh.json",
+    "sha256": "f0241735a0f4fe88cbafc9338611a463bae93cce3abf2aa3652089c6205082ec",
+    "terminal_verdict": "changes_required",
+    "blocking_findings": 1,
+    "medium_findings": 3,
+    "low_findings": 2,
+    "nit_findings": 1
+  },
+  "review_finding_resolutions": [
+    {
+      "finding_id": "AR-S1-001",
+      "disposition": "closed",
+      "resolution": "Conformance now requires exact bidirectional closure between structural source paths and structural module owners; a negative package-initializer test proves the bypass is rejected."
+    },
+    {
+      "finding_id": "AR-S1-002",
+      "disposition": "closed",
+      "resolution": "Every structural initializer now has both its literal __all__ and its actual non-private top-level bindings compared with the public surface manifest."
+    },
+    {
+      "finding_id": "AR-S1-003",
+      "disposition": "closed_by_owner_decision",
+      "resolution": "agent_runtime.testing is a compatibility facade, not Conformance or a seventh responsibility; each testing source retains its separately registered Registry, Execution, or Durability owner."
+    },
+    {
+      "finding_id": "AR-S1-004",
+      "disposition": "closed",
+      "resolution": "Consumer records distinguish derived_default from owner_decision, and retirement readiness fails while any site remains a generated default."
+    },
+    {
+      "finding_id": "AR-S1-005",
+      "disposition": "closed",
+      "resolution": "The exact real-consumer build and check commands, consumer commit, counts, and artifact hash are recorded and reproduced."
+    },
+    {
+      "finding_id": "AR-S1-006",
+      "disposition": "closed_by_owner_decision",
+      "resolution": "Conformance remains shipped in the independently publishable wheel but is forbidden from the product execution import and call path; the CodeDesignBasis wording now states that boundary."
+    },
+    {
+      "finding_id": "AR-S1-007",
+      "disposition": "closed",
+      "resolution": "The unused _RUNTIME_SOURCE_ROOT constant was removed."
+    }
+  ],
   "test_evidence": [
     {
       "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q tests/test_runtime_architecture_validation.py tests/test_runtime_architecture_conformance.py tests/test_runtime_foundation_validation.py tests/test_runtime_consumer_manifest.py tests/test_agent_runtime_packaging_boundary.py",
-      "result": "49 passed"
+      "result": "54 passed"
     },
     {
       "command": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -m pytest -q",
-      "result": "502 passed, 20 skipped"
+      "result": "507 passed, 20 skipped"
     },
     {
       "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": "PYTHONPATH=src /Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -c 'from agent_runtime.conformance.conformance_consumer_manifesting import main; raise SystemExit(main())' --consumer-id trading_platform --consumer-root /Users/bokanbao/Documents/GitHub/trading_platform --consumer-git-commit bdaf1391453a7ab3ad9ec0e8c8a45e026cee2f50 --output review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json",
+      "result": "rebuilt 836 symbol sites across 109 files"
+    },
+    {
+      "command": "PYTHONPATH=src /Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python -c 'from agent_runtime.conformance.conformance_consumer_manifesting import main; raise SystemExit(main())' --consumer-id trading_platform --consumer-root /Users/bokanbao/Documents/GitHub/trading_platform --consumer-git-commit bdaf1391453a7ab3ad9ec0e8c8a45e026cee2f50 --check-manifest review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json",
       "result": "passed"
     }
   ],

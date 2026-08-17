@@ -222,6 +222,11 @@ one-way responsibility import graph, exact public exports, and shrinking
 migration-debt baselines. Existing forbidden imports are frozen by exact source
 and target module. A removed debt edge is accepted; a new debt edge fails CI.
 Runtime execution code never imports Conformance.
+Conformance ships with the standalone wheel so the published package carries
+its own assurance tools; shipping it does not place it on the execution call
+path. `agent_runtime.testing` is a compatibility facade for shipped evaluation
+and Adapter-conformance entry points. Each file below that directory retains
+its registered Registry, Execution, or Durability owner.
 
 `agent_runtime.foundation` contains responsibility-neutral validation and JSON
 Schema traversal primitives. It imports no Runtime responsibility. Schema
@@ -238,6 +243,9 @@ Before a public cutover, Conformance freezes every downstream Runtime import at
 symbol level. The current trading-platform baseline is stored in
 `review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json`;
 it records a `replace` or `retire` disposition for every observed import site.
+Those values are derived defaults used to freeze the surface, not owner
+decisions. Compatibility-facade retirement remains blocked until every site is
+explicitly marked `owner_decision`.
 
 Package initializers temporarily re-export some predecessor types for existing
 downstream callers. Those re-exports are compatibility-only, must not be used
