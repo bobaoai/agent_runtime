@@ -1,0 +1,109 @@
+{
+  "manifest_schema_version": "agent_runtime_design_review_subject_v1",
+  "candidate_status": "t2_execution_coordination_slice_revision_4",
+  "candidate_revision": 4,
+  "baseline_head": "294a3bd",
+  "evidence_subject_status": "proposal_over_unfrozen_dirty_worktree",
+  "inputs": [
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/subject_manifest.json",
+      "sha256": "010b9b14e6de27fe4ca44c1cf45ee31deb804ed2bc73fd36dc0a276ffbe9bba1"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/subject_manifest.json",
+      "sha256": "e3af7a53bf0fad5a72725240215fdcebbf89a29a8111a13801864316083ab6ed"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/subject_manifest.json",
+      "sha256": "82467ed000e29067b607ca7675f317d51a7ce3f81617e1a6c3fb119d40b576c2"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_architecture_audit.md",
+      "sha256": "e558c73561a078dcac4ddf70a07e93d6b3afa46ba2187559fc679c13a907dc93"
+    },
+    {
+      "path": "designDoc/the_design_doc_management.md",
+      "sha256": "379be6b4eacd40abb531a4c38da888a8ed0d6d6bcf78d88c2753788c049a9a45"
+    },
+    {
+      "path": "designDoc/the_timestamp_semantic.md",
+      "sha256": "ee027ea43eba0af454606215fe1ab445395a3d31bbbcfa2b685e1c66286f3e53"
+    },
+    {
+      "path": "designDoc/the_product_authorization.md",
+      "sha256": "22ecc4a50474fedfd9670cccea54e4ee9f7a9a5c708c552400f50984c6020bfc"
+    },
+    {
+      "path": "designDoc/the_data_governance.md",
+      "sha256": "167ddbaaaf3d126f735965268739da48bd89045b616891417e2c1546fc5f3441"
+    },
+    {
+      "path": "designDoc/the_contract_audit.md",
+      "sha256": "d20d185e23a4935bab4b037fc0cbc3176707ad0fadcd9dd34b76d6daf810244f"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "7c30b45e60baf257f5a9662b14a2c1fa96aa475f853bfc51fa3d5a304b84683d"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "e1359738cc94c69c81d28f1e5a8c959918368d4fb1290d89e04f5bcd0ecc003f"
+    }
+  ],
+  "subject_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/agent_runtime_09_external_authority_integration_contract.md",
+      "canonical_target": "designDoc/agent_runtime_09_external_authority_integration_contract.md",
+      "sha256": "da1c6931562ad7db37e589fc3d0ec9d84e705abc864df6851dfce6b030f4db7c"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/agent_runtime_10_execution_contract.md",
+      "canonical_target": "designDoc/agent_runtime_10_execution_contract.md",
+      "sha256": "bfbbd1b53808763f16918a9e51cb7521a31ab053eb80fbc4f615a214e6447b3b"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/agent_runtime_03_external_event_ingress_contract.md",
+      "canonical_target": "designDoc/agent_runtime_03_external_event_ingress_contract.md",
+      "sha256": "28ad9d5c79af13c54dc53f57648ff4c81f0dcb54b7f75c07b6ee73b8e1c16bf6"
+    }
+  ],
+  "supporting_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/REVIEW_BRIEF.md",
+      "sha256": "188de99773e6b43bbba546dcd21b7156d409a5f0fa17fe0b3fc90569fe6feb5e"
+    }
+  ],
+  "predecessor_findings": [
+    {"finding_id": "f01_execution_resource_permission_manifest_absent", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0", "2.1", "10", "11"]},
+    {"finding_id": "f02_authority_invalidation_inbound_boundary_absent", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_09_external_authority_integration_contract", "correction_target": "agent_runtime_09_external_authority_integration_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0", "2", "8", "9"]},
+    {"finding_id": "f03_cross_clock_evidence_omits_ledger_domain", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_09_external_authority_integration_contract", "correction_target": "agent_runtime_09_external_authority_integration_contract", "disposition": "closed_in_revision_2", "correction_sections": ["3", "6", "9"]},
+    {"finding_id": "f04_ingress_second_public_host_entry", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_03_external_event_ingress_contract", "correction_target": "agent_runtime_03_external_event_ingress_contract", "disposition": "closed_in_revision_2", "correction_sections": ["2", "5"]},
+    {"finding_id": "f05_durable_event_response_type_and_operation_unbound", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_10_execution_contract_and_agent_runtime_03_external_event_ingress_contract", "correction_target": "agent_runtime_10_execution_contract_and_agent_runtime_03_external_event_ingress_contract", "disposition": "closed_in_revision_2", "correction_sections": ["execution.7", "ingress.5"]},
+    {"finding_id": "f06_module_origin_coordination_unspecified", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_10_execution_contract_agent_runtime_03_external_event_ingress_contract_and_agent_runtime_04_execution_ledger_contract", "correction_target": "three_candidate_contracts", "disposition": "closed_in_revision_2_and_upstream_revision_4", "correction_sections": ["execution.3", "execution.4", "execution.7", "ingress.4", "ledger.5.1"]},
+    {"finding_id": "f07_execution_profile_selection_authority_ambiguous", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_2", "correction_sections": ["3", "4"]},
+    {"finding_id": "f08_runtime_module_activity_output_undefined", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0"]},
+    {"finding_id": "f09_ingress_inherits_omits_data_governance", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_03_external_event_ingress_contract", "correction_target": "agent_runtime_03_external_event_ingress_contract", "disposition": "closed_in_revision_2", "correction_sections": ["frontmatter", "0", "3"]},
+    {"finding_id": "f10_ingress_validity_window_attribution_drift", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_03_external_event_ingress_contract", "correction_target": "agent_runtime_03_external_event_ingress_contract", "disposition": "closed_in_revision_2", "correction_sections": ["7"]},
+    {"finding_id": "f11_ingress_application_receipt_output_undefined", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_03_external_event_ingress_contract", "correction_target": "agent_runtime_03_external_event_ingress_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0", "5"]},
+    {"finding_id": "f12_bounded_status_conformance_gap", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_2", "correction_sections": ["11"]},
+    {"finding_id": "f13_execution_time_comparison_law_unbound", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_2", "correction_sections": ["6", "11"]},
+    {"finding_id": "f01_execution_enforcement_point_decision_source_unnamed", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_4", "correction_sections": ["2.1", "11"], "correction_evidence": "Every lifecycle action now resolves server-side and validates a current decision through one host-provided Product Authorization decision-validator protocol."},
+    {"finding_id": "f02_invocation_host_provider_and_dynamic_intent_commit_unassigned", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_4_and_upstream_revision_6", "correction_sections": ["4", "11"], "correction_evidence": "Execution supplies InvocationHost and commits each dynamic protected-operation intent under the active claim and fence before resource entry."},
+    {"finding_id": "f04_execution_variant_policy_release_family_taxonomy_conflict", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_4_and_upstream_revision_12", "correction_sections": ["3"], "correction_evidence": "Execution binds the distinct Registry Execution Variant Policy Release family by exact opaque ref."},
+    {"finding_id": "f06_conformance_enumerations_close_twice", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_10_execution_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_4", "correction_sections": ["11"], "correction_evidence": "Execution item 17 is the sole penultimate item carrying the list-closing conjunction before final item 18."}
+  ],
+  "validation": {
+    "frontmatter": "pass",
+    "markdown_links": "pass",
+    "whitespace": "pass"
+  },
+  "adoption_blockers": [
+    "whole-system revision 2 findings are corrected; revision 4 awaits whole-system revision 3 re-review",
+    "upstream candidate slices are not independently admitted",
+    "Inspection 06 and Standalone Release Conformance 05 remain candidate inputs to the complete revision 3 subject",
+    "Agency Platform still claims the predecessor Runtime-prefixed document 10",
+    "formal Runtime review host still imports retired registry_module_exporting interface"
+  ],
+  "authorized_changes": [],
+  "implementation_changes": []
+}

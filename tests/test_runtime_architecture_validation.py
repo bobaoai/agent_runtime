@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_runtime_architecture_registration_covers_every_python_source() -> None:
     projection = build_runtime_architecture_projection()
-    assert projection["schema_version"] == "agent_runtime_architecture_projection_v3"
+    assert projection["schema_version"] == "agent_runtime_architecture_projection_v4"
 
 
 def test_target_source_names_match_logical_owner_module() -> None:
@@ -23,6 +23,14 @@ def test_target_source_names_match_logical_owner_module() -> None:
         assert Path(source.source_path).name == source.expected_file_name
         assert source.expected_file_name.startswith(
             f"{source.logical_responsibility_id}_"
+        )
+
+
+def test_supporting_source_names_match_supporting_plane() -> None:
+    for source in architecture.RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS:
+        assert Path(source.source_path).name == source.expected_file_name
+        assert source.expected_file_name.startswith(
+            f"{source.supporting_plane_id}_"
         )
 
 
@@ -42,6 +50,7 @@ def test_architecture_axes_are_registered_independently() -> None:
 
     assert responsibility_ids == architecture.RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS
     assert {"contracts", "testing"}.issubset(directory_ids)
+    assert {"foundation", "conformance"}.issubset(directory_ids)
     assert {"postgresql", "temporal", "claude_agent_sdk", "codex_cli", "html"}.issubset(
         technology_ids
     )
@@ -208,4 +217,6 @@ def test_duplicate_detached_source_name_fails_validation(monkeypatch) -> None:
 
 def test_every_target_owner_contract_exists() -> None:
     for source in architecture.RUNTIME_SOURCE_FILE_REGISTRATIONS:
+        assert (REPO_ROOT / source.owner_contract_ref).is_file()
+    for source in architecture.RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS:
         assert (REPO_ROOT / source.owner_contract_ref).is_file()

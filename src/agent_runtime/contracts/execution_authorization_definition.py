@@ -9,7 +9,7 @@ import hashlib
 import json
 from typing import Any, ClassVar, Mapping
 
-from .registry_contract_validation import (
+from ..foundation.foundation_contract_validation import (
     validate_bool,
     validate_id,
     validate_opaque_ref,

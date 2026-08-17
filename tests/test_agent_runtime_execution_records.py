@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.contracts.registry_contract_validation import (
+from agent_runtime.foundation.foundation_contract_validation import (
     format_utc_timestamp,
     parse_utc_timestamp,
 )

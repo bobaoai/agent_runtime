@@ -184,7 +184,7 @@ overlapping lane to make local work appear clean.
 - Timestamps never participate in idempotency identity.
 - Use `validate_utc_timestamp`, `parse_utc_timestamp`, and
   `format_utc_timestamp` from
-  `src/agent_runtime/contracts/registry_contract_validation.py`.
+  `src/agent_runtime/foundation/foundation_contract_validation.py`.
 
 ### R11: Validate the changed surface
 

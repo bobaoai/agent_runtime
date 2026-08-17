@@ -1,0 +1,108 @@
+{
+  "manifest_schema_version": "agent_runtime_design_review_subject_v1",
+  "candidate_status": "t2_read_and_release_slice_revision_4",
+  "candidate_revision": 4,
+  "baseline_head": "294a3bd",
+  "evidence_subject_status": "proposal_over_unfrozen_dirty_worktree",
+  "inputs": [
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/subject_manifest.json",
+      "sha256": "010b9b14e6de27fe4ca44c1cf45ee31deb804ed2bc73fd36dc0a276ffbe9bba1"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/subject_manifest.json",
+      "sha256": "e3af7a53bf0fad5a72725240215fdcebbf89a29a8111a13801864316083ab6ed"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/subject_manifest.json",
+      "sha256": "82467ed000e29067b607ca7675f317d51a7ce3f81617e1a6c3fb119d40b576c2"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/subject_manifest.json",
+      "sha256": "aa9128dced5e6596670e967c325025137a534b1aea7dced79e206231e059b542"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_architecture_audit.md",
+      "sha256": "e558c73561a078dcac4ddf70a07e93d6b3afa46ba2187559fc679c13a907dc93"
+    },
+    {
+      "path": "designDoc/the_design_doc_management.md",
+      "sha256": "379be6b4eacd40abb531a4c38da888a8ed0d6d6bcf78d88c2753788c049a9a45"
+    },
+    {
+      "path": "designDoc/the_timestamp_semantic.md",
+      "sha256": "ee027ea43eba0af454606215fe1ab445395a3d31bbbcfa2b685e1c66286f3e53"
+    },
+    {
+      "path": "designDoc/the_product_authorization.md",
+      "sha256": "22ecc4a50474fedfd9670cccea54e4ee9f7a9a5c708c552400f50984c6020bfc"
+    },
+    {
+      "path": "designDoc/the_data_governance.md",
+      "sha256": "167ddbaaaf3d126f735965268739da48bd89045b616891417e2c1546fc5f3441"
+    },
+    {
+      "path": "designDoc/the_software_delivery.md",
+      "sha256": "e7a3e575ddc4bf81a7881b55b589b04ddb6de0834838f96a45ef46df4c359d6c"
+    },
+    {
+      "path": "designDoc/the_contract_audit.md",
+      "sha256": "d20d185e23a4935bab4b037fc0cbc3176707ad0fadcd9dd34b76d6daf810244f"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "0f41dfe55bf7d3c8c45c7617b57c97d29e5b40069eb15e7c09ea8177f4f5266d"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "e1359738cc94c69c81d28f1e5a8c959918368d4fb1290d89e04f5bcd0ecc003f"
+    }
+  ],
+  "subject_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/agent_runtime_06_inspection_contract.md",
+      "canonical_target": "designDoc/agent_runtime_06_inspection_contract.md",
+      "sha256": "b0d36545232e806623df4ebdc0b5ff34a40e1bff39230ca2f91915b016dbac89"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/agent_runtime_05_standalone_release_conformance_contract.md",
+      "canonical_target": "designDoc/agent_runtime_05_standalone_release_conformance_contract.md",
+      "sha256": "ac58e0cefba8ed10f4beb554a792a6a8ff0d7c95b40d79871a508032b96a0ba2"
+    }
+  ],
+  "supporting_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/REVIEW_BRIEF.md",
+      "sha256": "ecd1306bdf44bdcd05a8fa5ad63e300d332410fb8828e141c48e4ed94a8a8b93"
+    }
+  ],
+  "predecessor_findings": [
+    {"finding_id": "f01_release_conformance_omits_design_contract_bundle_parity", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_05_standalone_release_conformance_contract", "correction_target": "agent_runtime_05_standalone_release_conformance_contract", "disposition": "closed_in_revision_2", "correction_sections": ["2", "4", "7", "9"]},
+    {"finding_id": "f02_release_conformance_pins_postgresql_as_required_fixture", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_05_standalone_release_conformance_contract", "correction_target": "agent_runtime_05_standalone_release_conformance_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0", "6"]},
+    {"finding_id": "f03_inspection_pins_postgresql_as_conformance_evidence", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_06_inspection_contract", "correction_target": "agent_runtime_06_inspection_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0", "9"]},
+    {"finding_id": "f04_inspection_permission_manifest_omits_grant_class", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_06_inspection_contract", "correction_target": "agent_runtime_06_inspection_contract", "disposition": "closed_in_revision_2", "correction_sections": ["2", "8", "9"]},
+    {"finding_id": "f05_inspection_export_omits_governed_derivative_law", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_06_inspection_contract", "correction_target": "agent_runtime_06_inspection_contract", "disposition": "closed_in_revision_2", "correction_sections": ["6", "8", "9"]},
+    {"finding_id": "f06_inspection_cross_clock_scope_validity_not_fail_closed", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_06_inspection_contract", "correction_target": "agent_runtime_06_inspection_contract", "disposition": "closed_in_revision_2", "correction_sections": ["2", "8", "9"]},
+    {"finding_id": "f07_conformance_subject_omits_adapter_release_identity", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_05_standalone_release_conformance_contract", "correction_target": "agent_runtime_05_standalone_release_conformance_contract", "disposition": "closed_in_revision_2", "correction_sections": ["2", "8"]},
+    {"finding_id": "f08_delivery_roadmap_disposition_routed_to_code_design_basis", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_05_standalone_release_conformance_contract", "correction_target": "agent_runtime_05_standalone_release_conformance_contract", "disposition": "closed_in_revision_2", "correction_sections": ["10"]},
+    {"finding_id": "f09_registry_read_port_lacks_storage_applicable_scope", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_upstream_revision_10", "correction_sections": ["8", "10", "11"]},
+    {"finding_id": "f10_execution_status_disclosed_by_two_enforcement_points", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_06_inspection_contract", "correction_target": "agent_runtime_06_inspection_contract", "disposition": "closed_in_revision_2", "correction_sections": ["1", "2"]},
+    {"finding_id": "f11_inspection_lineage_level_vocabulary_ambiguous", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_06_inspection_contract", "correction_target": "agent_runtime_06_inspection_contract", "disposition": "closed_in_revision_2", "correction_sections": ["3", "4"]},
+    {"finding_id": "f12_evidence_denominator_undefined", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_05_standalone_release_conformance_contract", "correction_target": "agent_runtime_05_standalone_release_conformance_contract", "disposition": "closed_in_revision_2", "correction_sections": ["2.1"]},
+    {"finding_id": "f13_deterministic_waiver_rule_narrowed_to_ai_reviewer", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_05_standalone_release_conformance_contract", "correction_target": "agent_runtime_05_standalone_release_conformance_contract", "disposition": "closed_in_revision_2", "correction_sections": ["5"]}
+  ],
+  "validation": {
+    "frontmatter": "pass",
+    "markdown_links": "pass",
+    "whitespace": "pass"
+  },
+  "adoption_blockers": [
+    "whole-system revision 2 findings require no owned-contract change; revision 4 awaits whole-system revision 3 re-review",
+    "upstream candidate slices are not independently admitted",
+    "complete root-plus-ten-T2 revision 3 whole-system re-review is pending",
+    "Software Delivery and existing canonical files still claim predecessor Runtime-prefixed documents 05, 06, and 10",
+    "formal Runtime review host still imports retired registry_module_exporting interface"
+  ],
+  "authorized_changes": [],
+  "implementation_changes": []
+}

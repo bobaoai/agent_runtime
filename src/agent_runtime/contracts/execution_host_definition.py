@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from .registry_contract_validation import (
+from ..foundation.foundation_contract_validation import (
     validate_bool,
     validate_id,
     validate_opaque_ref,

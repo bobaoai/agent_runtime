@@ -11,6 +11,8 @@ from ..registry.registry_architecture_registration import (
     RUNTIME_MIGRATION_DEBT_PATHS,
     RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS,
     RUNTIME_SOURCE_FILE_REGISTRATIONS,
+    RUNTIME_SUPPORTING_PLANE_REGISTRATIONS,
+    RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS,
     RUNTIME_STRUCTURAL_SOURCE_PATHS,
     validate_registry_architecture_registration,
     validate_runtime_architecture_registration,
@@ -18,7 +20,7 @@ from ..registry.registry_architecture_registration import (
 
 
 ARCHITECTURE_PROJECTION_SCHEMA_VERSION = (
-    "agent_runtime_architecture_projection_v3"
+    "agent_runtime_architecture_projection_v4"
 )
 
 
@@ -62,6 +64,14 @@ def build_runtime_architecture_projection(
             }
             for row in RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS
         ],
+        "supporting_planes": [
+            {
+                "supporting_plane_id": row.supporting_plane_id,
+                "purpose": row.purpose,
+                "owner_contract_ref": row.owner_contract_ref,
+            }
+            for row in RUNTIME_SUPPORTING_PLANE_REGISTRATIONS
+        ],
         "physical_source_directories": [
             {
                 "source_directory_id": row.source_directory_id,
@@ -93,6 +103,17 @@ def build_runtime_architecture_projection(
             }
             for row in RUNTIME_SOURCE_FILE_REGISTRATIONS
         ],
+        "supporting_source_files": [
+            {
+                "source_path": row.source_path,
+                "supporting_plane_id": row.supporting_plane_id,
+                "physical_directory": directories[row.source_directory_id],
+                "subject": row.subject,
+                "nominalized_action": row.nominalized_action,
+                "owner_contract_ref": row.owner_contract_ref,
+            }
+            for row in RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS
+        ],
         "structural_source_files": list(RUNTIME_STRUCTURAL_SOURCE_PATHS),
         "migration_debt_source_files": list(RUNTIME_MIGRATION_DEBT_PATHS),
     }
@@ -116,6 +137,7 @@ def render_runtime_architecture_markdown() -> str:
         "| Disposition | Files |",
         "| --- | ---: |",
         f"| Target implementation | `{len(projection['target_source_files'])}` |",
+        f"| Supporting-plane implementation | `{len(projection['supporting_source_files'])}` |",
         f"| Structural package file | `{len(projection['structural_source_files'])}` |",
         f"| Explicit migration debt | `{len(projection['migration_debt_source_files'])}` |",
         "",
@@ -129,6 +151,21 @@ def render_runtime_architecture_markdown() -> str:
             f"| `{responsibility['responsibility_id']}` | "
             f"{responsibility['responsibility']} | "
             f"`{responsibility['owner_contract_ref']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Supporting Planes",
+            "",
+            "| Supporting plane | Purpose | Design owner |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for supporting_plane in projection["supporting_planes"]:
+        lines.append(
+            f"| `{supporting_plane['supporting_plane_id']}` | "
+            f"{supporting_plane['purpose']} | "
+            f"`{supporting_plane['owner_contract_ref']}` |"
         )
     lines.extend(
         [
@@ -177,6 +214,24 @@ def render_runtime_architecture_markdown() -> str:
             f"| `{source['source_path']}` | "
             f"`{source['logical_responsibility_id']}` | "
             f"`{source['physical_directory']}` | `{binding}` | "
+            f"`{source['subject']}` | "
+            f"`{source['nominalized_action']}` | "
+            f"`{source['owner_contract_ref']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Supporting Source Files",
+            "",
+            "| Source | Supporting plane | Physical directory | Subject | Action | Design owner |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for source in projection["supporting_source_files"]:
+        lines.append(
+            f"| `{source['source_path']}` | "
+            f"`{source['supporting_plane_id']}` | "
+            f"`{source['physical_directory']}` | "
             f"`{source['subject']}` | "
             f"`{source['nominalized_action']}` | "
             f"`{source['owner_contract_ref']}` |"

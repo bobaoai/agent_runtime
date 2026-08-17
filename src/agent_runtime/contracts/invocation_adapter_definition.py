@@ -8,7 +8,7 @@ import json
 import re
 from typing import Any, Protocol, runtime_checkable
 
-from .registry_contract_validation import (
+from ..foundation.foundation_contract_validation import (
     validate_bool,
     validate_enum_string,
     validate_exact_record_instance,

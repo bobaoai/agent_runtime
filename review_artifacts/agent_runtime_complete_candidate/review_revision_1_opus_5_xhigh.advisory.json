@@ -1,0 +1,216 @@
+{
+  "verdict": "block",
+  "design_judgment": {
+    "intended_result": "The set states one coherent product result: a domain-neutral, independently publishable Runtime that turns an exact admitted, externally authorized host binding into durable execution, canonical lineage, and authorized inspection. Reader decisions are explicit at each layer — the Charter answers 'is this capability Runtime's?', the T0 answers 'which identity must survive provider and backend replacement?', the T1 answers 'which single owner holds this responsibility and in which direction may it depend?', and each T2 answers one implementable question. The public host lifecycle enumerates identically across Charter section 7 item 3, T0 section 6, T1 section 5.1, and Execution section 2 (start, bounded status, cancel, authorized external event, reconcile, recover), so the Charter completion gate cannot pass while a required public operation is absent. The material design choices — six peer responsibilities plus four supporting or validating T2s, one canonical Ledger, per-responsibility Policy Enforcement Points rather than a central authorization service, and idempotent reconciliation instead of a claimed cross-system transaction — are stated and consistently defended rather than assumed.",
+    "authority_structure": "Each of the six responsibilities has exactly one primary T2 owner in T1 section 2, and documents 02, 03, 05, and 09 are explicitly scoped as specializing or validating rather than peer. No seventh responsibility is smuggled in: the supporting foundation, physical directories, PostgreSQL, Temporal, and providers are each labelled as a source class or replaceable binding, not as a peer owner. Duplicated authority is actively refused — Registry section 8 makes the Registry writer its own enforcement point and explicitly disclaims dependency on document 09's ports; document 09 section 4 disclaims becoming a central PEP; Ledger section 6 owns durable fence comparison while document 09 owns fence meaning and document 10 owns finalization timing. The one authority object that escapes this discipline is the top-level Runtime Execution identity: documents 04 and 10 commit it for both origins, but neither the T0 execution object chain nor the T1 fixed identity-ownership list registers it, so a T2 widens the identity law it inherits.",
+    "boundary_coherence": "Semantic owner, author, operator, reviewer, persistence owner, implementation binding, and admission authority stay distinct in almost every place they meet. Registry owns record and schema meaning while Data Governance binds the System of Record and Software Delivery admits the migration code; Contract Audit owns the independent verdict while Design Doc Management owns admission of the canonical text; document 05 assembles evidence and explicitly refuses to publish or deploy. The failure is at the source-placement boundary: document 02 rule 6 assigns all document 09 port source to the Execution responsibility and exports it through the Execution namespace, while document 08 sections 3, 5, and 6 require Invocation to reach that port as its own PEP for dynamic tool and Gateway operations. Under document 02 rule 2 and conformance item 2, that import is a forbidden reverse edge, so a stated enforcement obligation and the registered import policy cannot both hold.",
+    "inheritance_and_dependencies": "Inherited constraints are named per document and mostly close: Timestamp Semantics' registered predicate, DistributedClockProfile, fresh ClockHealthEvidence, and conservative half-open window are consumed identically by Registry section 8, Ledger section 6, document 09 sections 3 and 6, Inspection section 2, and Execution section 6, and every one fails closed. Product Authorization's grant-class law, Data Governance's derivative-inheritance law, and the store-assigned recorded_at_utc rule are consumed without being redefined. Three closure gaps remain. The independent Module origin declared by T1 section 1 is not carried through T1 section 6 start ordering, the Invocation request closure, or the Inspection lineage view. The Execution Variant Policy is required by every start but is not admitted by any Registry release family, and no document owns validating its node coverage against the pinned Workflow graph. Inspection introduces a persistent governed export family with a System of Record and writer binding, while T1 sections 9.1 and 13 recognize only the Registry and Ledger stores for schema-release, migration, and startup-refusal evidence.",
+    "intent_code_separation": "Stable intent is generally well separated from mutable truth. Every T2 ends with a change boundary that refuses to freeze fields, select a provider, or migrate data; the audit's current-code observations are consistently held as evidence inputs rather than design; and Temporal, PostgreSQL, Claude, and Codex are named only as replaceable adapters or as exclusions from public ports. Two leaks remain. Document 05, whose entire purpose is proving domain-neutral independent publishability, encodes the current consuming host by name — 'trading-platform import', 'trading code' — as the portability and clean-install criterion, so the gate can pass while coupling to any other host survives. Document 08 section 4 states that governed content is 'normally backed by PostgreSQL', which is a current binding preference inside stable intent. Separately, the frozen t2_candidate subject manifest certifies predecessor-finding closure with evidence describing a nineteen-item Registry conformance enumeration that revision 10 no longer has.",
+    "implementability": "Most of the set is implementable without redesign: the start, dispatch, finalization, event, cancellation, recovery, and reconciliation orderings converge idempotently across the declared crash and race windows without claiming cross-system atomicity or a second Ledger; A/B Variants, Runtime retry, backend delivery retry, reviewer revision loops, reconstruction, and new execution are each distinguished and consistently represented; Inspection filters authorized scope at storage before disclosure and keeps content permissions separate. The set is also close to minimal — the only object I would question on economy is RuntimeCohesionSignalReport, which is a registered machine contract that carries no verdict and derives entirely from already-registered inputs, and that is defensible as advisory. What is not implementable today is the start path itself. A Code Design Basis cannot proceed without inventing the top-level execution identity's relationship to Workflow Execution, the Registry family and closure validation for the Variant Policy, and a legal source placement for the authority port that Invocation must call."
+  },
+  "check_results": [
+    {
+      "check_id": "intent_and_reader_result",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "disposition": "finding",
+      "finding_ids": [
+        "f01_top_level_runtime_execution_identity_unowned"
+      ]
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "disposition": "finding",
+      "finding_ids": [
+        "f02_root_start_ordering_excludes_module_origin",
+        "f07_ingress_frontmatter_inherits_partial"
+      ]
+    },
+    {
+      "check_id": "boundary_coherence",
+      "disposition": "finding",
+      "finding_ids": [
+        "f04_invocation_authority_port_import_forbidden"
+      ]
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "disposition": "finding",
+      "finding_ids": [
+        "f08_release_conformance_names_host_product"
+      ]
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "disposition": "finding",
+      "finding_ids": [
+        "f06_inspection_export_store_schema_lifecycle_unowned"
+      ]
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "disposition": "finding",
+      "finding_ids": [
+        "f03_invocation_request_requires_workflow_execution",
+        "f05_variant_policy_release_family_unregistered"
+      ]
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "disposition": "finding",
+      "finding_ids": [
+        "f09_subject_manifest_certifies_stale_enumeration_evidence"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "f01_top_level_runtime_execution_identity_unowned",
+      "severity": "block",
+      "finding_class": "layer_or_owner_defect",
+      "affected_candidate_document_id": "agent_runtime_10_execution_contract",
+      "correction_target_document_id": "the_agent_runtime",
+      "quoted_evidence": "Execution 10 section 4: \"For an independent Module origin, Execution commits one top-level `RuntimeExecution` with `origin_kind=module`, exact Module Release, external binding, authority, governed input, and Variant Policy refs.\" Ledger 04 section 5.1: \"One start batch commits the exact host binding, admitted Runtime release closure, external authorization context, governed-input scope, active authority fence, durable-start intent, and top-level Runtime Execution fact.\" The T0 owner states a different chain in section 3.2: \"The stable execution object chain is: Workflow Execution, when a Workflow is the origin -> Module Run -> Execution Variant -> Attempt\", and T1 section 4 fixes ownership as \"Execution creates Workflow Execution, Module Run, Variant, Attempt policy, Evaluation coordination, Selection, Resolution, and Outcome decisions.\"",
+      "requirement": "the_agent_runtime section 1 reserves to the T0 the definition of \"what identity must remain stable across provider and backend replacement\", and Design Doc Management section 2.3 states that a T2 \"cannot create a second domain root or widen its parent's semantic authority.\" T1 section 4 requires that \"Every T2 uses the same logical identity chain\" and that identity ownership is fixed.",
+      "impact": "The object that the host handle names, that Durability binds a backend execution ref to, that Execution's ResourcePermissionManifest scopes as \"active executions\", and that Inspection lists is created by two T2s but registered by neither parent layer. An implementer forming the Code Design Basis must invent whether Workflow Execution is a specialization of RuntimeExecution, a sibling, or a fact committed alongside it, and must invent which object carries the durable acknowledgement, the fence, and the terminal status. Because that choice determines the Ledger lineage root, the Durability binding key, and the Inspection scope key, guessing it wrong propagates into every persistent record family.",
+      "accountable_owner_ref": "Agent Runtime T0 design owner of designDoc/the_agent_runtime.md, whose material change is accepted by the Project Owner or delegated design owner under the_charter.md section 8",
+      "required_change": "Decide at the T0 whether a single top-level Runtime execution identity exists for both origins. If it does, register it in the section 3.2 object chain with its stable meaning and its relationship to Workflow Execution, then align T1 section 4's chain and fixed ownership list and the wording in documents 04 and 10. If it does not, remove the top-level RuntimeExecution fact from documents 04 and 10 and state which object is the lineage root for an independent Module origin. Do not leave the object defined only in T2 prose."
+    },
+    {
+      "finding_id": "f04_invocation_authority_port_import_forbidden",
+      "severity": "block",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_08_invocation_contract",
+      "correction_target_document_id": "agent_runtime_02_source_architecture_contract",
+      "quoted_evidence": "Source Architecture 02 section 3 rule 6: \"Source implementing the T2 03 Event Ingress protocol or T2 09 External Authority Integration ports belongs to the Execution responsibility. These contracts specialize Execution behavior and do not create peer source-owner classes or peer public namespaces.\" Section 6: \"T2 03 and T2 09 public contracts are exported through the Execution namespace.\" Section 3 rule 2: \"A peer reverse edge or responsibility cycle is invalid.\" Invocation 08 section 3 requires the opposite direction: \"I->>A: validate declared action and required grant class\" where I is \"Invocation PEP\" and A is \"External authority port\", and section 6 requires that for each dynamic tool call \"Runtime constructs an exact operation intent before the resource callable is entered.\"",
+      "requirement": "T1 section 3 states \"An arrow means that the source consumes a public contract or port from the target. There is no peer reverse edge\", and Source Architecture section 9 item 2 makes conformance depend on \"every import edge is permitted and the responsibility graph is acyclic\". T1 section 2 requires that \"Each Runtime responsibility that owns a protected resource acts as the Policy Enforcement Point for its own operations\".",
+      "impact": "Invocation is required to be its own Policy Enforcement Point for workspace, repository, shell, network, environment, and dynamic Gateway operations, and dynamic tool authorization cannot be pre-resolved by Execution before the resource callable is entered. Yet the only registered home for the authority port is the Execution namespace, which Invocation may not import because Execution already depends on Invocation. Neither T1 section 3, whose graph shows AUTHORITY as a separate node with no INVOCATION edge, nor document 02 admits the edge. Implementation must therefore invent a placement — a duplicate port in Invocation, a foundation-level authority abstraction, or a host-supplied validator as Registry uses — and each choice changes who owns execution-time authorization semantics.",
+      "accountable_owner_ref": "Agent Runtime Source Architecture T2 design owner of designDoc/agent_runtime_02_source_architecture_contract.md, which T1 section 3 names as owner of \"the exact machine-checked allowed-import graph, public-surface manifest, file ownership, and migration-debt high-water mark\"",
+      "required_change": "Resolve the placement of the document 09 execution-time authority port so that every responsibility acting as its own PEP can consume it without a reverse edge. Either register the authority port as its own supporting source class below the responsibilities with explicit allowed edges from Invocation, Execution, and Ingress, or state in rule 6 that Invocation obtains its execution-time authority evidence through a host-provided validator on the Registry pattern and correct document 08 sections 3, 5, and 6 accordingly. Whichever is chosen, the resulting edge set must appear in the section 3 graph and in the section 9 conformance items."
+    },
+    {
+      "finding_id": "f05_variant_policy_release_family_unregistered",
+      "severity": "block",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_10_execution_contract",
+      "correction_target_document_id": "agent_runtime_01_registry_contract",
+      "quoted_evidence": "Execution 10 section 3: \"One start command binds exact host execution binding, origin release, input package, Runtime-issued Execution Variant Policy release... The Variant Policy is an admitted Registry Behavior Policy carried as an opaque exact ref by the host binding. It declares the ordered sibling Variant IDs and exact admitted Execution Profile refs for every Workflow node or independent Module origin.\" Registry 01 section 3 defines the family differently: \"Behavior Policy | Immutable Context, Evaluation, retry, entry, operation, or output-resolution rule referenced by a Module or Workflow | The execution-time decision or result\". Registry section 6 validates only that \"every executable node resolves one exact admitted Module Release\", \"every referenced schema and behavior policy resolves by exact ref and hash\", and \"no node requests an entry origin its Module forbids\".",
+      "requirement": "Registry section 1 states that Registry \"answers whether a release is structurally and contractually valid for Runtime, which exact dependencies it binds\", and section 3 states \"Registry admits the following logical families.\" T0 section 3.1 requires that \"Every executable closure binds the exact content of its behavior-bearing dependencies\" and that any change to \"model profile\" behavior \"must be represented by the release or execution identity that owns that behavior.\"",
+      "impact": "The Variant Policy determines which admitted Execution Profile, and therefore which provider and model, executes every node of every execution, and it is mandatory in every start command. It is nonetheless a Behavior Policy that is referenced by neither a Module nor a Workflow, contradicting the family definition, and no document owns validating that its declared node identities cover the pinned Workflow graph exactly or that its Profile refs are admitted. An implementer must invent the family or subfamily, the closure-validation owner, and the failure semantics when the policy names an absent node or omits a declared node. Registry's conformance list in section 11 gives no evidence obligation for any of it.",
+      "accountable_owner_ref": "Agent Runtime Registry T2 design owner of designDoc/agent_runtime_01_registry_contract.md, which T1 section 2 names as owner of \"Immutable release closure, admission, activation, deactivation, withdrawal, exact retrieval\"",
+      "required_change": "Register the Execution Variant Policy in Registry section 3 as an admitted release family or an explicitly named Behavior Policy form whose reference source is the host execution binding rather than a Module or Workflow, state in section 6 or 7 which document validates its node coverage against the pinned Workflow graph and its Profile refs against admitted Execution Profiles, add the corresponding rejection rows to section 10, and add the matching conformance obligation to section 11. If Registry is not the correct validator, say so explicitly and name the owning document so Execution section 3 can bind it."
+    },
+    {
+      "finding_id": "f02_root_start_ordering_excludes_module_origin",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_00_runtime_domain_contract",
+      "correction_target_document_id": "agent_runtime_00_runtime_domain_contract",
+      "quoted_evidence": "T1 section 6 step 4: \"Ledger atomically commits the binding, active fence, start intent, and Workflow Execution fact.\" The same section closes: \"It creates no second Workflow Execution identity.\" T1 section 1 nonetheless declares two origins: \"an exact Workflow release selected by a host; and one exact Module release invoked independently when its release and external authority permit that origin.\" Ledger 04 section 5.1 contradicts the root for the second origin: \"an independent Module origin commits `origin_kind=module`, the exact Module Release and Variant Policy refs, and no invented Workflow identity.\"",
+      "requirement": "T1 section 0 scope includes \"cross-responsibility call, commit, recovery, and acknowledgement ordering\", and section 6 states \"One start follows this invariant order\". Design Doc Management section 6 requires \"peer-boundary and inherited-constraint closure\" and forbids a candidate whose parent and child give different rules for the same object.",
+      "impact": "The root's normative start ordering, which every T2 inherits, describes only the Workflow origin while the root itself declares two. For an independent Module origin the required contents of the atomic start batch and the recovery invariant are stated only in a T2, so the root and its children disagree about what a legal start commits. A Code Design Basis reading the root would build a start path that cannot serve the second declared origin.",
+      "accountable_owner_ref": "Agent Runtime T1 design owner of designDoc/agent_runtime_00_runtime_domain_contract.md, whose material change is accepted by the Project Owner or delegated design owner under the_charter.md section 8",
+      "required_change": "Restate section 6 step 4 so it names the facts committed for each declared origin, consistent with Ledger section 5.1 and Execution section 4, and restate the recovery sentence in terms of the top-level execution identity resolved under finding f01 rather than Workflow Execution alone. Apply the same correction to the section 4 identity chain so the independent Module origin has an explicit root."
+    },
+    {
+      "finding_id": "f03_invocation_request_requires_workflow_execution",
+      "severity": "fix",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_08_invocation_contract",
+      "correction_target_document_id": "agent_runtime_08_invocation_contract",
+      "quoted_evidence": "Invocation 08 section 2: \"An `InvocationRequest` binds the exact:\" followed by \"- Workflow Execution, Module Run, Variant, Attempt claim, and protected model-call intent;\". The requirement is unconditional, while Execution 10 section 1 states \"Both origins create the same Module Run, Variant, Attempt, Invocation, Ledger, authority, and durability lineage\" and section 4 states that an independent Module origin \"commits no Workflow Execution fact and creates one root Module Run.\"",
+      "requirement": "T1 section 1 admits two product-neutral execution origins and requires that a controlled origin produces \"the same identity, authority, Invocation, Ledger, and recovery lineage as production\". T0 section 3.2 makes Workflow Execution conditional: \"Workflow Execution, when a Workflow is the origin\".",
+      "impact": "An independent Module origin has no Workflow Execution, so it cannot form a legal InvocationRequest as specified. Implementation must either fabricate a synthetic Workflow Execution identity for module-origin work, which the whole candidate set forbids, or silently treat a mandatory binding as optional. Both outcomes damage the identity lineage that Ledger, Durability, and Inspection depend on.",
+      "accountable_owner_ref": "Agent Runtime Invocation T2 design owner of designDoc/agent_runtime_08_invocation_contract.md",
+      "required_change": "Make the Workflow Execution binding in section 2 explicitly conditional on Workflow origin and name the identity that is always present for both origins, consistent with the resolution of finding f01. Confirm in section 12 that Invocation conformance exercises an independent Module origin."
+    },
+    {
+      "finding_id": "f06_inspection_export_store_schema_lifecycle_unowned",
+      "severity": "fix",
+      "finding_class": "failure_or_completion_gap",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_00_runtime_domain_contract",
+      "quoted_evidence": "Inspection 06 section 6: \"The export family has one Data Governance `DataAssetRegistration`, one System-of-Record and writer binding, and one exact Timestamp class registration. Inspection can assemble the derivative only through that registered writer boundary.\" T1 section 9.1 recognizes only two stores: \"Registry T2 owns Registry-store schema lifecycle; Ledger T2 owns Ledger-store schema lifecycle.\" T1 section 13 assigns the corresponding evidence family to \"Documents 01 and 04 with Data Governance registrations\".",
+      "requirement": "T1 section 2 states \"Every persistent responsibility owns the schema identity, ordered migration, startup compatibility refusal, and recovery evidence for its own store.\" Charter section 7 item 9 requires that \"Runtime startup 能识别 persistent-schema release，并拒绝 unsupported 或 incomplete migration state；每个 persistent record family 均有 Data Governance `DataAssetRegistration`、System-of-Record 和 writer-boundary evidence\".",
+      "impact": "Inspection introduces a third persistent, governed Runtime record family with its own System of Record and writer boundary, but neither Inspection nor the root assigns it a schema release, ordered migration, startup compatibility refusal, or recovery evidence. Because the T1 evidence table names only documents 01 and 04, the Charter completion gate can be satisfied while the export family's schema lifecycle has no owner, which is exactly the class of gap that the Registry and Ledger obligations exist to prevent.",
+      "accountable_owner_ref": "Agent Runtime T1 design owner of designDoc/agent_runtime_00_runtime_domain_contract.md, whose material change is accepted by the Project Owner or delegated design owner under the_charter.md section 8",
+      "required_change": "Either extend T1 sections 9.1 and 13 so the export record family's persistent-schema identity, migration, startup refusal, and recovery evidence are assigned to document 06, and add the matching obligation and conformance item to Inspection sections 6 and 9; or state explicitly that the export derivative is not Runtime-persistent state and remove its System-of-Record and writer binding from Inspection section 6. Do not leave one Runtime-owned managed Data Asset outside the persistent-store obligations that bind the other two."
+    },
+    {
+      "finding_id": "f07_ingress_frontmatter_inherits_partial",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "correction_target_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "quoted_evidence": "External Event Ingress 03 frontmatter declares a single inherited authority: \"inherits:\" followed only by \"- designDoc/the_data_governance.md\". Its Contract Capsule in section 0 declares five: \"inherits:\" followed by \"- designDoc/the_charter.md\", \"- designDoc/the_agent_runtime.md\", \"- designDoc/the_product_authorization.md\", \"- designDoc/the_data_governance.md\", \"- designDoc/the_timestamp_semantic.md\". No other candidate in the set carries an `inherits` key in frontmatter.",
+      "requirement": "Design Doc Management section 6 requires audit of \"peer-boundary and inherited-constraint closure\" and section 10 invariant 3 requires that every contract name its inherited constraints. The subject manifest records \"frontmatter\": \"pass\", so the declaration is being treated as validated.",
+      "impact": "The document declares its inherited authority twice with different content, and the machine-readable surface names only one of five. A validator or generated projection that reads frontmatter would conclude that Ingress inherits neither the Charter, the Runtime T0, Product Authorization, nor Timestamp Semantics, even though sections 4, 7, and 9 depend on all four. The inconsistency also breaks the uniform frontmatter shape of the other nine candidates.",
+      "accountable_owner_ref": "Agent Runtime External Event Ingress T2 design owner of designDoc/agent_runtime_03_external_event_ingress_contract.md",
+      "required_change": "Remove the partial `inherits` key from the frontmatter so the Contract Capsule remains the single inheritance declaration, matching the other nine candidates; or make the frontmatter list identical to the capsule list and apply the same frontmatter key uniformly across the set. Do not leave two inheritance declarations that disagree."
+    },
+    {
+      "finding_id": "f08_release_conformance_names_host_product",
+      "severity": "fix",
+      "finding_class": "code_truth_leakage",
+      "affected_candidate_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "correction_target_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "quoted_evidence": "Standalone Release Conformance 05 section 4: \"Portability | At least one synthetic host and plugin with no trading-platform import or semantic assumption\". Section 9 item 10: \"the clean-install fixture contains no trading-platform code or ambient local credentials.\" Section 3: \"The base install imports without provider SDKs, durable-backend SDKs, host product code, domain plugins, trading code, customer content, local checkout paths, or credentials.\"",
+      "requirement": "the_agent_runtime section 0 lists as a non-goal \"host workflow selection, product lifecycle, deployment topology, or user experience\" and section 8 states \"Runtime distribution remains independent of host and domain code.\" the_charter.md section 1 defines the product as \"可独立发布、与业务无关的 Agent Runtime 产品\". Design Doc Management section 5.1 states that reusable contracts \"do not need to be reclassified as trading-platform-specific\".",
+      "impact": "The contract whose sole purpose is proving domain-neutral independent publishability encodes the current consuming host by name as its portability criterion. A conformance gate implemented literally from these clauses passes a Runtime distribution that imports any other host product, so the ceremony can succeed while the required result — no host coupling — is false. It also makes an allegedly portable Runtime contract unusable unchanged by a second consuming project.",
+      "accountable_owner_ref": "Agent Runtime Standalone Release Conformance T2 design owner of designDoc/agent_runtime_05_standalone_release_conformance_contract.md",
+      "required_change": "Replace every named-host criterion in sections 3, 4, and 9 with the general rule already stated in section 3 — no host product, domain plugin, business-database, or customer-content import and no host semantic assumption — and let the exact excluded package identities live in the code-owned conformance profile and evidence record rather than in stable Design Intent."
+    },
+    {
+      "finding_id": "f09_subject_manifest_certifies_stale_enumeration_evidence",
+      "severity": "fix",
+      "finding_class": "review_or_admission_conflict",
+      "affected_candidate_document_id": "agent_runtime_t2_candidate_subject_manifest",
+      "correction_target_document_id": "agent_runtime_t2_candidate_subject_manifest",
+      "quoted_evidence": "review_artifacts/agent_runtime_t2_candidate/subject_manifest.json carries f37 with \"disposition\": \"closed_in_revision_9\" and \"correction_evidence\": \"Registry conformance item 17 ends with a semicolon, item 18 is the sole penultimate item ending with 'and', and final item 19 ends the list.\" Entries f32, f35, and f36 carry the same nineteen-item description. The frozen revision-10 Registry candidate has twenty items: item 18 ends \"...exact evidence refs recorded with the lifecycle fact;\", item 19 ends \"...supporting evidence refs; and\", and item 20 ends \"...never substitutes for `RegistryActivationScope`.\"",
+      "requirement": "Contract Audit section 7 requires that \"When the immediate predecessor version of the same subject identity has unresolved actionable findings, the successor subject closure must carry all of them as immutable declared inputs\", and section 6 requires that every finding record \"evidence or reproduced failure\". The same manifest's own f38 entry escalated this exact class as a `fix`: \"subject_manifest_certifies_enumeration_closure_with_false_evidence\".",
+      "impact": "The frozen closure that this whole-system review is asked to rely on certifies four predecessor findings as closed using evidence that no longer describes the accompanying candidate. Registry revision 10 added conformance item 20 to close f09 from the read-and-release slice, and the carried evidence was not updated. A downstream reviewer or admission authority that verifies closure by reading the manifest rather than the candidate would confirm a structure that is not present, which is the reporting-integrity defect f38 was raised to prevent.",
+      "accountable_owner_ref": "Agent Runtime Design Contract candidate owner who freezes review_artifacts/agent_runtime_t2_candidate/subject_manifest.json, accepted by the Project Owner or delegated design owner under the_charter.md section 8",
+      "required_change": "Restate the correction_evidence for f32, f35, f36, and f37 so it describes the enumeration structure actually present in Registry section 11 of the frozen revision-10 candidate, or replace prose enumeration evidence with a reference to the exact item text and hash. Do not re-freeze a manifest whose closure evidence describes an earlier revision."
+    },
+    {
+      "finding_id": "f10_root_dependency_graph_omits_foundation_edges",
+      "severity": "note",
+      "finding_class": "communication_defect",
+      "affected_candidate_document_id": "agent_runtime_00_runtime_domain_contract",
+      "correction_target_document_id": "agent_runtime_00_runtime_domain_contract",
+      "quoted_evidence": "T1 section 3 introduces its diagram with \"The target logical dependency direction is:\" and lists edges including \"REGISTRY --> FOUNDATION\", \"INVOCATION --> FOUNDATION\", \"DURABILITY --> FOUNDATION\", \"LEDGER --> FOUNDATION\", \"AUTHORITY --> FOUNDATION\", and \"INGRESS --> FOUNDATION\", but contains no EXECUTION --> FOUNDATION or INSPECTION --> FOUNDATION edge. Source Architecture 02 section 3 contains both: \"EXECUTION --> FOUNDATION\" and \"INSPECTION --> FOUNDATION\".",
+      "requirement": "T1 section 3 presents the graph as normative target direction while also delegating: \"Document 02 owns the exact machine-checked allowed-import graph, public-surface manifest, file ownership, and migration-debt high-water mark.\"",
+      "impact": "Read literally, the root forbids Execution and Inspection from consuming the shared serialization, hashing, ID, ref, and instant-validation primitives that both plainly require. The delegation sentence prevents this from becoming an enforcement conflict, but the two normative-looking graphs differ, which invites an implementer to encode the wrong edge set.",
+      "accountable_owner_ref": "Agent Runtime T1 design owner of designDoc/agent_runtime_00_runtime_domain_contract.md",
+      "required_change": "Add the two missing foundation edges so the root diagram is a correct subset of document 02's graph, or label the root diagram explicitly as illustrative class-level direction whose exact edge set is owned by document 02."
+    },
+    {
+      "finding_id": "f11_invocation_names_postgresql_binding",
+      "severity": "note",
+      "finding_class": "code_truth_leakage",
+      "affected_candidate_document_id": "agent_runtime_08_invocation_contract",
+      "correction_target_document_id": "agent_runtime_08_invocation_contract",
+      "quoted_evidence": "Invocation 08 section 4: \"Governed content is retrieved through a host-provided data-access capability, normally backed by PostgreSQL or another governed service.\"",
+      "requirement": "the_agent_runtime section 0 lists as a non-goal \"provider, model, database, durable backend, SDK, CLI, renderer, hosting, or deployment selection\", and section 4 invariant 10 states that \"Current implementation bindings, lifecycle state, evidence, and release pointers come from code and persistent records, not maintained Design prose.\" The same defect class was corrected in documents 05 and 06 as predecessor findings f02 and f03 of the read-and-release slice.",
+      "impact": "A current storage binding is stated as the normal case inside stable, provider-neutral Design Intent. The hedge \"or another governed service\" limits the damage, but the sentence still carries a technology preference that the candidate set elsewhere refuses to state, and it is the one remaining instance after the equivalent leaks were removed from documents 05 and 06.",
+      "accountable_owner_ref": "Agent Runtime Invocation T2 design owner of designDoc/agent_runtime_08_invocation_contract.md",
+      "required_change": "Drop the named store and state only that governed content is retrieved through a host-provided, enforcing data-access capability, leaving the concrete binding to code-owned registration and release evidence."
+    },
+    {
+      "finding_id": "f12_inspection_lineage_view_roots_at_workflow_execution",
+      "severity": "note",
+      "finding_class": "communication_defect",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_06_inspection_contract",
+      "quoted_evidence": "Inspection 06 section 4 introduces \"One execution detail view makes the lineage visible:\" and roots the tree at \"Workflow Execution\" with \"Module Run\" nested beneath it. The Required reader gain likewise promises that a maintainer can build an Inspector that shows \"every Workflow Execution, Module Run, Variant, Attempt, complete model Context, output, usage, failure, retry, and release ref\". Execution 10 section 4 states that an independent Module origin \"commits no Workflow Execution fact and creates one root Module Run.\"",
+      "requirement": "Inspection section 9 item 7 requires proof that \"complete Context, provider projection, input, output, usage, failure, retry, Evaluation, Selection, Resolution, Outcome, and acknowledgement lineage are reconstructable from committed facts\", and T1 section 1 declares both execution origins product-neutral.",
+      "impact": "The documented detail view and reader-gain statement describe only the Workflow origin, so the projection shape for an independent Module execution is left to the implementer. This is presentational rather than authority-bearing, but it repeats the identity gap in finding f01 at the read surface and would produce an Inspector that cannot render one of the two declared origins.",
+      "accountable_owner_ref": "Agent Runtime Inspection T2 design owner of designDoc/agent_runtime_06_inspection_contract.md",
+      "required_change": "State the lineage view for both declared origins, rooted at the identity resolved under finding f01, and align the Required reader gain sentence accordingly."
+    }
+  ],
+  "safe_next_step": "Return the complete candidate to the Runtime design owner for a revision 2; do not freeze a Code Design Basis, replace canonical Design Docs, or begin source restructuring on this revision. Close the three blocking findings first and in this order, because each later decision depends on the earlier one: f01 fixes the top-level execution identity at the T0 and propagates it into T1 sections 4 and 6 and documents 04, 08, and 10; f05 registers the Execution Variant Policy family and names its closure-validation owner, without which no start path can be specified; f04 resolves where the document 09 execution-time authority port lives so Invocation can act as its own Policy Enforcement Point without a reverse edge. Then apply the five fixes (f02, f03, f06, f07, f08) and the three notes, re-freeze one whole-system candidate with a corrected t2_candidate subject manifest per f09, and submit revision 2 for a new independent whole-system semantic review. The declared missing formal-review-host, filename-owner-collision, predecessor-lifecycle, and not-yet-written Code Design Basis blockers remain open and correctly disclosed; none of them is closed by this review, and this result is advisory until the formal Design Contract reviewer binding exists."
+}

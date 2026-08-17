@@ -28,13 +28,15 @@ RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS = (
     "ledger",
     "inspection",
 )
+RUNTIME_REQUIRED_SUPPORTING_PLANE_IDS = (
+    "foundation",
+    "conformance",
+)
 RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS = (
     "claude_agent_sdk",
     "codex_cli",
     "html",
     "http",
-    "postgresql",
-    "postgresql",
     "postgresql",
     "temporal",
 )
@@ -60,6 +62,40 @@ class RuntimeSourceDirectoryRegistration:
     source_directory_id: str
     source_directory: str
     purpose: str
+
+
+@dataclass(frozen=True)
+class RuntimeSupportingPlaneRegistration:
+    """One non-service plane supporting all Runtime responsibilities."""
+
+    record_type: ClassVar[str] = "runtime_supporting_plane_registration"
+
+    supporting_plane_id: str
+    purpose: str
+    owner_contract_ref: str
+
+
+@dataclass(frozen=True)
+class RuntimeSupportingSourceFileRegistration:
+    """One source file owned by Foundation or build-time Conformance."""
+
+    record_type: ClassVar[str] = "runtime_supporting_source_file_registration"
+
+    source_path: str
+    supporting_plane_id: str
+    source_directory_id: str
+    subject: str
+    nominalized_action: str
+    owner_contract_ref: str
+
+    @property
+    def expected_file_name(self) -> str:
+        """Return the required three-part Python filename."""
+
+        return (
+            f"{self.supporting_plane_id}_"
+            f"{self.subject}_{self.nominalized_action}.py"
+        )
 
 
 @dataclass(frozen=True)
@@ -154,6 +190,26 @@ RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS = (
 )
 
 
+RUNTIME_SUPPORTING_PLANE_REGISTRATIONS = (
+    RuntimeSupportingPlaneRegistration(
+        supporting_plane_id="foundation",
+        purpose=(
+            "Own responsibility-neutral identity, serialization, validation, "
+            "and immutable-value primitives without importing Runtime peers."
+        ),
+        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
+    RuntimeSupportingPlaneRegistration(
+        supporting_plane_id="conformance",
+        purpose=(
+            "Validate source ownership, dependency direction, public surfaces, "
+            "and shrinking migration debt outside product execution."
+        ),
+        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
+)
+
+
 RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS = (
     *(
         RuntimeSourceDirectoryRegistration(
@@ -177,6 +233,16 @@ RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS = (
         source_directory_id="testing",
         source_directory=f"{_RUNTIME_SOURCE_ROOT}/testing",
         purpose="standalone architecture and conformance implementations",
+    ),
+    RuntimeSourceDirectoryRegistration(
+        source_directory_id="foundation",
+        source_directory=f"{_RUNTIME_SOURCE_ROOT}/foundation",
+        purpose="responsibility-neutral import-free Runtime primitives",
+    ),
+    RuntimeSourceDirectoryRegistration(
+        source_directory_id="conformance",
+        source_directory=f"{_RUNTIME_SOURCE_ROOT}/conformance",
+        purpose="build-time Runtime architecture and release validation",
     ),
 )
 
@@ -291,13 +357,6 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "registry",
         "release",
         "definition",
-        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
-        source_directory_id="contracts",
-    ),
-    _source(
-        "registry",
-        "contract",
-        "validation",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
         source_directory_id="contracts",
     ),
@@ -670,13 +729,72 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
 )
 
 
+RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
+    RuntimeSupportingSourceFileRegistration(
+        source_path=(
+            "src/agent_runtime/foundation/foundation_contract_validation.py"
+        ),
+        supporting_plane_id="foundation",
+        source_directory_id="foundation",
+        subject="contract",
+        nominalized_action="validation",
+        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path=(
+            "src/agent_runtime/foundation/foundation_schema_traversal.py"
+        ),
+        supporting_plane_id="foundation",
+        source_directory_id="foundation",
+        subject="schema",
+        nominalized_action="traversal",
+        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path=(
+            "src/agent_runtime/conformance/"
+            "conformance_architecture_manifest.py"
+        ),
+        supporting_plane_id="conformance",
+        source_directory_id="conformance",
+        subject="architecture",
+        nominalized_action="manifest",
+        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path=(
+            "src/agent_runtime/conformance/"
+            "conformance_architecture_validation.py"
+        ),
+        supporting_plane_id="conformance",
+        source_directory_id="conformance",
+        subject="architecture",
+        nominalized_action="validation",
+        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path=(
+            "src/agent_runtime/conformance/"
+            "conformance_consumer_manifesting.py"
+        ),
+        supporting_plane_id="conformance",
+        source_directory_id="conformance",
+        subject="consumer",
+        nominalized_action="manifesting",
+        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
+)
+
+
 # Package initializers are structural Python files, not executable product
 # components, and therefore do not use the three-part semantic filename.
 RUNTIME_STRUCTURAL_SOURCE_PATHS = (
     "src/agent_runtime/__init__.py",
+    "src/agent_runtime/conformance/__init__.py",
     "src/agent_runtime/contracts/__init__.py",
     "src/agent_runtime/durability/__init__.py",
     "src/agent_runtime/execution/__init__.py",
+    "src/agent_runtime/foundation/__init__.py",
     "src/agent_runtime/inspection/__init__.py",
     "src/agent_runtime/invocation/__init__.py",
     "src/agent_runtime/ledger/__init__.py",
@@ -700,7 +818,13 @@ RUNTIME_MIGRATION_DEBT_PATHS = (
 def _registered_source_paths() -> set[str]:
     """Return source paths declared by the current registration tuple."""
 
-    return {source.source_path for source in RUNTIME_SOURCE_FILE_REGISTRATIONS}
+    return {
+        source.source_path
+        for source in (
+            *RUNTIME_SOURCE_FILE_REGISTRATIONS,
+            *RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS,
+        )
+    }
 
 
 def validate_runtime_architecture_registration() -> tuple[str, ...]:
@@ -710,6 +834,10 @@ def validate_runtime_architecture_registration() -> tuple[str, ...]:
     responsibilities = {
         item.responsibility_id: item
         for item in RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS
+    }
+    supporting_planes = {
+        item.supporting_plane_id: item
+        for item in RUNTIME_SUPPORTING_PLANE_REGISTRATIONS
     }
     directories = {
         item.source_directory_id: item
@@ -728,6 +856,13 @@ def validate_runtime_architecture_registration() -> tuple[str, ...]:
             "Runtime logical responsibilities must be exactly: "
             + ", ".join(RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS)
         )
+    if len(supporting_planes) != len(RUNTIME_SUPPORTING_PLANE_REGISTRATIONS):
+        errors.append("duplicate Runtime supporting plane")
+    if tuple(supporting_planes) != RUNTIME_REQUIRED_SUPPORTING_PLANE_IDS:
+        errors.append(
+            "Runtime supporting planes must be exactly: "
+            + ", ".join(RUNTIME_REQUIRED_SUPPORTING_PLANE_IDS)
+        )
     if len(directories) != len(RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS):
         errors.append("duplicate Runtime source directory")
     if len(implementation_bindings) != len(
@@ -736,8 +871,10 @@ def validate_runtime_architecture_registration() -> tuple[str, ...]:
         errors.append("duplicate Runtime implementation binding")
     if tuple(
         sorted(
-            binding.technology_id
-            for binding in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+            {
+                binding.technology_id
+                for binding in RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+            }
         )
     ) != RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS:
         errors.append("Runtime implementation technologies differ from the required set")
@@ -750,6 +887,10 @@ def validate_runtime_architecture_registration() -> tuple[str, ...]:
         *(
             ("source directory", row.source_directory_id)
             for row in RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS
+        ),
+        *(
+            ("supporting plane", row.supporting_plane_id)
+            for row in RUNTIME_SUPPORTING_PLANE_REGISTRATIONS
         ),
         *(
             ("implementation binding", row.implementation_binding_id)
@@ -836,6 +977,38 @@ def validate_runtime_architecture_registration() -> tuple[str, ...]:
                     "declare this source"
                 )
 
+    for source in RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS:
+        if source.source_path in source_paths:
+            errors.append(f"duplicate Runtime source path: {source.source_path}")
+        source_paths.add(source.source_path)
+        if source.supporting_plane_id not in supporting_planes:
+            errors.append(
+                f"{source.source_path}: unknown supporting plane "
+                f"{source.supporting_plane_id}"
+            )
+        directory = directories.get(source.source_directory_id)
+        if directory is None:
+            errors.append(
+                f"{source.source_path}: unknown source directory "
+                f"{source.source_directory_id}"
+            )
+        elif Path(source.source_path).parent.as_posix() != directory.source_directory:
+            errors.append(
+                f"{source.source_path}: not contained by registered source directory "
+                f"{directory.source_directory}"
+            )
+        if Path(source.source_path).name != source.expected_file_name:
+            errors.append(
+                f"{source.source_path}: expected filename {source.expected_file_name}"
+            )
+        if source.expected_file_name in detached_file_names:
+            errors.append(
+                f"duplicate detached Runtime source name: {source.expected_file_name}"
+            )
+        detached_file_names.add(source.expected_file_name)
+        if not _SOURCE_NAME.fullmatch(Path(source.source_path).stem):
+            errors.append(f"{source.source_path}: invalid three-part source name")
+
     registered_implementation_sources = {
         source.source_path: source.implementation_binding_id
         for source in RUNTIME_SOURCE_FILE_REGISTRATIONS
@@ -877,6 +1050,14 @@ def validate_registry_architecture_registration(project_root: Path) -> tuple[str
                 f"{source.source_path}: owner contract not found: "
                 f"{source.owner_contract_ref}"
             )
+    for source in RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS:
+        if not (project_root / source.source_path).is_file():
+            errors.append(f"registered Runtime source not found: {source.source_path}")
+        if not (project_root / source.owner_contract_ref).is_file():
+            errors.append(
+                f"{source.source_path}: owner contract not found: "
+                f"{source.owner_contract_ref}"
+            )
 
     declared_paths = (
         source_paths
@@ -902,13 +1083,18 @@ __all__ = [
     "RUNTIME_MIGRATION_DEBT_PATHS",
     "RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS",
     "RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS",
+    "RUNTIME_REQUIRED_SUPPORTING_PLANE_IDS",
     "RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS",
     "RUNTIME_SOURCE_FILE_REGISTRATIONS",
+    "RUNTIME_SUPPORTING_PLANE_REGISTRATIONS",
+    "RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS",
     "RUNTIME_STRUCTURAL_SOURCE_PATHS",
     "RuntimeImplementationBindingRegistration",
     "RuntimeLogicalResponsibilityRegistration",
     "RuntimeSourceDirectoryRegistration",
     "RuntimeSourceFileRegistration",
+    "RuntimeSupportingPlaneRegistration",
+    "RuntimeSupportingSourceFileRegistration",
     "validate_registry_architecture_registration",
     "validate_runtime_architecture_registration",
 ]

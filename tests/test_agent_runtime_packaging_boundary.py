@@ -128,10 +128,12 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
     }
     assert configuration["tool"]["setuptools"]["packages"] == [
         "agent_runtime",
+        "agent_runtime.conformance",
         "agent_runtime.contracts",
         "agent_runtime.design_contract",
         "agent_runtime.durability",
         "agent_runtime.execution",
+        "agent_runtime.foundation",
         "agent_runtime.inspection",
         "agent_runtime.invocation",
         "agent_runtime.ledger",
@@ -307,10 +309,10 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
                 row["responsibility_id"]
                 for row in architecture["logical_responsibilities"]
             ],
-            "technology_ids": sorted(
-                row["technology_id"]
-                for row in architecture["implementation_bindings"]
-            ),
+                "technology_ids": sorted({
+                    row["technology_id"]
+                    for row in architecture["implementation_bindings"]
+                }),
         }))
         """,
         str(wheel_path),
@@ -324,7 +326,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         "public_namespace": "agent_runtime",
         "driver_result": {"status": "synthetic"},
         "workflow_ids": ["workflow_zeta"],
-        "architecture_schema_version": "agent_runtime_architecture_projection_v3",
+        "architecture_schema_version": "agent_runtime_architecture_projection_v4",
         "responsibility_ids": list(RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS),
         "technology_ids": list(RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS),
     }

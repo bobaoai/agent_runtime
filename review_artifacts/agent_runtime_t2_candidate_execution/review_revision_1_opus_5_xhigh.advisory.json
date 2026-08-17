@@ -1,0 +1,230 @@
+{
+  "verdict": "pass_with_fixes",
+  "design_judgment": {
+    "intended_result": "All three candidates state an explicit purpose, required reader gain, and a material design choice, and those three are mutually consistent. Document 09 delivers the intended reader decision (which authority facts enter one execution, when the fence closes, which component enforces a protected resource, how late results and compensation behave) and does not drift into identity, Entitlement, policy, credential, database, or resource-local precondition authority; its non_goals and section 4 explicitly refuse the central-PEP role. Document 10 states one composition root that owns ordering and decisions but not the implementation authority of its peers, and its sections 5 and 6 correctly separate the five execution-change identities the brief asks about: a retry appends the next monotonic Attempt under the same Variant, provider/model A/B creates sibling Variants, backend delivery retries are explicitly excluded from Runtime Attempt identity, a reviewer revision creates a new Module Run or a Workflow-declared revision dispatch rather than rewriting a committed Attempt, and an authority, Principal, tenant, Cell, policy, or binding change starts a new execution. Document 03 keeps authorization and exact legal-wait matching as two independent predicates and keeps human role, UI, approval meaning, and domain content out of the protocol. The one intent-level shortfall is that document 10 declares Workflow and independent Module origins as equal but then specifies coordination, waits, and terminal Outcome mapping only through the Workflow control schema, so the second declared origin does not actually reach the promised reader result.",
+    "authority_structure": "Layer, identity, owner, and parent are valid. Each candidate declares layer T2, canonical_owner under its own agent_runtime_<NN> filename, and parent agent_runtime_00_runtime_domain_contract.md; the domain prefix mechanically binds all three to the single declared T1 root, and the root's section 2 delegation table names exactly these three filenames with matching owned specializations. Owned objects do not collide: 09 owns execution-time observation and fence meaning, 04 owns the durable fence facts and the atomic comparison, 10 owns when comparison is requested and how state advances. That three-owner split is stated consistently in all three documents and matches the root. The material authority defect is that Execution, the largest host-facing protected surface in the Runtime, never names its own Policy Enforcement Point and never publishes a ResourcePermissionManifest, while its peers Registry and Invocation both do and while 09 explicitly refuses to be the fallback. A second defect is that 09 declares ExternalAuthorityInvalidation as an owned output and describes accepting invalidations, but its port exposes only Runtime-initiated pull operations, leaving both the inbound channel and the trust boundary for an invalidation submitter unowned.",
+    "boundary_coherence": "Semantic owner, author, operator, reviewer, persistence owner, implementation binding, and approval authority remain distinguishable across the slice. Ledger is named as the only commit authority, Durability as the only acknowledged-backend-progress authority, Registry as the only release authority, and each Change Boundary defers exact schemas, protocols, and predecessor disposition to a later Code Design Basis without self-admitting. Provider and store names appear only as negative examples or replaceable bindings, never as owners. Two boundaries do not hold. First, document 03's normative sequence diagram makes Event Ingress a direct public host entry point, which contradicts 03's own statement that the port returns values to Execution, contradicts document 10's submit_external_event operation, and contradicts the root's single-Runtime-owned-service handoff and Source Architecture's rule that 03 and 09 public contracts are exported through the Execution namespace. Second, document 10's start command carries Execution Profile selection rules, which places provider and model selection authority in an undefined position between the host, Registry policy, and Execution, directly against the same document's rule that Runtime never chooses a provider or model from a request.",
+    "inheritance_and_dependencies": "Dependency direction closes in the intended direction: 09 and 03 are consumed by Execution, Execution consumes Registry, Invocation, Durability, and Ledger, and no peer reverse edge is introduced. Registry's refusal to depend on 09's execution-time ports is preserved, and 09 correspondingly disclaims Registry lifecycle authorization. Inheritance closure is incomplete in three places. Document 03 omits Data Governance from its inherits list while binding external payload content refs and mandating retention of rejected ingress intents as bounded audit evidence, and while asserting a content and secret boundary in its conformance list. Document 09 requires a single fresh ClockHealthEvidence carried in the authority observation, but the conservative half-open window it inherits compares an authority-clock effective and expiry against the Ledger store's recorded_at_utc, and Timestamp Semantics requires evidence from each participating service, so the Ledger clock domain is never evidenced and the fail-closed claim is not actually closed. Document 03's durable protocol also consumes a Durability response type and an acknowledgement operation that the Durability contract does not declare.",
+    "intent_code_separation": "This dimension is clean. None of the three candidates carries a current source inventory, file path, test result, release pointer, provider selection, delivery status, or migration status as stable intent. Current-technology names appear only as excluded implementation leakage or as replaceable bindings, and predecessor disposition is consistently deferred to the Code Design Basis rather than asserted as present state. Observations from the code architecture audit are treated as evidence in the brief and manifest rather than promoted into contract prose. The manifest correctly records evidence_subject_status as a proposal over an unfrozen dirty worktree, lists its adoption blockers, and claims no authorized or implementation changes, so no false implementation-completion claim exists that would require re-opening the declared upstream blockers.",
+    "implementability": "An implementer could freeze most of a Code Design Basis from this slice: the start ordering, Attempt claim and finalization sequence, Evaluation and Selection separation, reconciliation catalogue, and idempotency and concurrency tables are specific enough to build against. Four gaps would force the implementer to invent authority or behavior rather than realize it. Execution's public lifecycle operations, including request_cancellation, reconcile, and recover, have no declared enforcement point, resource type, scope form, or grant requirement class. The independent Module origin has no control position, wait identity, terminal Outcome mapping, or top-level execution identity, while Ledger's start batch and 03's accepted-event closure both require a Workflow Execution fact and a pinned Workflow Release. Execution Profile and Variant origin is undeclared even though sibling A/B Variants are a stated conformance obligation. RuntimeModuleActivity is declared as a public Execution output but is never defined anywhere in the contract body, and its name imports durable-backend vocabulary into a provider-neutral surface. None of these requires redesigning the slice's boundaries; each is correctable inside the candidate that owns it."
+  },
+  "check_results": [
+    {
+      "check_id": "intent_and_reader_result",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "disposition": "finding",
+      "finding_ids": [
+        "f01_execution_resource_permission_manifest_absent",
+        "f03_cross_clock_evidence_omits_ledger_domain",
+        "f05_durable_event_response_type_and_operation_unbound",
+        "f09_ingress_inherits_omits_data_governance"
+      ]
+    },
+    {
+      "check_id": "boundary_coherence",
+      "disposition": "finding",
+      "finding_ids": [
+        "f01_execution_resource_permission_manifest_absent",
+        "f02_authority_invalidation_inbound_boundary_absent",
+        "f04_ingress_second_public_host_entry",
+        "f07_execution_profile_selection_authority_ambiguous"
+      ]
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "disposition": "finding",
+      "finding_ids": [
+        "f02_authority_invalidation_inbound_boundary_absent",
+        "f05_durable_event_response_type_and_operation_unbound"
+      ]
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "disposition": "finding",
+      "finding_ids": [
+        "f01_execution_resource_permission_manifest_absent",
+        "f06_module_origin_coordination_unspecified",
+        "f07_execution_profile_selection_authority_ambiguous",
+        "f08_runtime_module_activity_output_undefined"
+      ]
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "disposition": "passed",
+      "finding_ids": []
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "f01_execution_resource_permission_manifest_absent",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_10_execution_contract",
+      "correction_target_document_id": "agent_runtime_10_execution_contract",
+      "quoted_evidence": "| `request_cancellation` | Commit and deliver one authorized cancellation intent |\n| `submit_external_event` | Apply document 03 to one exact legal wait |\n| `reconcile` | Repair one committed intent or result lacking its backend acknowledgement |\n| `recover` | Resume from canonical Ledger facts and one bounded durable snapshot |",
+      "requirement": "Product Authorization section 4 requires that each resource-owning service publish a code-owned ResourcePermissionManifest with its resource types, atomic actions, scope forms, condition schema, and grant requirement class, and section 5 makes that service the Policy Enforcement Point. The Runtime root lists each protected-resource responsibility's own ResourcePermissionManifest and enforcement point as a required machine contract and as a Charter completion-evidence family. Candidate 09 states that 'Each Runtime responsibility that owns a protected resource publishes and enforces its own `ResourcePermissionManifest`. This document does not become a central Runtime PEP', and its conformance item 7 requires that 'every high-risk operation carries the grant class required by the owning `ResourcePermissionManifest`'.",
+      "impact": "Execution exposes the entire host-facing protected surface, yet the string ResourcePermissionManifest does not occur anywhere in document 10, and no section names Execution as the enforcement point for its own operations. Peer T2 owners Registry and Invocation both publish theirs, and 09 explicitly refuses the fallback role, so no document in the closure declares who may cancel, reconcile, or recover one execution, under which resource type and scope form, or whether any of these is a high-risk class requiring a bounded OperationGrant. An implementer must invent that authority, and the Charter completion evidence for per-responsibility protected-resource enforcement cannot be produced for the composition root.",
+      "accountable_owner_ref": "designDoc/agent_runtime_10_execution_contract.md",
+      "required_change": "Add to document 10 an enforcement-point section that names Execution as the Policy Enforcement Point for its own execution resources, declares a code-owned Execution ResourcePermissionManifest in the capsule outputs, states the resource types, atomic actions, scope forms, condition schema, and grant requirement class for start, get_status, request_cancellation, submit_external_event, reconcile, and recover, adds a failure row rejecting any lifecycle action or execution resource absent from that manifest before Runtime mutation, and adds a matching conformance item. Do not route this enforcement through document 09."
+    },
+    {
+      "finding_id": "f02_authority_invalidation_inbound_boundary_absent",
+      "severity": "fix",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_09_external_authority_integration_contract",
+      "correction_target_document_id": "agent_runtime_09_external_authority_integration_contract",
+      "quoted_evidence": "An invalidation is accepted only for the exact execution authority binding and\na fence value greater than the last committed value. Duplicate identical\nevents are idempotent. Conflicting reuse or regression fails closed.",
+      "requirement": "Document 09 declares `ExternalAuthorityInvalidation` as an owned output and its section 6 diagram shows 'Invalidation or expiry' producing a higher monotonic fence value, so the contract must state the boundary through which an invalidation enters Runtime and which trusted context may submit it. The peer Durability candidate already closed this exact class by declaring one provider-neutral `DurableDispatchSink` as the inbound boundary carrying no Runtime decision, after its revision-2 finding f07_durability_missing_inbound_dispatch_boundary.",
+      "impact": "The `ExternalAuthorityPort` table exposes only five Runtime-initiated pull operations. Nothing declares whether an invalidation is discovered by polling `resolve_execution_status`, pushed by the external authority, or submitted by a host, and nothing requires a trusted request context for the submitter as document 03 does for events. An unauthenticated or unbounded invalidation submitter could close any execution fence, and conversely a pull-only reading means a mid-Attempt revocation has no path in, so the fail-closed guarantees in sections 7 and 8 and the invalidation-driven `authorization_invalidated` terminal in document 10 section 8 cannot be implemented as written.",
+      "accountable_owner_ref": "designDoc/agent_runtime_09_external_authority_integration_contract.md",
+      "required_change": "Declare in document 09 the inbound boundary for `ExternalAuthorityInvalidation`: name the provider-neutral sink or port operation that receives it, require a trusted external-authority request context and exact execution authority binding on every submission, state that the received value carries no Runtime state decision, and state the refresh obligation for `resolve_execution_status` when no push channel exists. Add the corresponding fail-closed failure rows and a conformance item."
+    },
+    {
+      "finding_id": "f03_cross_clock_evidence_omits_ledger_domain",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_09_external_authority_integration_contract",
+      "correction_target_document_id": "agent_runtime_09_external_authority_integration_contract",
+      "quoted_evidence": "When clock domains differ, the observation includes the registered protected\npredicate, immutable `DistributedClockProfile`, and fresh\n`ClockHealthEvidence`. Validity uses Timestamp Semantics' conservative\nhalf-open window.",
+      "requirement": "Timestamp Semantics section 8 requires that 'Each participating service supplies fresh, immutable `ClockHealthEvidence`' and defines the conservative window as `effective_at_utc + safety_margin <= recorded_at_utc < expiry_at_utc - safety_margin`, then fails closed on 'Missing, expired, unhealthy, regressed, mismatched, or unverifiable profile or health evidence'.",
+      "impact": "The window compares `effective_at_utc` and `expiry_at_utc` produced by the external authority's clock domain against `recorded_at_utc`, which candidate 04 states the Ledger store alone assigns at atomic commit. Two services participate, but 09 requires health evidence only for the authority side, and 04 correspondingly accepts a single evidence ref and forbids importing a 09 implementation while its transaction is open, so the Ledger store's own clock health is never evidenced. A skewed or unhealthy Ledger clock would pass the comparison, and conformance item 9 would record a pass, so the fail-closed cross-clock guarantee that the fence rests on is not actually closed.",
+      "accountable_owner_ref": "designDoc/agent_runtime_09_external_authority_integration_contract.md",
+      "required_change": "State in document 09 that the observation and the durable fence tuple carry fresh `ClockHealthEvidence` for every clock domain named by the pinned `DistributedClockProfile`, including the Runtime Ledger store domain that assigns the authoritative commit instant, and that missing evidence for any participating domain closes the fence. Update conformance item 9 to require verification of the complete per-domain evidence set."
+    },
+    {
+      "finding_id": "f04_ingress_second_public_host_entry",
+      "severity": "fix",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "correction_target_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "quoted_evidence": "    participant H as Trusted product host\n    participant I as Event Ingress\n...\n    H->>I: ExternalEventRequest\n    I->>L: read exact waiting position",
+      "requirement": "The Runtime root section 5.1 requires one Runtime-owned service implementing the complete public lifecycle including 'accept an externally authorized event at a legal wait', and its section 8 states that 'Execution applies document 03's identity and legal-wait protocol'. Candidate 10 exposes `submit_external_event` on `RuntimeExecutionService`. Source Architecture section 6 states that 'T2 03 and T2 09 public contracts are exported through the Execution namespace'. Candidate 03's own section 2 states that the port 'returns values to Execution'.",
+      "impact": "The normative sequence diagram makes the trusted product host call Event Ingress directly while the result returns from Execution, creating a second public host entry point for the same operation and contradicting 03's own port prose, document 10's `submit_external_event`, the root's single-service handoff, and the Execution-namespace export rule. An implementer cannot tell which surface a host integrates against, and the Charter completion condition that the host completes the authorized-external-event lifecycle through the public Runtime API becomes unprovable against two competing entries.",
+      "accountable_owner_ref": "designDoc/agent_runtime_03_external_event_ingress_contract.md",
+      "required_change": "Correct the section 5 diagram so the trusted product host calls Execution's `submit_external_event`, Execution calls `ExternalEventIngressPort.validate_request`, and Ingress returns the `AcceptedExternalEvent` to Execution. State explicitly that `ExternalEventIngressPort` is an intra-Execution contract exported through the Execution namespace and is not a separate host entry surface."
+    },
+    {
+      "finding_id": "f05_durable_event_response_type_and_operation_unbound",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "correction_target_document_id": "agent_runtime_10_execution_contract",
+      "quoted_evidence": "    E->>D: frozen apply-event command\n    D-->>E: DurableReadyEvent + bounded snapshot\n...\n    E->>D: acknowledge committed application ref\n    D-->>E: durable acknowledgement",
+      "requirement": "The Durability candidate declares `apply_event` as returning 'Idempotent acknowledgement and resulting snapshot for one committed event intent', declares `DurableReadyEvent` as the value the Adapter delivers inbound through `DurableDispatchSink` when a wait is satisfied, and enumerates its complete port as start, query, apply_event, request_cancellation, acknowledge_outcome, schedule_timer, cancel_timer, and recover. Candidate 03 assigns durable submission to Execution: 'Execution owns durable submission and state advancement'.",
+      "impact": "The diagram types the `apply_event` response as `DurableReadyEvent` rather than a `DurableAcknowledgement`, and it invents a Durability operation, 'acknowledge committed application ref', that the Durability port does not declare and that `acknowledge_outcome` does not cover because an event application is not a Runtime Outcome. Document 10 section 7 repeats the first error with 'A returned `DurableReadyEvent` wakes Execution'. Because Execution owns durable submission, an implementer would have to invent a Durability operation and confuse the inbound readiness channel with a command response, breaking the intent-to-acknowledgement lineage on which the event crash-window convergence depends.",
+      "accountable_owner_ref": "designDoc/agent_runtime_10_execution_contract.md",
+      "required_change": "In document 10 section 7, state the exact Durability call sequence using only the declared Durability port: Execution submits the frozen `apply_event` command and receives a `DurableAcknowledgement` and bounded snapshot, while an inbound `DurableReadyEvent` delivered through `DurableDispatchSink` is a separate wake signal carrying no state decision. Then correct candidate 03's section 5 diagram to match, removing the undeclared acknowledge-application operation."
+    },
+    {
+      "finding_id": "f06_module_origin_coordination_unspecified",
+      "severity": "fix",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_10_execution_contract",
+      "correction_target_document_id": "agent_runtime_10_execution_contract",
+      "quoted_evidence": "2. an exact admitted Module Release when its registration allows independent\n   execution.\n\nBoth origins create the same Module Run, Variant, Attempt, Invocation, Ledger,\nauthority, and durability lineage.\n...\nExecution interprets only the registered provider-neutral Workflow control\nschema: nodes, legal edges, Module release refs, branch and join policy, wait\npolicy, retry policy, Evaluation policy, Selection policy, and terminal Outcome\nmapping.",
+      "requirement": "The Agent Runtime T0 execution identity law states 'Workflow Execution, when a Workflow is the origin', and the Runtime root repeats 'Workflow Execution, when Workflow-originated' while requiring both origins to produce the same identity, authority, Invocation, Ledger, and recovery lineage. Candidate 10's conformance item 1 requires proof that 'the public service starts Workflow and independent Module origins through the same identity, authority, Ledger, Invocation, and durability law'.",
+      "impact": "Every coordination rule in document 10 is expressed through the Workflow control schema and Workflow-graph concepts, including control position, join readiness, wait policy, and terminal Outcome mapping. For the independent Module origin there is no Workflow Release and therefore no control schema, yet candidate 04 requires the start batch to commit a Workflow Execution fact and enforces 'one Workflow Execution identity for one exact start command hash', and candidate 03 requires a 'pinned Workflow Release' plus a `waiting` status and binds the exact Workflow Release into every `AcceptedExternalEvent`. The second declared origin therefore has no top-level execution identity, no wait model, and no terminal Outcome mapping, and 03's legal-wait validation is unimplementable for it. Conformance item 1 cannot be satisfied as written.",
+      "accountable_owner_ref": "designDoc/agent_runtime_10_execution_contract.md",
+      "required_change": "State in document 10 the exact Module-origin realization: which top-level execution identity is committed when no Workflow Release exists, whether an independently executing Module may hold a wait and, if so, what supplies its control position, accepted event classes, and terminal Outcome mapping, and which registered policy replaces the Workflow control schema. Then align candidate 03's legal-wait requirements and candidate 04's start-batch expectation with that answer, or state explicitly that independent Module origins admit no external wait."
+    },
+    {
+      "finding_id": "f07_execution_profile_selection_authority_ambiguous",
+      "severity": "fix",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_10_execution_contract",
+      "correction_target_document_id": "agent_runtime_10_execution_contract",
+      "quoted_evidence": "One start command binds exact host execution binding, origin release, input\npackage, Execution Profile selection rules, external authority context,\ngoverned-input scope, durable Adapter binding, and stable idempotency identity.",
+      "requirement": "Candidate 10 section 1 states 'The host supplies one exact, already selected execution binding. Runtime never chooses a product workflow, deployment, tenant, Cell, provider, model, or durable backend from a request.' The Registry candidate states that 'An Execution Variant binds one exact admitted Execution Profile at run time' and that a Profile pins provider, model, effort, and adapter identity. The Agent Runtime T0 requires that any change to provider-visible behavior, model profile, or adapter behavior be represented by the release or execution identity that owns it.",
+      "impact": "Every other element of the start command is an exact binding, but 'Execution Profile selection rules' is a rule set, and the term appears exactly once with no owner. If the rules are caller-supplied, Runtime evaluates them and thereby chooses provider and model from a request, contradicting section 1 and absorbing host selection authority. If they are release-pinned policy, they belong to a Registry Behavior Policy and should not be a start-command field. Compounding this, section 4's enumeration of the interpretable Workflow control schema omits any Variant or Profile policy, so the sibling A/B Variant set required by sections 5 and 6 and by conformance item 6 has no declared source at all.",
+      "accountable_owner_ref": "designDoc/agent_runtime_10_execution_contract.md",
+      "required_change": "Replace 'Execution Profile selection rules' with the exact declared authority: either an exact host-supplied admitted Execution Profile ref per origin, or an immutable release-pinned Variant and Profile policy resolved through Registry. State which registered release declares the sibling Variant set, and add that element to the section 4 control-schema enumeration so Variant creation is not an undeclared Execution inference."
+    },
+    {
+      "finding_id": "f08_runtime_module_activity_output_undefined",
+      "severity": "fix",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_10_execution_contract",
+      "correction_target_document_id": "agent_runtime_10_execution_contract",
+      "quoted_evidence": "outputs:\n  - RuntimeExecutionService\n  - RuntimeExecutionCommand family\n  - RuntimeExecutionHandle and RuntimeExecutionStatus\n  - RuntimeModuleActivity\n  - execution state-machine and reconciliation evidence",
+      "requirement": "Design Doc Management requires a Design Doc to state its stable logical interfaces and responsibility handoffs, and the Runtime root requires the stable public surface to be organized by responsibility and narrow host ports. The Charter records that directories, durable backends, and provider SDKs are implementation bindings that cannot become peer semantic surfaces.",
+      "impact": "`RuntimeModuleActivity` is declared as a public Execution output but the term occurs nowhere else in the contract body; no section states what it owns, who calls it, or what crosses it. It is also durable-backend vocabulary, and the Durability candidate's Temporal mapping separately states that 'Activities enter Runtime Execution through a host-composed bridge using stable refs', so a reader cannot tell whether this output is the provider-neutral Execution-side dispatch seam, an internal collaborator that should not be public at all, or a Temporal-shaped concept leaking into a provider-neutral surface. An implementer forming the Code Design Basis must invent the interface.",
+      "accountable_owner_ref": "designDoc/agent_runtime_10_execution_contract.md",
+      "required_change": "Either define `RuntimeModuleActivity` in the contract body with a provider-neutral name, stating what it owns, which responsibility invokes it, what values cross it, and why it is part of the public Execution surface rather than a private collaborator, or remove it from the capsule outputs and leave the dispatch seam to the Code Design Basis."
+    },
+    {
+      "finding_id": "f09_ingress_inherits_omits_data_governance",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "correction_target_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "quoted_evidence": "inherits:\n  - designDoc/the_charter.md\n  - designDoc/the_agent_runtime.md\n  - designDoc/the_product_authorization.md\n  - designDoc/the_timestamp_semantic.md",
+      "requirement": "Data Governance owns managed Data Asset identity, classification, derivative inheritance, retention, and custody for every persisted record family, and the Runtime root requires each Runtime record family to carry its Data Governance registration and writer boundary. Peer candidates 01, 04, 08, 09, and 10 all list `designDoc/the_data_governance.md` in their inherits sets.",
+      "impact": "Candidate 03 binds an externally supplied 'payload content ref and exact event schema ref when a payload exists', directs that 'Ingress preserves the rejected intent as bounded audit evidence', requires a 'bounded evidence ref' on authority failure, and asserts in conformance item 9 that 'content, credentials, Entitlement bodies, and provider secrets do not enter shared ingress or durable state'. Those are Data Governance objects and a Data Governance invariant asserted without declaring the inherited authority, so classification, derivative restriction inheritance, retention, and custody rules for host-supplied event payloads and preserved rejected intents have no declared owner. This is the same inheritance-closure class already corrected on the Registry candidate.",
+      "accountable_owner_ref": "designDoc/agent_runtime_03_external_event_ingress_contract.md",
+      "required_change": "Add `designDoc/the_data_governance.md` to the inherits list in both the frontmatter and the Contract Capsule, and state which owner registers the event payload content class and the preserved rejected-intent evidence as governed content, confirming that Ledger holds the bodies under its registered custody rules and that Ingress holds only bounded refs."
+    },
+    {
+      "finding_id": "f10_ingress_validity_window_attribution_drift",
+      "severity": "note",
+      "finding_class": "communication_defect",
+      "affected_candidate_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "correction_target_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "quoted_evidence": "Every authority-sensitive validation uses the registered protected predicate,\npinned `DistributedClockProfile`, fresh `ClockHealthEvidence`, and conservative\nhalf-open validity window from document 09 and Timestamp Semantics.",
+      "requirement": "Timestamp Semantics section 8 alone owns the conservative half-open validity window and its fail-closed law, and candidate 09 correctly consumes rather than co-owns it: 'Validity uses Timestamp Semantics' conservative half-open window.' The Charter states that one rule is declared only by its semantic owner and that two documents giving different rules for the same object makes the candidate non-conforming.",
+      "impact": "Attributing the validity window jointly to 'document 09 and Timestamp Semantics' presents a Runtime T2 as a co-owner of portable time law. It does not currently change any stated behavior, but it invites a later local change to the window inside a Runtime contract instead of at the portable semantic owner.",
+      "accountable_owner_ref": "designDoc/agent_runtime_03_external_event_ingress_contract.md",
+      "required_change": "Reword section 7 so document 09 supplies the registered predicate, pinned profile, and health-evidence requirements for the execution authority binding, while the conservative half-open validity window is attributed to Timestamp Semantics alone."
+    },
+    {
+      "finding_id": "f11_ingress_application_receipt_output_undefined",
+      "severity": "note",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "correction_target_document_id": "agent_runtime_03_external_event_ingress_contract",
+      "quoted_evidence": "outputs:\n  - ExternalEventIngressPort\n  - ExternalEventRequest\n  - AcceptedExternalEvent\n  - ExternalEventApplicationReceipt\n  - ExternalEventAcknowledgement",
+      "requirement": "Candidate 03 states that 'Execution owns durable submission and state advancement; Ingress owns event identity and legal-wait validation; Ledger owns commits', and candidate 04 declares `RuntimeRecordBatch and CommitReceipt` as the Ledger-owned commit receipt family.",
+      "impact": "`ExternalEventApplicationReceipt` appears only in the capsule outputs and is never defined in the body. Because the application fact is committed by Execution through a Ledger batch, this named output either duplicates the Ledger commit receipt or is an undefined fourth value, leaving a small ownership smear between Ingress and Ledger at exactly the boundary the contract is trying to keep separate.",
+      "accountable_owner_ref": "designDoc/agent_runtime_03_external_event_ingress_contract.md",
+      "required_change": "Define `ExternalEventApplicationReceipt` in the body with its producer and its relation to the Ledger commit receipt, or remove it from the outputs and let the Ledger commit receipt plus `ExternalEventAcknowledgement` carry the application and acknowledgement lineage."
+    },
+    {
+      "finding_id": "f12_bounded_status_conformance_gap",
+      "severity": "note",
+      "finding_class": "failure_or_completion_gap",
+      "affected_candidate_document_id": "agent_runtime_10_execution_contract",
+      "correction_target_document_id": "agent_runtime_10_execution_contract",
+      "quoted_evidence": "| `get_status` | Return one bounded status and resolved output refs |",
+      "requirement": "Charter product completion condition 3 requires that the host complete the 'start、bounded status/result、cancel、authorized external event、reconcile 和 recovery lifecycle' through the public API, and the Runtime root assigns the public start-to-terminal lifecycle evidence family to document 10 with document 03 ingress evidence.",
+      "impact": "Document 10's twelve conformance items prove start idempotency, dispatch, retry, Variants, review loops, fence and cancellation, crash windows, replay, structural absences, and end-to-end lifecycle, but none proves that `get_status` returns a bounded status and result reference set rather than an unbounded execution object. The root's evidence table likewise omits bounded status from the document 10 evidence family, so the Charter's bounded-status completion condition has no owning proof anywhere in the closure, even though the code architecture audit records unbounded trace loading as a current defect.",
+      "accountable_owner_ref": "designDoc/agent_runtime_10_execution_contract.md",
+      "required_change": "Add a conformance item to document 10 proving that `get_status` returns bounded status and resolved output references under declared response budgets and never an unbounded execution object or trace, and confirm the boundary between that operation and Inspection's paged read models."
+    },
+    {
+      "finding_id": "f13_execution_time_comparison_law_unbound",
+      "severity": "note",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_10_execution_contract",
+      "correction_target_document_id": "agent_runtime_10_execution_contract",
+      "quoted_evidence": "A retry is allowed only\nfor a typed failure whose policy class, Attempt ceiling, time budget, authority\nfence, and Workflow state permit another Attempt.",
+      "requirement": "Timestamp Semantics section 6 forbids raw comparisons outside an admitted role, storage, and clock-domain relationship, and section 5 permits a worker or process wall clock to observe local work only 'under an admitted profile'. Document 10 lists `designDoc/the_timestamp_semantic.md` in its inherits set, and its slice peers 09 and 03 both state that bare wall-clock comparison is forbidden for authority decisions.",
+      "impact": "Document 10 owns time-budget exhaustion, Attempt ceilings, and the wait timeout policy, but never states which clock domain evaluates them or which admitted profile governs the comparison between a Ledger-assigned start instant and a worker's current observation. The Durability candidate governs the deadline form carried in a command, and the Invocation candidate already closed the equivalent gap for its budgets, so Execution is the remaining owner of time-bearing control decisions with no stated comparison law.",
+      "accountable_owner_ref": "designDoc/agent_runtime_10_execution_contract.md",
+      "required_change": "State in document 10 which clock domain and admitted profile govern retry time-budget and Attempt-ceiling evaluation and wait-timeout derivation, that Execution never assigns the Ledger's authoritative commit instant, and that these deadlines use the governed instant and integer duration forms."
+    }
+  ],
+  "safe_next_step": "Return the nine actionable findings to the document owners for a revision-2 candidate of this same three-document slice; do not admit canonical Design Docs, freeze a Code Design Basis, or begin Inspection 06 and Standalone Release Conformance 05 authoring until they are applied. Sequence the corrections so the cross-document ones settle first: fix the Execution enforcement point and ResourcePermissionManifest (f01), then the two protocol-boundary corrections that span documents (f04 ingress entry point, f05 Durability call types and operations, applied in document 10 first and then mirrored into 03's diagram), then the independent Module origin realization (f06), which may in turn require aligning candidate 04's start-batch expectation and 03's legal-wait requirements. Resolve f07 by naming the Execution Profile and Variant authority before any Attempt or Variant state table is drafted. The two authority-closure corrections in document 09 (f02 inbound invalidation boundary, f03 per-domain clock-health evidence) and the 03 inheritance correction (f09) can proceed in parallel. Record the four notes as carried predecessor findings in the revision-2 subject manifest with their exact dispositions. Keep the declared upstream blockers listed unchanged; this review is advisory and neither closes them nor supplies an admitted verdict."
+}

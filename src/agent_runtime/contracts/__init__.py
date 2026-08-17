@@ -6,7 +6,7 @@ modules. The predecessor exports from ``registry_workflow_definition`` and
 retire with the corresponding architecture-debt entries.
 """
 
-from .registry_contract_validation import (
+from ..foundation.foundation_contract_validation import (
     validate_usd_amount,
     format_usd_amount,
     validate_id,

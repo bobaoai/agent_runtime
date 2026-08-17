@@ -1,0 +1,144 @@
+{
+  "basis_schema_version": "code_design_basis_v1",
+  "basis_id": "agent_runtime_architecture_rebuild",
+  "status": "approved",
+  "requested_result": "Produce one independently publishable Agent Runtime whose Registry, Execution, Invocation, Durability, Ledger, and Inspection responsibilities are independently reviewable, have one-way dependencies, and compose one recoverable start-to-inspection execution path.",
+  "owning_design_refs": [
+    "review_artifacts/agent_runtime_complete_candidate/subject_manifest.json@sha256:09ee88f6751bee4db1a259a27a08822e4900c1d62af2ce16cb406c2b34e4954a",
+    "review_artifacts/agent_runtime_code_architecture_audit.md@sha256:e558c73561a078dcac4ddf70a07e93d6b3afa46ba2187559fc679c13a907dc93"
+  ],
+  "engineering_change_route_ref": "engineering_change_route:agent_runtime_architecture_rebuild@v1",
+  "architecture_disposition": "refactor",
+  "logical_modules": [
+    {
+      "module_id": "runtime_registry",
+      "responsibility": "Own immutable executable release identity, closure, admission, activation, and exact retrieval.",
+      "owned_resources": ["runtime_release_records", "registry_admission_state", "registry_schema_release"],
+      "public_interfaces": ["registry_release_reader", "registry_candidate_validator", "registry_release_writer", "registry_admission_writer"],
+      "allowed_dependencies": ["runtime_foundation"],
+      "prohibited_dependencies": ["runtime_execution", "runtime_invocation", "runtime_durability", "runtime_ledger", "runtime_inspection", "authoring_worktree_discovery"],
+      "failure_and_recovery": ["reject incomplete closure before registration", "idempotently reuse byte-identical releases", "reject identity conflicts", "refuse unsupported persistent schema"],
+      "required_tests": ["canonical release hashing", "closure and admission", "replay and conflict", "postgres schema migration and refusal", "no working-tree discovery"],
+      "future_capabilities": ["new typed release families through explicit Registry contract revisions"],
+      "implementation_bindings": ["src/agent_runtime/contracts/registry_release_definition.py", "src/agent_runtime/registry/*.py"],
+      "disposition": "split"
+    },
+    {
+      "module_id": "runtime_execution",
+      "responsibility": "Own the public execution lifecycle and all dispatch, retry, evaluation, selection, resolution, cancellation, invalidation, and reconciliation decisions.",
+      "owned_resources": ["host_lifecycle_contracts", "attempt_state_machine", "request_bound_invocation_host", "reconciliation_selection"],
+      "public_interfaces": ["runtime_execution_service", "runtime_module_activity", "execution_recovery_service", "submit_authority_invalidation"],
+      "allowed_dependencies": ["runtime_registry", "runtime_invocation", "runtime_durability", "runtime_ledger", "external_authority_ports", "runtime_foundation"],
+      "prohibited_dependencies": ["provider_sdk", "database_implementation", "durable_backend_sdk", "inspection_projection"],
+      "failure_and_recovery": ["idempotent lifecycle actions", "typed policy-admitted retries only", "quarantine stale-fence results", "replay committed intents without duplicate effects"],
+      "required_tests": ["end_to_end_start_to_inspection", "duplicate lifecycle actions", "retry and resolution", "crash windows", "cancellation and invalidation races", "external wait recovery"],
+      "future_capabilities": ["new registered workflow coordination policies without provider or storage conditionals"],
+      "implementation_bindings": ["src/agent_runtime/contracts/execution_host_definition.py", "src/agent_runtime/execution/*.py"],
+      "disposition": "rewrite"
+    },
+    {
+      "module_id": "runtime_invocation",
+      "responsibility": "Execute one exact provider, tool, or deterministic computation under a pinned profile and return bounded normalized observations.",
+      "owned_resources": ["invocation_contracts", "provider_adapter_spi", "semantic_context_projection", "attempt_workspace", "invocation_resource_permission_manifest"],
+      "public_interfaces": ["invocation_adapter", "invocation_adapter_registry", "invocation_host", "invocation_result"],
+      "allowed_dependencies": ["runtime_registry", "runtime_foundation"],
+      "prohibited_dependencies": ["runtime_execution", "runtime_ledger", "runtime_durability", "workflow_routing", "retry_decision"],
+      "failure_and_recovery": ["deny undeclared resource before entry", "separate provider failures from Runtime defects", "bound output during collection", "rebuild provider context from canonical inputs"],
+      "required_tests": ["resource permission allow and deny", "authority intent ordering", "Claude and Codex adapter conformance", "minimal environment", "bounded output", "workspace crash recovery"],
+      "future_capabilities": ["new providers and tools through the same admitted adapter SPI"],
+      "implementation_bindings": ["src/agent_runtime/contracts/invocation_adapter_definition.py", "src/agent_runtime/invocation/*.py"],
+      "disposition": "refactor"
+    },
+    {
+      "module_id": "runtime_durability",
+      "responsibility": "Acknowledge frozen durable commands and return bounded cursor snapshots or readiness events for timers, waits, replay, and recovery.",
+      "owned_resources": ["durable_commands", "command_acknowledgements", "bounded_cursor_snapshot", "durable_ready_event", "adapter_descriptor"],
+      "public_interfaces": ["durable_backend_adapter", "frozen_durable_command", "durable_acknowledgement", "durable_ready_event"],
+      "allowed_dependencies": ["runtime_foundation"],
+      "prohibited_dependencies": ["runtime_registry", "runtime_execution", "runtime_ledger", "host_topology", "deployment_configuration"],
+      "failure_and_recovery": ["idempotent command replay", "stale cursor rejection", "bounded history rollover", "ready event after wait or timer satisfaction"],
+      "required_tests": ["frozen command serialization", "command idempotency", "ready event fields", "crash replay", "snapshot bound", "Temporal conformance"],
+      "future_capabilities": ["replaceable durable backends implementing the same command and event protocol"],
+      "implementation_bindings": ["src/agent_runtime/contracts/durability_backend_definition.py", "src/agent_runtime/durability/*.py"],
+      "disposition": "split"
+    },
+    {
+      "module_id": "runtime_ledger",
+      "responsibility": "Validate and atomically append the sole canonical execution fact, content-reference, fence, intent, outcome, and acknowledgement history.",
+      "owned_resources": ["runtime_execution_records", "runtime_content_refs", "ledger_schema_release", "ledger_sequence", "ledger_query_ports"],
+      "public_interfaces": ["runtime_execution_record_store", "runtime_execution_content_store", "runtime_execution_query_store", "atomic_record_batches"],
+      "allowed_dependencies": ["runtime_foundation"],
+      "prohibited_dependencies": ["runtime_execution", "runtime_invocation", "runtime_durability", "runtime_inspection", "authorization_policy_decision"],
+      "failure_and_recovery": ["atomic batch rollback", "idempotent fact replay", "immutable conflict rejection", "cross_clock_fence_fail_closed", "schema compatibility refusal"],
+      "required_tests": ["batch atomicity", "cross_process fence races", "lineage closure", "usage and output closure", "postgres concurrency and migration", "content disposition"],
+      "future_capabilities": ["new versioned fact families with explicit migrations"],
+      "implementation_bindings": ["src/agent_runtime/contracts/ledger_record_definition.py", "src/agent_runtime/ledger/*.py"],
+      "disposition": "split"
+    },
+    {
+      "module_id": "runtime_inspection",
+      "responsibility": "Serve bounded authorized projections of committed Registry and Ledger facts.",
+      "owned_resources": ["inspection_read_models", "authorized_query_scope", "page_cursor", "deterministic_rendering"],
+      "public_interfaces": ["inspection_service", "inspection_query_authorizer", "inspection_repository", "inspection_renderer"],
+      "allowed_dependencies": ["runtime_registry", "runtime_ledger", "runtime_foundation"],
+      "prohibited_dependencies": ["runtime_execution", "runtime_invocation", "runtime_durability", "canonical_mutation", "ambient_backend_selection"],
+      "failure_and_recovery": ["authorize before storage retrieval", "fail closed on inaccessible content", "reject malformed lineage", "rebuild projection from canonical facts"],
+      "required_tests": ["cross_tenant_query_denial", "summary_detail_content_authorization", "bounded cursor paging", "lineage rejection", "deterministic HTML", "no ambient adapter default"],
+      "future_capabilities": ["additional UI and telemetry consumers through the same authorized read ports"],
+      "implementation_bindings": ["src/agent_runtime/inspection/*.py"],
+      "disposition": "refactor"
+    },
+    {
+      "module_id": "runtime_foundation",
+      "responsibility": "Own import-free canonical identity, serialization, immutable-byte, timestamp-format, ref, and shared schema-traversal primitives.",
+      "owned_resources": ["pure_value_types", "canonical_serialization", "shared_validation"],
+      "public_interfaces": ["foundation_identity", "foundation_serialization", "foundation_validation"],
+      "allowed_dependencies": [],
+      "prohibited_dependencies": ["all_runtime_responsibilities", "provider_sdk", "database_sdk", "durable_backend_sdk"],
+      "failure_and_recovery": ["deterministic typed validation failure"],
+      "required_tests": ["canonical bytes and hashes", "identifier and timestamp formats", "shared schema traversal"],
+      "future_capabilities": ["only primitives with at least two valid responsibility consumers"],
+      "implementation_bindings": ["selected primitives currently duplicated under src/agent_runtime/contracts and peer modules"],
+      "disposition": "rewrite"
+    },
+    {
+      "module_id": "runtime_conformance",
+      "responsibility": "Validate source ownership, dependency direction, public surfaces, shrinking migration debt, adapters, downstream closure, and generated release evidence outside product execution.",
+      "owned_resources": ["architecture_manifests", "public_surface_manifests", "migration_debt_manifest", "conformance_test_kits"],
+      "public_interfaces": ["architecture_validator", "release_conformance_runner", "consumer_closure_validator"],
+      "allowed_dependencies": ["all_public_runtime_contracts"],
+      "prohibited_dependencies": ["product_runtime_import_of_conformance"],
+      "failure_and_recovery": ["fail build or admission with exact violation identities"],
+      "required_tests": ["allowed imports", "cycle freedom", "exact public exports", "debt high-water mark", "downstream consumer closure"],
+      "future_capabilities": ["additional adapter and distribution checks without entering the product wheel path"],
+      "implementation_bindings": ["src/agent_runtime/registry/registry_architecture_registration.py", "src/agent_runtime/testing/*.py", "tools/*.py"],
+      "disposition": "split"
+    }
+  ],
+  "cross_module_seams": [
+    "Execution consumes Registry, Invocation, Durability, Ledger, and external-authority ports; peers do not import Execution.",
+    "Invocation returns observations; Execution translates them to one Ledger atomic batch.",
+    "Durability receives frozen commands and returns acknowledgements or DurableReadyEvent; deployment configuration stays in adapter assembly.",
+    "Inspection consumes authorized Registry and Ledger query ports and never records execution activity.",
+    "Product code never imports Conformance."
+  ],
+  "migration_and_compatibility": [
+    "Freeze a symbol-level downstream consumer manifest before public contract changes.",
+    "Add architecture enforcement and Foundation before moving behavior.",
+    "Version Registry and Ledger PostgreSQL schema migrations and refuse unsupported schema state.",
+    "Remove compatibility facades only after every downstream import has keep, replace, or retire disposition.",
+    "Keep active executions on their admitted Runtime release until terminal or explicitly migrated."
+  ],
+  "rollback_boundary": "Rollback restores the prior deployable Runtime release and its compatible persistent schema, or follows the migration's declared forward-repair path; it never reintroduces a second Ledger or silently rebinds active executions.",
+  "acceptance_criteria": [
+    "One shipped RuntimeExecutionService completes and recovers a start-to-inspection path.",
+    "All six responsibilities obey the one-way allowed dependency graph.",
+    "Invocation resource entry has a permission manifest, one authority observation, and prior Ledger intent.",
+    "Ledger fence and intent races pass real concurrent PostgreSQL tests.",
+    "Durability returns declared readiness events from frozen commands without deployment configuration leakage.",
+    "Inspection is bounded, authorized, and projection-only.",
+    "One canonical Registry identity and one canonical Ledger remain.",
+    "Runtime, live adapter, downstream compatibility, wheel, and independent engineering review gates pass."
+  ],
+  "unresolved_decisions": []
+}

@@ -1,0 +1,111 @@
+{
+  "manifest_schema_version": "agent_runtime_design_review_subject_v1",
+  "candidate_status": "t2_core_runtime_slice_revision_6",
+  "candidate_revision": 6,
+  "baseline_head": "294a3bd",
+  "evidence_subject_status": "proposal_over_unfrozen_dirty_worktree",
+  "inputs": [
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/subject_manifest.json",
+      "sha256": "010b9b14e6de27fe4ca44c1cf45ee31deb804ed2bc73fd36dc0a276ffbe9bba1"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/subject_manifest.json",
+      "sha256": "e3af7a53bf0fad5a72725240215fdcebbf89a29a8111a13801864316083ab6ed"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_architecture_audit.md",
+      "sha256": "e558c73561a078dcac4ddf70a07e93d6b3afa46ba2187559fc679c13a907dc93"
+    },
+    {
+      "path": "designDoc/the_design_doc_management.md",
+      "sha256": "379be6b4eacd40abb531a4c38da888a8ed0d6d6bcf78d88c2753788c049a9a45"
+    },
+    {
+      "path": "designDoc/the_timestamp_semantic.md",
+      "sha256": "ee027ea43eba0af454606215fe1ab445395a3d31bbbcfa2b685e1c66286f3e53"
+    },
+    {
+      "path": "designDoc/the_product_authorization.md",
+      "sha256": "22ecc4a50474fedfd9670cccea54e4ee9f7a9a5c708c552400f50984c6020bfc"
+    },
+    {
+      "path": "designDoc/the_data_governance.md",
+      "sha256": "167ddbaaaf3d126f735965268739da48bd89045b616891417e2c1546fc5f3441"
+    },
+    {
+      "path": "designDoc/the_software_delivery.md",
+      "sha256": "e7a3e575ddc4bf81a7881b55b589b04ddb6de0834838f96a45ef46df4c359d6c"
+    },
+    {
+      "path": "designDoc/the_contract_audit.md",
+      "sha256": "d20d185e23a4935bab4b037fc0cbc3176707ad0fadcd9dd34b76d6daf810244f"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "f5e3f317b872f6e570eea7f9eda37fec3834fb09e64ba7f5ed5735f99332abac"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_execution/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "7c30b45e60baf257f5a9662b14a2c1fa96aa475f853bfc51fa3d5a304b84683d"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "e1359738cc94c69c81d28f1e5a8c959918368d4fb1290d89e04f5bcd0ecc003f"
+    }
+  ],
+  "subject_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/agent_runtime_04_execution_ledger_contract.md",
+      "canonical_target": "designDoc/agent_runtime_04_execution_ledger_contract.md",
+      "sha256": "27ed7d1820a3b85ecb31dfae06502dba43789b395265b07ce238f2784e218cbe"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/agent_runtime_08_invocation_contract.md",
+      "canonical_target": "designDoc/agent_runtime_08_invocation_contract.md",
+      "sha256": "aa0cfcf3a67a3d805c78002ad6f5a27b0b37ae4871921aed0590c9b6d2dd269f"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/agent_runtime_07_durability_contract.md",
+      "canonical_target": "designDoc/agent_runtime_07_durability_contract.md",
+      "sha256": "f6e67ed616d29b1b7a195cf55b01b34e02785f61d815135157713ac41bd3be80"
+    }
+  ],
+  "supporting_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_next/REVIEW_BRIEF.md",
+      "sha256": "f985a854dff73abe1a6eaf1dd8b537ee72da5894b341a53896b524fd10796015"
+    }
+  ],
+  "predecessor_findings": [
+    {"finding_id": "f01_invocation_inspector_recording_authority", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_08_invocation_contract", "correction_target": "agent_runtime_08_invocation_contract", "disposition": "closed_in_revision_3", "correction_sections": ["3"]},
+    {"finding_id": "f02_invocation_missing_resource_permission_manifest", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_08_invocation_contract", "correction_target": "agent_runtime_08_invocation_contract", "disposition": "closed_in_revision_3", "correction_sections": ["0", "5", "12"]},
+    {"finding_id": "f03_invocation_timestamp_inheritance_gap", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_08_invocation_contract", "correction_target": "agent_runtime_08_invocation_contract", "disposition": "closed_in_revision_3", "correction_sections": ["0", "2", "6", "12"]},
+    {"finding_id": "f04_ledger_cross_clock_conformance_gap", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_04_execution_ledger_contract", "correction_target": "agent_runtime_04_execution_ledger_contract", "disposition": "closed_in_revision_3", "correction_sections": ["9", "10"]},
+    {"finding_id": "f05_ledger_timestamp_registration_gap", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_04_execution_ledger_contract", "correction_target": "agent_runtime_04_execution_ledger_contract", "disposition": "closed_in_revision_3", "correction_sections": ["3", "10"]},
+    {"finding_id": "f06_ledger_fence_predicate_delivery_undefined", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_04_execution_ledger_contract", "correction_target": "agent_runtime_04_execution_ledger_contract", "disposition": "closed_in_revision_3", "correction_sections": ["5", "6"]},
+    {"finding_id": "f07_durability_missing_inbound_dispatch_boundary", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_07_durability_contract", "correction_target": "agent_runtime_07_durability_contract", "disposition": "closed_in_revision_3", "correction_sections": ["0", "2", "11"]},
+    {"finding_id": "f08_durability_backend_binding_channel_conflict", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_07_durability_contract", "correction_target": "agent_runtime_07_durability_contract", "disposition": "closed_in_revision_3", "correction_sections": ["3", "8", "11"]},
+    {"finding_id": "f09_ledger_content_retrieval_boundary_note", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_04_execution_ledger_contract", "correction_target": "agent_runtime_04_execution_ledger_contract", "disposition": "closed_in_revision_3", "correction_sections": ["4", "9", "10"]},
+    {"finding_id": "f10_subject_predecessor_revision_closure_note", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_t2_candidate_next_subject_manifest", "correction_target": "subject_manifest_and_review_brief", "disposition": "closed_in_revision_3", "correction_sections": ["predecessor_findings", "Evidence status"], "correction_evidence": "Revision 1 is explicitly recorded as an internal draft freeze with no independent verdict and no actionable findings."},
+    {"finding_id": "f06_module_origin_coordination_unspecified", "source_review": "../agent_runtime_t2_candidate_execution/review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_04_execution_ledger_contract", "correction_target": "agent_runtime_04_execution_ledger_contract", "disposition": "closed_in_revision_4", "correction_sections": ["5.1"], "correction_evidence": "The start batch now commits one top-level Runtime Execution for both origins, adds a Workflow Execution fact only for Workflow origin, and records exact Module and Variant Policy refs without inventing a Workflow identity for independent Module origin."},
+    {"finding_id": "f03_ledger_start_batch_omits_module_origin_root_module_run", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_04_execution_ledger_contract", "correction_target": "agent_runtime_04_execution_ledger_contract", "disposition": "closed_in_revision_6", "correction_sections": ["3", "5.1"], "correction_evidence": "Independent Module start now atomically commits and idempotently reuses exactly one root Module Run directly under Runtime Execution."},
+    {"finding_id": "f02_invocation_host_provider_and_dynamic_intent_commit_unassigned", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_08_invocation_contract_and_agent_runtime_04_execution_ledger_contract", "correction_target": "agent_runtime_10_execution_contract", "disposition": "closed_in_revision_6_and_downstream_revision_4", "correction_sections": ["invocation.3", "invocation.6", "ledger.5.3", "execution.4"], "correction_evidence": "Invocation owns the protocol, Execution supplies the request-bound host, and Execution commits each dynamic intent under the active claim and fence before resource entry."},
+    {"finding_id": "f06_conformance_enumerations_close_twice", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_07_durability_contract_and_agent_runtime_08_invocation_contract", "correction_target": "agent_runtime_07_durability_contract_and_agent_runtime_08_invocation_contract", "disposition": "closed_in_revision_6", "correction_sections": ["durability.11", "invocation.12"]},
+    {"finding_id": "f08_durability_temporal_mapping_in_stable_intent", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_07_durability_contract", "correction_target": "agent_runtime_07_durability_contract", "disposition": "closed_in_revision_6", "correction_sections": ["9"], "correction_evidence": "Stable intent now states only provider-neutral backend primitive obligations; exact mappings remain in Adapter releases and conformance evidence."}
+  ],
+  "validation": {
+    "frontmatter": "pass",
+    "markdown_links": "pass",
+    "whitespace": "pass"
+  },
+  "adoption_blockers": [
+    "whole-system revision 2 findings are corrected; revision 6 awaits whole-system revision 3 re-review",
+    "Source Architecture and Registry revision 12 await whole-system revision 3 re-review",
+    "the complete Runtime contract revision 3 remains a candidate",
+    "Agency Platform and Software Delivery still claim Runtime-prefixed 02, 10, and 05 contracts",
+    "formal Runtime review host still imports retired registry_module_exporting interface"
+  ],
+  "authorized_changes": [],
+  "implementation_changes": []
+}

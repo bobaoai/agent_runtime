@@ -19,7 +19,7 @@ import re
 from typing import Any, Mapping, TypeAlias, TypeVar
 
 from .ledger_lineage_definition import ModuleOutputResolutionRecord
-from .registry_contract_validation import (
+from ..foundation.foundation_contract_validation import (
     validate_usd_amount,
     validate_utc_timestamp,
 )

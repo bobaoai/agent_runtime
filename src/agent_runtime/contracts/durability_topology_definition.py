@@ -20,7 +20,7 @@ from .registry_workflow_definition import (
     validate_capability_id,
     validate_runtime_ref,
 )
-from .registry_contract_validation import validate_bool, validate_id
+from ..foundation.foundation_contract_validation import validate_bool, validate_id
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")

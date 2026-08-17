@@ -1,0 +1,188 @@
+{
+  "verdict": "pass_with_fixes",
+  "design_judgment": {
+    "intended_result": "All three candidates state a purpose, a required reader gain, and a material design choice that are mutually consistent and non-overlapping. Ledger 04 makes one canonical execution-fact authority with atomic batch families and explicitly refuses Execution decisions, Product Authorization policy, Data Governance custody, durable scheduling, and inspection presentation. Invocation 08 makes one provider-neutral bounded external computation per claimed Attempt that returns observations rather than committing them. Durability 07 makes one replaceable acknowledged-command surface that keeps canonical history in Ledger. The brief's declared decisions match the contract bodies; nothing in the slice claims implementation completion, admission, or provider selection.",
+    "authority_structure": "Layer, canonical owner, parent, and owned system object are valid and distinct for each candidate: all three declare layer T2 under designDoc/agent_runtime_00_runtime_domain_contract.md, and their owned objects (execution facts and transaction semantics; invocation and model-visible Context; durable progress and recovery) do not collide with each other or with Registry 01 and Source Architecture 02. Decision ownership is generally well split: Execution supplies decisions and submits batches, Invocation and Durability return observations and receipts, Ledger validates and commits. Two authority defects remain. Invocation 08 section 3 assigns recording of the delivered Context and provider-native projections to Inspector, which the Runtime T0 defines as read-only and Ledger 04 itself lists as a derived surface. Invocation 08 also owns protected resources (Attempt workspace, authorized repository checkout, bounded shell, network egress, environment and credential injection) but publishes no ResourcePermissionManifest and names no enforcement point, deferring instead to 'external authority' — exactly the centralization the T1 root forbids and the pattern peer Registry 01 discharges explicitly.",
+    "boundary_coherence": "Semantic owner, author, operator, reviewer, persistence owner, implementation binding, and admission authority stay distinct in most of the slice. Ledger 04 keeps record meaning with Ledger, Data Asset and custody registration with Data Governance, and migration and deployment admission with Software Delivery. Durability 07 keeps Temporal as a labeled replaceable Adapter and pushes tenant routing, Cell placement, and backend product selection to host composition. Ledger 04 correctly refuses cross-system atomicity and refuses to call an authorization service inside a database transaction. Two boundaries are not coherent. Invocation 08 blurs persistence owner and read-only projection in the Inspector sentence. Durability 07 places 'backend binding selected by the host' inside the frozen command in section 3 while section 8 routes backend binding and deployment-specific namespace, endpoint, queue, credentials, region, and placement through a secure Adapter configuration and declares those values non-Durability types; the same named value therefore has two channels and no rule separating them.",
+    "inheritance_and_dependencies": "The target import direction is preserved at the responsibility level: Durability reconciles 'through Execution' rather than reading Ledger, Ledger records durable acknowledgements supplied 'by Durability through Execution', and Invocation resolves Adapter releases through Registry, which is an allowed edge. Inherited constraint closure is incomplete in three places. Ledger 04 states only that timestamp fields retain 'instant semantics and format', omitting the Timestamp Semantics rules that the authoritative store assigns recorded_at_utc at atomic commit and that every concrete persisted class carries an exact registration — both of which peer Registry 01 states for its own store. Invocation 08 omits designDoc/the_timestamp_semantic.md from inherits entirely although it is the sole entry point for provider-reported instants, protected-operation deadlines, timeouts, and workspace retention. Ledger 04 assigns itself execution of a fail-closed comparison 'supplied by document 09' without declaring the channel, while the T1 dependency graph gives Ledger no edge to the authority ports and Source Architecture bars the supporting foundation from satisfying a protected predicate.",
+    "intent_code_separation": "Stable intent is well separated from mutable implementation truth. None of the three candidates carries a file inventory, current release pointer, test result, delivery status, or admission claim. Each change-boundary section defers exact fields, schemas, predecessor disposition, migration, and rollback to a later Code Design Basis after the complete contract set is accepted, and each states that missing real integration evidence remains validation debt rather than conformance. Technology names appear only as labeled replaceable bindings or negative examples (PostgreSQL connections and ORM sessions as things the ports must not expose; Temporal as one Adapter that the contract explicitly does not select as a product dependency). No mutable provider, path, or release fact is presented as Design Intent.",
+    "implementability": "An implementer can form a Code Design Basis for most of this slice: the record families, atomic transaction families, port set, capability classes, structured-output modes, context-continuity modes, frozen command law, bounded snapshot, and intent-to-acknowledgement recovery pattern are concrete enough to build against without inventing product behavior. Three gaps would force redesign or invention. Ledger 04 does not say how the registered fence predicate, clock profile, and health evidence reach the transaction that must evaluate them, so an implementer must choose between a forbidden reverse import, a foundation implementation the architecture contract prohibits, or an invented parameter. Durability 07 declares no provider-neutral inbound boundary for backend-initiated progress — a fired timer, a satisfied wait, or worker dispatch re-entering Execution — mentioning it only inside the Temporal-specific mapping as 'a host-composed bridge'. Ledger 04's content port declares staging, hash verification, ref binding, and disposition but no authorized body-retrieval boundary or explicit body-unavailable result, which the later Inspection contract would otherwise have to invent."
+  },
+  "check_results": [
+    {
+      "check_id": "intent_and_reader_result",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "disposition": "finding",
+      "finding_ids": [
+        "f02_invocation_missing_resource_permission_manifest",
+        "f03_invocation_timestamp_inheritance_gap",
+        "f05_ledger_timestamp_registration_gap"
+      ]
+    },
+    {
+      "check_id": "boundary_coherence",
+      "disposition": "finding",
+      "finding_ids": [
+        "f01_invocation_inspector_recording_authority",
+        "f08_durability_backend_binding_channel_conflict"
+      ]
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "disposition": "finding",
+      "finding_ids": [
+        "f04_ledger_cross_clock_conformance_gap"
+      ]
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "disposition": "finding",
+      "finding_ids": [
+        "f06_ledger_fence_predicate_delivery_undefined",
+        "f07_durability_missing_inbound_dispatch_boundary"
+      ]
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "disposition": "passed",
+      "finding_ids": []
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "f01_invocation_inspector_recording_authority",
+      "severity": "fix",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_08_invocation_contract",
+      "correction_target_document_id": "agent_runtime_08_invocation_contract",
+      "quoted_evidence": "Inspector records the exact complete envelope and every provider-native projection separately. It does not display prompt fragments as if they were independent invocations.",
+      "requirement": "The Runtime T0 section 4 invariant 7 states that 'Inspection is read-only, receives authorization before retrieval, and exposes bounded projections rather than loading an unbounded history.' Ledger 04 section 1 states that 'Provider transcripts, CLI workspaces, Temporal history, Inspector projections, in-memory result objects, and usage aggregates are derived or operational surfaces. None is a second Ledger.' Design Doc Management section 6 requires the persistence owner and the operator or projection surface to remain distinguishable, and treats ambiguous prose as a design finding when it changes who may write.",
+      "impact": "The delivered model Context and its provider-native projections are the only evidence of what the model actually saw, and this sentence makes a read-only projection responsibility their recorder. It creates a second write path beside the canonical Ledger, contradicts Charter completion condition 4, and contradicts this same candidate's section 2, where the InvocationResult already returns 'delivered Context and provider-native output-constraint evidence refs' as observations for Execution to commit. An implementer could legitimately build envelope capture inside Inspection and leave no canonical record family for it.",
+      "accountable_owner_ref": "Runtime Invocation T2 design owner, canonical_owner designDoc/agent_runtime_08_invocation_contract.md",
+      "required_change": "Restate section 3 so that Invocation returns the complete envelope and each provider-native projection as bounded observation and content refs inside the InvocationResult, Execution commits them, Ledger 04 owns the corresponding canonical record family and content class, and Inspection only projects the already-committed facts. Remove any recording verb attached to Inspector."
+    },
+    {
+      "finding_id": "f02_invocation_missing_resource_permission_manifest",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_08_invocation_contract",
+      "correction_target_document_id": "agent_runtime_08_invocation_contract",
+      "quoted_evidence": "- a deliberately authorized repository checkout with bounded shell access; or",
+      "requirement": "The T1 root section 2 states that 'Document 09 does not centralize authorization for every Runtime-owned resource. Each Runtime responsibility that owns a protected resource acts as the Policy Enforcement Point for its own operations under Product Authorization and publishes its own `ResourcePermissionManifest`.' T1 section 13 lists per-responsibility protected-resource enforcement as an evidence family owed by 'Each T2 owning a protected resource, through its published `ResourcePermissionManifest`, Policy Enforcement Point conformance, Product Authorization decision evidence'. Product Authorization section 4 requires each resource-owning service to publish resource types, atomic actions, scope forms, condition schema, and grant requirement class, and section 3 requires a bounded OperationGrant by default for high-risk externally visible effects.",
+      "impact": "Invocation owns high-risk protected resources that no other responsibility owns: the Attempt workspace, an authorized repository checkout, bounded shell access, network egress, and environment and credential injection. The candidate declares only sandbox enforcement of 'declared capabilities' and defers the grant decision to 'the Profile and external authority', so these resource types, actions, scope forms, and grant requirement classes are declared nowhere. Peer Registry 01 discharges exactly this obligation for its own lifecycle resources and even records that it 'declares no dependency on the T2 09 External Authority Integration ports', which makes the asymmetry a peer-set defect rather than a wording preference. The later External Authority 09 contract would have to invent Invocation's resource semantics to close the gap.",
+      "accountable_owner_ref": "Runtime Invocation T2 design owner, canonical_owner designDoc/agent_runtime_08_invocation_contract.md",
+      "required_change": "Add an Invocation-owned `ResourcePermissionManifest` to the capsule outputs, name Invocation as the Policy Enforcement Point for its workspace, repository, shell, network, environment, and credential-injection resource classes, state the grant requirement class for the high-risk classes under Product Authorization section 3, and add a matching conformance obligation in section 12 requiring recorded decision evidence and fail-closed behavior for those resources."
+    },
+    {
+      "finding_id": "f03_invocation_timestamp_inheritance_gap",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_08_invocation_contract",
+      "correction_target_document_id": "agent_runtime_08_invocation_contract",
+      "quoted_evidence": "inherits:\n  - designDoc/the_charter.md\n  - designDoc/the_agent_runtime.md\n  - designDoc/the_product_authorization.md\n  - designDoc/the_data_governance.md",
+      "requirement": "Timestamp Semantics section 5 assigns provider timestamps the status of 'Observational execution evidence only unless a typed domain projection admits them' and restricts the monotonic process clock to local durations and timeouts that 'never persist as a cross-process business timestamp'. Section 9 makes it non-conformant when 'a caller, worker, provider, or durable backend assigns another store's `recorded_at_utc`'. The Runtime T0 section 9 records Timestamp Semantics as an external authority whose exact authorities Runtime 'consumes and records'.",
+      "impact": "Invocation is the sole point at which provider-reported instants enter Runtime, and it also defines a protected-operation 'deadline', provider-turn and timeout budgets, and workspace retention. Omitting Timestamp Semantics from the inherited set leaves the contract with no rule that provider instants stay observational, that timeouts stay monotonic and local, or that Invocation observations never carry a Ledger commit instant. Peers Ledger 04 and Durability 07 both inherit the contract, and Durability even pins a 'Timestamp-governed deadline', so the omission is a closure gap in the peer set rather than an editorial one.",
+      "accountable_owner_ref": "Runtime Invocation T2 design owner, canonical_owner designDoc/agent_runtime_08_invocation_contract.md",
+      "required_change": "Add designDoc/the_timestamp_semantic.md to the inherits list and state, in the observation and operation-intent sections, that provider-supplied instants are observational evidence only, that deadlines and budgets use the governed instant and duration forms, and that Invocation never supplies the Ledger's authoritative commit instant."
+    },
+    {
+      "finding_id": "f04_ledger_cross_clock_conformance_gap",
+      "severity": "fix",
+      "finding_class": "failure_or_completion_gap",
+      "affected_candidate_document_id": "agent_runtime_04_execution_ledger_contract",
+      "correction_target_document_id": "agent_runtime_04_execution_ledger_contract",
+      "quoted_evidence": "5. concurrent finalization admits only the active claim and current fence;",
+      "requirement": "The Charter section 7 completion condition 5 requires that 'authority-sensitive finalization 在同一 durable transaction 中比较当前 fence；跨时钟 expiry 或 validity 判断同时绑定 registered protected predicate、`DistributedClockProfile` 和 fresh `ClockHealthEvidence`'. The T1 root section 13 assigns 'Canonical Registry and Ledger authority, durable fences, protected cross-clock evidence, and persistent-schema compatibility' to documents 01 and 04. Timestamp Semantics section 8 requires the conservative half-open window and fail-closed behavior on 'missing, expired, unhealthy, regressed, mismatched, or unverifiable profile or health evidence'.",
+      "impact": "Ledger 04 is the responsibility that actually executes the protected cross-clock comparison, yet its section 10 conformance list and section 9 failure table contain no obligation to prove that path. Section 6 covers only 'A missing, expired, incompatible, or unprovable authority observation', which does not enumerate the clock-evidence failure classes or the conservative window. The Ledger conformance gate can therefore pass while the Charter completion condition it feeds remains unproven, which is a ceremony-passes-while-result-wrong exposure on the single most safety-critical Runtime transaction. Peer Registry 01 states the full closure for its lesser lifecycle decision in its section 8, failure table, and conformance item 18.",
+      "accountable_owner_ref": "Runtime Execution Ledger T2 design owner, canonical_owner designDoc/agent_runtime_04_execution_ledger_contract.md",
+      "required_change": "Add a section 9 failure row and a section 10 conformance item requiring that authority-sensitive finalization records the registered predicate, pinned `DistributedClockProfile`, and fresh `ClockHealthEvidence` refs with the terminal fact, applies the conservative half-open acceptance window, and fails closed on missing, expired, unhealthy, regressed, mismatched, or unverifiable evidence, with real persistent-store evidence for each case."
+    },
+    {
+      "finding_id": "f05_ledger_timestamp_registration_gap",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_04_execution_ledger_contract",
+      "correction_target_document_id": "agent_runtime_04_execution_ledger_contract",
+      "quoted_evidence": "Timestamp fields retain the instant semantics and format required by Timestamp Governance. They describe when an observation occurred. They do not establish transaction order or replay identity.",
+      "requirement": "Timestamp Semantics section 2 states that 'Every persisted record has `recorded_at_utc`' and that `recorded_at` is 'Assigned by that store, not by a caller, worker, or provider'. Section 4 states that 'Every concrete persisted class therefore requires its own exact registration' and that unregistered persisted classes fail validation. Section 9 makes it non-conformant when 'an unregistered class writes time-bearing records'.",
+      "impact": "Ledger 04 owns the largest persisted record family in the Runtime and receives time-bearing observations from Invocation, Durability, and External Authority Integration, but it states only the format and ordering half of the inherited law. It never states that the Ledger store assigns `recorded_at_utc` at atomic commit, nor that every concrete persisted Ledger class carries an exact Timestamp class registration. An implementer may therefore accept caller-supplied or provider-supplied commit instants inside a batch, which is precisely the non-conformance Timestamp Semantics section 9 names. Peer Registry 01 section 9 states both obligations for its own store, so the inherited constraint closes for Registry and not for Ledger.",
+      "accountable_owner_ref": "Runtime Execution Ledger T2 design owner, canonical_owner designDoc/agent_runtime_04_execution_ledger_contract.md",
+      "required_change": "Extend section 3 or section 8 to state that the Ledger store alone assigns `recorded_at_utc` at atomic commit, that no supplier of an observation may assign it, and that every concrete persisted Ledger record class carries an exact Timestamp class registration; add the corresponding conformance item in section 10 as Registry 01 does in its conformance item 13."
+    },
+    {
+      "finding_id": "f06_ledger_fence_predicate_delivery_undefined",
+      "severity": "fix",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_04_execution_ledger_contract",
+      "correction_target_document_id": "agent_runtime_04_execution_ledger_contract",
+      "quoted_evidence": "3. applies the registered fail-closed comparison supplied by document 09;",
+      "requirement": "The T1 root section 3 dependency graph gives Ledger only the edge `LEDGER --> FOUNDATION` and states 'There is no peer reverse edge.' Source Architecture 02 section 3 rule 1 restricts a responsibility to 'the foundation, its declared inward public dependencies, and its own private implementation', rule 6 places T2 09 source inside the Execution responsibility, and section 5 states that the foundation 'cannot define or widen those semantics, satisfy a protected predicate, or prove a cross-clock decision'.",
+      "impact": "Ledger must execute a comparison whose definition another contract owns, but the three declared ports (`RuntimeExecutionRecordStore`, `RuntimeExecutionQueryStore`, `RuntimeContentStore`) expose no channel for the registered predicate, clock profile, or health evidence, and Ledger may not import Registry, Execution, or the 09 ports to resolve them. An implementer forming the Code Design Basis must choose between a forbidden reverse import that creates a Ledger-Execution cycle, a foundation implementation that Source Architecture 02 prohibits, or an invented callback parameter — three different architectures, one of which breaks the declared import law.",
+      "accountable_owner_ref": "Runtime Execution Ledger T2 design owner, canonical_owner designDoc/agent_runtime_04_execution_ledger_contract.md",
+      "required_change": "State in section 4 and section 6 how the registered predicate, `DistributedClockProfile`, and `ClockHealthEvidence` reach the finalization transaction as committed durable fence facts or typed values inside the submitted batch, that Ledger evaluates them itself without importing document 09 or Registry, and how Ledger refuses an unknown or unsupported registered predicate version."
+    },
+    {
+      "finding_id": "f07_durability_missing_inbound_dispatch_boundary",
+      "severity": "fix",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_07_durability_contract",
+      "correction_target_document_id": "agent_runtime_07_durability_contract",
+      "quoted_evidence": "| `schedule_timer` | Stable timer identity for one retry or wait deadline |",
+      "requirement": "The T1 root section 2 assigns Durability 'Provider-neutral durable commands, bounded snapshots, timers, waits, replay, recovery, and adapter conformance', and its section 3 graph contains only the edge `EXECUTION --> DURABILITY`. The Runtime T0 section 6 states that 'Module dispatch and backend acknowledgement are internal Runtime ordering steps, not additional Host product operations.'",
+      "impact": "Every operation in the section 2 port table is outbound. The contract never declares how backend-initiated progress — a fired retry or wait timer, a satisfied wait, or worker dispatch after replacement — re-enters Runtime Execution. The only statement of that path is Temporal-specific: 'Activities enter Runtime Execution through a host-composed bridge using stable refs.' A maintainer implementing a non-Temporal backend, which is the stated purpose of this contract, must invent the inbound contract, and its ownership between Durability, Execution 10, and host composition is unassigned. The section 11 adapter conformance list likewise proves no inbound behavior.",
+      "accountable_owner_ref": "Runtime Durability T2 design owner, canonical_owner designDoc/agent_runtime_07_durability_contract.md",
+      "required_change": "Declare the provider-neutral inbound boundary in section 2 or a new section — what the Adapter delivers when a timer fires or a wait is satisfied, which values it may carry, and that it carries no decision — or explicitly delegate that boundary by name to Execution 10 and state that Durability owns only the stable identity it returns; then add a matching adapter conformance obligation in section 11."
+    },
+    {
+      "finding_id": "f08_durability_backend_binding_channel_conflict",
+      "severity": "fix",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_07_durability_contract",
+      "correction_target_document_id": "agent_runtime_07_durability_contract",
+      "quoted_evidence": "- exact durable Adapter release and backend binding selected by the host;",
+      "requirement": "The same candidate's section 8 states that 'Host composition selects the backend binding and provides deployment-specific namespace, endpoint, queue, credentials, region, and placement through a secure Adapter configuration. These values are not Durability domain types unless they affect the provider-neutral command contract.' The T1 root section 2 lists 'host route selection, tenant placement, or backend product selection' among Durability's non-goals, and the supplied code architecture audit finding P1.2 records host topology already leaking into current Durability types.",
+      "impact": "'Backend binding selected by the host' is placed on two different channels by two sections of the same contract — inside the frozen idempotent command in section 3 and inside the out-of-band secure Adapter configuration in section 8 — and the qualifier 'unless they affect the provider-neutral command contract' names no test for which is which. Because the command is hashed into the idempotency identity, this ambiguity decides whether deployment namespace, endpoint, queue, region, or placement become part of command identity, and it reopens the exact host-topology leak the audit already identified.",
+      "accountable_owner_ref": "Runtime Durability T2 design owner, canonical_owner designDoc/agent_runtime_07_durability_contract.md",
+      "required_change": "Define one rule separating the two channels: name the exact binding facts that are part of frozen command identity (for example an opaque backend binding identity and Adapter release ref) and state that every deployment-specific value including namespace, endpoint, queue, credentials, region, and placement reaches the Adapter only through configuration and never enters the command payload or its idempotency identity. Remove the open-ended 'unless' qualifier in section 8."
+    },
+    {
+      "finding_id": "f09_ledger_content_retrieval_boundary_note",
+      "severity": "note",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_04_execution_ledger_contract",
+      "correction_target_document_id": "agent_runtime_04_execution_ledger_contract",
+      "quoted_evidence": "| `RuntimeContentStore` | Stages immutable bytes, verifies content hashes, binds content refs, and applies registered body-custody dispositions |",
+      "requirement": "The T1 root section 9.3 states that 'A content body is retrieved separately under current authorization', and its section 10 requires that a disposed content body 'Preserve lineage and disposition evidence; return explicit body-unavailable semantics'. The T1 section 3 graph gives Inspection its only path to content bodies through `INSPECTION --> LEDGER`.",
+      "impact": "The declared content-store boundary covers staging, verification, ref binding, and disposition but not authorized body retrieval or the explicit body-unavailable result. Since Inspection 06 can reach bodies only through this port, the later Inspection candidate would have to invent the retrieval boundary and the unavailable result shape, and the supplied code architecture audit finding P1.11 identifies authorized retrieval before expiry, denied retrieval after expiry, and integrity verification after disposal as the required evidence.",
+      "accountable_owner_ref": "Runtime Execution Ledger T2 design owner, canonical_owner designDoc/agent_runtime_04_execution_ledger_contract.md",
+      "required_change": "Extend the section 4 port boundary and section 9 failure table so `RuntimeContentStore` declares authorized body retrieval under a scope resolved outside Ledger and an explicit typed body-unavailable result that preserves lineage, hash, and disposition facts."
+    },
+    {
+      "finding_id": "f10_subject_predecessor_revision_closure_note",
+      "severity": "note",
+      "finding_class": "review_or_admission_conflict",
+      "affected_candidate_document_id": "agent_runtime_t2_candidate_next_subject_manifest",
+      "correction_target_document_id": "agent_runtime_t2_candidate_next_subject_manifest",
+      "quoted_evidence": "\"candidate_status\": \"t2_core_runtime_slice_revision_2\",",
+      "requirement": "Contract Audit section 7 states that 'When the immediate predecessor version of the same subject identity has unresolved actionable findings, the successor subject closure must carry all of them as immutable declared inputs. The subject owner cannot omit or select a subset. The reviewer must disposition every carried finding and cannot recover additional history from memory or ambient records.'",
+      "impact": "The subject declares itself revision 2 but its inputs, supporting files, and brief never state what happened to revision 1. The adoption blocker 'missing independent T2 design review verdict' implies no predecessor verdict exists, but that inference is left to the reviewer, whereas the upstream Source Architecture and Registry subject ships its eight prior advisory results inside the subject directory and narrates the revision 8 to 9 closure explicitly. The asymmetry weakens the reviewer's ability to bind this verdict to a complete predecessor closure from the subject alone.",
+      "accountable_owner_ref": "Agent Runtime T2 slice candidate owner, review_artifacts/agent_runtime_t2_candidate_next/subject_manifest.json",
+      "required_change": "Add an explicit predecessor-closure statement to the manifest or brief recording that revision 1 received no independent verdict and carries no actionable findings, or, if a revision-1 result exists, list it as a declared input with each carried finding and its disposition."
+    }
+  ],
+  "safe_next_step": "Return the six actionable findings to the three T2 design owners and produce revision 3 of this slice only; do not touch canonical designDoc files, the upstream revision-9 Source Architecture and Registry candidate, or the declared 02/05/10 filename-owner and review-host blockers. Sequence the corrections so the two that change who may write or enforce are settled first: remove the Inspector recording verb from Invocation 08 section 3 and route envelope and provider-projection evidence through the InvocationResult into a named Ledger 04 record family (f01), and give Invocation 08 its own ResourcePermissionManifest and enforcement point for workspace, repository, shell, network, environment, and credential-injection resources (f02). Then close the inherited-law gaps (f03, f05), the Ledger cross-clock conformance obligation (f04), the fence-predicate delivery channel (f06), the Durability inbound boundary (f07), and the frozen-command versus Adapter-configuration split (f08). Re-freeze with a new manifest that also records the predecessor-revision closure statement (f10), then rerun independent semantic review over the revised subject before authoring External Authority 09, Execution 10, and Event Ingress 03."
+}

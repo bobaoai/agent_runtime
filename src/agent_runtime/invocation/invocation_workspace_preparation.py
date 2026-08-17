@@ -14,7 +14,7 @@ try:  # pragma: no branch - selected once for the host platform
 except ImportError:  # Windows has no fcntl module
     _fcntl = None
 
-from ..contracts.registry_contract_validation import validate_id
+from ..foundation.foundation_contract_validation import validate_id
 
 
 _MARKER_NAME = ".agent_runtime_attempt.json"

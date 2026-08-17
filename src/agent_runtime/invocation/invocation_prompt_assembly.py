@@ -6,11 +6,11 @@ import hashlib
 import json
 
 from ..contracts.execution_module_definition import ModuleInputBinding
-from .invocation_schema_projection import (
+from ..foundation.foundation_schema_traversal import (
     resolve_local_schema_reference,
-    task_plane_output_schema,
     transform_json_schema_nodes,
 )
+from .invocation_schema_projection import task_plane_output_schema
 
 
 PROMPT_ONLY_JSON = "prompt_only_json"

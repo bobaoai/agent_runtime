@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any, ClassVar, Mapping
 
-from .registry_contract_validation import (
+from ..foundation.foundation_contract_validation import (
     validate_exact_record_tuple,
     validate_id,
     validate_int,

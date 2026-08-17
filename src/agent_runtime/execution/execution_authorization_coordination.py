@@ -19,7 +19,7 @@ from ..contracts.execution_authorization_definition import (
     ProtectedOperationIntent,
 )
 from ..contracts.registry_release_definition import RuntimeModuleRelease
-from ..contracts.registry_contract_validation import validate_utc_timestamp
+from ..foundation.foundation_contract_validation import validate_utc_timestamp
 from ..registry.registry_release_retrieval import RuntimeModuleReleaseClient
 from .execution_authorization_resolution import ProductAuthorizationContextClient
 from .execution_operation_resolution import RuntimeProtectedOperationClient

@@ -187,6 +187,8 @@ generic Clean Architecture vocabulary.
 agent_runtime/
   README.md
   design_contract/
+  foundation/
+  conformance/
   contracts/
   registry/
   execution/
@@ -206,24 +208,36 @@ agent_runtime/
 | `durability_*_*` | `agent_runtime_07_temporal_durable_adapter_contract.md` |
 | `ledger_*_*` | `agent_runtime_06_standalone_package_and_lifecycle_contract.md` |
 | `inspection_*_*` | `agent_runtime_06_standalone_package_and_lifecycle_contract.md` |
+| `foundation_*_*` | approved Runtime source-architecture and Code Design Basis |
+| `conformance_*_*` | approved Runtime source-architecture and Code Design Basis |
 
-Per-file exceptions are code-owned and appear in the generated architecture
-report. In particular, `registry_architecture_registration` is owned by
-`agent_runtime_06`, `registry_migration_validation` by `agent_runtime_05`, and
-the portable topology plus retired-backend evaluations by `agent_runtime_02`.
+The code-owned architecture registration keeps logical responsibilities,
+supporting planes, physical source directories, and concrete technology
+bindings as separate dimensions. Every target source file maps to one logical
+responsibility or one supporting plane and one physical directory. Only a
+concrete adapter maps to an implementation binding.
 
-The code-owned `registry_architecture_registration` maintains three independent
-registries: logical responsibilities, physical source directories, and concrete
-implementation bindings. Every target source file maps to exactly one logical
-responsibility and one physical directory, and only concrete technology files
-map to an implementation binding. Repository tests reject mixed axes,
-unregistered or misplaced files, missing contracts, duplicate dispositions, and
-stale migration-debt paths.
+`agent_runtime.conformance` validates the registered source closure, the
+one-way responsibility import graph, exact public exports, and shrinking
+migration-debt baselines. Existing forbidden imports are frozen by exact source
+and target module. A removed debt edge is accepted; a new debt edge fails CI.
+Runtime execution code never imports Conformance.
+
+`agent_runtime.foundation` contains responsibility-neutral validation and JSON
+Schema traversal primitives. It imports no Runtime responsibility. Schema
+traversal distinguishes schema-bearing positions from container maps such as
+`properties` and `$defs`, so a user field named `items` or `properties` is not
+misread as a schema keyword.
 
 The current wheel still contains five explicitly enumerated predecessor
 semantic surfaces while migration is in progress. They are listed in
 `RUNTIME_MIGRATION_DEBT_PATHS`; the generated architecture report, not this
 illustrative tree, is the exhaustive current source map.
+
+Before a public cutover, Conformance freezes every downstream Runtime import at
+symbol level. The current trading-platform baseline is stored in
+`review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json`;
+it records a `replace` or `retire` disposition for every observed import site.
 
 Package initializers temporarily re-export some predecessor types for existing
 downstream callers. Those re-exports are compatibility-only, must not be used

@@ -17,7 +17,7 @@ from ..contracts.invocation_adapter_definition import (
     ProviderOperationIntent,
 )
 from ..contracts.ledger_lineage_definition import ModuleToolCallObservation
-from ..contracts.registry_contract_validation import validate_id
+from ..foundation.foundation_contract_validation import validate_id
 
 
 @functools.cache

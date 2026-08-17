@@ -613,7 +613,7 @@ def test_live_inspector_observes_lease_expiry_at_the_request_instant() -> None:
 
 
 def test_default_observation_clock_emits_canonical_utc() -> None:
-    from agent_runtime.contracts.registry_contract_validation import (
+    from agent_runtime.foundation.foundation_contract_validation import (
         parse_utc_timestamp,
     )
     from agent_runtime.inspection.inspection_http_serving import (

@@ -22,7 +22,7 @@ from ..contracts.ledger_record_definition import (
     legacy_authorization_record_as_dict,
     runtime_record_as_dict,
 )
-from ..contracts.registry_contract_validation import format_utc_timestamp
+from ..foundation.foundation_contract_validation import format_utc_timestamp
 from ..contracts.registry_release_definition import WorkflowRelease
 from ..ledger.ledger_postgres_persistence import (
     RuntimeExecutionDescriptor,

@@ -16,7 +16,7 @@ import hashlib
 import json
 from typing import Any, Callable, Mapping
 
-from ..contracts.registry_contract_validation import validate_id
+from ..foundation.foundation_contract_validation import validate_id
 from ..contracts.execution_authorization_definition import (
     ExecutionAuthorizationContextBinding,
     ExecutionAuthorizationFence,

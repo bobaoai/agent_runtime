@@ -1,0 +1,71 @@
+{
+  "manifest_schema_version": "agent_runtime_design_review_subject_v1",
+  "candidate_status": "architecture_review_subject_revision_12",
+  "candidate_revision": 12,
+  "baseline_head": "80d44a6",
+  "evidence_subject_status": "proposal_over_unfrozen_dirty_worktree",
+  "inputs": [
+    {
+      "path": "review_artifacts/agent_runtime_design_system_review.md",
+      "sha256": "77950fa374ea0299aabcbbc0ebddb337b3de3db7ecc38f83768260c345a6dbb1"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_architecture_audit.md",
+      "sha256": "e558c73561a078dcac4ddf70a07e93d6b3afa46ba2187559fc679c13a907dc93"
+    },
+    {
+      "path": "designDoc/the_design_doc_management.md",
+      "sha256": "379be6b4eacd40abb531a4c38da888a8ed0d6d6bcf78d88c2753788c049a9a45"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "e1359738cc94c69c81d28f1e5a8c959918368d4fb1290d89e04f5bcd0ecc003f"
+    }
+  ],
+  "subject_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/the_charter.md",
+      "canonical_target": "designDoc/the_charter.md",
+      "sha256": "d7a1f5806bf3ce249539101598193d1bc866c99f6e60e06a119276f837fdb2a0"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/the_agent_runtime.md",
+      "canonical_target": "09_soul/governance/t0/the_agent_runtime.md",
+      "project_projection_target": "designDoc/the_agent_runtime.md",
+      "adoption_order": "governance_distribution_owner_accepts_portable_source_then_mechanical_project_projection",
+      "sha256": "1ac3444e85c4fe2ce4f64d0effafa88879c164482da2be405f9c3fc0ce0a6efb"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/agent_runtime_00_runtime_domain_contract.md",
+      "canonical_target": "designDoc/agent_runtime_00_runtime_domain_contract.md",
+      "sha256": "bb0bd159d1a79e76c9d017cbef8c6351f2254c652549fcf513d6e38f5eaf6c15"
+    }
+  ],
+  "supporting_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/REVIEW_BRIEF.md",
+      "sha256": "108efbf35b27d3cd6fb4afe5042a1bae8b231e8cb0eb24fb9523a885986e04f9"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/rewrite_matrix.md",
+      "sha256": "568ea73d058f628b8696e6f24dc3252963f32f7caa71bbe0bbbd35fbe98f4da4"
+    }
+  ],
+  "predecessor_findings": [
+    {"finding_id": "f07_root_reuses_registry_term_for_design_contract_registry", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_00_runtime_domain_contract", "correction_target": "agent_runtime_00_runtime_domain_contract", "disposition": "closed_in_revision_12", "correction_sections": ["2"], "correction_evidence": "The sentence now names the Design Doc contract registry and cannot be read as Runtime Registry authority."}
+  ],
+  "validation": {
+    "frontmatter": "pass",
+    "markdown_links": "pass",
+    "whitespace": "pass",
+    "prose_lint_hard_violations": 0,
+    "subject_prose_lint_warnings": 8
+  },
+  "adoption_blockers": [
+    "whole-system revision 2 findings are corrected; revision 12 awaits whole-system revision 3 re-review",
+    "governance distribution owner must accept and update the portable 09_soul governance source before mechanically projecting the Runtime T0 into designDoc",
+    "formal Runtime review host still imports retired registry_module_exporting interface"
+  ],
+  "authorized_changes": [],
+  "implementation_changes": []
+}

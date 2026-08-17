@@ -54,7 +54,7 @@ from ..contracts.ledger_record_definition import (
     sha256_text,
     stable_runtime_id,
 )
-from ..contracts.registry_contract_validation import (
+from ..foundation.foundation_contract_validation import (
     format_utc_timestamp,
     parse_utc_timestamp,
     validate_sha256,

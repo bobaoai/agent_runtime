@@ -14,7 +14,7 @@ import hashlib
 import json
 from typing import Any, ClassVar, Mapping
 
-from ..contracts.registry_contract_validation import (
+from ..foundation.foundation_contract_validation import (
     validate_id,
     validate_int,
     validate_opaque_ref,

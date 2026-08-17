@@ -17,7 +17,7 @@ from agent_runtime.contracts import (
     execution_operation_definition as authorization_contracts,
     registry_release_definition as module_contracts,
 )
-from agent_runtime.contracts.registry_contract_validation import validate_snake_case_name
+from agent_runtime.foundation.foundation_contract_validation import validate_snake_case_name
 from agent_runtime.registry import (
     registry_plugin_registration as plugin_sdk,
     registry_release_registration as release_registry,

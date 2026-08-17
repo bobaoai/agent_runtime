@@ -1,0 +1,227 @@
+{
+  "verdict": "pass_with_fixes",
+  "design_judgment": {
+    "intended_result": "Both candidates state a usable intended result and reader decision. Inspection 06 promises that a maintainer can build an Inspector showing every Workflow Execution, Module Run, Variant, Attempt, complete model Context, output, usage, failure, retry, and release ref while applying authorization before storage retrieval; sections 2, 3, 5, 8, and 9 mostly deliver that. Release Conformance 05 promises that a maintainer can distinguish Runtime conformance from software release admission, assemble one exact evidence bundle, and reject a candidate with hidden domain dependencies; sections 1, 2, 4, 6, and 7 mostly deliver that. Two reader-gain gaps remain: 06's lineage vocabulary places Evaluation and Outcome at levels that do not match the T0 identity chain or the Ledger and Execution candidates, and 05 makes 'evidence denominator' the central anti-false-claim mechanism without ever defining it.",
+    "authority_structure": "The read-side and release-side authority split is correct in substance. Inspection 06 keeps Registry and Ledger as the only source authorities, forbids mutation, retry, cancellation, approval, and release admission, and states that a view can be discarded and rebuilt without changing either authority. Release Conformance 05 correctly refuses to publish or deploy software, leaves change and release admission with Software Delivery, semantic conformance with Contract Audit, and Data Asset and migration law with Data Governance, and states that a Software Delivery rejection leaves Runtime conformant but unreleased. Two authority defects appear at the edges: 06 publishes a ResourcePermissionManifest without the atomic actions, scope forms, condition schema, and grant requirement class that Product Authorization section 4 requires of every published manifest, and it never classifies its export action against Product Authorization section 3's default bounded OperationGrant rule for sensitive export, even though Registry 01, Invocation 08, and Execution 10 each declare their grant class. Separately, 05 section 10 routes the disposition of a predecessor Design Doc owned by Software Delivery into a Code Design Basis, which is not a Design Doc lifecycle authority.",
+    "boundary_coherence": "Semantic owner, operator surface, persistence owner, implementation binding, and admission authority stay distinguishable in the main body of both documents. 06 keeps live HTML, JSON, CLI, Agency Platform projection, and offline export as consumers of one service result and forbids a second truth; 05 keeps deterministic validation, Runtime integration evidence, independent semantic review, and Software Delivery admission as four separate results. One unresolved edge remains: Execution 10 declares itself the enforcement point for get_status while 06 declares itself the enforcement point for get_execution, and neither document states how the two read authorizations over the same execution status relate. The generated-inspection surfaces owned by Source Architecture 02 and Release Conformance 05 are correctly outside 06 because the Charter and 02 place build and conformance tooling on a separate repository plane; that is not a defect.",
+    "inheritance_and_dependencies": "Both candidates declare the correct T1 parent and inherit the right T0 set, but three inherited laws are named without being consumed. 06 inherits Data Governance yet defines an offline export bundle without the recipient scope, redaction policy, expiry, retention, deletion behavior, classification inheritance, or DataAssetRegistration that Data Governance section 4.3 and Charter completion condition 9 require of a governed derivative and a persistent record family. 06 binds a predicate and clock into its query scope but never states the fail-closed obligation on missing, unhealthy, regressed, or unverifiable clock-health evidence that Registry 01, Ledger 04, External Authority 09, and Execution 10 each state. 05 inherits Design Doc Management but never states the generated Design Contract bundle parity evidence that T1 root section 13 and Source Architecture 02 section 9.7 both delegate to it, leaving that Charter completion condition without an owner anywhere in the ten-T2 set. Dependency direction is otherwise clean: 06 depends only on Registry and Ledger, and 05 depends on all six responsibilities from the conformance plane, matching both T1 and 02 graphs. One peer port does not close: 06 requires a storage-applicable scope at the Registry query boundary, and the Registry candidate's public ports offer only 'bounded Registry query projections for Inspection' with no scope parameter and no read-scope conformance item.",
+    "intent_code_separation": "Both documents keep exact fields, schemas, paths, versions, and delivery status out of Design Intent and defer them to a Code Design Basis, and both correctly treat generated views as projections rather than editable authority. The exception is a concrete technology binding pinned as stable intent in both candidates: 05 section 6 makes 'one real PostgreSQL Ledger and Registry migration path' a minimum release-profile requirement while its own section 9.6 requires that database substitution be explicit and its non_goals silently drop the 'database' exclusion that the T1 root carries, and 06 conformance item 10 makes 'real PostgreSQL tests' the proof obligation. Their sibling contracts deliberately say 'real persistent-store tests' instead, and Registry 01 even explains that a SQL pattern is an example rather than the store-specific definition of a rule. 05 also narrows Contract Audit's reviewer-neutral waiver rule to 'an AI reviewer' in section 5 while restating it correctly in section 9.5.",
+    "implementability": "An implementer can form most of a Code Design Basis from these two contracts: 06 gives a public operation table, bounded-result semantics, a typed failure table covering scope, cursor, permission, availability, integrity, store, and renderer failures, and ten conformance obligations; 05 gives a frozen subject, eleven evidence families, a required fixture profile, a failure and release table, and a conformance-of-the-conformance-system list. Three gaps would force invention. The implementer must invent a scope-accepting Registry read port that the Registry candidate does not publish. The implementer must invent the semantics of the evidence denominator that 05 relies on to prevent partial suites from claiming full release. And 05 section 7 dispositions an 'Adapter release blocked' outcome against an Adapter release identity that section 2 never binds into the frozen subject, so a change to an admitted Adapter descriptor's capability bounds or conformance identity would not invalidate attached evidence."
+  },
+  "check_results": [
+    {
+      "check_id": "intent_and_reader_result",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "disposition": "finding",
+      "finding_ids": [
+        "f01_release_conformance_omits_design_contract_bundle_parity",
+        "f04_inspection_permission_manifest_omits_grant_class",
+        "f05_inspection_export_omits_governed_derivative_law",
+        "f06_inspection_cross_clock_scope_validity_not_fail_closed",
+        "f09_registry_read_port_lacks_storage_applicable_scope"
+      ]
+    },
+    {
+      "check_id": "boundary_coherence",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "disposition": "finding",
+      "finding_ids": [
+        "f02_release_conformance_pins_postgresql_as_required_fixture",
+        "f03_inspection_pins_postgresql_as_conformance_evidence"
+      ]
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "disposition": "finding",
+      "finding_ids": [
+        "f07_conformance_subject_omits_adapter_release_identity"
+      ]
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "disposition": "finding",
+      "finding_ids": [
+        "f09_registry_read_port_lacks_storage_applicable_scope"
+      ]
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "disposition": "finding",
+      "finding_ids": [
+        "f08_delivery_roadmap_disposition_routed_to_code_design_basis"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "f01_release_conformance_omits_design_contract_bundle_parity",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "correction_target_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "quoted_evidence": "| Contract closure | Exact T0/T1/T2 hashes, owner uniqueness, references, and independent review results |",
+      "requirement": "The T1 root evidence table assigns 'Generated Runtime Design Contract bundle parity with the approved canonical source | Document 05 using the Design Doc Management projection contract', and Source Architecture 02 conformance item 7 explicitly disclaims it with 'Design Contract bundle parity belongs to T2 05'. Charter completion condition 12 requires that the Runtime-owned Design Contract bundle inside the distribution unit match the approved canonical source. Document 05 inherits designDoc/the_design_doc_management.md in its capsule.",
+      "impact": "No document in the root-plus-ten-T2 set states this obligation. Section 2 binds Design Contract release refs and hashes but never the generated package projection; section 3 lists distribution contents as 'migrations, conformance fixtures, generated inspection, and release metadata' without the Design Contract bundle; sections 4, 7, and 9 contain no parity evidence, no blocking condition, and no conformance item. A candidate could therefore be reported Runtime conformant while shipping a generated Design Contract package that has drifted from the approved canonical source, which the current repository audit already records as a live failing gate.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_05_standalone_release_conformance_contract.md",
+      "required_change": "Add generated Design Contract bundle parity as an explicit obligation: bind the generated bundle release and hash into the section 2 frozen subject, add a parity row to the section 4 evidence families naming the Design Doc Management projection contract as the governing law, add a blocking condition to section 7 for bundle drift from the approved canonical source, and add a matching conformance item to section 9."
+    },
+    {
+      "finding_id": "f02_release_conformance_pins_postgresql_as_required_fixture",
+      "severity": "fix",
+      "finding_class": "code_truth_leakage",
+      "affected_candidate_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "correction_target_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "quoted_evidence": "4. one real PostgreSQL Ledger and Registry migration path;",
+      "requirement": "The T1 root non_goals exclude 'provider, model, database, durable backend, SDK, CLI, or renderer selection' from Runtime domain intent, and the Runtime T0 excludes 'provider, model, database, durable backend, SDK, CLI, renderer, hosting, or deployment selection'. The Charter's product completion condition 12 requires production admission evidence from a declared real instance without naming a database product. Document 05's own conformance item 9.6 requires that 'host, provider, backend, database, and plugin substitutions are explicit'.",
+      "impact": "Section 6 makes a specific database product a minimum release-profile requirement, which contradicts document 05's own section 9.6 substitution requirement and silently drops 'database' from the non_goals list it inherits from the T1 root. Sibling contracts avoid this: Registry 01 and Ledger 04 require 'real persistent-store tests' and Registry 01 explains that a SQL pattern is 'one example of the forbidden behavior, not the store-specific definition of the rule'. As written, replacing the persistent store would require a Design Intent change rather than an adapter and evidence change.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_05_standalone_release_conformance_contract.md",
+      "required_change": "Restate section 6 item 4 in store-neutral terms, for example one declared real persistent-store instance carrying the exact Registry and Ledger migration path, and restore the inherited database, provider, and durable-backend selection exclusion to the section 0 non_goals so the concrete store remains a declared evidence instance rather than stable Design Intent."
+    },
+    {
+      "finding_id": "f03_inspection_pins_postgresql_as_conformance_evidence",
+      "severity": "fix",
+      "finding_class": "code_truth_leakage",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_06_inspection_contract",
+      "quoted_evidence": "10. real PostgreSQL tests prove authorization filtering, pagination,\n    concurrency visibility, content dereference, and projection rebuild.",
+      "requirement": "The Runtime T0 excludes database selection from Runtime law, the Charter classifies PostgreSQL as a replaceable implementation binding, and the peer read-adjacent contracts state the same obligation store-neutrally: Ledger 04 requires 'real persistent-store tests prove transaction, concurrency, cross-clock fence, schema-release, migration, content-retrieval, and recovery behavior' and Registry 01 requires 'real persistent-store tests'.",
+      "impact": "Inspection's completion evidence is bound to one database product inside stable Design Intent. Document 06 otherwise states that it 'imports no concrete Registry or Ledger store implementation', so pinning the store in the conformance obligation contradicts its own store-neutral boundary and makes a persistent-store replacement a Design Intent change.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_06_inspection_contract.md",
+      "required_change": "Restate conformance item 10 as real persistent-store tests against the declared instance, keeping the exact store identity in the code-owned evidence record rather than in the contract, and add a section 0 non_goal excluding persistent-store, renderer, and transport selection so the store binding stays code-owned."
+    },
+    {
+      "finding_id": "f04_inspection_permission_manifest_omits_grant_class",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_06_inspection_contract",
+      "quoted_evidence": "It publishes one code-owned `ResourcePermissionManifest` covering release\nmetadata, execution summaries, lineage records, usage, diagnostics, model\nContext, input bodies, output bodies, tool bodies, and export actions.",
+      "requirement": "Product Authorization section 4 requires each resource-owning service to publish a manifest 'containing its resource types, atomic actions, scope forms, condition schema, and grant requirement class'. Section 3 makes the bounded OperationGrant the default for 'Publication, external sending, sensitive export, trading, and cross-service asynchronous mutation'. Every peer Runtime T2 declares this: Registry 01 conformance item 9 declares 'the resource type, authorization scope form, condition schema, and grant requirement class'; Invocation 08 section 5 requires the bounded OperationGrant for any operation that 'publishes, externally sends, sensitively exports'; Execution 10 section 2.1 requires it for external cancellation and event submission.",
+      "impact": "Document 06 lists only resource classes. It never declares atomic actions, scope forms, condition schema, or grant requirement class, and it never classifies `export_execution` against the sensitive-export default even though that action can emit prompt, Source, input, output, tool, stdout, stderr, and diagnostic bodies out of the Runtime boundary. An implementer could therefore build export as an ordinary read under the same scope as a summary, which is the fail-open case Product Authorization section 3 is written to prevent. This is also an incomplete peer comparison: 06 is the only protected-resource owner in the set whose manifest omits the grant class.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_06_inspection_contract.md",
+      "required_change": "State in section 2 that the published manifest declares resource types, atomic actions, scope forms, condition schema, and grant requirement class for every inspection resource, and state explicitly that `export_execution` requires the bounded OperationGrant class defined by Product Authorization unless a successor manifest deliberately admits a narrower class. Add a matching failure row in section 8 and a conformance item in section 9 that rejects any inspection action or resource absent from the published manifest before query or dereference."
+    },
+    {
+      "finding_id": "f05_inspection_export_omits_governed_derivative_law",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_06_inspection_contract",
+      "quoted_evidence": "An offline export is an explicit content-addressed snapshot with subject,\nscope, record refs, content dispositions, renderer release, and integrity\nevidence. It is never the primary operational source and cannot be imported as\nnew Ledger truth.",
+      "requirement": "Document 06 inherits designDoc/the_data_governance.md. Data Governance section 4.3 states that 'An export is a governed derivative. It records source identity, recipient scope, redaction policy, expiry, retention, and deletion behavior' and that 'Derived data inherits the strictest applicable tenant, Cell, classification, licence, residency, retention, and export restrictions from its complete input closure'. The T1 root section 9.1 requires that 'Each persistent record family has one Data Governance `DataAssetRegistration`, System-of-Record binding, and writer boundary', and Charter completion condition 9 repeats that requirement. Timestamp Semantics requires every persisted record to carry `recorded_at_utc` under an exact class registration.",
+      "impact": "The export bundle is a durable derivative that can carry governed content bodies, yet document 06 names only subject, scope, refs, dispositions, renderer release, and integrity evidence. It states no recipient scope, redaction policy, expiry, retention, or deletion behavior, no classification and residency inheritance from the exported closure, no DataAssetRegistration or writer boundary for the bundle family, and no Timestamp class registration. Restricted content can therefore leave the governed boundary in an artifact with no stated retention, disposal, or custody obligation, while document 06 correctly closes only the narrower 'not a second Ledger truth' question. Registry 01 and Ledger 04 both state the equivalent registrations for their persisted families, so this is also an incomplete peer comparison.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_06_inspection_contract.md",
+      "required_change": "Extend section 6 so the export bundle is defined as a governed derivative that binds recipient scope, redaction policy, expiry, retention, and deletion behavior, and that inherits the strictest tenant, Cell, classification, licence, residency, retention, and export restrictions from its exported closure. State that the bundle family carries one Data Governance DataAssetRegistration, System-of-Record binding, and writer boundary, and one exact Timestamp class registration. Add the corresponding failure rows in section 8 and conformance items in section 9."
+    },
+    {
+      "finding_id": "f06_inspection_cross_clock_scope_validity_not_fail_closed",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_06_inspection_contract",
+      "quoted_evidence": "| Missing, denied, expired, or mismatched query scope | Return no rows, counts, facets, or timing-derived disclosure |",
+      "requirement": "The T1 root section 2 states that 'When an enforcement point judges an external decision's validity across clock domains, it consumes a registered Timestamp Semantics protected predicate, pins its immutable `DistributedClockProfile`, requires fresh `ClockHealthEvidence`, records those refs with the protected fact, and fails closed on missing or unverifiable evidence.' Timestamp Semantics section 8 makes this mandatory for any authorization comparing instants from different clock domains and requires fail-closed behavior on 'Missing, expired, unhealthy, regressed, mismatched, or unverifiable profile or health evidence'. Registry 01, Ledger 04, External Authority 09, and Execution 10 each state this obligation explicitly with a failure row and a conformance item.",
+      "impact": "Document 06 declares Inspection an enforcement point and binds 'validity, predicate, clock, and decision evidence' into the query scope, but its failure table stops at expired or mismatched scope and its conformance list contains no cross-clock item. An implementer could accept a scope whose expiry is judged by bare wall-clock comparison across the Product Authorization and Runtime store clock domains, which Timestamp Semantics forbids, while still passing every stated conformance obligation. Inspection is the only protected-resource enforcement point in the set that leaves this half of the law unstated.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_06_inspection_contract.md",
+      "required_change": "State in section 2 that when the scope validity judgment spans clock domains Inspection consumes the registered protected predicate, pins its immutable DistributedClockProfile, requires fresh ClockHealthEvidence for every participating domain, applies the conservative half-open window, and records those refs with the disclosure decision. Add a section 8 failure row for missing, expired, unhealthy, regressed, mismatched, or unverifiable predicate, profile, or health evidence, and a matching section 9 conformance item."
+    },
+    {
+      "finding_id": "f07_conformance_subject_omits_adapter_release_identity",
+      "severity": "fix",
+      "finding_class": "failure_or_completion_gap",
+      "affected_candidate_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "correction_target_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "quoted_evidence": "| Declared Adapter lacks real conformance evidence | Adapter release blocked; core disposition follows declared denominator |",
+      "requirement": "Document 05's own section 2 states that 'The subject cannot be changed after any conformance result is attached' and that 'A code, contract, schema, dependency, version, build, or evidence-profile change creates a new subject.' Registry 01 defines Adapter as a release family owning 'One provider-neutral port implementation descriptor, capability bounds, optional dependency, and conformance identity', and Invocation 08 section 5 states that 'Runtime admits only combinations proven by Adapter conformance'. Durability 07 section 8 requires the admitted Adapter release to declare capability, bounds, rollover, failure normalization, and exact conformance evidence.",
+      "impact": "Section 7 dispositions an 'Adapter release' that section 2 never binds into the frozen subject. The subject enumerates source commit, package metadata, Design Contract refs, Source Architecture releases, and per-responsibility contract and schema releases, but for adapters it binds only 'declared core, adapter, persistence, inspection, test, and development extras', which are packaging extras rather than release identities. A change to an admitted Adapter release descriptor's capability bounds, optional dependency, or conformance identity would therefore not invalidate attached evidence, and the report could not name which exact Adapter release is conformant or blocked.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_05_standalone_release_conformance_contract.md",
+      "required_change": "Add the exact admitted provider, durable-backend, and persistence Adapter release refs and hashes, and any Execution Profile releases the profile exercises, to the section 2 frozen subject; include an Adapter release change in the invalidation trigger sentence; and make the section 8 report bind its adapter disposition to those exact release identities."
+    },
+    {
+      "finding_id": "f08_delivery_roadmap_disposition_routed_to_code_design_basis",
+      "severity": "fix",
+      "finding_class": "review_or_admission_conflict",
+      "affected_candidate_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "correction_target_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "quoted_evidence": "the Code Design Basis must define subject and\nevidence schemas, conformance profiles, validator registry, clean-build matrix,\nintegration harness, report renderer, predecessor delivery-roadmap disposition,\nSoftware Delivery handoff, tests, migration, and rollback.",
+      "requirement": "Design Doc Management owns Design Doc lifecycle and supersession, its section 9 assigns 'Design Doc class, scaffold, lifecycle, and design audit' to Design Doc Management and 'Product-level material decision' to the Project Owner or delegated design owner, and its section 4 lifecycle moves a contract from Current to Superseded to Retired through owner acceptance, not through an implementation artifact. A CodeDesignBasis is defined by Software Delivery as a pre-implementation logical-module design for one material code change. The upstream T0/T1 rewrite matrix gate 5 already assigns this closure to a design-level decision: 'the Agency Platform and Software Delivery owners release the Runtime-prefixed 02, 10, and 05 filenames through reviewed re-home or retirement changes'.",
+      "impact": "The predecessor named here, designDoc/agent_runtime_05_delivery_roadmap.md, is a Design Doc that Software Delivery lists as its own owned specialization contract. Assigning its disposition to a Code Design Basis routes a Design Doc lifecycle and cross-T0 ownership decision into an implementation artifact that has no authority to retire or re-home it, and it contradicts the upstream candidate's own gate. This is separate from the already declared filename-owner blocker: the defect is the proposed correction path, not the existence of the collision.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_05_standalone_release_conformance_contract.md",
+      "required_change": "Remove the predecessor delivery-roadmap disposition from the Code Design Basis list in section 10 and state instead that the predecessor Design Doc's retirement or re-home is a Design Doc Management lifecycle decision accepted by the Software Delivery owner before this contract may take the agent_runtime_05 canonical name. Keep only implementation-bearing items in the Code Design Basis list."
+    },
+    {
+      "finding_id": "f09_registry_read_port_lacks_storage_applicable_scope",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_01_registry_contract",
+      "quoted_evidence": "Inspection passes a storage-applicable scope to Registry or Ledger. Filtering\noccurs inside the query boundary before row counts, facets, cursors, summaries,\nor records leave storage. Per-object and per-content checks remain as defense in\ndepth. A broad database read followed by application filtering is\nnon-conformant.",
+      "requirement": "The T1 root section 5.4 requires that 'Inspection applies that scope at the Registry or Ledger query boundary, then retains per-object authorization as defense in depth', and Inspection 06 conformance item 1 requires that storage-level scope filtering occur before rows, counts, facets, cursors, or timing signals leave Registry or Ledger. Ledger 04 accepts this obligation explicitly: its query port 'receives a storage-applicable authorized scope resolved outside Ledger. It filters at the storage boundary and returns no row outside that scope', with conformance item 8 to match.",
+      "impact": "The Registry candidate does not accept the symmetric obligation. Its public ports offer only 'bounded Registry query projections for Inspection' with no authorized-scope parameter, no storage-boundary filtering rule, and no read-scope conformance item, and its RegistryActivationScope is explicitly declared to contain 'no tenant, host, product route, environment, Cell, region, deployment, or provider identity'. Inspection therefore cannot close its own conformance item 1 on the Registry half without an implementer inventing a Registry read port and a release-visibility scope form that no accepted contract publishes. Inspection cannot safely resolve this itself, because it would be defining another responsibility's public port.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_01_registry_contract.md",
+      "required_change": "In the Registry contract's public ports section, state that the Registry query projection receives a storage-applicable authorized scope resolved outside Registry, filters at the storage boundary before rows, counts, facets, or cursors leave storage, and names the release-visibility scope form it supports as distinct from RegistryActivationScope. Add a matching failure row and conformance item so the Registry read boundary closes with Ledger's."
+    },
+    {
+      "finding_id": "f10_execution_status_disclosed_by_two_enforcement_points",
+      "severity": "note",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_06_inspection_contract",
+      "quoted_evidence": "| `get_execution` | One execution identity, status, release closure, Outcome, and lineage counts |",
+      "requirement": "Design Doc Management section 6 requires a candidate to keep semantic owner, operator surface, and approval or admission authority distinguishable, and Product Authorization section 9 makes disclosure of an unauthorized count, snippet, log, or timing signal non-conformant. Execution 10 section 2.1 declares Execution the Policy Enforcement Point for `get_status` under its own manifest and requires 'a current exact authorization decision under their registered scope', while conformance item 13 states that `get_status` 'delegates paged trace and content retrieval to Inspection 06'.",
+      "impact": "Two enforcement points with two independent permission manifests can disclose execution status. Execution acknowledges the split from its side; Inspection never mentions the Execution lifecycle status surface or states that the two are deliberately distinct resource classes whose scopes cannot disagree. An implementer could produce a lifecycle status path whose scope is broader than the inspection scope for the same execution.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_06_inspection_contract.md",
+      "required_change": "Add one sentence to section 1 or 2 stating that Execution's bounded lifecycle status is a separate resource class owned by Execution 10, that Inspection read models never widen what that surface may disclose, and that both enforcement points resolve the same Principal, tenant, Cell, and execution scope for the same execution."
+    },
+    {
+      "finding_id": "f11_inspection_lineage_level_vocabulary_ambiguous",
+      "severity": "note",
+      "finding_class": "communication_defect",
+      "affected_candidate_document_id": "agent_runtime_06_inspection_contract",
+      "correction_target_document_id": "agent_runtime_06_inspection_contract",
+      "quoted_evidence": "    Execution Variant\n      Attempt\n        model/tool calls\n        complete Runtime-authored ModelContextEnvelope\n        provider-native projection\n        input/output content refs\n        usage and normalized failure\n      Evaluation\n    Selection and Module Output Resolution\n  Outcome, checkpoint, and durable acknowledgement",
+      "requirement": "The Runtime T0 execution identity chain places 'Evaluation and Selection, when required' and 'Module Output Resolution' at the Module Run level, below Execution Variant. Execution 10 commits 'one Module Output Resolution, Outcome, and checkpoint when ready' as part of one dispatch, and Ledger 04 lists 'Evaluation, Selection, Resolution, Outcome, and checkpoint' as one Execution-supplied record family under the dispatch lineage.",
+      "impact": "The detail tree places Evaluation one level below the T0 chain and places Outcome, checkpoint, and durable acknowledgement at the Workflow Execution level, and section 3's `get_execution` likewise returns a singular execution-level Outcome. Because Execution 10 also uses 'terminal Outcome mapping' for a Workflow terminal result, a reader cannot tell whether the Outcome shown here is the per-dispatch record family owned by Ledger 04 or a derived Workflow terminal result, and the per-Module-Run Outcome is absent from the tree. An Inspector implementer would have to choose.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_06_inspection_contract.md",
+      "required_change": "Align the section 4 tree with the T0 identity chain and the Ledger record families: show the Module Run level Outcome, checkpoint, and Resolution explicitly, place Evaluation at the level its owning contract assigns, and where an execution-level terminal result is shown, label it as derived from the latest committed Outcome rather than as a record family. Use the same distinction in the section 3 `get_execution` result description."
+    },
+    {
+      "finding_id": "f12_evidence_denominator_undefined",
+      "severity": "note",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "correction_target_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "quoted_evidence": "4. evidence denominators prevent partial suites from claiming full release;",
+      "requirement": "Design Doc Management requires a Design Doc to state stable logical interfaces and the target-state behavior sufficient to guide implementation, with exact fields deferred to code. The Runtime T0 requires that 'A skipped integration test records validation debt; it is neither passing evidence nor automatic proof of a design defect', and the Charter forbids substituting a skipped integration test for completion status.",
+      "impact": "The evidence denominator is the mechanism this contract relies on in sections 2, 4, 6, 7, and 9 to stop optional or skipped evidence from becoming a full-release claim, yet the term is never defined. A Code Design Basis author must invent what a denominator enumerates, how the core denominator differs from an Adapter denominator, and what makes one explicit. The surrounding rules are otherwise correct and the skip, unavailable, fail, validation debt, and pass distinction is stated clearly.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_05_standalone_release_conformance_contract.md",
+      "required_change": "Define the evidence denominator once at first use, for example as the exact declared set of required claims and fixtures a profile must satisfy for one release scope, and state how a core denominator and an Adapter denominator differ, before relying on it in sections 2, 4, 6, 7, and 9."
+    },
+    {
+      "finding_id": "f13_deterministic_waiver_rule_narrowed_to_ai_reviewer",
+      "severity": "note",
+      "finding_class": "communication_defect",
+      "affected_candidate_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "correction_target_document_id": "agent_runtime_05_standalone_release_conformance_contract",
+      "quoted_evidence": "Deterministic failures cannot be waived by an AI reviewer.",
+      "requirement": "Contract Audit owns this rule and states it reviewer-neutrally: 'A reviewer cannot waive a failed deterministic invariant', with invariant 5 reading 'Deterministic failures cannot be waived by prose or model judgment.' Contract Audit section 4 further states that 'Provider or model identity is execution metadata. It does not create review authority.' The Charter requires that a rule be declared only by its semantic owner.",
+      "impact": "Narrowing the waiver prohibition to an AI reviewer implies that a human or non-model reviewer could waive a deterministic failure, which the owning T0 forbids. Document 05's own section 9.5 states the rule correctly as 'deterministic failure cannot be waived by semantic review', so the two statements diverge inside one contract.",
+      "accountable_owner_ref": "canonical_owner: designDoc/agent_runtime_05_standalone_release_conformance_contract.md",
+      "required_change": "Restate section 5 reviewer-neutrally to match Contract Audit and section 9.5, for example that no reviewer, prose, or model judgment may waive a deterministic failure, and cite Contract Audit as the owner of that rule rather than restating a narrower variant."
+    }
+  ],
+  "safe_next_step": "Return both candidates to their design owner for one revision that closes the nine `fix` findings inside documents 05 and 06, and separately route f09 to the Registry 01 candidate owner so the Registry read query port publishes the storage-applicable authorized scope that Inspection conformance item 1 depends on. Do not admit either document as canonical Design Intent, do not begin the complete root-plus-ten-T2 whole-system design review, and do not write the Runtime Code Design Basis until the export authorization and governed-derivative corrections (f04, f05) and the Design Contract bundle parity ownership (f01) are accepted, because those three determine which evidence family and which enforcement obligation the later Code Design Basis must implement. The already declared upstream blockers — missing independent verdicts, the Software Delivery and Agency Platform claims on Runtime-prefixed filenames, and the broken formal review host — remain open and are not addressed by this review."
+}

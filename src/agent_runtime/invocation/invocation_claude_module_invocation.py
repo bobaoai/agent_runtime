@@ -64,7 +64,7 @@ from .invocation_result_assembly import (
     provider_adapter_descriptor,
     raise_terminal_failure,
 )
-from .invocation_schema_projection import transform_json_schema_nodes
+from ..foundation.foundation_schema_traversal import transform_json_schema_nodes
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
     lease_attempt_workspace,

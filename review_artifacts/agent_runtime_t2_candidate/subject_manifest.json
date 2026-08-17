@@ -1,0 +1,165 @@
+{
+  "manifest_schema_version": "agent_runtime_design_review_subject_v1",
+  "candidate_status": "t2_dependency_slice_revision_12",
+  "candidate_revision": 12,
+  "baseline_head": "294a3bd",
+  "evidence_subject_status": "proposal_over_unfrozen_dirty_worktree",
+  "inputs": [
+    {
+      "path": "review_artifacts/agent_runtime_t0_t1_candidate/subject_manifest.json",
+      "sha256": "010b9b14e6de27fe4ca44c1cf45ee31deb804ed2bc73fd36dc0a276ffbe9bba1"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_design_system_review.md",
+      "sha256": "77950fa374ea0299aabcbbc0ebddb337b3de3db7ecc38f83768260c345a6dbb1"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_code_architecture_audit.md",
+      "sha256": "e558c73561a078dcac4ddf70a07e93d6b3afa46ba2187559fc679c13a907dc93"
+    },
+    {
+      "path": "designDoc/the_design_doc_management.md",
+      "sha256": "379be6b4eacd40abb531a4c38da888a8ed0d6d6bcf78d88c2753788c049a9a45"
+    },
+    {
+      "path": "designDoc/the_timestamp_semantic.md",
+      "sha256": "ee027ea43eba0af454606215fe1ab445395a3d31bbbcfa2b685e1c66286f3e53"
+    },
+    {
+      "path": "designDoc/the_product_authorization.md",
+      "sha256": "22ecc4a50474fedfd9670cccea54e4ee9f7a9a5c708c552400f50984c6020bfc"
+    },
+    {
+      "path": "designDoc/the_data_governance.md",
+      "sha256": "167ddbaaaf3d126f735965268739da48bd89045b616891417e2c1546fc5f3441"
+    },
+    {
+      "path": "designDoc/the_skill_management.md",
+      "sha256": "e946bdeef30dd91d7b3b9bcbc2639f130bf5d1e7997e77f74e0bf118f0ba4ff1"
+    },
+    {
+      "path": "designDoc/the_software_delivery.md",
+      "sha256": "e7a3e575ddc4bf81a7881b55b589b04ddb6de0834838f96a45ef46df4c359d6c"
+    },
+    {
+      "path": "designDoc/the_contract_audit.md",
+      "sha256": "d20d185e23a4935bab4b037fc0cbc3176707ad0fadcd9dd34b76d6daf810244f"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "0310101d463f4783f15395837d3dfa8aca0dc5ea57064400e38017f55cb6a3a5"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "8882f1bb5b47b91a64519e2adde06fd9081eaa4a1732e0b52bb807fb464ec31b"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_3_opus_5_xhigh.advisory.json",
+      "sha256": "187402c89012e7c9a6b88070d1b783a8540e70be6cd8438f2aafd43d4cb7bb20"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_4_opus_5_xhigh.advisory.json",
+      "sha256": "1d90f9c022b13e97853891b9612739e03824bb6f96d8809e00f94cf8dc194c3c"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_5_opus_5_xhigh.advisory.json",
+      "sha256": "73d5aa1f8104e1cc22cfe90d65f85d1be0a29e9a81561157ee1f8bcdd26d66fe"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_6_opus_5_xhigh.advisory.json",
+      "sha256": "8c63da091c57b49f2970beb41dc7e22d986694208c1aa03d04eadf4548139806"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_7_opus_5_xhigh.advisory.json",
+      "sha256": "f6767fa68dfa9fda19c17e00be357faaa851fcf719335e413c6622a12b907932"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/review_revision_8_opus_5_xhigh.advisory.json",
+      "sha256": "0547400425777bba85eb7a92e7a9edfb73de9992b6dfce3b790132297b8d546a"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate_read_release/review_revision_1_opus_5_xhigh.advisory.json",
+      "sha256": "0f41dfe55bf7d3c8c45c7617b57c97d29e5b40069eb15e7c09ea8177f4f5266d"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json",
+      "sha256": "e1359738cc94c69c81d28f1e5a8c959918368d4fb1290d89e04f5bcd0ecc003f"
+    }
+  ],
+  "subject_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/agent_runtime_02_source_architecture_contract.md",
+      "canonical_target": "designDoc/agent_runtime_02_source_architecture_contract.md",
+      "sha256": "711866a5ea0895f8bff3b6e323f7302efbf419f5e9cd4190e8f2725da64dc265"
+    },
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/agent_runtime_01_registry_contract.md",
+      "canonical_target": "designDoc/agent_runtime_01_registry_contract.md",
+      "sha256": "ae2494182454423a79da31a3ae60cb8c1c69f2aef827c6816913275a5e058c5d"
+    }
+  ],
+  "supporting_files": [
+    {
+      "path": "review_artifacts/agent_runtime_t2_candidate/REVIEW_BRIEF.md",
+      "sha256": "7d75190483b8a7bd6721c4639c0509f161d7ec62cd65dc5627fbcaa070cc5a07"
+    }
+  ],
+  "predecessor_findings": [
+    {"finding_id": "f01_source_ownership_class_gap", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "block", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_2", "correction_sections": ["3", "6", "9"]},
+    {"finding_id": "f02_package_root_reexport_unowned", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_2", "correction_sections": ["6", "9"]},
+    {"finding_id": "f03_repository_plane_manifest_unregistered", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_2", "correction_sections": ["2", "7", "9"]},
+    {"finding_id": "f04_generated_projection_parity_duplicated", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_2", "correction_sections": ["7", "9"]},
+    {"finding_id": "f05_foundation_instant_validation_timestamp_unbound", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0", "5", "9"]},
+    {"finding_id": "f06_registry_lifecycle_authorization_unbound", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0", "8", "10"]},
+    {"finding_id": "f07_registry_persistent_record_timestamp_unbound", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_2", "correction_sections": ["0", "9", "11"]},
+    {"finding_id": "f08_registry_ddl_idiom_in_stable_intent", "source_review": "review_revision_1_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_2", "correction_sections": ["9"]},
+    {"finding_id": "f09_registry_lifecycle_authorization_enforcement", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_3", "correction_sections": ["8", "10", "11"]},
+    {"finding_id": "f10_registry_scope_undefined", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_3", "correction_sections": ["7", "10", "11"]},
+    {"finding_id": "f11_registry_inherits_omits_data_governance", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_3", "correction_sections": ["0"]},
+    {"finding_id": "f12_subject_closure_omits_predecessor_findings", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "subject_manifest", "correction_target": "subject_manifest", "disposition": "closed_in_revision_3", "correction_sections": ["predecessor_findings"]},
+    {"finding_id": "f13_subject_closure_omits_inherited_authorities", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "subject_manifest", "correction_target": "subject_manifest", "disposition": "closed_in_revision_3", "correction_sections": ["inputs"]},
+    {"finding_id": "f14_architecture_diagram_omits_inspection_foundation_edge", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_3", "correction_sections": ["3"]},
+    {"finding_id": "f15_source_architecture_inherits_omits_design_doc_management", "source_review": "review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_3", "correction_sections": ["0"]},
+    {"finding_id": "f16_registry_resource_permission_manifest_unregistered", "source_review": "review_revision_3_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_4", "correction_sections": ["0", "8", "10", "11"]},
+    {"finding_id": "f17_registry_migration_transition_registration_unbound", "source_review": "review_revision_3_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_4", "correction_sections": ["0", "9", "10", "11"]},
+    {"finding_id": "f18_source_architecture_cohesion_contract_unregistered", "source_review": "review_revision_3_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_4", "correction_sections": ["0", "2", "4", "9"]},
+    {"finding_id": "f19_registry_inherits_omits_software_delivery", "source_review": "review_revision_3_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_4", "correction_sections": ["0", "9", "11", "12"]},
+    {"finding_id": "f20_registry_scope_term_drift", "source_review": "review_revision_3_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_4", "correction_sections": ["1", "7"]},
+    {"finding_id": "f21_registry_admission_atomicity_and_isolation_unproven", "source_review": "review_revision_4_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_5", "correction_sections": ["7", "10", "11"]},
+    {"finding_id": "f22_registry_lifecycle_authorization_port_peer_scope_unstated", "source_review": "review_revision_4_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_00_runtime_domain_contract", "disposition": "closed_in_revision_5", "correction_sections": ["2", "12"]},
+    {"finding_id": "f23_registry_authorization_scope_form_term_collision", "source_review": "review_revision_4_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_5", "correction_sections": ["10", "11"]},
+    {"finding_id": "f24_registry_lifecycle_decision_ref_durability_unproven", "source_review": "review_revision_5_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_6", "correction_sections": ["8", "10", "11"]},
+    {"finding_id": "f25_root_completion_evidence_omits_resource_permission_enforcement", "source_review": "review_revision_5_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_00_runtime_domain_contract", "disposition": "closed_in_revision_6", "correction_sections": ["13"]},
+    {"finding_id": "f26_cohesion_signal_derivation_inputs_incomplete", "source_review": "review_revision_5_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_6", "correction_sections": ["2", "4", "9"]},
+    {"finding_id": "f27_review_brief_states_stale_root_revision", "source_review": "review_revision_5_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "review_brief", "disposition": "closed_in_revision_7", "correction_sections": ["Evidence status"], "correction_evidence": "The Runtime root revision 10 remains a candidate; carried notes f22 and f25 are closed in that root's sections 2, 12, and 13."},
+    {"finding_id": "f28_review_brief_root_revision_stale_again", "source_review": "review_revision_6_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "review_brief", "disposition": "closed_in_revision_7", "correction_sections": ["Evidence status"], "correction_evidence": "The Runtime root revision 10 remains a candidate; carried notes f22 and f25 are closed in that root's sections 2, 12, and 13."},
+    {"finding_id": "f29_subject_manifest_certifies_unclosed_f27", "source_review": "review_revision_6_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "subject_manifest", "correction_target": "subject_manifest", "disposition": "closed_in_revision_7", "correction_sections": ["predecessor_findings.f27", "predecessor_findings.f28"], "correction_evidence": "Both carried entries cite the exact root revision 10 sentence now present in REVIEW_BRIEF.md."},
+    {"finding_id": "f30_registry_lifecycle_decision_validity_cross_clock_unbound", "source_review": "review_revision_6_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_7", "correction_sections": ["8", "10", "11"]},
+    {"finding_id": "f31_source_ownership_manifest_plane_scope_narrower_than_conformance", "source_review": "review_revision_6_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_7", "correction_sections": ["2", "7", "9"]},
+    {"finding_id": "f32_registry_conformance_list_closes_twice", "source_review": "review_revision_6_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_11", "correction_sections": ["11"], "correction_evidence": "Registry conformance items 1 through 19 contain no list-closing conjunction, item 20 is the sole penultimate item followed by 'and', and final item 21 ends the list."},
+    {"finding_id": "f33_root_per_responsibility_enforcement_omits_clock_evidence", "source_review": "review_revision_6_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_00_runtime_domain_contract", "disposition": "closed_in_revision_7", "correction_sections": ["2", "12", "13"]},
+    {"finding_id": "f34_registry_withdrawal_reason_and_evidence_unrecorded", "source_review": "review_revision_7_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_8", "correction_sections": ["7", "11"]},
+    {"finding_id": "f35_registry_conformance_list_still_closes_twice", "source_review": "review_revision_7_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_11", "correction_sections": ["11"], "correction_evidence": "Registry conformance items 1 through 19 contain no list-closing conjunction; item 20 is the sole penultimate item followed by 'and', and final item 21 ends the list."},
+    {"finding_id": "f36_subject_manifest_certifies_unclosed_f32", "source_review": "review_revision_7_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "subject_manifest", "correction_target": "subject_manifest", "disposition": "closed_in_revision_11", "correction_sections": ["predecessor_findings.f32", "predecessor_findings.f35"], "correction_evidence": "The carried entries quote the exact 21-item enumeration structure now present in Registry section 11."},
+    {"finding_id": "f37_registry_conformance_list_closes_twice_again", "source_review": "review_revision_8_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_11", "correction_sections": ["11"], "correction_evidence": "Registry conformance item 19 ends with a semicolon, item 20 is the sole penultimate item followed by 'and', and final item 21 ends the list."},
+    {"finding_id": "f38_subject_manifest_certifies_enumeration_closure_with_false_evidence", "source_review": "review_revision_8_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "subject_manifest", "correction_target": "subject_manifest", "disposition": "closed_in_revision_9", "correction_sections": ["predecessor_findings.f32", "predecessor_findings.f35", "predecessor_findings.f36", "predecessor_findings.f37"], "correction_evidence": "All four entries now describe the exact enumeration structure in Registry section 11 rather than restating the desired structure."},
+    {"finding_id": "f39_registry_withdrawal_reason_absent_from_port_and_failure_surfaces", "source_review": "review_revision_8_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_9", "correction_sections": ["8", "10"]},
+    {"finding_id": "f09_registry_read_port_lacks_storage_applicable_scope", "source_review": "review_artifacts/agent_runtime_t2_candidate_read_release/review_revision_1_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_10", "correction_sections": ["8", "10", "11"], "correction_evidence": "RegistryReadScope now filters rows, counts, facets, and cursors at the storage boundary and is explicitly distinct from RegistryActivationScope."},
+    {"finding_id": "f04_execution_variant_policy_release_family_taxonomy_conflict", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "fix", "affected_candidate": "agent_runtime_01_registry_contract", "correction_target": "agent_runtime_01_registry_contract", "disposition": "closed_in_revision_12", "correction_sections": ["3", "6"], "correction_evidence": "Execution Variant Policy is one distinct execution_variant_policy release family with an activation identity separate from behavior_policy."},
+    {"finding_id": "f06_conformance_enumerations_close_twice", "source_review": "../agent_runtime_complete_candidate/review_revision_2_opus_5_xhigh.advisory.json", "severity": "note", "affected_candidate": "agent_runtime_02_source_architecture_contract", "correction_target": "agent_runtime_02_source_architecture_contract", "disposition": "closed_in_revision_12", "correction_sections": ["9"], "correction_evidence": "Only Source Architecture item 11 carries the list-closing conjunction before final item 12."}
+  ],
+  "validation": {
+    "frontmatter": "pass",
+    "markdown_links": "pass",
+    "whitespace": "pass"
+  },
+  "adoption_blockers": [
+    "whole-system revision 2 findings are corrected; revision 12 awaits whole-system revision 3 re-review",
+    "Runtime root revision 12 awaits whole-system revision 3 re-review",
+    "the complete Runtime contract revision 3 remains a candidate",
+    "Agency Platform and Software Delivery still claim Runtime-prefixed 02, 10, and 05 contracts",
+    "formal Runtime review host still imports retired registry_module_exporting interface"
+  ],
+  "authorized_changes": [],
+  "implementation_changes": []
+}

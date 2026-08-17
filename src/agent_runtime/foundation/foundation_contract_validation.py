@@ -1,4 +1,4 @@
-"""Shared strict validators for public Agent Runtime transport records.
+"""Responsibility-neutral validation primitives for Agent Runtime records.
 
 Public DTO validation is also a serialization boundary.  These helpers reject
 Python coercions that can compare or stringify successfully while producing a

@@ -1,0 +1,163 @@
+{
+  "verdict": "block",
+  "design_judgment": {
+    "intended_result": "Both candidates state an explicit intended result, reader decision, and material design choice. Source Architecture 02 promises that a maintainer can place or split a source unit, decide which imports and exports are legal, and separate Runtime product code from repository support planes without reading a manual file inventory. Registry 01 promises that a maintainer can determine what Runtime versions, which source change creates a new release, how one Skill source exports multiple independently owned Modules, and why authoring layout, provider selection, execution state, and host routing sit outside Registry authority. The four verification targets set for this slice are met in the candidate text: the RuntimeReleaseCandidateBundle is declared transport-only and 'not independently versioned or admitted' (01 section 4); one Skill source may export 'zero, one, or many Runtime Modules' each with its own identity, closure, and admission history, and 'Changing one Module does not re-version an unchanged sibling' (01 section 4); provider/model A/B reuse one Module Release because 'A model, effort, adapter, tool implementation, environment, or provider option change creates a new Execution Profile or Adapter Release, not a new Module Release' (01 section 5); and a failed admission unit 'does not block an independent sibling closure merely because both arrived in one transport bundle' (01 section 7). Authoring discovery is refused at both the port and the failure table. Neither candidate reintroduces provider/model coupling into semantic Module identity, and neither creates a seventh named Runtime responsibility.",
+    "authority_structure": "Layer, canonical owner, parent, and owned system object are valid and distinct for each candidate: 02 owns 'Agent Runtime source ownership and dependency architecture' and 01 owns 'immutable Agent Runtime release identity and dependency closure', both under the single T1 root agent_runtime_00_runtime_domain_contract.md, both non-00 filenames under the domain prefix. Registry 01 correctly refuses admission, activation, deactivation, withdrawal, host selection, Product Authorization, and Software Delivery admission as one decision, and defers release admission to Software Delivery. Source Architecture 02 correctly states that it supplies conformance evidence while Software Delivery decides release. The defect is not a missing owner but two duplications and one omission at the edges: 02 section 9 item 7 makes generated-projection reproduction an architecture conformance gate over the same artifact family the root assigns to document 05, and 02 section 6 permits a package-root re-export set that no RuntimePublicSurfaceManifest owns. Registry section 8 gates lifecycle commands on 'their external authorization' without naming the enforcing party or the owning law.",
+    "boundary_coherence": "Semantic owner, author, operator, reviewer, persistence owner, implementation binding, and approval authority remain distinguishable in prose: 02 section 7 separates the Runtime product distribution, build and conformance tooling, portable governance source, agent interface projections, and canonical-versus-generated Design Docs; 01 section 9 separates Registry record meaning from the Data Governance asset registration and from Software Delivery migration admission. The failure is at the source-graph level. 02 section 3 renders External-authority integration, External-event ingress, and Source and release conformance as unlabeled peer nodes of the six responsibilities, discarding the node-class labeling that the root supplies and that Software Delivery section 4.1 requires of any module map. Combined with an ownership law that admits only six responsibilities plus the foundation, the diagram and the ownership rule contradict each other.",
+    "inheritance_and_dependencies": "Dependency direction is preserved exactly. Every edge in 02 section 3 matches the root target graph edge for edge, including INVOCATION to REGISTRY, EXECUTION to INGRESS, INGRESS to AUTHORITY, and the conformance fan-out, with no peer reverse edge and no cycle. Inherited constraint closure is the weak axis. Both capsules declare inherits limited to the_charter.md and the_agent_runtime.md while the root T1 inherits Product Authorization, Data Governance, and Timestamp Semantics. 02 admits 'instant' validation into the foundation without binding the Timestamp law that the root explicitly says the foundation may not define or widen. 01 registers persistent release, admission, and lifecycle record families and a migration rollback window without naming Timestamp Semantics anywhere in the document, and gates protected lifecycle commands on an unnamed external authorization.",
+    "intent_code_separation": "Both candidates hold the intent-versus-code line well. 02 declares current source-file inventory, line counts, versions, implementation status, and delivery plan as non-goals, pushes exact paths, symbols, exception IDs, hashes, and current violations to code-owned registrations, and explicitly refuses a resettable debt count and a magic file count. 01 declares current releases, active pointers, provider bindings, database product, and migration status as non-goals and defers exact fields to a later Code Design Basis. Neither carries a file list, a provider matrix, or a delivery status table. The single leak is minor: 01 section 9 states the operative prohibition using a SQL DDL idiom rather than a store-neutral rule, in a contract whose own non-goals exclude database product.",
+    "implementability": "An implementer can form a Code Design Basis for Registry release families, closure validation, admission and lifecycle separation, and persistence, and for the four Source Architecture manifests. The implementer cannot place the document 09 external-authority port source or the document 03 event-ingress source, because 02 assigns every product source unit to one of six responsibilities or the foundation, forbids the foundation from owning authorization, gives neither a public namespace, and still requires both to be importable surfaces in its own dependency graph. 02 also relies on a repository-plane manifest that is not one of its four registered machine contracts and is not validated by any of its ten conformance items. These force the implementer to invent an owner class, a namespace, and a machine contract that this Design Intent was supposed to supply."
+  },
+  "check_results": [
+    {
+      "check_id": "intent_and_reader_result",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "disposition": "finding",
+      "finding_ids": [
+        "f01_source_ownership_class_gap",
+        "f04_generated_projection_parity_duplicated",
+        "f05_foundation_instant_validation_timestamp_unbound",
+        "f07_registry_persistent_record_timestamp_unbound"
+      ]
+    },
+    {
+      "check_id": "boundary_coherence",
+      "disposition": "finding",
+      "finding_ids": [
+        "f02_package_root_reexport_unowned",
+        "f06_registry_lifecycle_authorization_unbound"
+      ]
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "disposition": "passed",
+      "finding_ids": []
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "disposition": "finding",
+      "finding_ids": [
+        "f01_source_ownership_class_gap",
+        "f03_repository_plane_manifest_unregistered"
+      ]
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "disposition": "passed",
+      "finding_ids": []
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "f01_source_ownership_class_gap",
+      "severity": "block",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_02_source_architecture_contract",
+      "correction_target_document_id": "agent_runtime_02_source_architecture_contract",
+      "quoted_evidence": "Section 1: \"Every Runtime product source unit resolves to exactly one of the six Runtime responsibilities or to the supporting foundation.\" Section 2: \"`RuntimeSourceOwnershipManifest` | Assigns every Runtime product source unit to exactly one responsibility or the supporting foundation\". Section 3 graph: \"AUTHORITY[\"External-authority integration\"]\" and \"EVENT[\"External-event ingress\"]\" with edges \"EXECUTION --> AUTHORITY\", \"EVENT --> AUTHORITY\", \"EXECUTION --> EVENT\", \"EVENT --> FOUNDATION\". Section 5: the foundation \"owns no release, Workflow, Module Run, Attempt, authorization, provider session, durable command, persistent store policy, inspection model, retry decision, or Resolution.\" Section 6: \"The standalone Runtime exposes deliberate responsibility namespaces for Registry, Execution, Invocation, Durability, Ledger, and Inspection.\" Section 9 item 1: \"every Runtime product source unit has exactly one registered owner\".",
+      "requirement": "The root T1 registers `agent_runtime_09_external_authority_integration_contract.md` and `agent_runtime_03_external_event_ingress_contract.md` as owned specializations that \"specialize or validate those six responsibilities without creating additional peers\", places them in a labeled box titled \"Supporting contracts, not Runtime responsibilities\", states that \"The containing boxes identify node class, not deployment containment\", and then delegates the resolution to this candidate: \"Document 02 owns the exact machine-checked allowed-import graph, public-surface manifest, file ownership, and migration-debt high-water mark.\" Software Delivery section 4.1 additionally requires that \"A diagram or module map must not present logical responsibilities, physical source organization, and concrete technology as peer dimensions without labeling their relationship.\"",
+      "impact": "Source units implementing the document 09 authorization ports and the document 03 ingress protocol are Runtime product code inside the distribution, are not one of the six responsibilities, are forbidden to the foundation because they carry authorization, and are not build tooling. `RuntimeSourceOwnershipManifest` therefore cannot assign them an owner, `RuntimePublicSurfaceManifest` gives them no namespace, and conformance item 1 is unsatisfiable for them, while the candidate's own dependency graph requires both to be importable public surfaces consumed by Execution. The candidate simultaneously drops the node-class labeling the root supplies, so the same diagram reads as ten peer responsibilities and reopens the seventh-responsibility risk this slice was authored to close. An implementer restructuring source must invent an owner class, a namespace, and an import rule that this contract was delegated to supply, which defeats the candidate's own declared reader gain of placing or splitting a source unit and deciding which imports and exports are legal.",
+      "accountable_owner_ref": "Agent Runtime source-architecture design owner, canonical_owner designDoc/agent_runtime_02_source_architecture_contract.md (single semantic owner \"Agent Runtime source architecture\" per review_artifacts/agent_runtime_design_system_review.md section 4.1)",
+      "required_change": "Close the ownership taxonomy for external-authority integration and external-event ingress source without creating a seventh responsibility. Either bind their source units and public symbols to the Execution responsibility that the design system review section 4.1 already assigns them, declaring how `RuntimeDependencyPolicy` expresses the resulting intra-Execution edges, or register an explicitly labeled supporting-contract owner class in `RuntimeSourceOwnershipManifest` and `RuntimePublicSurfaceManifest` and state that it is not a peer responsibility. Then restate sections 1, 2, 6, 7, and 9 item 1 against the chosen class set, and relabel the section 3 graph so responsibility nodes, supporting-contract nodes, and the foundation are visibly distinct classes as they are in the parent contract."
+    },
+    {
+      "finding_id": "f02_package_root_reexport_unowned",
+      "severity": "fix",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_02_source_architecture_contract",
+      "correction_target_document_id": "agent_runtime_02_source_architecture_contract",
+      "quoted_evidence": "Section 6: \"A minimal package root may re-export a small explicitly registered stable set; it is not a second cross-responsibility contracts facade.\" Section 6 also states that each manifest binds \"namespace identity and semantic owner\". Section 9 item 4 validates only \"every responsibility public namespace exactly matches its manifest\".",
+      "requirement": "The root T1 section 11 requires that \"The stable public surface is organized by responsibility and narrow host ports, not by one cross-responsibility contracts facade or exported concrete in-memory implementations.\" The code architecture audit finding P1.1 records that the current central `contracts` package \"accounts for more than one third of Runtime Python source\" and hides responsibility cycles, and P1.3 records 120 exported names at the package root, which is the exact failure this rule must prevent.",
+      "impact": "A package root re-export set spans responsibilities by construction, so it has no single semantic owner and cannot be bound by any responsibility-scoped `RuntimePublicSurfaceManifest`. The candidate supplies no owner, no membership criterion, no size bound, and no conformance item covering that set, and section 9 item 4 checks only responsibility namespaces. The anti-facade rule is therefore asserted in prose but not machine-enforceable, and a future root export list can grow back into the cross-responsibility facade the root forbids while every registered conformance check still passes.",
+      "accountable_owner_ref": "Agent Runtime source-architecture design owner, canonical_owner designDoc/agent_runtime_02_source_architecture_contract.md (single semantic owner \"Agent Runtime source architecture\" per review_artifacts/agent_runtime_design_system_review.md section 4.1)",
+      "required_change": "Either forbid product-type exports at the package root outright, or give the root re-export set a named owner, an admission criterion stating which symbol classes may enter, a registration inside `RuntimePublicSurfaceManifest`, and a matching conformance item in section 9 so that root membership is validated rather than merely described as small and deliberate."
+    },
+    {
+      "finding_id": "f03_repository_plane_manifest_unregistered",
+      "severity": "fix",
+      "finding_class": "implementability_gap",
+      "affected_candidate_document_id": "agent_runtime_02_source_architecture_contract",
+      "correction_target_document_id": "agent_runtime_02_source_architecture_contract",
+      "quoted_evidence": "Section 7: \"The code-owned plane manifest records current paths and generators. Moving a file between planes is a material architecture or delivery change when it changes import eligibility, packaging, or authority.\" Capsule outputs list exactly \"RuntimeSourceOwnershipManifest\", \"RuntimeDependencyPolicy\", \"RuntimePublicSurfaceManifest\", \"RuntimeMigrationDebtManifest\". Section 2 registers the same four and no other.",
+      "requirement": "The candidate's own section 2 states that \"Exact paths, symbols, exception IDs, hashes, current violations, and generated views belong to code-owned registrations. A prose list, directory scan without registration, or magic file count cannot replace those records.\" The root T1 section 12 requires machine contracts for \"source ownership, import graph, public namespaces, code cohesion, and migration-debt enforcement\", and Design Doc Management section 6 requires a \"declared machine-contract and enforcement handoff\".",
+      "impact": "Section 7 makes plane classification load-bearing for import eligibility, packaging, and authority, and conformance item 10 depends on it to prove that the distribution contains no host, domain, authoring, Skill, or business-database implementation. But the plane manifest is a fifth code-owned artifact that the candidate never registers as a required machine contract, never lists in its outputs, and never validates in any of its ten conformance items. The plane rule and the material-change rule attached to it are therefore unenforceable, and an implementer forming the Code Design Basis has no declared contract to build against.",
+      "accountable_owner_ref": "Agent Runtime source-architecture design owner, canonical_owner designDoc/agent_runtime_02_source_architecture_contract.md (single semantic owner \"Agent Runtime source architecture\" per review_artifacts/agent_runtime_design_system_review.md section 4.1)",
+      "required_change": "Either register the repository-plane manifest as a fifth required machine contract in section 2 and the capsule outputs with a matching conformance item that validates plane assignment and detects cross-plane moves, or fold plane classification into `RuntimeSourceOwnershipManifest` as a declared attribute and state that binding explicitly in section 7."
+    },
+    {
+      "finding_id": "f04_generated_projection_parity_duplicated",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_02_source_architecture_contract",
+      "correction_target_document_id": "agent_runtime_02_source_architecture_contract",
+      "quoted_evidence": "Section 9 item 7: \"generated projections reproduce from their canonical source\". Section 7 plane table: \"Canonical Design Docs and generated distribution projection | Canonical intent is author-owned; the distribution copy is mechanically generated and read-only\".",
+      "requirement": "The root T1 section 13 assigns this evidence family to a different owner: \"Generated Runtime Design Contract bundle parity with the approved canonical source | Document 05 using the Design Doc Management projection contract\", and section 11 states that \"Document 05 owns Runtime distribution and downstream closure evidence.\" The candidate's own non_goals exclude \"Runtime release, execution, invocation, persistence, durability, or inspection behavior\".",
+      "impact": "The unqualified conformance item makes architecture conformance a second gate over the same generated Design Contract bundle parity that the root assigns to document 05, so one artifact family has two conformance owners that can return different verdicts. This is the duplicated-authority pattern the slice was meant to avoid, and it will force the later document 05 candidate either to restate the same gate or to negotiate ownership back out of an already accepted T2.",
+      "accountable_owner_ref": "Agent Runtime source-architecture design owner, canonical_owner designDoc/agent_runtime_02_source_architecture_contract.md (single semantic owner \"Agent Runtime source architecture\" per review_artifacts/agent_runtime_design_system_review.md section 4.1)",
+      "required_change": "Scope section 9 item 7 to the generated projections this contract owns, namely generated architecture and public-surface inspection reproduced from the source-architecture registrations, and state explicitly that Design Contract bundle parity against approved canonical Design Docs belongs to document 05 under the Design Doc Management projection contract. Adjust the section 7 plane row to record the plane distinction without claiming its parity verdict."
+    },
+    {
+      "finding_id": "f05_foundation_instant_validation_timestamp_unbound",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_02_source_architecture_contract",
+      "correction_target_document_id": "agent_runtime_02_source_architecture_contract",
+      "quoted_evidence": "Section 5: \"The supporting foundation may own only provider-neutral primitives required by more than one Runtime responsibility: ... stable ID, token, ref, instant, and exact-record validation\". Section 9 item 3 validates only that \"the foundation contains only admitted primitive families\". The capsule declares \"inherits: designDoc/the_charter.md, designDoc/the_agent_runtime.md\" and the References list omits Timestamp Semantics.",
+      "requirement": "The root T1 section 3 states that \"Timestamp validation enforces the instant meaning, format, precision, and ordering semantics owned by `the_timestamp_semantic.md`. The supporting foundation does not define or widen those semantics. Format or ordering validation in the foundation does not satisfy a protected cross-clock predicate; documents 09, 04, and 10 retain the evidence and decision split defined in section 2.\" Timestamp Semantics section 6.7 states that \"A storage-wrapper helper that validates only timestamp syntax cannot authorize a protected decision\", and section 8 that \"No protected cross-clock action may claim conformance from storage-wrapper helpers alone.\"",
+      "impact": "This candidate is the machine-enforcement owner of the foundation boundary, yet it admits instant validation into the foundation without naming the law that owns instant meaning and without carrying the root's prohibition on satisfying a protected predicate from foundation validation. A foundation instant primitive can therefore pass conformance item 3 while widening or contradicting Timestamp Semantics, and a later implementer can read foundation timestamp validation as sufficient evidence for authority-sensitive finalization, which is the exact confusion the root split across documents 09, 04, and 10.",
+      "accountable_owner_ref": "Agent Runtime source-architecture design owner, canonical_owner designDoc/agent_runtime_02_source_architecture_contract.md (single semantic owner \"Agent Runtime source architecture\" per review_artifacts/agent_runtime_design_system_review.md section 4.1)",
+      "required_change": "In section 5, bind foundation instant and exact-record validation to `the_timestamp_semantic.md` as the owning law, state that the foundation may not define or widen instant meaning, format, precision, or ordering, and state that foundation validation never satisfies a registered protected predicate or cross-clock decision. Add Timestamp Semantics to the capsule inherits list and the References list, and extend conformance item 3 so an admitted foundation primitive is checked against that boundary."
+    },
+    {
+      "finding_id": "f06_registry_lifecycle_authorization_unbound",
+      "severity": "fix",
+      "finding_class": "boundary_ambiguity",
+      "affected_candidate_document_id": "agent_runtime_01_registry_contract",
+      "correction_target_document_id": "agent_runtime_01_registry_contract",
+      "quoted_evidence": "Section 8: \"lifecycle commands for activation, deactivation, and withdrawal under their external authorization\". Section 7: \"The host's exact execution binding and Product Authorization remain separate decisions.\" The capsule declares \"inherits: designDoc/the_charter.md, designDoc/the_agent_runtime.md\" and non_goals exclude \"Product Authorization, host routing, domain acceptance, or software release admission\"; the References list omits Product Authorization.",
+      "requirement": "The root T0 section 3.1 makes withdrawal a protected change of state that \"makes one admitted release ineligible for new execution selection and appends the reason and evidence to Registry authority\", and separates it from the decision that \"external authorization decides whether the requested product action is permitted\". The root T1 dependency graph gives Registry exactly one outbound edge, `REGISTRY --> FOUNDATION`, so Registry has no declared path to the document 09 authority ports, and the root section 2 assigns authorization observation semantics to document 09.",
+      "impact": "Activation, deactivation, and withdrawal change which release may be selected for execution, so they are protected operations, yet the contract names no enforcement point and no owning law for the authorization they are said to occur under. Registry cannot consult authority itself without an import edge that neither graph declares, and the candidate never states that the caller must present an already-resolved external decision reference. An implementer must either invent a Registry-to-authority dependency that violates the accepted dependency direction or leave the lifecycle commands effectively unguarded.",
+      "accountable_owner_ref": "Agent Runtime Registry design owner, canonical_owner designDoc/agent_runtime_01_registry_contract.md (single semantic owner \"Runtime Registry\" per review_artifacts/agent_runtime_design_system_review.md section 4.1)",
+      "required_change": "State in section 8 that the lifecycle writer accepts an already-resolved external authorization decision reference supplied by the caller, that Registry records that opaque reference without evaluating, issuing, or widening it, and that Registry declares no dependency on the document 09 ports. Name `the_product_authorization.md` as the owning law and add it to the capsule inherits list and the References list, and add the corresponding refusal row to the section 10 failure table for a lifecycle command presented without a resolved decision reference."
+    },
+    {
+      "finding_id": "f07_registry_persistent_record_timestamp_unbound",
+      "severity": "fix",
+      "finding_class": "peer_or_inheritance_conflict",
+      "affected_candidate_document_id": "agent_runtime_01_registry_contract",
+      "correction_target_document_id": "agent_runtime_01_registry_contract",
+      "quoted_evidence": "Section 4: each Module has its own \"admission and lifecycle history\". Section 9: \"Registry owns Registry record meaning, schema meaning, intended writer semantics, and ordered physical-schema release compatibility. Data Governance registers the Registry record families as managed Data Assets and binds the one System of Record and writer boundary.\" and \"Migration evidence covers clean creation, ordered forward upgrade, interrupted-migration recovery, compatibility refusal, reconciliation, writer fencing, explicit rollback window, and the documented restore or forward-repair path.\" The document contains no occurrence of timestamp, instant, or `recorded_at`, and the capsule inherits list and References omit Timestamp Semantics.",
+      "requirement": "Timestamp Semantics section 2 states that \"Every persisted record has `recorded_at_utc`\", and section 4 that \"Unregistered persisted classes and unauthorized time fields fail validation ... Every concrete persisted class therefore requires its own exact registration.\" Data Governance section 5 confirms that Timestamp and Clock Semantics \"Owns time-field roles and comparisons used by retention, expiry, migration, backup, and evidence records\". The root T1 capsule inherits `designDoc/the_timestamp_semantic.md` and its section 13 requires Registry to supply managed-record-family evidence.",
+      "impact": "Registry declares persistent release, admission, and lifecycle record families and a migration rollback window, all of which are time-bearing persisted classes under Timestamp Semantics, but binds only the Data Governance half of the obligation. The inherited constraint closure is incomplete, so the conformance list in section 11 can pass with unregistered persisted timestamp classes, and a later Registry implementation can assign commit instants without the `recorded_at_utc` role, exact class registration, or clock-domain rules the peer law requires. The rollback window in particular is a validity interval whose comparison law lives in that peer contract.",
+      "accountable_owner_ref": "Agent Runtime Registry design owner, canonical_owner designDoc/agent_runtime_01_registry_contract.md (single semantic owner \"Runtime Registry\" per review_artifacts/agent_runtime_design_system_review.md section 4.1)",
+      "required_change": "In section 9, state that every Registry persisted record family carries the Timestamp Semantics role and storage obligations, including `recorded_at_utc` assignment by the authoritative store and exact per-class registration, and that the migration rollback window is expressed under that law's validity-interval semantics. Add `the_timestamp_semantic.md` to the capsule inherits list and the References list, and add a matching item to the section 11 conformance list so timestamp-class registration is proved alongside the Data Asset registration."
+    },
+    {
+      "finding_id": "f08_registry_ddl_idiom_in_stable_intent",
+      "severity": "note",
+      "finding_class": "code_truth_leakage",
+      "affected_candidate_document_id": "agent_runtime_01_registry_contract",
+      "correction_target_document_id": "agent_runtime_01_registry_contract",
+      "quoted_evidence": "Section 9: \"Schema creation and migration do not occur implicitly through `CREATE TABLE IF NOT EXISTS` during ordinary service startup.\" The capsule non_goals exclude \"current releases, active pointers, provider bindings, database product, or migration status\".",
+      "requirement": "Design Doc Management section 3 permits current implementation facts in prose as \"explanatory examples only\" that \"cannot become authoritative\", and the root T0 section 4 invariant 10 requires that current implementation bindings come \"from code and persistent records, not maintained Design prose\". The code architecture audit finding P1.9 records the concrete defect being generalized here: adapters \"create tables and triggers with `CREATE TABLE IF NOT EXISTS` during `initialize_schema`\".",
+      "impact": "The operative prohibition is stated in a SQL DDL idiom inside a contract whose non-goals exclude database product selection. A non-SQL or document persistent store could satisfy the literal rule while performing exactly the implicit startup schema mutation the rule exists to forbid. The intent is correct and well grounded in the audit evidence; only its store-neutral expression is missing, so this does not block adoption.",
+      "accountable_owner_ref": "Agent Runtime Registry design owner, canonical_owner designDoc/agent_runtime_01_registry_contract.md (single semantic owner \"Runtime Registry\" per review_artifacts/agent_runtime_design_system_review.md section 4.1)",
+      "required_change": "State the prohibition store-neutrally, for example that ordinary service startup performs no implicit persistent-schema creation or mutation and refuses an unsupported or incomplete installed schema release, and keep `CREATE TABLE IF NOT EXISTS` only as a parenthetical example of the forbidden pattern."
+    }
+  ],
+  "safe_next_step": "Return this advisory result to the two T2 design owners and revise Source Architecture 02 before Registry 01, because f01 changes the ownership-class and public-namespace taxonomy that Registry conformance item 9 already binds itself to (\"the public Registry namespace matches its Source Architecture manifest\"). Close f01 first by choosing one owner class for the document 09 and document 03 source units and relabeling the section 3 graph node classes, then apply f02 through f05 to 02 and f06 through f08 to 01. Re-freeze both files as one t2_dependency_slice_revision_2 subject with updated hashes and re-run this independent semantic review over the corrected slice. Do not author the Ledger 04, Invocation 08, or Durability 07 candidates against 02's current ownership taxonomy, since each must place its own source units and public namespace under a class set that is not yet closed. This result remains advisory evidence only: the manifest records that the formal Runtime review host \"still imports retired registry_module_exporting interface\", which under Design Doc Management invariant 17 is a review-routing gap, so this verdict cannot stand as the Contract Audit independent-review result, cannot satisfy the missing revision-7 root review, and does not touch the declared adoption blockers over the Runtime-prefixed 02, 05, and 10 filenames."
+}

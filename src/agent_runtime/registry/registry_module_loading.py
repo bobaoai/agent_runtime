@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
-from ..contracts.registry_contract_validation import validate_snake_case_name
+from ..foundation.foundation_contract_validation import validate_snake_case_name
 from ..contracts.registry_release_definition import (
     ModuleEntryPolicy,
     OutputResolutionPolicy,
