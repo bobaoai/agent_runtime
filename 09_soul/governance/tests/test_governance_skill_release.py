@@ -124,7 +124,7 @@ def test_production_governance_skill_release_is_clean() -> None:
 
     assert report.is_clean
     assert report.skill_count == 5
-    assert report.projection_count == 14
+    assert report.projection_count == 18
 
 
 def test_check_reports_missing_projections(tmp_path: Path) -> None:

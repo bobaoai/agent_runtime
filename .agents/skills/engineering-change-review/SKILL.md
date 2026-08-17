@@ -81,6 +81,22 @@ semantics. It cannot satisfy this Skill's implementation-review gate because it
 cannot independently reproduce the candidate diff, dependency closure, or
 declared tests.
 
+## Registered Runtime Module
+
+This Skill authors one portable Runtime Module source:
+
+| `module_id` | semantic owner | purpose |
+| --- | --- | --- |
+| `engineering_change_reviewer` | `designDoc/the_software_delivery.md` | Independently review one frozen implementation ChangeSet against its approved `CodeDesignBasis`, declared gates, and carried predecessor findings |
+
+Its canonical static task instruction is the `prompt.md` file in the canonical
+`engineering_change_reviewer` Module source; its input and output contracts are
+the sibling registered schemas. Registry projects the declared Module assets
+only to their registered Runtime host.
+Provider, model, reasoning, repository tool grants, command allowlist, timeout,
+and writable roots remain Execution Profile or per-run control-plane records
+rather than Skill or Prompt content.
+
 ## When To Use
 
 Use this Skill when a peer Agent or human has finished an engineering candidate
@@ -278,14 +294,14 @@ Run only checks triggered by the subject:
 `designDoc/the_skill_management.md` defines the installed projection
 relationship. The portable Governance Skill release owns the canonical method;
 each registered host projection must match that source exactly unless the
-governing contract explicitly admits a typed host-specific delta. Runtime
-Module assets remain on their registered canonical surface and are not copied
-into a host projection.
+governing contract explicitly admits a typed host-specific delta. A host
+projection may include `runtime_modules/` only when the Registry declares each
+projected file, its hash, and its target.
 
-Missing projection pairs, byte drift, copied Runtime assets, or stale release
-hashes are findings. A future host-specific delta requires an explicit change
-to the governing contract, Registry, projector, and tests before review may
-accept it.
+Missing projection pairs, byte drift, undeclared or orphaned Runtime Module
+assets, and stale release hashes are findings. A future host-specific delta
+requires an explicit change to the governing contract, Registry, projector,
+and tests before review may accept it.
 
 #### Architecture classification integrity
 

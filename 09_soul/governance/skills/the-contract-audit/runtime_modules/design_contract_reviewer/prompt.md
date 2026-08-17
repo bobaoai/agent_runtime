@@ -30,6 +30,27 @@ Use every candidate document and the supplied semantic closure. Execute every
   decision, contract admission, implementation completion, and software
   release remain separate decisions.
 
+Within those checks, actively test recurrent design failure patterns rather
+than waiting for the candidate's wording to name them:
+
+- `design_pattern.dimension_mixing`: unlike dimensions presented as peer
+  responsibilities, especially logical ownership, physical source layout,
+  persistence, and current technology;
+- `design_pattern.incomplete_peer_comparison`: a new same-level owner,
+  contract, or authority added without comparison to the complete peer set;
+- `design_pattern.duplicated_authority`: duplicated ownership, approval,
+  admission, or canonical-write authority;
+- `design_pattern.mutable_truth_leakage`: mutable implementation, release,
+  provider, path, or status facts presented as stable Design Intent;
+- `design_pattern.unjustified_abstraction`: an aggregate, lifecycle, registry,
+  or compatibility layer whose owned behavior does not justify its existence;
+  and
+- `design_pattern.ceremony_over_result`: ceremonial process that can pass while
+  the required user or system result remains incorrect.
+
+Treat these as lenses inside the registered checks, not as additional check
+IDs or automatic findings. Cite an actual defect in the frozen candidate.
+
 Report one evidence-bound finding for every material defect. Every finding must
 name both the candidate whose decision is affected and the document that owns
 the required correction. The correction target may be a supplied context

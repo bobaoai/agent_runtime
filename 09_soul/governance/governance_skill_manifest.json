@@ -56,7 +56,7 @@
         },
         {
           "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/prompt.md",
-          "sha256": "f2a064b5fda4b9cc49d8019ff01eaecfcef7d6cf7f34ef2c6000c49ee2f92dfc",
+          "sha256": "3ac54b55cd871e120b90a7f2166cbe534efe4ffbb4d4b8082017f0e0a9f41fa7",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/prompt.md"}
           ]
@@ -101,10 +101,38 @@
       "source_files": [
         {
           "source": "09_soul/governance/skills/engineering-change-review/SKILL.md",
-          "sha256": "54fa45145a18919012b401dbe51f6af02835cba9d0cf6b22b405d3a801cc84d1",
+          "sha256": "8ba1f01c8af68264e2f894b56555a24e1795bf738225a0921088f63fcec782a4",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/engineering-change-review/SKILL.md"},
             {"host_id": "codex", "target": ".agents/skills/engineering-change-review/SKILL.md"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/module_registration.json",
+          "sha256": "4e7eed7825073862ada4085e5eab55b2f631aa9debdcb612f49ed141842b78d9",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/module_registration.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/prompt.md",
+          "sha256": "a968e332216bb32c7263292df326e153e250f3d1376cabf14d297f8b019e25fb",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/prompt.md"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/schemas/input.schema.json",
+          "sha256": "8bcc95c20b8b3f291edb9f4ab0a62d57d05dea62527fcf256b4e0f360b45974f",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/schemas/input.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/schemas/output.schema.json",
+          "sha256": "ea0b083c51ed80fb404cd3deea5b35edc1fa4802e0c0a5a238e3ecf3d1cb716c",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/schemas/output.schema.json"}
           ]
         }
       ]

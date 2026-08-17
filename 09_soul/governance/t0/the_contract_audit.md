@@ -39,6 +39,7 @@ scope:
 non_goals:
   - authoring or repairing the audited subject
   - defining the subject's business, design, data, Runtime, or release rules
+  - defining Software Delivery's engineering-change terminal-result vocabulary
   - admitting, publishing, deploying, or activating the subject
   - requiring every subject family to expose prose or the same implementation surfaces
   - requiring Agent Runtime to be admitted before Agent Runtime itself can receive bootstrap audit
@@ -153,12 +154,21 @@ Reviewer, because a Design candidate has no implementation diff, test plan, or
 Code Design Basis to reproduce. The later implementation ChangeSet is a
 separate subject with a separate engineering-review result.
 
-Engineering Change Governance may reuse this T0 layer's independence, evidence,
-finding, and verdict rules for `engineering-change-review`. That reuse does not
-make Contract Audit the owner of the engineering workflow or its frozen change
-subject. Contract Audit owns only a formal `ContractSubjectManifest` audit;
-Engineering Change Governance owns the as-built change review and Software
-Delivery handoff.
+When an Audit Profile requires the Independent Engineering Review layer, it
+binds a fixed review Workflow that resolves the
+`engineering_change_reviewer` Module. One reviewer execution may be referenced
+by both an `AuditResult` and an `EngineeringChangeReview` only when the subject
+closure, Workflow Release, Module Release, required checks, and Audit Profile
+release match exactly. Otherwise the Audit Profile requires its own execution
+and result.
+
+Software Delivery may reuse this T0 layer's independence, evidence, and
+finding-severity rules for `EngineeringChangeReview`. That reuse does not make
+Contract Audit the owner of the engineering workflow, its frozen change
+subject, or its implementation-review verdict. Contract Audit owns only a
+formal registered `AuditSubject` review under an `AuditProfile`; Software
+Delivery owns the as-built change review, its terminal-result vocabulary, and
+its release-governance handoff.
 
 ## 4. Independent Review
 
@@ -169,12 +179,22 @@ A reviewer is independent only when all of the following hold:
 - the reviewer receives the immutable subject closure and declared profile;
 - the reviewer identity, component or human role, release, and execution are
   recorded;
+- the reviewer release or binding is not itself a member of the reviewed
+  subject;
 - the reviewer cannot silently widen the subject, evidence, tools, or policy;
 - the reviewer result is bound to the exact subject and profile hashes.
 
 Provider or model identity is execution metadata. It does not create review
 authority. A direct model response, terminal log, or manually written summary
 is advisory until it enters the registered audit protocol.
+
+When the subject changes a reviewer source, release, or binding, its required
+Independent Review uses a reviewer method whose instruction and binding are
+frozen outside the candidate. The normal path uses the last admitted reviewer
+release. During bootstrap, when no admitted Runtime reviewer release exists,
+the repository-governed predecessor review method may invoke an approved
+external reviewer directly and must record the bootstrap status. The candidate
+reviewer source, schema, or binding never reviews itself.
 
 The audit contract is executor-neutral. During bootstrap, the Primary Agent may
 assemble the frozen package and invoke an approved external reviewer directly.
@@ -252,6 +272,13 @@ evidence or rerun only affected review components for efficiency, but the final
 AuditResult must bind a coherent result set for one exact subject version and
 one exact profile release.
 
+When the immediate predecessor version of the same subject identity has
+unresolved actionable findings, the successor subject closure must carry all
+of them as immutable declared inputs. The subject owner cannot omit or select a
+subset. The reviewer must disposition every carried finding and cannot recover
+additional history from memory or ambient records. A missing or unresolved
+actionable predecessor finding blocks a passing result.
+
 ## 8. Admission Handoff
 
 An AuditResult is evidence, not authority to activate the subject:
@@ -273,12 +300,15 @@ The implementation of this T0 requires code-owned contracts for:
 - `AuditSubject` and immutable package closure;
 - `AuditProfile` and check selection;
 - subject-kind-to-reviewer-Workflow binding, including the fixed Design
-  Contract reviewer for Design Intent profiles;
+  Contract reviewer for Design Intent profiles and the fixed Engineering
+  Change reviewer for Independent Engineering Review layers;
 - per-layer `required` or `not_required` applicability;
 - `ReviewerBinding` and independence policy;
 - `AuditRun`, layer result, finding, and aggregate verdict;
 - executor binding and evidence references for bootstrap or Agent Runtime review;
-- result expiry, invalidation, dependency impact, and re-audit.
+- result expiry, invalidation, dependency impact, and re-audit;
+- immediate predecessor AuditResult and complete carried-forward
+  prior-finding closure whenever actionable findings remain unresolved.
 
 Exact schemas, provider bindings, reviewer inventories, commands, and current
 results belong to code and persistent stores. Generated inspection renders
@@ -296,8 +326,9 @@ them for operators and reviewers.
 8. AuditResult is bound to exact subject, profile, and reviewer evidence.
 9. Admission remains with the owning authority.
 10. Every correction creates a new subject version and re-audit record.
-11. A reviewer binding must match the subject kind and semantic-review gate;
-    selecting a nearby reviewer is a blocked routing defect, not a valid audit.
+11. A reviewer binding must match the subject kind and required review layer;
+    selecting a nearby or self-referential reviewer is a blocked routing
+    defect, not a valid audit.
 
 ## References
 

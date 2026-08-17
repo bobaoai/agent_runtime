@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:engineering_change_reviewer_output@v1",
+  "title": "Engineering Change Reviewer Semantic Output",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {"enum": ["passed", "finding", "not_reproducible"]},
+        "finding_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"}
+        }
+      },
+      "required": ["disposition", "finding_ids"]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+        "severity": {"enum": ["BLOCKING", "MEDIUM", "LOW", "NIT"]},
+        "finding_class": {
+          "enum": [
+            "subject_closure",
+            "design_conformance",
+            "architecture_or_dependency",
+            "contract_or_projection_drift",
+            "deterministic_enforcement_gap",
+            "failure_or_recovery",
+            "prior_finding_regression",
+            "review_or_admission_conflict",
+            "maintainability"
+          ]
+        },
+        "location": {"type": "string", "minLength": 1},
+        "evidence": {"type": "string", "minLength": 1},
+        "impact": {"type": "string", "minLength": 1},
+        "accountable_owner": {"type": "string", "minLength": 1},
+        "required_change": {"type": "string", "minLength": 1}
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "finding_class",
+        "location",
+        "evidence",
+        "impact",
+        "accountable_owner",
+        "required_change"
+      ]
+    }
+  },
+  "properties": {
+    "review_disposition": {"enum": ["pass", "changes_required", "not_reproducible"]},
+    "subject_closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {"enum": ["closed", "not_reproducible"]},
+        "summary": {"type": "string", "minLength": 1},
+        "issues": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "required": ["disposition", "summary", "issues"]
+    },
+    "check_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject_closure": {"$ref": "#/$defs/check_result"},
+        "gate_reproduction": {"$ref": "#/$defs/check_result"},
+        "design_conformance": {"$ref": "#/$defs/check_result"},
+        "architecture_and_dependency": {"$ref": "#/$defs/check_result"},
+        "contract_and_projection": {"$ref": "#/$defs/check_result"},
+        "failure_recovery_and_rollback": {"$ref": "#/$defs/check_result"},
+        "prior_finding_closure": {"$ref": "#/$defs/check_result"},
+        "review_and_admission_separation": {"$ref": "#/$defs/check_result"}
+      },
+      "required": [
+        "subject_closure",
+        "gate_reproduction",
+        "design_conformance",
+        "architecture_and_dependency",
+        "contract_and_projection",
+        "failure_recovery_and_rollback",
+        "prior_finding_closure",
+        "review_and_admission_separation"
+      ]
+    },
+    "gate_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "gate_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+          "disposition": {"enum": ["passed", "failed", "not_run"]},
+          "evidence": {"type": "string", "minLength": 1},
+          "attribution": {"enum": ["subject", "dirty_tree", "baseline", "infrastructure", "none"]}
+        },
+        "required": ["gate_id", "disposition", "evidence", "attribution"]
+      }
+    },
+    "prior_finding_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+          "disposition": {"enum": ["closed", "open", "not_reproducible"]},
+          "evidence": {"type": "string", "minLength": 1}
+        },
+        "required": ["finding_id", "disposition", "evidence"]
+      }
+    },
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "longitudinal_observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pattern": {"type": "string", "minLength": 1},
+          "evidence": {"type": "string", "minLength": 1},
+          "recommended_destination": {
+            "enum": [
+              "design_review_prompt",
+              "engineering_review_prompt",
+              "deterministic_gate",
+              "candidate_specific_prior_finding",
+              "hold_for_confirmation"
+            ]
+          }
+        },
+        "required": ["pattern", "evidence", "recommended_destination"]
+      }
+    },
+    "punch_list": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "priority": {"enum": ["P0", "P1", "P2"]},
+          "action": {"type": "string", "minLength": 1},
+          "blocking": {"type": "boolean"}
+        },
+        "required": ["priority", "action", "blocking"]
+      }
+    }
+  },
+  "required": [
+    "review_disposition",
+    "subject_closure",
+    "check_results",
+    "gate_results",
+    "prior_finding_results",
+    "findings",
+    "longitudinal_observations",
+    "punch_list"
+  ]
+}

@@ -57,13 +57,13 @@
       "t0_layer_id": "the_contract_audit",
       "source": "09_soul/governance/t0/the_contract_audit.md",
       "target": "designDoc/the_contract_audit.md",
-      "sha256": "6e3636c1fbfc49b708cff01778058d21f6fc2eb8dca1cfa39a67cc21d5150ed8"
+      "sha256": "d20d185e23a4935bab4b037fc0cbc3176707ad0fadcd9dd34b76d6daf810244f"
     },
     {
       "t0_layer_id": "the_software_delivery",
       "source": "09_soul/governance/t0/the_software_delivery.md",
       "target": "designDoc/the_software_delivery.md",
-      "sha256": "21bcb742b5fc20b0a86750898dac0107b808613d6a4becae4f6e1146e34e164d"
+      "sha256": "e7a3e575ddc4bf81a7881b55b589b04ddb6de0834838f96a45ef46df4c359d6c"
     }
   ]
 }
