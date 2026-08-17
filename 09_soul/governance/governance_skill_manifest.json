@@ -1,0 +1,65 @@
+{
+  "manifest_version": "governance_skill_manifest_v1",
+  "portable_governance_skills": [
+    {
+      "skill_id": "the-task-routing",
+      "source": "09_soul/governance/skills/the-task-routing/SKILL.md",
+      "sha256": "8f60612bc7854ef73463b4bbf39e071045176baf17b2d0c4bd64901cafb060ab",
+      "required_t0_layer_ids": ["the_task_routing"],
+      "primary_agent_entry_role": "routing",
+      "primary_agent_entry_subject": "task_request",
+      "projections": [
+        {"host_id": "claude", "target": ".claude/skills/the-task-routing/SKILL.md"},
+        {"host_id": "codex", "target": ".agents/skills/the-task-routing/SKILL.md"}
+      ]
+    },
+    {
+      "skill_id": "the-skill-management",
+      "source": "09_soul/governance/skills/the-skill-management/SKILL.md",
+      "sha256": "b3a139d0434dd7481cb54a9ab76f4caa72a00f3178092a96a65e7da4ee5d469b",
+      "required_t0_layer_ids": ["the_design_doc_management"],
+      "primary_agent_entry_role": "authoring",
+      "primary_agent_entry_subject": "skill_candidate",
+      "projections": [
+        {"host_id": "claude", "target": ".claude/skills/the-skill-management/SKILL.md"},
+        {"host_id": "codex", "target": ".agents/skills/the-skill-management/SKILL.md"}
+      ]
+    },
+    {
+      "skill_id": "the-contract-audit",
+      "source": "09_soul/governance/skills/the-contract-audit/SKILL.md",
+      "sha256": "b44d38af57d85af8cba71a7d5219b4b7e8f5af6c87b910013feb98f01d35c6b7",
+      "required_t0_layer_ids": ["the_contract_audit"],
+      "primary_agent_entry_role": "review",
+      "primary_agent_entry_subject": "contract_subject",
+      "projections": [
+        {"host_id": "claude", "target": ".claude/skills/the-contract-audit/SKILL.md"},
+        {"host_id": "codex", "target": ".agents/skills/the-contract-audit/SKILL.md"}
+      ]
+    },
+    {
+      "skill_id": "engineering-code-design",
+      "source": "09_soul/governance/skills/engineering-code-design/SKILL.md",
+      "sha256": "d327a60ce7ae621e6ff0ae715845cd5be1b692ddeade124b13b36435549e59ff",
+      "required_t0_layer_ids": ["the_design_doc_management", "the_software_delivery"],
+      "primary_agent_entry_role": "authoring",
+      "primary_agent_entry_subject": "engineering_change_candidate",
+      "projections": [
+        {"host_id": "claude", "target": ".claude/skills/engineering-code-design/SKILL.md"},
+        {"host_id": "codex", "target": ".agents/skills/engineering-code-design/SKILL.md"}
+      ]
+    },
+    {
+      "skill_id": "engineering-change-review",
+      "source": "09_soul/governance/skills/engineering-change-review/SKILL.md",
+      "sha256": "54fa45145a18919012b401dbe51f6af02835cba9d0cf6b22b405d3a801cc84d1",
+      "required_t0_layer_ids": ["the_contract_audit", "the_software_delivery"],
+      "primary_agent_entry_role": "review",
+      "primary_agent_entry_subject": "engineering_change_candidate",
+      "projections": [
+        {"host_id": "claude", "target": ".claude/skills/engineering-change-review/SKILL.md"},
+        {"host_id": "codex", "target": ".agents/skills/engineering-change-review/SKILL.md"}
+      ]
+    }
+  ]
+}
