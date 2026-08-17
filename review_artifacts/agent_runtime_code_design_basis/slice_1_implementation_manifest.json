@@ -5,7 +5,7 @@
   "implementation_baseline_commit": "294a3bd3778c0a6df7adabe2816221e953223e49",
   "approved_code_design_basis": {
     "path": "review_artifacts/agent_runtime_code_design_basis/code_design_basis.json",
-    "sha256": "f1741a3d928ee2905b30489e3843e6a76e4b77a5995b0bf2a9d2f923a6165c92"
+    "sha256": "6dcb12efcd0ff5c32a97f73d9595cdac98944ea32f7c1504a993da07fc26234a"
   },
   "approved_design_subject": {
     "path": "review_artifacts/agent_runtime_complete_candidate/subject_manifest.json",

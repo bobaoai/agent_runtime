@@ -2,6 +2,56 @@
   "basis_schema_version": "code_design_basis_v1",
   "basis_id": "agent_runtime_architecture_rebuild",
   "status": "approved",
+  "package_id": "agent_runtime_core",
+  "primary_module_id": "runtime_conformance",
+  "change_kind": "systematic_refactor_not_consumer_migration",
+  "module_paths": [
+    "src/agent_runtime/conformance",
+    "src/agent_runtime/foundation",
+    "src/agent_runtime/registry/registry_architecture_registration.py",
+    "src/agent_runtime/inspection/inspection_architecture_rendering.py"
+  ],
+  "compatibility_slice_ids": [
+    "runtime_foundation",
+    "contracts_compatibility_facade",
+    "trading_platform_downstream_consumer_freeze"
+  ],
+  "changed_resource_ids": [
+    "runtime_source_ownership_manifest",
+    "runtime_allowed_dependency_graph",
+    "runtime_public_surface_manifest",
+    "runtime_migration_debt_high_water",
+    "runtime_foundation_validation_primitives",
+    "runtime_foundation_schema_traversal",
+    "trading_platform_runtime_consumer_manifest"
+  ],
+  "external_dependency_roots": [
+    "python_standard_library"
+  ],
+  "shared_projection_paths": [
+    {
+      "path": "src/agent_runtime/inspection/inspection_architecture_rendering.py",
+      "affected_module_ids": [
+        "runtime_registry",
+        "runtime_execution",
+        "runtime_invocation",
+        "runtime_durability",
+        "runtime_ledger",
+        "runtime_inspection",
+        "runtime_foundation",
+        "runtime_conformance"
+      ]
+    },
+    {
+      "path": "src/agent_runtime/contracts/__init__.py",
+      "affected_module_ids": [
+        "runtime_foundation"
+      ]
+    }
+  ],
+  "migration_guidance_refs": [],
+  "migration_log_ref": null,
+  "future_capability_impact": "Later Runtime slices can move one responsibility at a time under deterministic import, export, source-ownership, and shrinking-debt gates without changing current execution behavior.",
   "requested_result": "Produce one independently publishable Agent Runtime whose Registry, Execution, Invocation, Durability, Ledger, and Inspection responsibilities are independently reviewable, have one-way dependencies, and compose one recoverable start-to-inspection execution path.",
   "owning_design_refs": [
     "review_artifacts/agent_runtime_complete_candidate/subject_manifest.json@sha256:09ee88f6751bee4db1a259a27a08822e4900c1d62af2ce16cb406c2b34e4954a",

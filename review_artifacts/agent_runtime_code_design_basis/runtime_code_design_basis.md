@@ -6,6 +6,15 @@ implementation slices in section 9.
 Machine-readable basis:
 `review_artifacts/agent_runtime_code_design_basis/code_design_basis.json`.
 
+Package: `agent_runtime_core`.
+
+Primary implementation module for Slice 1: `runtime_conformance`.
+
+Compatibility slices: import-free Runtime Foundation, the current
+`agent_runtime.contracts` compatibility facade, and the frozen
+`trading_platform` downstream consumer surface. This Slice is an architecture
+refactor, not the downstream consumer migration itself.
+
 Change route: `agent_runtime_architecture_rebuild`.
 
 Design subject:
