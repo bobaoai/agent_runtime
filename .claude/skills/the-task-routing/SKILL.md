@@ -36,6 +36,9 @@ The trusted caller supplies:
 - immutable `RouteEligibilityDecision` ref;
 - pinned routing-registry release ref;
 - request text or structured intent;
+- exact `SystemChangeCase`, `SystemChangePlan`, and
+  `SystemChangeWorkPackage` refs/hashes when the request claims an existing
+  specialist branch entry; and
 - authorized context-overlay refs.
 
 This skill may classify only mainlines present in the eligible set. It must not
@@ -47,6 +50,24 @@ error.
 Classify the requested durable result, not a noun mentioned in the request.
 Theme, ticker, account, Source, file, provider, model, framework, and UI names
 are context unless they define the requested output.
+
+Design titles, T0 names, Skill IDs, directories, filenames, Reviewers, and
+component names follow the same rule. They may help locate registered evidence;
+they never establish the requested outcome, governed layer, or logical owner by
+lexical similarity.
+
+When the requested durable result mutates any governed Design, Skill, Runtime,
+Data, Registry, schema, code, test, release, deployment, rollback, or retirement
+surface, the only parentless route is the registered `system_change_intake`
+mainline. A Design, Skill, Runtime registration, Engineering, Audit, or
+Software Delivery branch may be selected only when the request binds the exact
+current `SystemChangeCase`, `SystemChangePlan`, and
+`SystemChangeWorkPackage`, and the registered parent guard accepts that
+binding. A target filename or Skill name never substitutes for those refs.
+
+This mutation test chooses the System Change mainline. It does not perform
+Scope Assessment, impact closure, Work Package selection, or Case completion;
+those remain with System Change Governance.
 
 Intersect semantic candidates with the eligible set and return:
 
@@ -98,6 +119,13 @@ After `routed`:
 3. Product Authorization evaluates the exact target and input closure;
 4. Agent Runtime admits and executes Runtime-required work;
 5. the owning domain decides semantic acceptance.
+
+Before an operating method acts, it validates the routed entry-subject class or
+the exact current System Change Work Package. If it returns an applicability
+rejection, stop that method and return the evidence to Task Routing or the
+current System Change Scope Assessment. When the rejection identifies a wrong
+logical owner, record the existing `wrong_logical_owner` Routing Gap. Do not
+continue because the method was named and do not fall back to a nearby Skill.
 
 A failure in those stages does not change or retry semantic routing through a
 different mainline.

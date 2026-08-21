@@ -21,7 +21,8 @@ binding, isolation, residency, lifecycle, recovery, and migration.
 **Required reader gain**: A reader can identify the System of Record for a
 record family, distinguish semantic ownership from physical custody, and know
 which policy and evidence must accompany storage, migration, backup, restore,
-export, and deletion.
+export, and deletion. The reader can also distinguish a shared database-access
+mechanism from the domain service that owns schema, SQL, and canonical writes.
 
 ## 0. Intent Capsule
 
@@ -35,16 +36,20 @@ scope:
   - managed Data Asset identity
   - System-of-Record and single-writer binding
   - tenant, Cell, classification, residency, licence, and export constraints
+  - boundary between the shared DataAccessAdapter and the domain-owned Data Access Gateway
   - retention, legal hold, purge, backup, restore, migration, and retirement law
   - code-owned registration and generated inspection
 non_goals:
   - domain record meaning, schema meaning, or business acceptance
+  - concrete database product, driver, pool, credential backend, or deployment binding
+  - System Change Case intake, scope assessment, Work Package coordination, Candidate Set assembly, or case closure
   - Principal, Entitlement, or authorization decisions
   - time-field meaning
   - workflow execution, evaluation, or provider behavior
   - software release or Independent Review verdicts
 inputs:
   - domain-owned record-family contract
+  - exact System Change Data Work Package when the Data candidate belongs to a governed mutation
   - Product Authorization data-access boundary
   - Timestamp Semantic requirements
   - code-owned storage and policy registrations
@@ -53,9 +58,9 @@ outputs:
   - StorageBinding law
   - DataPolicyBinding law
   - DataMigrationRegistration law
+  - DataAccessAdapter law
+  - DataAccessBinding law
   - generated Data Governance inspection
-owned_specialization_contracts:
-  - designDoc/data_governance_10_data_access_gateway_contract.md
 truth_surfaces:
   - designDoc/the_data_governance.md
   - logical:data_governance_contract_registry
@@ -69,10 +74,11 @@ open_decisions:
   - normalized target schema replacing predecessor assurance-specific records
   - complete registration coverage for managed data families
 review_gate: design_doc_review and registered data-governance conformance
-runtime_surface_ledger: generated from code-owned Data Asset, Storage Binding, policy, migration, and lifecycle registrations
+runtime_surface_ledger: generated from code-owned Data Asset, Storage Binding, DataAccessAdapter, DataAccessBinding, policy, migration, and lifecycle registrations
 verification_hooks:
   - System-of-Record uniqueness and single-writer closure
   - tenant, Cell, residency, retention, migration, backup, restore, and purge policy tests
+  - Adapter release, consumer binding, credential-reference, scope, retry, and audit-boundary tests
 ```
 
 ## 1. Authority
@@ -94,7 +100,7 @@ flowchart LR
     REG --> BIND["StorageBinding<br/>one System of Record"]
     AUTHZ["Product Authorization"] --> SERVICE["Owning data service"]
     BIND --> SERVICE
-    SERVICE --> PG[("PostgreSQL authority")]
+    SERVICE --> DB[("Registered relational authority")]
     SERVICE -.-> OBJ["Object store<br/>immutable payload bytes"]
 ```
 
@@ -108,11 +114,11 @@ The enterprise target has three deliberate authority classes:
 
 1. Git is authoritative for code, Design Docs, schemas, migrations, tests, and
    infrastructure definitions.
-2. PostgreSQL is authoritative for managed metadata, domain state, identity,
+2. The registered relational System of Record is authoritative for managed metadata, domain state, identity,
    policy assignments, lineage, decisions, access evidence, and lifecycle
    records.
 3. An admitted object store may hold large immutable payload bytes while
-   PostgreSQL retains authoritative identity, ownership, hash, policy,
+   the relational System of Record retains authoritative identity, ownership, hash, policy,
    lifecycle, and locator records.
 
 Secret values belong to an admitted secret or key-management service. Managed
@@ -132,6 +138,8 @@ registration until retired.
 | `DataPolicyBinding` | Binds one exact tenant/Cell, classification, residency, retention, legal-hold, licence, export, or backup policy to an asset |
 | `DataMigrationRegistration` | Defines current and target authority, legal forward and rollback transitions, reconciliation requirements, and retirement condition |
 | `DataLifecycleEvidence` | Records backup, restore, migration, reconciliation, export, purge, legal-hold, or retirement evidence without becoming a release decision |
+| `DataAccessAdapter` | Defines the shared mechanism interface for connection acquisition, transaction mechanics, workload-credential resolution, trusted tenant and Cell context injection, retry classification, and operation audit. It owns no domain schema, SQL, migration, query meaning, result mapping, writer rule, or authorization decision |
+| `DataAccessBinding` | Binds one consumer to one exact DataAccessAdapter release, StorageBinding target, opaque workload-credential reference, server-resolved tenant and Cell scope, permitted operation class, and registered audit Data Asset. It is a data-boundary registration and never grants Product access |
 
 Code owns exact IDs, schemas, bindings, policy versions, migration states,
 implementation references, current coverage, and test results. Generated
@@ -148,7 +156,7 @@ inspection is the human-readable current inventory.
 - Cross-domain access uses an authorized service contract rather than direct
   internal-table or cross-domain filesystem access.
 
-### 4.2 Tenant, Cell, and authorization
+### 4.2 Tenant, Cell, authorization, and shared access mechanism
 
 - Tenant and Cell identity are resolved by trusted services, never accepted
   from caller input as authority.
@@ -157,13 +165,54 @@ inspection is the human-readable current inventory.
 - A Dedicated Cell has independent credentials, key scope, Artifact namespace,
   backup scope, worker identity, and audit boundary. A pooled Cell must prove
   equivalent isolation.
-- Agent Runtime, Dagster, providers, and tools receive bounded service or data
+- Agent Runtime, the admitted deterministic integration, providers, and tools receive bounded service or data
   handles rather than unrestricted database, filesystem, or object-store
   credentials.
 - Database-backed domain services enforce authorized Agent operations through
   the shared Data Access Gateway contract. The Gateway combines Runtime Module
   authority with Product Authorization and creates no independent permission
   policy.
+
+`DataAccessAdapter` and Data Access Gateway are different contracts. The
+Adapter supplies reusable database-access mechanics. A Data Access Gateway is
+the domain-owned enforcement surface that translates an authorized logical
+operation into domain SQL or a domain command under the Product Authorization
+enforcement law. Sharing one Adapter release or implementation never shares
+domain SQL, schema ownership, data ownership, or canonical-writer authority.
+
+The project host composition root, through its Code Projection, selects one
+admitted Adapter implementation and injects it only through exact
+`DataAccessBinding` registrations. Agency Platform may fulfill that host role
+when installed; a standalone subsystem host may fulfill the same seam without
+Agency Platform. Every consumer therefore receives its own target, credential
+reference, tenant and Cell scope, operation class, and audit destination. The
+Adapter cannot select a domain query, widen the authorized resource scope, or
+become a cross-domain all-powerful Gateway.
+
+Workload credential resolution is a hook into the admitted secret or
+key-management custody service. The Adapter obtains one scope-bound credential
+for the exact binding; it does not issue, mint, own lifecycle for, persist,
+expose, or cache that credential beyond the bounded connection lease.
+
+Retry classification is evidence, not execution authority. The Adapter reports
+`retryable`, `non_retryable`, or `fenced`; the consuming writer's registered
+recovery policy decides whether another transaction is legal. Transparent
+Adapter re-execution of a non-idempotent operation or an operation with an
+unknown commit outcome is forbidden.
+
+Adapter operation audit is a registered Data Asset owned by the consuming
+service and written inside that consumer's tenant and Cell audit boundary. Its
+Timestamp-registered record class may carry identities, references, timing,
+failure classification, and outcome class, but no domain content or secret. It
+never substitutes for a Product Authorization decision record, a domain writer
+record, or Runtime execution lineage.
+
+The owning domain retains its schema contract, migrations, SQL and typed
+result mapping, query semantics, and writer rules. Runtime-owned record stores
+retain the same responsibilities for Runtime records. Models and Agent
+processes receive neither raw database credentials nor an unrestricted
+Adapter; an admitted Module may use only the exact domain-scoped operation
+surface supplied through its execution binding.
 
 ### 4.3 Classification and derivatives
 
@@ -209,11 +258,12 @@ not transfer System-of-Record authority.
 
 | Peer T0 | Boundary |
 | --- | --- |
+| System Change Governance | Supplies the exact Data Work Package and current Case/Plan lineage; Data Governance alone decides Data Asset, writer, placement, migration, retention, and recovery meaning |
 | Artifact Graph | Owns the project Workflow, Operation, Artifact, and Design Contract index plus Artifact dependency and freshness relations; Data Governance owns physical record and payload bindings |
 | Product Authorization | Decides who may perform an exact data operation; Data Governance supplies the resource, tenant, Cell, classification, residency, and lifecycle boundary enforced by the data service |
 | Timestamp and Clock Semantics | Owns time-field roles and comparisons used by retention, expiry, migration, backup, and evidence records |
-| Agency Platform | Hosts Cell Data and Product Control services without becoming the semantic owner of their records |
-| Agent Runtime | Consumes governed data interfaces and preserves isolation; Runtime history is not a domain System of Record |
+| Agency Platform | When it is the project host composition root, implements the registered DataAccessBinding injection seam and hosts Cell Data and Product Control services without becoming the semantic owner of their records |
+| Agent Runtime | Consumes an injected DataAccessAdapter or domain-scoped data service and preserves isolation; Runtime history is not a domain System of Record, and Runtime does not resolve database credentials or select a driver or pool |
 | Design Doc Management | Governs the intent contracts referenced by data registrations |
 | Contract Audit | Audits immutable data registrations or evidence packages when a registered profile requires it |
 | Software Delivery | Admits storage code, schemas, migrations, deployment, rollback, and retirement; Data Governance supplies the data-safety constraints |
@@ -227,8 +277,13 @@ generic verifier or production-release authority.
 This T0 contains no manually maintained asset, table, writer, storage,
 migration, test, or admission inventory.
 
-- The project-local Data Governance contract and asset registries own the
-  current code-supported records and coverage.
+- The project-local Data Governance contract and registries own the current
+  Data Asset, StorageBinding, DataAccessAdapter, and DataAccessBinding records
+  and coverage.
+- A project-local Platform service inventory may reference the exact
+  DataAccessBinding and concrete implementation release that it hosts; it does
+  not copy the binding fields or become their authority. Domain registries
+  continue to own their schemas, migrations, operations, and writers.
 - Generated Contract Reference and Current Status pages project code-owned
   definitions and registrations.
 - Missing coverage remains explicitly missing or pending implementation.
@@ -246,6 +301,19 @@ Data Governance is non-conformant when:
 - a file, replica, cache, backup, index, workflow history, or object store is
   treated as an independent domain authority;
 - storage is treated as permission or semantic acceptance;
+- a shared DataAccessAdapter contains domain SQL, schema, migration, query
+  semantics, writer rules, or an independent authorization policy;
+- a consumer receives database access without one exact DataAccessBinding, or
+  a Platform inventory duplicates or overrides that binding;
+- sharing an Adapter implementation is treated as permission to share a
+  credential, tenant scope, Cell scope, or canonical writer;
+- Adapter retry classification is treated as permission to re-execute a
+  non-idempotent or unknown-outcome operation;
+- Adapter operation audit crosses a tenant or Cell boundary, has no registered
+  owning Data Asset, contains domain content or secrets, or substitutes for an
+  authorization, domain, or Runtime record;
+- Runtime or a domain service bypasses the registered Adapter binding to
+  construct an unrestricted database connection;
 - Product Authorization, Contract Audit, Software Delivery, or a domain owner
   is absorbed into Data Governance;
 - a caller-supplied tenant or Cell identity selects the data boundary;
@@ -258,7 +326,8 @@ Data Governance is non-conformant when:
 
 ## References
 
-- [Enterprise Constitution](the_charter.md)
+- [Project Charter](the_charter.md)
+- [System Change Governance](the_system_change_governance.md)
 - [Agency Platform](the_agency_platform.md)
 - [Agent Runtime](the_agent_runtime.md)
 - [Product Authorization](the_product_authorization.md)

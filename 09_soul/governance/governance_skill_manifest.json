@@ -1,15 +1,38 @@
 {
-  "manifest_version": "governance_skill_manifest_v2",
+  "manifest_version": "governance_skill_manifest_v4",
+  "retired_projection_roots": [
+    ".agents/skills/agent-runtime-release-registration",
+    ".agents/skills/agent-the-contract-audit",
+    ".agents/skills/agent-the-skill-management",
+    ".agents/skills/contract-audit-subject-review",
+    ".agents/skills/engineering-commit-review",
+    ".agents/skills/engineering-project-review",
+    ".agents/skills/engineering-runtime-registration",
+    ".agents/skills/engineering-skill-authoring",
+    ".agents/skills/governance-contract-audit",
+    ".agents/skills/the-skill-management",
+    ".claude/skills/agent-runtime-release-registration",
+    ".claude/skills/agent-the-contract-audit",
+    ".claude/skills/agent-the-skill-management",
+    ".claude/skills/contract-audit-subject-review",
+    ".claude/skills/engineering-commit-review",
+    ".claude/skills/engineering-project-review",
+    ".claude/skills/engineering-runtime-registration",
+    ".claude/skills/engineering-skill-authoring",
+    ".claude/skills/governance-contract-audit",
+    ".claude/skills/the-skill-management"
+  ],
   "portable_governance_skills": [
     {
       "skill_id": "the-task-routing",
-      "required_t0_layer_ids": ["the_task_routing"],
+      "required_t0_layer_ids": ["the_task_routing", "the_system_change_governance"],
+      "required_soul_resource_ids": [],
       "primary_agent_entry_role": "routing",
       "primary_agent_entry_subject": "task_request",
-      "source_files": [
+      "package_files": [
         {
           "source": "09_soul/governance/skills/the-task-routing/SKILL.md",
-          "sha256": "8f60612bc7854ef73463b4bbf39e071045176baf17b2d0c4bd64901cafb060ab",
+          "sha256": "7498427e2117628d716536be0b0ddad12494daa4aca0907a3a2b94d6bc921a88",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/the-task-routing/SKILL.md"},
             {"host_id": "codex", "target": ".agents/skills/the-task-routing/SKILL.md"}
@@ -18,30 +41,66 @@
       ]
     },
     {
-      "skill_id": "the-skill-management",
-      "required_t0_layer_ids": ["the_design_doc_management"],
+      "skill_id": "the-system-change",
+      "required_t0_layer_ids": ["the_system_change_governance"],
+      "required_soul_resource_ids": ["soul:communication"],
       "primary_agent_entry_role": "authoring",
-      "primary_agent_entry_subject": "skill_candidate",
-      "source_files": [
+      "primary_agent_entry_subject": "system_change_request",
+      "package_files": [
         {
-          "source": "09_soul/governance/skills/the-skill-management/SKILL.md",
-          "sha256": "59f20e95c3c3857f15cb75f4f53aa04e50a0c49d6a44aa81063905419e2d79d6",
+          "source": "09_soul/governance/skills/the-system-change/SKILL.md",
+          "sha256": "2c87283fb3cde2440bd6fb2a8f4b46941cd35fcfe1fc0140ee3c625d6c64ce28",
           "projections": [
-            {"host_id": "claude", "target": ".claude/skills/the-skill-management/SKILL.md"},
-            {"host_id": "codex", "target": ".agents/skills/the-skill-management/SKILL.md"}
+            {"host_id": "claude", "target": ".claude/skills/the-system-change/SKILL.md"},
+            {"host_id": "codex", "target": ".agents/skills/the-system-change/SKILL.md"}
+          ]
+        }
+      ]
+    },
+    {
+      "skill_id": "the-design-authoring",
+      "required_t0_layer_ids": ["the_design_doc_management", "the_system_change_governance"],
+      "required_soul_resource_ids": ["soul:communication", "soul:bestpractice_doc_self_review"],
+      "primary_agent_entry_role": "authoring",
+      "primary_agent_entry_subject": "design_work_package",
+      "package_files": [
+        {
+          "source": "09_soul/governance/skills/the-design-authoring/SKILL.md",
+          "sha256": "fb80a08868f24a1206dd40379a2dd70514eedf1f5c03a280b65ca89cf22cb2b6",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-design-authoring/SKILL.md"},
+            {"host_id": "codex", "target": ".agents/skills/the-design-authoring/SKILL.md"}
+          ]
+        }
+      ]
+    },
+    {
+      "skill_id": "the-skill-authoring",
+      "required_t0_layer_ids": ["the_skill_management", "the_system_change_governance"],
+      "required_soul_resource_ids": ["soul:axiom_a14_prompt_boundary_hygiene_2026", "soul:axiom_a21_skill_agent_boundary_2026", "soul:communication", "soul:bestpractice_skill_writing", "soul:bestpractice_doc_self_review"],
+      "primary_agent_entry_role": "authoring",
+      "primary_agent_entry_subject": "skill_work_package",
+      "package_files": [
+        {
+          "source": "09_soul/governance/skills/the-skill-authoring/SKILL.md",
+          "sha256": "4c249509b9f1c16712d99b3e2802151514ff9b1de1a657c9f35e0ccef7e96e23",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-skill-authoring/SKILL.md"},
+            {"host_id": "codex", "target": ".agents/skills/the-skill-authoring/SKILL.md"}
           ]
         }
       ]
     },
     {
       "skill_id": "the-contract-audit",
-      "required_t0_layer_ids": ["the_contract_audit"],
+      "required_t0_layer_ids": ["the_contract_audit", "the_design_doc_management", "the_skill_management", "the_system_change_governance"],
+      "required_soul_resource_ids": ["soul:communication"],
       "primary_agent_entry_role": "review",
       "primary_agent_entry_subject": "contract_subject",
-      "source_files": [
+      "package_files": [
         {
           "source": "09_soul/governance/skills/the-contract-audit/SKILL.md",
-          "sha256": "05fb14daa6424677b30cf1fcb5650584ef62df368778c2c2e848302cc5bc43c5",
+          "sha256": "33c4150db58f61391f0eb22437c58abca7cab1fbaf5d85d880f326e3b084627f",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/the-contract-audit/SKILL.md"},
             {"host_id": "codex", "target": ".agents/skills/the-contract-audit/SKILL.md"}
@@ -49,43 +108,212 @@
         },
         {
           "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/module_registration.json",
-          "sha256": "d6103406ef5a9e424b368048ce6b06c782cd0b41f2a1033039930412b3589491",
+          "sha256": "6a99aaaa86209f45e5f864bf2ea06c589d376c1b88e0bb5399c7132ee0bedfc8",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/module_registration.json"}
           ]
         },
         {
           "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/prompt.md",
-          "sha256": "b0d36b7e80185c8ede25a9ec78fb6ccb62370e0dfd5872adb627d8ea79077eef",
+          "sha256": "2fea53c5a16a0b9af1cc1fd5f13f7f4dfb7a0a00cb71bdae9583436496acbbdf",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/prompt.md"}
           ]
         },
         {
           "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/schemas/input.schema.json",
-          "sha256": "59ad678c0a8062954eee3b62eec0aacf9b45e200896f1d5212528b4635049d11",
+          "sha256": "de2a8ddf033b331be79fa06edcf5e38fadd2e5d57cd640a27528d19289e5b181",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/schemas/input.schema.json"}
           ]
         },
         {
           "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/schemas/output.schema.json",
-          "sha256": "8b96da95707ba87ddf126f6fa8641cdf3c456b0435734ed8c9ef952e5814a704",
+          "sha256": "5e09f1032290cae6570f5379e470681b82da9809aebc4344f65b4768e62e062e",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/schemas/output.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/validation_cases/positive_case.json",
+          "sha256": "8fd62cae01431dedc3159ec826eb180a1850fd05ccf1e039ef0e00297e916d74",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/validation_cases/positive_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/validation_cases/negative_extra_field_case.json",
+          "sha256": "393f8ff8b573968f253c9ab0e99c96049f3b304092363e5dec0fc2394803b70a",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/validation_cases/negative_extra_field_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/design_contract_reviewer/validation_cases/schema_drift_case.json",
+          "sha256": "ca0ee2434dcae21eaef142e2f49030188769e9b7af492661fcab337ddd7068cd",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/design_contract_reviewer/validation_cases/schema_drift_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/module_registration.json",
+          "sha256": "19db82b5f9962a2b7608cfcb36eecd40ccc36976b25230f55c49b69117b7a2c3",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/module_registration.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/prompt.md",
+          "sha256": "9426dd3aba451cdd3aaf726e80e86c344598f84d317d044c1ba76b7638c3e7a0",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/prompt.md"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/schemas/input.schema.json",
+          "sha256": "b4c151997589aa69c51abb7ac39f8832400c241ef20f6f62f3aa5ce6b0e8b342",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/schemas/input.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/schemas/output.schema.json",
+          "sha256": "15624bde607be5da3b08aa30a0ed7c1375138a121717c743f9302478124a6b74",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/schemas/output.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/validation_cases/positive_case.json",
+          "sha256": "eef5332c5fbf58c536dc951d7f63df2700a6e387d282a32cef22e8500c9f2b66",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/validation_cases/positive_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/validation_cases/negative_extra_field_case.json",
+          "sha256": "7ea15d73e10bdc74c2b3ca8b4c51b2ba4c3811290f6f89422f350f3da13326a4",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/validation_cases/negative_extra_field_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/validation_cases/schema_drift_case.json",
+          "sha256": "86c245e839f0be511d8bc649f8baf8fcca889c8e88fb93726882d79a1191f367",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/system_change_governance_reviewer/validation_cases/schema_drift_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/structure_change_reviewer/module_registration.json",
+          "sha256": "7ff55b892bcc8a2bdd25fc3ae75f3d63f510ca52d9b00e8f8ce60f6c0c0d50a6",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/structure_change_reviewer/module_registration.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/structure_change_reviewer/prompt.md",
+          "sha256": "e3605e40ca720cb8dece5cbe2019e52f46cbb765f86a9aca8f92d148647e7198",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/structure_change_reviewer/prompt.md"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/structure_change_reviewer/schemas/input.schema.json",
+          "sha256": "c59dc80a74adca8708ae4049a19cdb41fe9d3211e78111d11ea03afd6cbb36ca",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/structure_change_reviewer/schemas/input.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/structure_change_reviewer/schemas/output.schema.json",
+          "sha256": "a0515284ec3d9e818fae89f08e0f0ea6260dd2acdf60423aab7e0a8459782f05",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/structure_change_reviewer/schemas/output.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/structure_change_reviewer/validation_cases/positive_case.json",
+          "sha256": "164b19f80dfbe74bca5334163b1baf8caec6b2fd7045b3018fd60a81c91bf78d",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/structure_change_reviewer/validation_cases/positive_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/structure_change_reviewer/validation_cases/negative_extra_field_case.json",
+          "sha256": "0255f4274395e3137dcd136f3bf12e5f7e91ea9da2fa46dc08fb37608c3069b5",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/structure_change_reviewer/validation_cases/negative_extra_field_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/structure_change_reviewer/validation_cases/schema_drift_case.json",
+          "sha256": "b17083d019230976589da293346434c908b5b3fb17e8dc9d64250348f31661d8",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/structure_change_reviewer/validation_cases/schema_drift_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/module_registration.json",
+          "sha256": "064dacabfe6606ba1a436f13539015eb280da24549234d6fe43c9a063cbe07b4",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/module_registration.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/prompt.md",
+          "sha256": "996724e1168574c8122eb1b7866119e71e42a266e49ef64d020dc25eb1b0556d",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/prompt.md"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/schemas/input.schema.json",
+          "sha256": "8004088e714e32534dbe969b79133b6b06b0659eb3ae3820a229f179553a72cb",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/schemas/input.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/schemas/output.schema.json",
+          "sha256": "bad8fee7332476640e32ecb5f0c0d15d5d01590c563c373a9067d78fdf2fa3f3",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/schemas/output.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/validation_cases/positive_case.json",
+          "sha256": "cfe3d197980ea3fdcbb069843877889fbdcd40a1b065133f2e7b5aaba0d81d0c",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/validation_cases/positive_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/validation_cases/negative_extra_field_case.json",
+          "sha256": "a8be5103c93b4f9271cc278177cb6c5729224a2e4fcfa8e08bace74c3a78a176",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/validation_cases/negative_extra_field_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/validation_cases/schema_drift_case.json",
+          "sha256": "1b9408dd524ebeff076170e4682f1406e50cce1b38c57005334dbfda75105b30",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/the-contract-audit/runtime_modules/skill_candidate_reviewer/validation_cases/schema_drift_case.json"}
           ]
         }
       ]
     },
     {
       "skill_id": "engineering-code-design",
-      "required_t0_layer_ids": ["the_design_doc_management", "the_software_delivery"],
+      "required_t0_layer_ids": ["the_design_doc_management", "the_software_delivery", "the_system_change_governance"],
+      "required_soul_resource_ids": [],
       "primary_agent_entry_role": "authoring",
-      "primary_agent_entry_subject": "engineering_change_candidate",
-      "source_files": [
+      "primary_agent_entry_subject": "engineering_work_package",
+      "package_files": [
         {
           "source": "09_soul/governance/skills/engineering-code-design/SKILL.md",
-          "sha256": "d327a60ce7ae621e6ff0ae715845cd5be1b692ddeade124b13b36435549e59ff",
+          "sha256": "81d0786a63fbee6c5c55cbe071d068e8899017e67dec5bb258cc35bace379c6e",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/engineering-code-design/SKILL.md"},
             {"host_id": "codex", "target": ".agents/skills/engineering-code-design/SKILL.md"}
@@ -95,13 +323,14 @@
     },
     {
       "skill_id": "engineering-change-review",
-      "required_t0_layer_ids": ["the_contract_audit", "the_software_delivery"],
+      "required_t0_layer_ids": ["the_contract_audit", "the_skill_management", "the_software_delivery", "the_system_change_governance", "the_timestamp_semantic"],
+      "required_soul_resource_ids": ["soul:communication"],
       "primary_agent_entry_role": "review",
       "primary_agent_entry_subject": "engineering_change_candidate",
-      "source_files": [
+      "package_files": [
         {
           "source": "09_soul/governance/skills/engineering-change-review/SKILL.md",
-          "sha256": "8ba1f01c8af68264e2f894b56555a24e1795bf738225a0921088f63fcec782a4",
+          "sha256": "4eaf58a3a58568f1423788b958a3754f9afdfb5e9b3554da9d38fdb4cc6f7161",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/engineering-change-review/SKILL.md"},
             {"host_id": "codex", "target": ".agents/skills/engineering-change-review/SKILL.md"}
@@ -109,30 +338,51 @@
         },
         {
           "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/module_registration.json",
-          "sha256": "4e7eed7825073862ada4085e5eab55b2f631aa9debdcb612f49ed141842b78d9",
+          "sha256": "7afe6b8edaa16c7209be743fb4d0703d788673d701d5725e841b3ffd26442f44",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/module_registration.json"}
           ]
         },
         {
           "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/prompt.md",
-          "sha256": "1b265cbe27adc7fee7f5711be7f0562fa61a0e1f53be858981ae9d4d23032124",
+          "sha256": "3a344e41611aca826f74064ff96bc8115caa753c8225074d9533dc78e07739ab",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/prompt.md"}
           ]
         },
         {
           "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/schemas/input.schema.json",
-          "sha256": "8bcc95c20b8b3f291edb9f4ab0a62d57d05dea62527fcf256b4e0f360b45974f",
+          "sha256": "f6e6185300808a8364182867b51a74a2caaff82604ed8130739ab2914f2d81e1",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/schemas/input.schema.json"}
           ]
         },
         {
           "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/schemas/output.schema.json",
-          "sha256": "ea0b083c51ed80fb404cd3deea5b35edc1fa4802e0c0a5a238e3ecf3d1cb716c",
+          "sha256": "f7550fcbbfad690820b3de81fb0323059546ef46d03c8ed0283c47fb519922c8",
           "projections": [
             {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/schemas/output.schema.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/validation_cases/positive_case.json",
+          "sha256": "cd970e403dfc7c0b95cec65bc39592d93c759ab4d875e56100862e5539ef15e6",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/validation_cases/positive_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/validation_cases/negative_extra_field_case.json",
+          "sha256": "f0e4142a83171565c5eeed4e87177acff1e5675cdc1b40c54e4c27d9d0476f41",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/validation_cases/negative_extra_field_case.json"}
+          ]
+        },
+        {
+          "source": "09_soul/governance/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/validation_cases/schema_drift_case.json",
+          "sha256": "beff0dce26f38532806b641991c6ab7d9bc577f142fd09558678fdfc2bd4c353",
+          "projections": [
+            {"host_id": "claude", "target": ".claude/skills/engineering-change-review/runtime_modules/engineering_change_reviewer/validation_cases/schema_drift_case.json"}
           ]
         }
       ]

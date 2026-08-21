@@ -2,7 +2,6 @@
 name: the-contract-audit
 description: Independent Contract Assurance agent. Audits one immutable subject through declared subject resolution, deterministic conformance, independent semantic review when required, and formal Runtime evidence validation. It reports findings and never edits the audited subject.
 metadata:
-  type: agent
   skill_class: primary_agent_development
   primary_agent_entry_role: review
   primary_agent_entry_subject: contract_subject
@@ -15,9 +14,9 @@ This is a `review` Skill. It enters only after the owning workflow freezes the
 subject and profile; it never authors, repairs, admits, or publishes that
 subject.
 
-## Runtime Module Registrations
+## Runtime Module Exports
 
-This Skill may declare fixed independent-review Module sources only when each
+This Skill Package may export fixed independent-review Modules only when each
 Module has an owning Design Doc, exact input and output schemas, and the
 standard `runtime_modules/<module_id>/module_registration.json + prompt.md`
 source.
@@ -25,14 +24,26 @@ source.
 Project bindings may register fixed reviewer Modules for system-change or
 other contract subjects. Each prompt owns only the stable review method. The
 exact case, candidate set, Registry projections, and prior findings arrive as
-Runtime-frozen task input. Do not replace an admitted Module Release with a
+Runtime-frozen task input. Do not replace an admitted export with a
 conversation-written review brief or copy dynamic candidate content into its
 static prompt.
 
-A project may bind a fixed `design_contract_reviewer` Module for T0, T1, and
-T2 Design Intent subjects. Design Doc Management owns that Module's semantic
-review method; this Skill supplies the independent Contract Audit entry and may
-declare the Module source without taking ownership of the candidate design.
+A project may bind a fixed `design_contract_reviewer` export for Charter, T0,
+T1, and T2 Design Intent subjects. Design Doc Management owns that Module's semantic
+review method; this Skill Package supplies the independent Contract Audit entry
+and may export the Module without taking ownership of the candidate design.
+
+The portable package exports these fixed reviewer Modules:
+
+- `design_contract_reviewer`, method-owned by Design Doc Management;
+- `system_change_governance_reviewer`, method-owned by System Change
+  Governance;
+- `structure_change_reviewer`, method-owned by System Change Governance; and
+- `skill_candidate_reviewer`, method-owned by Skill Management.
+
+The separate `engineering-change-review` Skill exports
+`engineering_change_reviewer`; Contract Audit owns that Module's review method
+while Software Delivery owns the Skill entry and as-built subject lifecycle.
 
 ## Identity
 
@@ -42,21 +53,22 @@ workflow, not this Agent, decides and applies corrections.
 
 Use it when the user asks to audit a contract, capability release, typed
 registry, schema/API contract, domain graph contract, generated inspection, or
-other subject with a declared `ContractSubjectManifest` and
-`ConformanceProfile`.
+other subject with a declared immutable `AuditSubject` and `AuditProfile`.
 
 Use `engineering-change-review` for a frozen engineering change candidate or
 commit, including a change that happens to modify contracts, registries, or
 schemas. Contract Assurance enters when the contract subject itself has the
-manifest/profile identity above. Do not run both review Skills merely because
+AuditSubject/AuditProfile identity above. Do not run both review Skills merely because
 an engineering change contains a contract file.
 
 Use the subject identity rather than the filename to choose the reviewer:
 
 | Subject | Review method |
 | --- | --- |
-| Frozen T0, T1, or T2 Design Intent plus its declared semantic closure | fixed Design Contract reviewer declared by this Skill |
-| Frozen System Change Governance candidate | its registered System Change Governance reviewer |
+| Frozen Charter, T0, T1, or T2 Design Intent plus its declared semantic closure | fixed Design Contract reviewer under this Skill Package |
+| Frozen System Change Governance Design candidate | fixed System Change Governance reviewer under this Skill Package |
+| Immutable `StructureChangeProposal` plus admitted complete peer snapshot | fixed Structure Change reviewer under this Skill Package |
+| Frozen Skill candidate | fixed Skill Candidate reviewer under this Skill Package |
 | Frozen implementation diff or commit with an approved Code Design Basis | `engineering-change-review` |
 
 If the required reviewer binding does not exist, return a blocked or
@@ -66,16 +78,32 @@ Do not assume every subject has a Design Doc, Python registry, `SKILL.md`,
 Runtime registration, or implementation. Required surfaces come only from the
 subject's profile.
 
+## Applicability Gate
+
+Before resolving the subject semantically, verify that the exact routed request
+selects Contract Audit and declares `contract_subject` as the entry-subject
+class. When the audit belongs to a governed mutation, also verify that the exact
+active `SystemChangeWorkPackage` names Contract Audit as the specialist owner.
+An Audit-like filename, Reviewer name, schema, registry, or changed contract
+file is locating evidence only.
+
+If any check fails, stop before auditing the subject. Return the observed
+subject kind, governed layer, likely accountable owner, and mismatch evidence
+to Task Routing or the current System Change Scope Assessment and Plan. This is
+an applicability rejection, not an `AuditResult`, `blocked` verdict, or
+advisory audit.
+
 ## Required Inputs
 
 Resolve before auditing:
 
-1. exact subject identity, version, owner, status, and manifest hash;
-2. exact `ConformanceProfile` ref and hash;
+1. exact `AuditSubject` identity, version, owner, status, and hash;
+2. exact `AuditProfile` ref and hash;
 3. all required surface bindings and dependency refs declared by the manifest;
 4. generated inspection and validator bindings required by the profile;
-5. the formal reviewer workflow and component releases when Layer 3 requires
-   independent semantic review.
+5. every formal reviewer Workflow and Module release required by the profile's
+   semantic, engineering, and prose layers; and
+6. the installed Soul `COMMUNICATION` resource for the human-readable result.
 
 An unregistered candidate may receive an advisory candidate review. It cannot
 receive an admitted pass.
@@ -90,21 +118,23 @@ whether the result is admitted, advisory, non-pass, or blocked.
 
 ```mermaid
 flowchart LR
-    MANIFEST["ContractSubjectManifest"] --> L1["Layer 1: subject resolution"]
-    PROFILE["ConformanceProfile"] --> L1
-    L1 --> L2["Layer 2: deterministic conformance"]
-    L2 --> L3["Layer 3: semantic review"]
-    L3 --> EV["Formal evidence validation"]
-    EV --> RESULT["Immutable ConformanceResult"]
+    SUBJECT["AuditSubject"] --> RESOLVE["Mandatory subject resolution"]
+    PROFILE["AuditProfile"] --> RESOLVE
+    RESOLVE --> DET["Layer 1: deterministic conformance"]
+    RESOLVE --> SEM["Layer 2: semantic review"]
+    RESOLVE --> ENG["Layer 3: engineering review"]
+    RESOLVE --> PROSE["Layer 4: prose and communication review"]
+    DET & SEM & ENG & PROSE --> EV["Formal evidence validation"]
+    EV --> RESULT["Immutable AuditResult"]
 ```
 
-### Layer 1: Subject Resolution
+### Mandatory Subject Resolution
 
 Validate manifest identity, owner, version, status, hash, profile compatibility,
 required surfaces, dependencies, and T0 admission when T0 is claimed. Never
 recover missing authority by guessing from a filename.
 
-### Layer 2: Deterministic Conformance
+### Layer 1: Deterministic Conformance
 
 Run every validator declared by the profile. Typical checks cover schema and
 identifier validity, ref/hash closure, duplicate ownership, generated
@@ -117,7 +147,7 @@ Project-local discovery and structural validators may provide bootstrap checks
 for subjects that declare those surfaces. They are not universal T0 admission
 and do not by themselves prove conformance.
 
-### Layer 3: Independent Semantic Conformance
+### Layer 2: Independent Semantic Review
 
 When required by the profile, submit the frozen subject package to the exact
 independent reviewer release registered in Agent Runtime. The reviewer judges
@@ -126,6 +156,25 @@ failure-meaning mismatch, and misleading inspection.
 
 The reviewer is an evaluator, not an editor. It returns findings against the
 exact candidate hash.
+
+### Layer 3: Independent Engineering Review
+
+When required by the profile, invoke the registered Engineering Reviewer on
+the exact frozen as-built subject and its approved Code Design Basis. The
+reviewer reproduces the declared gates and returns Contract-Audit-compatible
+findings and one layer disposition. A semantic-only reviewer cannot satisfy
+this layer.
+
+### Layer 4: Prose and Communication Review
+
+When required by the profile, invoke the registered prose reviewer on the exact
+human-facing subject. It judges whether the approved meaning is communicated
+clearly without altering facts, authority, uncertainty, or governing
+semantics.
+
+Every Audit Profile marks each of the four layers `required` or
+`not_required`. Omission is invalid and one layer cannot substitute for
+another.
 
 ### Formal Evidence Validation
 
@@ -147,9 +196,9 @@ owner, and required disposition.
 - `fix`: material defect must be corrected by its owner before pass.
 - `note`: non-blocking observation or explicitly accepted migration debt.
 
-A pass requires Layer 1 and Layer 2 success, Layer 3 success or explicit
-`not_required`, complete formal evidence when required, and zero `block` or
-actionable `fix` findings.
+A pass requires deterministic conformance plus `passed` or explicit
+`not_required` for every other registered layer, complete formal evidence when
+required, and zero `block` or actionable `fix` findings.
 
 Do not reclassify a reviewer finding merely to make a gate pass. If a finding
 appears misrouted, report the routing conflict as a new finding. If the subject
@@ -165,6 +214,9 @@ assembler, direct Provider response, or local script cannot fabricate an
 admitted pass.
 
 ## Stop Condition
+
+An applicability rejection terminates before Audit execution and emits no
+finding, layer disposition, or aggregate verdict.
 
 Stop after producing exactly one immutable result:
 
@@ -183,13 +235,16 @@ may submit a new subject version for another independent audit.
 The result must include:
 
 - subject manifest and profile refs/hashes;
-- Layer 1, Layer 2, and Layer 3 disposition, including `not_required` where
-  declared;
+- subject-resolution disposition and all four Audit-layer dispositions,
+  including explicit `not_required` where declared;
 - validator and generated-inspection evidence;
 - formal reviewer evidence ref or explicit advisory classification;
 - every finding, severity, evidence, owner route, and required disposition;
 - affected dependent subjects requiring re-audit;
 - final verdict consistent with the recorded evidence.
+
+The human-readable result also passes the installed `COMMUNICATION` rules
+without weakening finding severity, owner routing, evidence, or verdict.
 
 ## Boundaries
 
@@ -212,5 +267,5 @@ Not owned:
 - software release, deployment, rollback, or canonical publication.
 
 Production code changes route through Software Delivery. Intent changes route
-through Architecture and Design Governance. Corrected subjects return as new
+through Design Doc Management. Corrected subjects return as new
 immutable versions.

@@ -14,7 +14,6 @@ metadata:
 
 - class: `primary_agent_development`
 - Primary Agent role: `review`
-- Skill governance owner: `designDoc/the_skill_management.md`
 - workflow owner: the project-bound engineering-change specialization under Software Delivery
 - assurance rules reused from: `designDoc/the_contract_audit.md`
 - task: independently judge one frozen engineering change
@@ -35,12 +34,29 @@ basis; a change that does not alter system shape does not need a new Design Doc.
 The Reviewer checks implementation against that basis and never reconstructs or
 redesigns the product from the diff.
 
-The review subject has exactly one mode:
+When implementation is staged, the review subject names one exact `slice_id`
+from the `implementation_slices` list of the approved `CodeDesignBasis`. The
+Reviewer judges two independent questions: whether the candidate completely
+proves the result and seams included in that Slice, and whether it introduced
+behavior, dependencies, or tests outside that boundary. It must not require
+a database, network, provider, or host-repository integration that the approved
+Slice explicitly excludes. It must verify that
+any deferred integration is assigned to a later Slice and gate rather than
+silently omitted.
+
+Each review selects exactly one subject mode:
 
 | Mode | Subject | Normal decision |
 | --- | --- | --- |
 | `pre_commit_candidate` | one frozen candidate based on an exact Git base | `ready_to_commit`, `changes_required`, or `not_reproducible` |
 | `commit_ref` | one isolated commit or declared commit range | `accepted`, `changes_required`, or `not_reproducible` |
+
+Every mode also returns one Contract-Audit-owned Independent Engineering Review
+layer disposition: `passed`, `non_pass`, or `blocked`. Findings use
+`block`, `fix`, or `note`. The mode-specific decision is a
+Software-Delivery-facing readiness projection layered on that audit result:
+`not_reproducible` requires `blocked`, `changes_required` requires
+`non_pass`, and `ready_to_commit` or `accepted` requires `passed`.
 
 A branch is not a review requirement. Isolation comes from freezing the subject,
 not from placing the same diff on another branch.
@@ -81,21 +97,19 @@ semantics. It cannot satisfy this Skill's implementation-review gate because it
 cannot independently reproduce the candidate diff, dependency closure, or
 declared tests.
 
-## Registered Runtime Module
+## Applicability Gate
 
-This Skill authors one portable Runtime Module source:
+Before reading a diff or repository snapshot semantically, verify that the exact
+active `SystemChangeWorkPackage` names the Independent Engineering Review owner,
+declares `engineering_change_candidate` as its entry-subject class, and requests
+an as-built engineering verdict. A commit, branch, directory, test failure, or
+Reviewer name is locating evidence only.
 
-| `module_id` | semantic owner | purpose |
-| --- | --- | --- |
-| `engineering_change_reviewer` | `designDoc/the_software_delivery.md` | Independently review one frozen implementation ChangeSet against its approved `CodeDesignBasis`, declared gates, and carried predecessor findings |
-
-Its canonical static task instruction is the `prompt.md` file in the canonical
-`engineering_change_reviewer` Module source; its input and output contracts are
-the sibling registered schemas. Registry projects the declared Module assets
-only to their registered Runtime host.
-Provider, model, reasoning, repository tool grants, command allowlist, timeout,
-and writable roots remain Execution Profile or per-run control-plane records
-rather than Skill or Prompt content.
+If any check fails, stop before reviewing the candidate. Return the observed
+subject kind, governed layer, likely accountable owner, and mismatch evidence
+to the current System Change Scope Assessment and Plan. This outcome is an
+applicability rejection; it is not `not_reproducible`, `blocked`, or a verdict
+on the candidate.
 
 ## When To Use
 
@@ -113,32 +127,43 @@ Typical subjects include:
 Use a domain content Reviewer for reports, Thesis, Evidence, or other analytical
 prose. Use the security-review workflow for a security audit. Use
 `the-contract-audit` when the requested subject is an immutable
-`ContractSubjectManifest` evaluated under a declared `ConformanceProfile` for
+`AuditSubject` evaluated under a declared `AuditProfile` for
 contract admission. A schema or registry inside an engineering diff remains
-part of this Engineering Project Review subject rather than triggering both
+part of this Engineering Change Review subject rather than triggering both
 review Skills.
 
 ## Required Review Package
 
 Every review begins from a closed package. It contains:
 
-1. the validated `EngineeringChangeRoute`, including the unique primary owner,
-   complete affected-surface closure, authoring route, and assurance route;
+1. the exact current `SystemChangeWorkPackage` ref/hash, including the
+   accountable specialist owner, included engineering surfaces, required
+   candidate kind, assurance requirements, completion contract, and parent
+   Case/Plan lineage;
 2. `subject_mode`;
 3. `base_ref` and, for post-commit review, the exact `commit_ref` or range;
 4. an exact path manifest with one state per path: `added`, `modified`,
    `deleted`, or `kept_at_base`;
 5. the frozen candidate diff or committed diff and its SHA-256;
 6. content hashes for added or otherwise untracked candidate files;
-7. the approved machine-readable `CodeDesignBasis` and its owning contract or
-   decision references;
-8. for migration work, the exact Migration Guidance refs and the append-only
+7. the approved machine-readable `CodeDesignBasis`, its
+   `design_basis_sha256`, approval reference, and owning contract or decision
+   references;
+8. when delivery is staged, the exact `slice_id`, intended result, included
+   surfaces, excluded surfaces, deferred integrations with their later owning
+   `slice_id` and gate, required tests, and completion gate selected from that
+   basis;
+9. for migration work, the exact Migration Guidance refs and the append-only
    Migration Log entry that records the actual guidance, Design Doc, registry,
    Code Design, test, and review delta;
-9. every claimed validation command with its working directory, material
+10. every claimed validation command with its working directory, material
    environment switches, expected result, and known baseline failures;
-10. the current working-tree inventory, recorded separately from the subject;
-11. prior findings when the change claims to close them.
+11. the current working-tree inventory, recorded separately from the subject;
+12. prior findings when the change claims to close them.
+13. the candidate's change-registration audit: every changed production symbol,
+    public export, schema, migration, and test mapped to one owning Slice; every
+    generated/public projection mapped to one code-owned projector or
+    conformance owner and deterministic regeneration gate.
 
 The `CodeDesignBasis` binds exactly one repository subject and contains, directly or
 through code-owned module records:
@@ -147,7 +172,11 @@ through code-owned module records:
 - exact module paths and declared compatibility slices;
 - the changed resources and interfaces;
 - allowed package-internal module edges and external dependency roots;
-- shared projection paths and every module they affect;
+- generated/public projection paths, their single projector or conformance
+  owner, and deterministic regeneration gates;
+- staged implementation Slices with exact included and excluded surface ids,
+  deferred integrations with their later owning `slice_id` and gate, and
+  smallest sufficient tests;
 - focused test paths, rollback boundary, and acceptance gates;
 - exact `migration_guidance_refs`, `intended_result`,
   `changed_resource_ids`, `future_capability_impact`, and `migration_log_ref`
@@ -204,15 +233,28 @@ approved disposition and current contracts decide what enters the candidate.
 
 ### 1. Verify Subject Closure
 
-- Resolve the approved `CodeDesignBasis` before interpreting code. Verify that its
-  package, primary module, compatibility slices, resources, paths, dependencies,
-  tests, and rollback close over exactly this repository subject.
+- Resolve the approved `CodeDesignBasis` before interpreting code. Verify its
+  `design_basis_sha256` and approval reference, then verify that its package,
+  primary module, compatibility slices, resources, paths, dependencies, tests,
+  and rollback close over exactly this repository subject.
+- When the subject is one implementation Slice, verify its exact result,
+  included surfaces, excluded surfaces, smallest sufficient tests, and
+  completion gate before interpreting an absent external integration as a
+  defect.
 - For migration work, verify that the exact Migration Guidance refs, refurbished
   owning Design Docs, Code Design Basis, registry snapshot, and Migration Log entry
   describe the same scope. Require an explicit `design_change: none` when the
   work claims no semantic design delta.
 - Recompute the path set, path states, content hashes, and candidate diff hash.
 - Compare claimed file count with the exact manifest count.
+- Compare the actual changed symbols and public exports with the selected
+  Slice's registered surfaces. Keep already-present later-Slice code separate
+  from the frozen subject; presence in the worktree, branch, or stash is not
+  admission evidence.
+- Assign each test to the contract or integration seam whose result it asserts;
+  setup fixtures and lower-layer dependencies do not create joint ownership.
+  Reject an independent multi-owner test file until it is split, and reject
+  every test treated as a projection.
 - Reject scope additions, missing paths, and generated or mirror files that
   were not declared.
 - For recovery work, verify every source path has one explicit disposition and
@@ -222,17 +264,18 @@ approved disposition and current contracts decide what enters the candidate.
   over the frozen candidate. Verify the review package's test and rollback
   evidence separately. Reproduce module readiness when implementation entry is
   claimed and package readiness when cutover eligibility is claimed.
-- Reject a path with no declared module or shared-projection owner, a resource
-  with two active owners, and a shared projection that does not name every
-  affected module.
+- Reject a path with no declared module owner, a resource with two active
+  owners, and a generated/public projection with multiple owners, no code-owned
+  projector, or no deterministic regeneration gate.
 
 If subject closure fails, stop with `not_reproducible`. Findings about a moving
 or incomplete subject are not reliable.
 
 ### 2. Reproduce Claimed Gates
 
-Run each claimed command verbatim with `./.venv/bin/python` where applicable.
-Record the author's expected result and the reproduced result side by side.
+Run each claimed command with the exact interpreter, argv, working directory,
+environment, and timeout frozen in the `SandboxCommandPlan`. Record the
+author's expected result and the reproduced result side by side.
 
 Run the same focused gate against the frozen candidate or commit subject. Run a
 broader repository gate only when the author claimed it or the owning contract
@@ -246,13 +289,26 @@ requires it. Separate failures into:
 An unrelated known failure may be excluded only when the base and candidate
 produce the same failure and the exact evidence is recorded.
 
+For a staged candidate, reproduce the smallest sufficient test set declared by
+the selected Slice. Confirm that it covers every in-scope positive behavior,
+required negative behavior, failure path, and owned seam. Do not add an
+external dependency merely to make the test resemble the final deployed
+system. A database, network, provider, or host-repository integration belongs
+in this review only when the selected Slice owns, changes,
+or explicitly proves that seam. An excluded seam is not a current finding when
+the approved basis assigns it to a later Slice with a concrete gate; a seam
+required by the approved overall result but omitted from every Slice is a Code
+Design defect and must return upstream.
+
 ### 3. Read The Actual Change
 
 Read the full diff and the post-change form of structural files. Compare them
 with the approved decision table and the author's scope statement.
 
 Review each declared logical-module slice independently before reviewing the
-cross-module and package closure. For every changed requirement, identify:
+cross-module and package closure. When delivery is staged, judge the selected
+implementation Slice against its own declared boundary before that closure.
+For every changed requirement, identify:
 
 - the logical owner;
 - the executable or persisted surface it changes;
@@ -260,10 +316,44 @@ cross-module and package closure. For every changed requirement, identify:
 - the downstream interface that consumes it;
 - the failure and rollback behavior.
 
+For every load-bearing contract claim, attempt one concrete false-green
+mutation: state a production change that would make the declared result false,
+then identify the exact test that must fail. If no current test fails, the
+Slice's evidence is insufficient. Apply this especially to ref/hash bindings,
+policy or schema authority, capability absence, and recovery fences. A ref/hash
+edge is closed only when the test resolves the referenced artifact and compares
+the stored hash with its canonical hash value. A key-set assertion without a
+value comparison does not prove the hash domain.
+
+When absence of a field, dependency, provider choice, path, or capability is a
+declared result, verify exact input/result/record field sets where practical;
+do not accept a denylist of familiar bad names as complete proof. When a guard
+or sandbox predicate is itself evidence, require a live positive control that
+demonstrates one rejected input as well as the allowed path.
+
 Code placed by directory convenience, current technology, legacy location, or
 copy source rather than by the approved responsibility owner is a boundary
 defect even when its local tests pass. Conversely, do not demand legacy file
 parity when the approved `CodeDesignBasis` classifies the source as `rewrite`.
+
+Read the frozen candidate as a cold-start final state. A name, comment,
+document, test, compatibility path, or release note whose only purpose is to
+explain or preserve an alternative rejected by the `CodeDesignBasis` is an
+architectural finding unless the Work Package or basis declares a migration,
+audit, or external compatibility obligation that requires it.
+
+Trace every added behavior to the accountable owner and canonical path named
+by the `CodeDesignBasis`. A new parallel path, wrapper, adapter, registry, state
+store, schema, or orchestration layer requires the basis to name the
+responsibility boundary that prevents integration into the existing owner. The
+Reviewer verifies that declaration and its as-built conformance; it never
+supplies a missing justification. A superseded path is removed in the selected
+Slice or deferred by that approved Slice to a named later owner and gate.
+
+Judge this boundary by the concepts, owners, dependencies, states, and
+execution paths the system must maintain rather than by local diff size.
+Correct behavior and passing tests do not discharge an architectural
+integration defect. Record these defects as `block` or `fix`, never `note`.
 
 Instruction-only promises do not count as implemented L1 enforcement when the
 condition is deterministically testable.
@@ -293,15 +383,18 @@ Run only checks triggered by the subject:
 
 `designDoc/the_skill_management.md` defines the installed projection
 relationship. The portable Governance Skill release owns the canonical method;
-each registered host projection must match that source exactly unless the
-governing contract explicitly admits a typed host-specific delta. A host
-projection may include `runtime_modules/` only when the Registry declares each
-projected file, its hash, and its target.
+each package file projects to exactly the host set declared in the Governance
+Skill manifest. `SKILL.md` projects to every supported Primary Agent host;
+Runtime Module assets project only to the canonical Claude Skill Package
+surface. Runtime transport compatibility, including Codex CLI execution, is a
+separate Runtime concern and does not require a Codex host projection of those
+assets.
 
-Missing projection pairs, byte drift, undeclared or orphaned Runtime Module
-assets, and stale release hashes are findings. A future host-specific delta
-requires an explicit change to the governing contract, Registry, projector,
-and tests before review may accept it.
+A missing or undeclared target, a projection set that differs from the
+manifest, byte drift, an undeclared package member, or a stale release hash is
+a finding. A future host-specific semantic delta requires an explicit change to
+the governing contract, Registry, manifest, projector, and tests before review
+may accept it.
 
 #### Architecture classification integrity
 
@@ -354,15 +447,14 @@ For modular subjects, also verify:
 
 ## Severity
 
-Use exactly four levels:
+Use the Contract Audit finding vocabulary:
 
-- `BLOCKING`: breaks an approved boundary, subject closure, deterministic gate,
-  next-phase entry condition, or canonical data safety.
-- `MEDIUM`: creates semantic or enforcement drift that should be resolved in
-  this candidate or explicitly deferred by the owner.
-- `LOW`: bounded hygiene or maintainability debt that can ride with a later
-  change.
-- `NIT`: phrasing or style that does not justify a separate fix.
+- `block`: an invalid subject, broken approved boundary, failed deterministic
+  gate, unsafe canonical effect, or unrecoverable admission conflict prevents
+  the Engineering layer from passing;
+- `fix`: a material implementation, compatibility, migration, recovery,
+  security, or enforcement defect must be corrected before pass; and
+- `note`: a non-blocking observation or explicitly accepted bounded debt.
 
 Do not promote a cross-project or historical process weakness into a blocking
 finding against one author. Put longitudinal observations in a separate
@@ -370,19 +462,29 @@ section with their actual owner.
 
 ## Output
 
+When the Applicability Gate rejects entry, emit only the observed subject kind,
+governed layer, likely accountable owner, mismatch evidence, and return target.
+Do not emit items 1 through 9 below, because no engineering review occurred.
+
 Emit in this order:
 
 1. **Subject closure**: mode, base, subject hash, claimed and observed path
    count, dirty-tree separation, and closure verdict.
 2. **Gate reproduction**: exact command, expected result, reproduced result,
    and attribution for every mismatch.
-3. **Prior-finding follow-up** when applicable.
-4. **Vertical findings** for this subject, severity ordered, each with path and
+3. **Slice conformance**, when delivery is staged: selected Slice, in-scope
+   result and seams, explicit exclusions, smallest sufficient test coverage,
+   boundary expansion, and later integration gates.
+4. **Prior-finding follow-up** when applicable.
+5. **Vertical findings** for this subject, severity ordered, each with path and
    evidence.
-5. **Longitudinal observations** only when a cross-change pattern materially
+6. **Longitudinal observations** only when a cross-change pattern materially
    matters.
-6. **Prioritized punch list** with blocking status and coarse effort.
-7. **Terminal verdict**: one value allowed by the selected subject mode.
+7. **Prioritized punch list** with blocking status and coarse effort.
+8. **Independent Engineering Review result**: `passed`, `non_pass`, or
+   `blocked`, plus `block` / `fix` / `note` findings.
+9. **Software Delivery readiness**: one value allowed by the selected subject
+   mode and consistent with the Engineering Review result.
 
 Each finding states what is wrong, why it matters, the evidence, and the
 smallest correct resolution. The Reviewer reports defects and never rewrites
@@ -395,18 +497,32 @@ the candidate.
 | Review only; never edit the subject | The review turn writes, stages, commits, amends, or pushes a reviewed path. |
 | Review one frozen subject | A file hash or path set changes between review start and verdict. |
 | Do not invent gates | The report contains a command absent from the review package but presents it as an author claim. |
-| Keep design authority upstream | The Reviewer replaces an approved design decision instead of checking conformance or returning an owner-routed conflict. |
+| Keep design authority upstream | The Reviewer replaces an approved design decision instead of checking conformance or returning an applicability rejection. |
+| Entry applicability | The Reviewer reads the diff semantically or issues a verdict after the Work Package owner or `engineering_change_candidate` entry-subject class fails to match. |
 | Preserve boundary coherence | The candidate conflates semantic owner, author, operator, reviewer, persistence owner, implementation technology, or admission authority. |
 | Separate dirty-tree effects | A failure is attributed to the subject without reproducing it against the base or frozen candidate. |
 | Preserve recovery provenance | A recovered file enters the candidate without a recovery source and explicit disposition. |
 | Preserve migration-registry closure | A registry-managed migration is accepted from prose or Git state without a current assessment snapshot and the applicable reproduced module-entry or package-cutover readiness result. |
 | Preserve migration-supervision closure | Migration Guidance, owning Design Docs, Code Design Basis, registry snapshot, or Migration Log describe different scopes, or the log is used as current-state authority. |
 | Require design before code review | A material code candidate is semantically reviewed without an approved `CodeDesignBasis` that assigns responsibility, boundaries, dependencies, paths, tests, and rollback. |
-| Review module slices before package closure | A multi-module candidate is accepted from aggregate tests while one module slice, shared projection, resource owner, or dependency edge remains undeclared. |
+| Review logical-module slices before package closure | A multi-module candidate is accepted from aggregate tests while one logical-module slice, generated projection gate, resource owner, or dependency edge remains undeclared. |
+| Preserve Slice boundary | The Reviewer demands an explicitly excluded integration, overlooks an in-scope behavior or seam, accepts an undeclared scope expansion, or allows a deferred integration with no later Slice and gate. |
+| Preserve change registration | A changed symbol, export, schema, migration, or test has no Slice owner, is assigned to a Slice whose `included_surfaces` do not contain the surfaces it exercises, a generated/public projection lacks one projector owner and deterministic gate, or already-present later-Slice code is counted as selected-Slice evidence. |
+| Preserve test ownership | A test is assigned to setup dependencies rather than the contract or seam it asserts, independent owner assertions remain mixed in one file, or a test is treated as a projection. |
+| Reject false-green closure | A load-bearing ref/hash edge is checked only for shape or key presence, an absence claim relies on a denylist rather than a complete structural fence, or a behavioral guard has no live rejection control. |
+| Preserve canonical final state and architectural integration | Rejected authoring history survives in implementation without a declared migration, audit, or external compatibility obligation; an added behavior bypasses the owner and canonical path named by the Code Design Basis; a separate abstraction lacks a declared responsibility boundary; or a superseded path remains active without an approved removal deferral. |
 
 ## Completion
 
+An applicability rejection is complete when it returns the mismatch evidence
+to the current System Change Scope Assessment and Plan without reading the diff
+semantically or issuing a review or readiness disposition.
+
 The review is complete only when the subject remains hash-stable, every claimed
-gate has a reproducibility disposition, every finding cites actual evidence,
-and one terminal verdict is issued. Any subsequent edit creates a new candidate
-and requires a new review.
+gate has a reproducibility disposition, the selected Slice has an explicit
+boundary and sufficient-test disposition when delivery is staged, every
+finding cites actual evidence, and one Engineering layer disposition plus one
+consistent Software Delivery readiness statement is issued. Any
+subsequent edit creates a new candidate and requires a new review.
+The final human-readable report also passes the installed Soul
+`COMMUNICATION` rules without weakening findings, evidence, or readiness.

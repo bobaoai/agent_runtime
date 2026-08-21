@@ -44,11 +44,12 @@ def _write_fixture_project(
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(target_payload)
     manifest = {
-        "manifest_version": "governance_t0_manifest_v1",
+        "manifest_version": "governance_t0_manifest_v2",
         "charter": {
             "mode": "project_specific",
             "target": "designDoc/the_charter.md",
         },
+        "retired_t0_targets": [],
         "portable_t0_contracts": [
             {
                 "t0_layer_id": "the_example",
@@ -68,8 +69,54 @@ def test_production_portable_t0_release_is_clean() -> None:
     report = release.check_governance_t0_release(REPO_ROOT)
 
     assert report.is_clean
-    assert report.contract_count == 10
+    assert report.contract_count == 12
     assert report.charter_target == "designDoc/the_charter.md"
+
+
+def test_all_portable_t0s_use_one_exact_intent_capsule_shape() -> None:
+    expected_keys = {
+        "layer",
+        "t0_layer_id",
+        "status",
+        "canonical_owner",
+        "owned_system_object",
+        "scope",
+        "non_goals",
+        "inputs",
+        "outputs",
+        "truth_surfaces",
+        "runtime_triggers",
+        "downstream_consumers",
+        "open_decisions",
+        "review_gate",
+        "runtime_surface_ledger",
+        "verification_hooks",
+    }
+    paths = [
+        REPO_ROOT / "designDoc/the_charter.md",
+        *sorted((REPO_ROOT / "09_soul/governance/t0").glob("the_*.md")),
+    ]
+    for path in paths:
+        body = path.read_text(encoding="utf-8")
+        assert sum(
+            line == "## 0. Intent Capsule" for line in body.splitlines()
+        ) == 1
+        capsule = body.split("## 0. Intent Capsule", maxsplit=1)[1]
+        yaml_body = capsule.split("```yaml", maxsplit=1)[1].split(
+            "```", maxsplit=1
+        )[0]
+        keys = {
+            line.split(":", maxsplit=1)[0]
+            for line in yaml_body.splitlines()
+            if line and not line[0].isspace() and ":" in line
+        }
+        if path.name == "the_charter.md":
+            assert keys in (
+                expected_keys,
+                expected_keys - {"t0_layer_id"},
+            )
+        else:
+            assert keys == expected_keys
 
 
 def test_check_reports_missing_charter_and_target(tmp_path: Path) -> None:
@@ -93,6 +140,101 @@ def test_check_reports_projection_drift(tmp_path: Path) -> None:
     ]
 
 
+def test_check_reports_retired_t0_target(tmp_path: Path) -> None:
+    manifest_path = _write_fixture_project(
+        tmp_path,
+        target_payload=b"# Portable T0\n",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    retired_target = "designDoc/the_retired.md"
+    manifest["retired_t0_targets"] = [retired_target]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (tmp_path / retired_target).write_text("# Retired\n", encoding="utf-8")
+
+    report = release.check_governance_t0_release(tmp_path)
+
+    assert [issue.code for issue in report.issues] == [
+        "portable_t0_retired_target_present"
+    ]
+
+
+def test_check_reports_undeclared_t0_like_target(tmp_path: Path) -> None:
+    _write_fixture_project(
+        tmp_path,
+        target_payload=b"# Portable T0\n",
+    )
+    undeclared = tmp_path / "designDoc/the_shadow.md"
+    undeclared.write_text("# Shadow\n", encoding="utf-8")
+
+    report = release.check_governance_t0_release(tmp_path)
+
+    assert [issue.code for issue in report.issues] == [
+        "portable_t0_undeclared_target"
+    ]
+
+
+def test_check_reports_undeclared_t0_source_member(tmp_path: Path) -> None:
+    _write_fixture_project(
+        tmp_path,
+        target_payload=b"# Portable T0\n",
+    )
+    extra = tmp_path / "09_soul/governance/t0/the_shadow.md"
+    extra.write_text("# Shadow\n", encoding="utf-8")
+
+    report = release.check_governance_t0_release(tmp_path)
+
+    assert [issue.code for issue in report.issues] == [
+        "portable_t0_undeclared_source_member"
+    ]
+
+
+def test_check_reports_undeclared_governance_package_root_member(
+    tmp_path: Path,
+) -> None:
+    _write_fixture_project(tmp_path, target_payload=b"# Portable T0\n")
+    governance_root = tmp_path / "09_soul/governance"
+    (governance_root / "README.md").write_text("# Governance\n", encoding="utf-8")
+    (governance_root / "governance_t0_release.py").write_text("", encoding="utf-8")
+    (governance_root / "governance_skill_manifest.json").write_text("{}", encoding="utf-8")
+    (governance_root / "governance_skill_release.py").write_text("", encoding="utf-8")
+    (governance_root / "skills").mkdir()
+    (governance_root / "tests").mkdir()
+    (governance_root / "unexpected.txt").write_text("extra\n", encoding="utf-8")
+
+    report = release.check_governance_t0_release(tmp_path)
+
+    assert [issue.code for issue in report.issues] == [
+        "governance_package_undeclared_root_member"
+    ]
+
+
+def test_release_rejects_unknown_cited_t0_contract(tmp_path: Path) -> None:
+    payload = b"# Portable T0\n\nSee [Missing](the_missing.md).\n"
+    _write_fixture_project(tmp_path, source_payload=payload)
+
+    with pytest.raises(
+        release.GovernanceT0ReleaseError,
+        match="unknown or retired T0 contracts",
+    ):
+        release.check_governance_t0_release(tmp_path)
+
+
+def test_release_rejects_unknown_charter_t0_reference(tmp_path: Path) -> None:
+    _write_fixture_project(tmp_path)
+    charter = tmp_path / "designDoc/the_charter.md"
+    charter.write_text(
+        "# Project Charter\n\nSee [Missing](the_missing.md).\n",
+        encoding="utf-8",
+    )
+
+    report = release.check_governance_t0_release(tmp_path)
+
+    assert [issue.code for issue in report.issues] == [
+        "project_charter_unknown_t0_reference",
+        "portable_t0_target_missing",
+    ]
+
+
 def test_apply_requires_project_specific_charter_before_writing(
     tmp_path: Path,
 ) -> None:
@@ -104,7 +246,9 @@ def test_apply_requires_project_specific_charter_before_writing(
     assert not (tmp_path / "designDoc/the_example.md").exists()
 
 
-def test_apply_replaces_projection_with_exact_source(tmp_path: Path) -> None:
+def test_apply_refuses_to_replace_drifted_projection_without_override(
+    tmp_path: Path,
+) -> None:
     payload = b"# Portable T0\n\nStable intent.\n"
     _write_fixture_project(
         tmp_path,
@@ -112,7 +256,28 @@ def test_apply_replaces_projection_with_exact_source(tmp_path: Path) -> None:
         target_payload=b"stale\n",
     )
 
-    report = release.apply_governance_t0_release(tmp_path)
+    with pytest.raises(
+        release.GovernanceT0ReleaseError,
+        match="projection drift must be reviewed before apply",
+    ):
+        release.apply_governance_t0_release(tmp_path)
+
+    assert (tmp_path / "designDoc/the_example.md").read_bytes() == b"stale\n"
+
+
+def test_apply_replaces_reviewed_drift_with_explicit_override(
+    tmp_path: Path,
+) -> None:
+    payload = b"# Portable T0\n\nStable intent.\n"
+    _write_fixture_project(
+        tmp_path,
+        source_payload=payload,
+        target_payload=b"stale\n",
+    )
+
+    report = release.apply_governance_t0_release(
+        tmp_path, allow_projection_drift=True
+    )
 
     assert report.is_clean
     assert (tmp_path / "designDoc/the_example.md").read_bytes() == payload
@@ -159,6 +324,84 @@ def test_portable_source_rejects_project_local_implementation_path(
         match="project-local implementation path or identity",
     ):
         release.check_governance_t0_release(tmp_path)
+
+
+def test_portable_source_rejects_virtual_environment_path(
+    tmp_path: Path,
+) -> None:
+    payload = b"# Portable T0\n\ncommand: .venv/bin/python\n"
+    _write_fixture_project(tmp_path, source_payload=payload)
+
+    with pytest.raises(
+        release.GovernanceT0ReleaseError,
+        match="project-local implementation path or identity",
+    ):
+        release.check_governance_t0_release(tmp_path)
+
+
+def test_portable_source_rejects_upstream_distribution_path(
+    tmp_path: Path,
+) -> None:
+    payload = b"# Portable T0\n\nRead 09_soul/governance/t0/source.md.\n"
+    _write_fixture_project(tmp_path, source_payload=payload)
+
+    with pytest.raises(
+        release.GovernanceT0ReleaseError,
+        match="project-local implementation path or identity",
+    ):
+        release.check_governance_t0_release(tmp_path)
+
+
+def test_project_policy_rejects_declared_t0_local_identity(
+    tmp_path: Path,
+) -> None:
+    payload = b"# Portable T0\n\nlocal-product-identity\n"
+    _write_fixture_project(tmp_path, source_payload=payload)
+    policy_path = tmp_path / "governance_bindings/governance_release_policy.json"
+    policy_path.parent.mkdir(parents=True)
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "governance_release_policy_v2",
+                "forbidden_source_fragments": ["local_product_identity"],
+                "retired_t0_targets": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        release.GovernanceT0ReleaseError,
+        match="project-local implementation path or identity",
+    ):
+        release.check_governance_t0_release(tmp_path)
+
+
+def test_project_policy_reports_retired_t0_target(tmp_path: Path) -> None:
+    _write_fixture_project(
+        tmp_path,
+        target_payload=b"# Portable T0\n",
+    )
+    retired_target = "designDoc/the_project_retired.md"
+    policy_path = tmp_path / "governance_bindings/governance_release_policy.json"
+    policy_path.parent.mkdir(parents=True)
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "governance_release_policy_v2",
+                "forbidden_source_fragments": [],
+                "retired_t0_targets": [retired_target],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / retired_target).write_text("# Retired\n", encoding="utf-8")
+
+    report = release.check_governance_t0_release(tmp_path)
+
+    assert [issue.code for issue in report.issues] == [
+        "portable_t0_retired_target_present"
+    ]
 
 
 def test_manifest_rejects_symlinked_target_ancestor(tmp_path: Path) -> None:

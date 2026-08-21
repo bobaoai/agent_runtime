@@ -26,7 +26,7 @@ mistaking its host plane for its semantic owner, distinguish a product request
 flow from authority delegation, and locate current implementation and delivery
 status outside this T0 Design Intent contract.
 
-## 0. Contract Capsule
+## 0. Intent Capsule
 
 ```yaml
 layer: T0
@@ -38,35 +38,21 @@ scope:
   - enterprise Agency Platform product composition
   - six stable service planes
   - shared Workflow Control Plane and execution-class binding
+  - shared DataAccessAdapter implementation binding and scoped injection
   - product-versus-Agent-Runtime boundary
   - separation of placement, semantic authority, and interaction views
   - host seams through which specialized T0 contracts are enforced
 non_goals:
   - domain workflow graphs, Agent roles, writing behavior, or content-quality rubrics
+  - System Change Case intake, scope assessment, Work Package coordination, Candidate Set assembly, or case closure
   - Product Authorization policy language or Principal and Entitlement record schemas
   - Runtime record schemas, provider adapters, context mechanics, or workflow-engine behavior
   - current implementation inventory, evidence ledger, delivery horizon, or roadmap status
   - cloud-vendor, identity-provider, database-product, or UI-page selection
 inputs:
-  - designDoc/the_charter.md
-  - designDoc/the_product_authorization.md
-  - designDoc/the_agent_runtime.md
-  - designDoc/the_task_routing.md
-  - designDoc/the_artifact_graph.md
-  - designDoc/the_data_governance.md
-  - designDoc/the_timestamp_semantic.md
-adjacent_contracts:
-  - designDoc/the_design_doc_management.md
-  - designDoc/the_contract_audit.md
-  - designDoc/the_software_delivery.md
-owned_specialization_contracts:
-  - designDoc/agency_platform_00_standalone_package_and_execution_composition_contract.md
-  - designDoc/agency_platform_10_identity_and_session_contract.md
-  - designDoc/agency_platform_11_usage_metering_quota_and_billing_contract.md
-  - designDoc/agency_platform_12_knowledge_and_external_search_gateway_contract.md
-  - designDoc/agency_platform_13_execution_visibility_contract.md
-  - designDoc/agent_runtime_02_product_target_topology.md
-  - designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md
+  - Principal Manager product-host intent
+  - registered product and domain Workflow hosting requirements
+  - exact System Change Agency Platform Work Package when host composition, Cell placement, product exposure, or Workflow Control Plane law belongs to a governed mutation
 outputs:
   - Agency Platform boundary
   - six-plane placement taxonomy
@@ -85,7 +71,7 @@ downstream_consumers:
   - Trust and Operations services
 open_decisions: []
 review_gate: design_doc_review and independent platform architecture review
-runtime_surface_ledger: exact Platform infrastructure-service, package, plane, deployment-binding, dependency, and implementation status must be rendered by the code-owned Platform service inventory; Domain, Workflow, Runtime Module, and Dagster definition registrations remain with their owning systems
+runtime_surface_ledger: exact Platform infrastructure-service, package, plane, deployment-binding, dependency, and implementation status must be rendered by the code-owned Platform service inventory; Domain, Workflow, Runtime Module, and deterministic-integration registrations remain with their owning systems
 verification_hooks:
   - manual confirmation that placement, authority, and interaction claims remain separated
   - generated Platform service inspection and standalone package conformance
@@ -106,13 +92,14 @@ Agent Runtime may coordinate and record admitted execution, but it does not own
 tenant policy, entitlement, business routing, domain judgment, human approval,
 artifact publication, billing, or canonical domain writes.
 
-The current target architecture selects Dagster as the deterministic execution
-integration under the Workflow Control Plane. Exact versions and deployment
-bindings remain code-owned. Replacing Dagster requires an explicit Agency
-Platform Design Intent decision and compatibility plan; it is not a routing or
-per-workflow fallback decision. Dagster is required only in a deployment that
-admits deterministic or hybrid execution bindings. `agency-platform-core`
-itself requires neither Dagster nor Agent Runtime.
+The target architecture exposes one admitted deterministic execution
+integration under the Workflow Control Plane. The project Charter and local
+Code Projection bind the concrete product, version, and deployment. Replacing
+that selected integration requires an explicit project Design Intent decision
+and compatibility plan; it is not a routing or per-workflow fallback decision.
+The integration is required only in a deployment that admits deterministic or
+hybrid execution bindings. The portable Platform core itself requires neither
+one concrete deterministic engine nor Agent Runtime.
 
 Agent Runtime is likewise an optional execution product from the Platform
 package perspective. Enabling agentic execution installs a Platform Runtime
@@ -120,10 +107,18 @@ client that consumes the Runtime-owned product-host execution API. Runtime's dur
 backend selection is not a Platform input, binding field, dependency, or
 inspection surface.
 
+This exclusion does not prevent a project host composition root from supplying
+the shared database-access mechanism required by a Runtime record-store port.
+When Agency Platform fulfills that host role, it selects the concrete
+implementation and injects only exact `DataAccessBinding` registrations under
+Data Governance §4.2. This host binding does not select Runtime's durable
+backend, enter the Runtime Release Registry, or transfer Runtime record meaning
+to the Platform.
+
 Platform adoption is incremental, not a repository-wide migration gate. A
 domain registers its logical Project Workflow with Artifact Graph, its Agent
 Workflow and Runtime Module Releases with Agent Runtime, or its deterministic
-implementation with Dagster. Agency Platform registers none of those objects.
+implementation with the admitted deterministic integration. Agency Platform registers none of those objects.
 It may create an immutable `workflow_execution_binding` that references their
 already registered and admitted releases and selects an execution host and
 Cell. That binding must close the exact data, authorization, execution, and
@@ -180,7 +175,7 @@ does not become the semantic owner of the records it observes or protects.
 | Cell Data | isolated persistence, entitlement-filtered knowledge query, authorized dereference, retention, backup, restore, and migration | semantic authority of a stored decision, artifact, lineage record, domain object, Entitlement, or Runtime projection |
 | Trust and Operations | credential custody, workload attestation, secrets, key management, clock health, security audit, compliance export, SLO, HA/DR orchestration, capacity, alerting, and incident response | identity or credential lifecycle meaning, business semantics, product authorization, storage content, or canonical domain admission |
 
-The Product Target Topology [T1-Topology] may map these planes to deployment
+The project-local Product Target Topology may map these planes to deployment
 zones, services, networks, stores, and recovery units. That specialization must
 not create a competing plane taxonomy.
 
@@ -192,7 +187,7 @@ Intent merely by storing or transporting the record.
 
 | Concern | Sole semantic owner | Typical host or enforcement boundary |
 | --- | --- | --- |
-| Federated subject binding, authentication result, session status, and credential lifecycle status | Identity and Session Service [T1-Identity] | Access edge transports proof; Identity and Session is hosted in Product Control and decides identity state; Trust and Operations protects secret material |
+| Federated subject binding, authentication result, session status, and credential lifecycle status | Identity and Session Service | Access edge transports proof; Identity and Session is hosted in Product Control and decides identity state; Trust and Operations protects secret material |
 | Product Principal, Entitlement, route eligibility, workflow authorization, protected-operation decision, execution authorization context, bounded high-risk grant, and invalidation | Product Authorization [T0-Authz] | Product Authorization is hosted in Product Control and decides; Product APIs and resource services enforce decisions while Runtime carries an admitted context |
 | Semantic task-mainline selection | Task Routing [T0-Routing] | Task Routing is hosted in Access and Delivery and selects only inside the authorized candidate set |
 | Logical product action, workflow meaning, behavior contract, and lifecycle | Owning product or domain T1 | The Workflow Control Plane consumes the exact registered T1 workflow or action identity |
@@ -203,14 +198,13 @@ Intent merely by storing or transporting the record.
 | Project Workflow, Operation, Artifact, and owning-Design-Contract index; dependency, readiness, and provenance semantics | Artifact Graph [T0-Artifact] | Platform services consume the generated index; Cell artifact services persist instances; owning domains decide workflow and Artifact semantics |
 | Managed Data Asset, System-of-Record and writer binding, isolation, lifecycle, migration, and recovery policy | Data Governance [T0-Data] | Cell Data and Trust and Operations execute the approved placement and recovery plan |
 | Time-field meaning and cross-clock comparison law | Timestamp and Clock Semantics [T0-Time] | Every writer validates semantics; Trust and Operations produces clock-health evidence |
-| PostgreSQL timestamp-schema audit requests, target bindings, results, and findings | Timestamp Schema Audit Workflow [T1-Time-Audit] | Cell Data hosts the Agency Platform submodule and PostgreSQL System of Record; Dagster executes its deterministic job |
-| Internal knowledge object, index, and retrieval semantics | Owning Knowledge service | Cell Data `KnowledgeQueryGateway` queries the admitted index [T1-Search] |
-| Internal knowledge candidate visibility permission | Product Authorization [T0-Authz] | Cell Data `KnowledgeQueryGateway` applies the authorized filter before candidate generation [T1-Search] |
-| External discovery request, egress effect, and provenance capture | External Search Gateway [T1-Search] | Controlled Integration validates disclosure and records the network effect; downstream domains verify content |
-| Canonical product usage meter | Metering Service [T1-Usage] | Product Control consumes immutable Runtime and Gateway facts |
-| Quota reservation, consumption, release, and denial | Quota Service [T1-Usage] | The Quota Service is hosted in Product Control and decides; execution hosts enforce the exact disposition |
-| Commercial rate, charge, invoice, credit, tax, payment, and balance | Rating and Billing authority outside Runtime and Metering | Controlled Integration performs the bounded usage handoff and reconciliation [T1-Usage] |
-| Runtime execution inspection, ledger query, projection, and rendering | Agent Runtime [T0-Runtime] | Agency Platform mounts the Runtime Inspector and supplies authenticated context plus current Product read authorization [T1-Visibility] |
+| Internal knowledge object, index, and retrieval semantics | Owning Knowledge service | Cell Data `KnowledgeQueryGateway` queries the admitted index |
+| Internal knowledge candidate visibility permission | Product Authorization | Cell Data `KnowledgeQueryGateway` applies the authorized filter before candidate generation |
+| External discovery request, egress effect, and provenance capture | External Search Gateway | Controlled Integration validates disclosure and records the network effect; downstream domains verify content |
+| Canonical product usage meter | Metering Service | Product Control consumes immutable Runtime and Gateway facts |
+| Quota reservation, consumption, release, and denial | Quota Service | The Quota Service is hosted in Product Control and decides; execution hosts enforce the exact disposition |
+| Commercial rate, charge, invoice, credit, tax, payment, and balance | Rating and Billing authority outside Runtime and Metering | Controlled Integration performs the bounded usage handoff and reconciliation |
+| Runtime execution inspection, ledger query, projection, and rendering | Agent Runtime | Agency Platform mounts the Runtime Inspector and supplies authenticated context plus current Product read authorization |
 | Resource-local precondition, mutation, and side-effect semantics | Owning resource service | Controlled Integration or domain Gateway validates local state plus the current Product Authorization decision; high-risk action classes additionally require a bounded grant |
 | Human belief, publication, or portfolio judgment reserved to the Principal Manager | Owning domain under the Charter | Access and Delivery captures a typed authenticated decision; it does not own that judgment |
 
@@ -231,7 +225,7 @@ sequenceDiagram
     participant R as Task Routing
     participant W as Artifact Graph Workflow Index
     participant C as Workflow Control Plane
-    participant J as Dagster
+    participant J as Deterministic Integration
     participant X as Agent Runtime
     participant D as Owning Domain
 
@@ -279,29 +273,35 @@ Agency Platform owns enterprise host composition and the shared Workflow
 Control Plane. It hosts or integrates peer T0 implementations without owning
 their semantic decisions.
 
+| Peer T0 | Boundary |
+| --- | --- |
+| System Change Governance | Supplies the exact Agency Platform Work Package and current Case/Plan lineage; Agency Platform alone decides and authors host composition, Cell placement, product exposure, and Workflow Control Plane changes |
+| Product Authorization | Decides permission; Agency Platform hosts the policy service and enforcing product surfaces without owning policy meaning |
+| Task Routing | Selects the semantic owner; Agency Platform hosts task intake without changing the RoutingDecision |
+| Artifact Graph | Supplies registered Workflow, Operation, Artifact, dependency, and owning-Design identities consumed by the Workflow Control Plane |
+| Data Governance | Owns Data Asset, System-of-Record, writer, isolation, migration, recovery, DataAccessAdapter, and DataAccessBinding law; Agency Platform implements the registered injection seam only when it is the project host composition root |
+| Timestamp and Clock Semantics | Owns time-field, calendar, ordering, freshness-comparison, and distributed-clock law used by Platform records |
+| Agent Runtime | Owns Agent Module and Workflow admission, execution, recovery, and execution lineage; Agency Platform supplies host composition and exact bindings |
+| Design Doc Management | Governs Agency Platform Design Intent authoring, lifecycle, and semantic review handoff |
+| Skill Management | Governs the Platform's Primary Agent and product-facing instruction artifacts without owning Platform services |
+| Contract Audit | Supplies immutable independent review results when the registered Platform profile requires them |
+| Software Delivery | Admits Platform software, deployment, rollback, and retirement; Agency Platform supplies target composition and acceptance constraints |
+
 ```mermaid
 flowchart LR
     DOMAIN["Product and domain T1 workflows"] --> CONTROL["Agency Platform<br/>Workflow Control Plane"]
     AUTHZ["Product Authorization"] --> CONTROL
-    CONTROL -->|"fixed or data workflow"| DAGSTER["Dagster integration"]
+    CONTROL -->|"fixed or data workflow"| FIXED["Admitted deterministic integration"]
     CONTROL -->|"Agent workflow"| RUNTIME["Agent Runtime"]
     ARTIFACT["Artifact Graph"] --> CONTROL
     DATA["Data Governance"] --> CONTROL
     TIME["Timestamp and Clock Semantics"] --> CONTROL
 ```
 
-Product Authorization decides permission. Task Routing selects the semantic
-owner. Artifact Graph resolves the registered Workflow, Operation, Artifact,
-and owning Design Contract relationships. Data Governance and Timestamp
-Semantics constrain the records. Software Delivery admits the deployed
-implementation. Contract Audit supplies Independent Review evidence when an
-owning profile requires it.
-
-The Timestamp Schema Audit Workflow [T1-Time-Audit] is a concrete cross-T0
-hosting example. Timestamp Semantics owns the audit law. Agency Platform hosts
-the service and PostgreSQL records. The Workflow Control Plane binds its
-deterministic release to Dagster. Dagster history remains execution evidence
-and never becomes the audit-result System of Record.
+A project-local schema-conformance Workflow may implement a peer T0's
+registered law. Agency Platform may host the service, records, and execution
+binding; hosting grants no semantic ownership of the law, request, result, or
+finding, and execution history never becomes the peer's System of Record.
 
 ## 6. Design Intent, As-built Inspection, and Delivery Planning
 
@@ -318,9 +318,15 @@ status, dependency closure, and evidence references. Any subsystem-specific
 inspection is scope-limited and must not be represented as complete platform
 truth.
 
-Target deployment topology belongs to the T1 Product Target Topology
-[T1-Topology]. Standalone Runtime delivery sequencing belongs to the Runtime
-Delivery Roadmap [T1-Runtime-Roadmap]. Agency product milestones and launch
+When Agency Platform is the project host composition root, this inventory may
+identify the concrete DataAccessAdapter implementation and the exact
+DataAccessBinding refs it serves. It never copies binding scope, credential,
+operation, or audit fields and never becomes a Runtime record-store or domain
+data registry.
+
+Target deployment topology belongs to the project-local Product Target
+Topology contract. Standalone Runtime delivery sequencing belongs to its
+project-local delivery contract. Agency product milestones and launch
 horizons belong to a T1 product delivery roadmap. Roadmap progress never amends
 this T0 boundary.
 
@@ -334,6 +340,9 @@ The product composition is non-conformant when:
   approval, publication, or canonical write;
 - a hosted plane is treated as the semantic owner of every record it stores or
   presents;
+- a shared database-access implementation becomes a universal data Gateway,
+  embeds domain SQL or writer rules, or gives several domains one implicit
+  credential or data scope;
 - Product Control reads customer Source, prompt, Draft, provider output, or
   complete search trace without a separately authorized support operation;
 - a caller-supplied tenant, Principal, Cell, workflow binding, workflow, or
@@ -347,30 +356,24 @@ The product composition is non-conformant when:
 - model, tool, external-search, or connector credentials provide unrestricted
   cross-Cell access;
 - high availability introduces a second semantic writer or an unobserved,
-  unauthorized failover path; or
+  unauthorized failover path;
 - manually edited architecture prose is used as proof of current implementation
   or production readiness;
-- a Domain, Project Workflow, Runtime Module, Agent Workflow Release, or Dagster
+- a Domain, Project Workflow, Runtime Module, Agent Workflow Release, or deterministic-integration
   asset is registered to Agency Platform instead of its owning domain,
-  Artifact Graph, Agent Runtime, or Dagster package; or
+  Artifact Graph, Agent Runtime, or deterministic-integration package; or
 - a `workflow_execution_binding` is treated as a second workflow or Module
   registration.
 
 ## References
 
-- `[T0-Charter]` [Product Charter](the_charter.md)
+- `[T0-Charter]` [Project Charter](the_charter.md)
+- `[T0-Change]` [System Change Governance](the_system_change_governance.md)
 - `[T0-Authz]` [Product Authorization and Entitlement Governance Contract](the_product_authorization.md)
 - `[T0-Routing]` [Task Intake Routing Contract](the_task_routing.md)
 - `[T0-Runtime]` [Agent Runtime Contract](the_agent_runtime.md)
 - `[T0-Artifact]` [Artifact Graph Contract](the_artifact_graph.md)
 - `[T0-Data]` [Data Governance, Residency, and Records Management](the_data_governance.md)
 - `[T0-Time]` [Timestamp Semantic Contract](the_timestamp_semantic.md)
+- [Contract Audit](the_contract_audit.md)
 - `[T0-Delivery]` [Software Delivery and Change Governance](the_software_delivery.md)
-- `[T1-Topology]` [Agent Runtime Product Target Topology Contract](agent_runtime_02_product_target_topology.md)
-- `[T1-Runtime-Roadmap]` [Agent Runtime Architecture Delivery Roadmap](agent_runtime_05_delivery_roadmap.md)
-- `[T1-Authz]` [Product Authorization Principal and Entitlement Specialization](product_authorization_00_service_and_persistence_contract.md)
-- `[T1-Identity]` [Identity and Session Service Contract](agency_platform_10_identity_and_session_contract.md)
-- `[T1-Usage]` [Usage Metering, Quota, and Billing Handoff Contract](agency_platform_11_usage_metering_quota_and_billing_contract.md)
-- `[T1-Search]` [Knowledge Query and External Search Gateway Contract](agency_platform_12_knowledge_and_external_search_gateway_contract.md)
-- `[T1-Visibility]` [Agency Platform Runtime Inspector Hosting Contract](agency_platform_13_execution_visibility_contract.md)
-- `[T1-Time-Audit]` [PostgreSQL Timestamp Schema Audit Workflow Contract](timestamp_10_schema_audit_workflow.md)

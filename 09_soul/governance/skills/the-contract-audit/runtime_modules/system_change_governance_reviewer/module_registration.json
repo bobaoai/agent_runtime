@@ -1,0 +1,25 @@
+{
+  "schema_version": "runtime_module_registration_v2",
+  "skill_package_id": "the_contract_audit",
+  "skill_id": "the-contract-audit",
+  "export_id": "system_change_governance_reviewer",
+  "module_id": "system_change_governance_reviewer",
+  "skill_package_owner_contract_path": "designDoc/the_contract_audit.md",
+  "module_owner_contract_path": "designDoc/the_system_change_governance.md",
+  "input_schema_ref": "schema:system_change_governance_reviewer_input@v8",
+  "input_schema_path": "schemas/input.schema.json",
+  "output_schema_ref": "schema:system_change_governance_reviewer_output@v6",
+  "output_schema_path": "schemas/output.schema.json",
+  "declared_operation_ids": [
+    "model_execute"
+  ],
+  "compatible_transport_kinds": [
+    "claude_agent_sdk",
+    "codex_cli"
+  ],
+  "context_policy_ref": "context-policy:workflow_execution_isolated@v1",
+  "evaluation_policy_ref": "evaluation-policy:module_candidate@v1",
+  "retry_policy_ref": "retry-policy:bounded_candidate@v1",
+  "entry_policy": "workflow_bound",
+  "output_resolution_policy": "evaluated_single"
+}

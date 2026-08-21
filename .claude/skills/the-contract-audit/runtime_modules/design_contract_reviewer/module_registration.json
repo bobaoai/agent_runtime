@@ -1,11 +1,14 @@
 {
   "schema_version": "runtime_module_registration_v2",
+  "skill_package_id": "the_contract_audit",
   "skill_id": "the-contract-audit",
+  "export_id": "design_contract_reviewer",
   "module_id": "design_contract_reviewer",
-  "owner_contract_path": "designDoc/the_design_doc_management.md",
-  "input_schema_ref": "schema:design_contract_reviewer_input@v2",
+  "skill_package_owner_contract_path": "designDoc/the_contract_audit.md",
+  "module_owner_contract_path": "designDoc/the_design_doc_management.md",
+  "input_schema_ref": "schema:design_contract_reviewer_input@v3",
   "input_schema_path": "schemas/input.schema.json",
-  "output_schema_ref": "schema:design_contract_reviewer_output@v2",
+  "output_schema_ref": "schema:design_contract_reviewer_output@v3",
   "output_schema_path": "schemas/output.schema.json",
   "declared_operation_ids": [
     "model_execute"

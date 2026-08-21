@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "schema:design_contract_reviewer_input@v2",
+  "$id": "schema:design_contract_reviewer_input@v3",
   "title": "Design Contract Reviewer Semantic Input",
   "type": "object",
   "additionalProperties": false,
@@ -10,7 +10,7 @@
       "additionalProperties": false,
       "properties": {
         "document_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
-        "layer": {"enum": ["T0", "T1", "T2"]},
+        "layer": {"enum": ["Charter", "T0", "T1", "T2"]},
         "title": {"type": "string", "minLength": 1},
         "owner_ref": {"type": "string", "minLength": 1},
         "parent_ref": {
@@ -59,14 +59,14 @@
     }
   },
   "properties": {
-    "schema_version": {"const": "design_contract_reviewer_input_v2"},
+    "schema_version": {"const": "design_contract_reviewer_input_v3"},
     "module_id": {"const": "design_contract_reviewer"},
     "review_request": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "review_purpose": {
-          "enum": ["owner_design_decision", "peer_structure_decision", "contract_admission"]
+          "enum": ["owner_design_decision", "peer_boundary_design_review", "contract_admission"]
         },
         "intended_result": {"type": "string", "minLength": 1},
         "architecture_change_summary": {"type": "string", "minLength": 1}

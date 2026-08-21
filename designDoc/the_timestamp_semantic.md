@@ -24,7 +24,7 @@ scheduler policy, market-specific helpers, or implementation history.
 choose a storage form without inventing precision, decide whether a comparison
 is legal, and understand when distributed clock evidence is required.
 
-## 0. Contract Capsule
+## 0. Intent Capsule
 
 ```yaml
 layer: T0
@@ -42,6 +42,7 @@ scope:
   - code-owned per-class time-role registration and generated projection boundary
 non_goals:
   - per-object-class role matrix rows in Design Doc prose
+  - System Change Case intake, scope assessment, Work Package coordination, Candidate Set assembly, or case closure
   - artifact freshness thresholds or domain lifecycle policy
   - scheduler timezone, cron expression, task cadence, or trading-session anchor policy
   - exchange-calendar helper names or market-data refresh behavior
@@ -49,6 +50,7 @@ non_goals:
   - non-time schema and domain semantics
 inputs:
   - designDoc/the_charter.md
+  - exact System Change Timestamp Work Package when time semantics belong to a governed mutation
 outputs:
   - timestamp role and storage vocabulary
   - comparison and clock-domain invariants
@@ -137,8 +139,6 @@ authority. `received`, `issued`, `requested`, `committed`, `projected`, and
 | --- | --- | --- |
 | `_at_utc` | An instant on the UTC timeline | RFC 3339 / ISO 8601 value with UTC offset, canonically `Z` |
 | `_calendar_day_utc` | A UTC calendar-day slice, typically for a 24/7 domain | ISO date `YYYY-MM-DD` |
-| `_session_date_et` | A declared New York market-session date | ISO date `YYYY-MM-DD` |
-| `_session_date_ct` | A declared Chicago market-session date | ISO date `YYYY-MM-DD` |
 | `_session_date_market` | A domain or asset-specific market-session date | ISO date plus sibling IANA `market_tz` and owning calendar policy |
 
 Role and storage must be compatible:
@@ -307,7 +307,19 @@ by their owning contract.
 No protected cross-clock action may claim conformance from storage-wrapper
 helpers alone.
 
-## 9. Conformance Invariants
+## 9. Cross-T0 Handoffs
+
+| Peer T0 | Boundary |
+| --- | --- |
+| System Change Governance | Supplies the exact Timestamp Work Package and current Case/Plan lineage; Timestamp and Clock Semantics alone decides time-field roles, storage forms, clock domains, calendar meaning, comparison law, and distributed-clock safety |
+| Product Authorization | Supplies protected authorization and grant predicates; Timestamp Semantics owns their issued, effective, expiry, revocation, recorded, and observed roles and cross-clock comparison law |
+| Agent Runtime | Supplies execution, lease, retry, and recovery record classes; Timestamp Semantics owns their time-role, clock-domain, ordering, and fencing requirements |
+| Artifact Graph | Supplies Artifact and dependency freshness consumers; Timestamp Semantics owns time-field and comparison meaning without selecting domain freshness thresholds |
+| Data Governance | Supplies retention, migration, backup, restore, and destruction consumers; Timestamp Semantics owns the time roles and comparisons those policies use |
+| Software Delivery | Supplies build, release, deployment, rollback, and retirement record classes; Timestamp Semantics owns their time-role and distributed-clock requirements |
+| Agency Platform | Hosts timestamp-governed services and records without owning time semantics |
+
+## 10. Conformance Invariants
 
 Time semantics are non-conformant when:
 
@@ -330,8 +342,12 @@ Time semantics are non-conformant when:
 
 ## References
 
-- `[T0-Charter]` [Product Charter](the_charter.md)
+- `[T0-Charter]` [Project Charter](the_charter.md)
+- `[T0-Change]` [System Change Governance](the_system_change_governance.md)
 - `[T0-Artifact]` [Artifact Graph Contract](the_artifact_graph.md)
 - `[T0-Authz]` [Product Authorization and Entitlement Governance Contract](the_product_authorization.md)
 - `[T0-Runtime]` [Agent Runtime Contract](the_agent_runtime.md)
+- [Agency Platform](the_agency_platform.md)
+- [Data Governance](the_data_governance.md)
+- [Software Delivery](the_software_delivery.md)
 - `[Time-Registry]` project-local code-owned timestamp semantic registry

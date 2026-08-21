@@ -1,0 +1,7 @@
+{
+  "case_id": "system_change_governance_reviewer_negative_v1",
+  "case_kind": "negative",
+  "module_id": "system_change_governance_reviewer",
+  "mutation": "additional_model_output_field",
+  "expected_disposition": "schema_rejected"
+}

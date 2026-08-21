@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "schema:design_contract_reviewer_output@v2",
+  "$id": "schema:design_contract_reviewer_output@v3",
   "title": "Design Contract Reviewer Semantic Output",
   "type": "object",
   "additionalProperties": false,
@@ -20,8 +20,7 @@
             "code_truth_leakage",
             "failure_or_completion_gap",
             "implementability_gap",
-            "review_or_admission_conflict",
-            "communication_defect"
+            "review_or_admission_conflict"
           ]
         },
         "affected_candidate_document_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
@@ -72,7 +71,7 @@
     }
   },
   "properties": {
-    "verdict": {"enum": ["pass", "pass_with_fixes", "block"]},
+    "verdict": {"enum": ["passed", "non_pass", "blocked"]},
     "design_judgment": {
       "type": "object",
       "additionalProperties": false,

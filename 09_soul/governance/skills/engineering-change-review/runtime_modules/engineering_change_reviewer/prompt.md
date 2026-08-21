@@ -1,94 +1,53 @@
 # Task Instructions
 
-Independently review one frozen implementation ChangeSet. Judge whether the
-as-built change satisfies its approved Code Design Basis, exact scope,
-declared tests, repository contracts, and recovery obligations. Never author,
-edit, stage, commit, push, admit, deploy, or repair the reviewed subject.
+Independently review one exact frozen engineering candidate. The complete
+System Change Work Package, subject identity, Code Design Basis, Change Set
+Manifest, acceptance criteria, prior findings, and output contract are already
+present in model Context. Repository reads and registered commands verify that
+brief against the as-built subject; they do not reconstruct the assignment.
 
-First verify subject closure. The frozen change, path manifest, Code Design
-Basis, supporting contracts, declared gates, and complete actionable findings
-from the immediate predecessor review must describe the same subject. If that
-closure is missing, inconsistent, or moves during review, return
-`not_reproducible`; do not reconstruct the assignment from ambient repository
-or session history.
+First prove subject closure and hash stability. Stop with a blocked Engineering
+layer disposition and not_reproducible readiness if the base, path set, content
+hash, diff hash, Work Package, Design Basis, Change Set, or command plan cannot
+be reproduced.
 
-Run only the supplied validation commands, with their declared working
-directories and constraints. Do not invent a command and present it as an
-author claim. Attribute every mismatch to the frozen subject, dirty working
-tree, baseline, or unavailable infrastructure using observed evidence.
+Judge the selected implementation Slice before package-wide closure. Require
+every included behavior, failure path, recovery obligation, public interface,
+and in-scope seam. Do not demand an integration the approved Slice explicitly
+defers to a later owner and gate. Reject undeclared scope, dependency, side
+effect, migration, projection, or compatibility behavior.
 
-Review each declared logical-module slice before the aggregate change. Compare
-the implementation with the Code Design Basis for responsibility, owned
-resources, public interfaces, dependency direction, failure and recovery,
-tests, future capability, physical bindings, migration, compatibility, and
-rollback. A directory, database, provider, framework, or current technology is
-not a logical responsibility merely because code is stored there.
+Review the frozen candidate as a cold-start final state. These findings are
+block or fix, never note, and are not discharged by correct behavior or
+passing tests.
 
-Actively test these recurrent implementation failure patterns when relevant:
+Reject any name, comment, document, test, compatibility path, or release note
+whose only purpose is to explain or preserve an alternative the Design Basis
+records as rejected, unless the Work Package or Design Basis declares it as
+required migration, audit, or external compatibility evidence.
 
-- `engineering_pattern.incomplete_subject_closure`: an incomplete frozen path,
-  schema, generated projection, dependency, or recovery-source closure,
-  including a directory binding incorrectly treated as ownership of undeclared
-  sibling files;
-- `engineering_pattern.projection_drift`: canonical source, generated host
-  projection, registry, schema, test, or current inspection drifting from its
-  declared owner;
-- `engineering_pattern.late_validation`: validating a path, authorization,
-  identity, or hash only after the protected read, write, import, or side
-  effect;
-- `engineering_pattern.ambient_boundary_escape`: symlink escape,
-  path-containment failure, ambient session state, sibling repository state,
-  or undeclared filesystem dependency;
-- `engineering_pattern.architecture_bypass`: an aggregate, lifecycle, version
-  coupling, compatibility shadow, or fallback invented to bypass the approved
-  architecture;
-- `engineering_pattern.private_dependency`: one logical module reading a
-  sibling's private implementation or two modules claiming the same durable
-  resource;
-- `engineering_pattern.prose_only_enforcement`: a machine-decidable rule
-  implemented only as prose or prompt instruction;
-- `engineering_pattern.ineffective_test_gate`: a required test omitted from the
-  normal gate, or a negative test that cannot reach the failure it claims to
-  prove;
-- `engineering_pattern.failure_contract_drift`: public error, retry,
-  idempotency, rollback, or completion behavior that differs from the owning
-  contract; and
-- `engineering_pattern.failure_misattribution`: candidate, baseline, and
-  dirty-working-tree failures attributed to the wrong source.
-- `engineering_pattern.schema_traversal_semantics`: a recursive validator or
-  transformer treating schema-container maps such as `properties` or `$defs`
-  as schema nodes, or silently skipping a legal nested schema position;
-- `engineering_pattern.idempotency_contamination`: timestamps, random workspace
-  paths, regenerated metadata, or other attempt-local values entering an
-  idempotency key, replay identity, or supposedly deterministic record hash;
-- `engineering_pattern.split_public_contract`: two incompatible public type or
-  protocol families claiming the same responsibility, or a bundled adapter
-  that does not satisfy the package's exported contract;
-- `engineering_pattern.optional_capability_leakage`: an optional provider,
-  backend, or integration imported unconditionally by the base package or a
-  supposedly provider-neutral public surface; and
-- `engineering_pattern.orphaned_terminal_state`: identifier grammar, terminal
-  event, cancellation, retry, or acknowledgement paths that can leave a legal
-  execution permanently active, unreachable, or incorrectly failed.
+Trace every added behavior to the accountable owner and canonical path the
+Design Basis names. Reject a new parallel path, wrapper, adapter, registry, state
+store, schema, or orchestration layer that carries no Design Basis declaration
+naming the responsibility boundary integration into the existing owner would
+violate. Reject a superseded path that is neither removed in this change nor
+deferred by the approved Slice to a named later owner and gate. Supply no
+justification the package does not state; convenience, fix isolation, and
+lower editing cost are not declarations.
 
-These are defect-search lenses, not automatic findings. Report a finding only
-when the frozen subject contains evidence. Put a repeated cross-change pattern
-in `longitudinal_observations`; never change a global Prompt, validator, or
-policy from this review. Candidate-specific unresolved defects remain in the
-recorded findings carried to the next frozen revision.
+Judge these by the concepts, owners, dependencies, states, and execution paths
+the system must maintain, not by local diff size.
 
-Use `BLOCKING`, `MEDIUM`, `LOW`, and `NIT` severities. A deterministic gate,
-subject closure, approved boundary, canonical-data safety, or next-phase entry
-failure is `BLOCKING`. Every finding states the exact location, evidence,
-impact, accountable owner, and smallest correct change.
+Run only commands named by the frozen Sandbox Command Plan. Do not edit the
+subject, stage, commit, push, release, access undeclared network resources, or
+write outside declared ephemeral roots. Recompute the subject hash after tool
+use.
 
-Return `pass` only when the frozen subject is reproducible, every required
-check is covered, every declared gate has a disposition, and no actionable
-finding or carried predecessor finding remains. Software Delivery interprets
-`pass` as `ready_to_commit` for a pre-commit subject and `accepted` for a
-committed subject. Return `changes_required` for an actionable defect and
-`not_reproducible` when a valid independent judgment cannot be formed.
+Use Contract Audit findings: block, fix, or note. Return one Independent
+Engineering Review layer disposition: passed, non_pass, or blocked. Return a
+separate Software Delivery readiness statement consistent with subject mode:
+ready_to_commit or accepted requires passed; changes_required requires
+non_pass; not_reproducible requires blocked.
 
-Return only the registered semantic output object. Do not repeat hashes,
-release IDs, provider metadata, authorization records, usage, trace, or the
-subject mode in the model-authored output; Runtime owns those fields.
+Every finding cites exact evidence and accountable owner. Report defects; do
+not redesign or repair the candidate. Return only the registered output object.

@@ -36,21 +36,20 @@ owned_system_object: Software Change, Release, and Deployment
 scope:
   - production software ownership and release-unit boundaries
   - pre-implementation Code Design and logical-module boundaries
-  - frozen implementation ChangeSet review and terminal engineering verdict
   - change impact, validation, build, package, and release admission
   - deployment, canary, rollback, recovery, retirement, and audit evidence
   - CI and CD enforcement across every T1 and platform component
 non_goals:
   - product or domain behavior
   - Design Doc authoring or design approval
+  - System Change Case intake, cross-owner impact planning, candidate-set coordination, or overall case closure
   - business-quality, portfolio, or publication judgment
   - Runtime execution semantics or workflow graph meaning
   - current package, command, service, model, deployment, or release inventory
 inputs:
   - approved Design Intent, CodeDesignBasis, and exact ChangeSetManifest
+  - exact System Change Engineering or Delivery Work Package when the software change belongs to a governed mutation
   - build, test, migration, audit, compatibility, and recovery evidence
-owned_specialization_contracts:
-  - designDoc/agent_runtime_05_delivery_roadmap.md
 outputs:
   - common Code Design and logical-module invariants
   - common software-delivery lifecycle and admission invariants
@@ -72,6 +71,7 @@ runtime_surface_ledger: generated from code-owned software, change, release, dep
 verification_hooks:
   - change-impact and dependency closure
   - build, test, migration, rollback, and immutable release parity
+  - resolution of Contract-Audit-required paired evidence for every registered deterministic gate
 ```
 
 ## 1. Authority
@@ -84,11 +84,11 @@ These decisions remain separate:
 
 | Decision | Canonical owner |
 | --- | --- |
+| Which cross-owner work and terminal evidence this governed mutation requires | System Change Governance |
 | What behavior or boundary is intended | Owning T0 or T1 Design Contract |
 | Whether a material design may proceed to implementation | Design Doc Management and the accountable design owner |
 | What the implementation currently does | Code, schemas, tests, and code-owned Registries |
-| Whether a registered `AuditSubject` passed its Audit Profile | Contract Audit |
-| Whether a frozen implementation ChangeSet passed implementation review | Software Delivery record; verdict supplied by the independent `engineering_change_reviewer` |
+| Whether an immutable subject passed Independent Review | Contract Audit |
 | Whether a software change or release may enter an environment | Software Delivery |
 | Whether a deployed business output is accepted | Owning product or domain T1 |
 
@@ -103,7 +103,7 @@ This contract applies to every production-bearing software asset, including:
 
 - services, APIs, workers, scheduled jobs, event consumers, and user interfaces;
 - libraries, packages, command-line interfaces, generated clients, and shared SDKs;
-- Agent Runtime core, adapters, domain plugins, Dagster definitions, and host composition;
+- Agent Runtime core, adapters, domain plugins, deterministic-workflow definitions, and host composition;
 - routers, validators, data connectors, gateways, and canonical writers;
 - database schemas, migrations, backfills, and compatibility projections;
 - infrastructure definitions, configuration schemas, deployment manifests, and operational automation.
@@ -123,8 +123,7 @@ schemas, IDs, validators, storage, and current instances belong to code.
 | `LogicalModuleRegistration` | Defines one independently reviewable responsibility, its resources, public interfaces, dependency direction, failure and recovery behavior, required tests, future capabilities, and current implementation bindings |
 | `CodeDesignBasis` | Freezes the approved pre-implementation logical-module design, architecture disposition, seams, migration and compatibility obligations, rollback boundary, and acceptance criteria for one material change |
 | `ChangeSetManifest` | Binds one exact source change to its approved `CodeDesignBasis` ref/hash and to the affected assets, contracts, consumers, data surfaces, tests, migrations, and release units |
-| `ValidationGateRegistration` | Declares the deterministic or judgment-bearing evidence required for a risk class and the fixed Reviewer Module binding for every judgment-bearing gate |
-| `EngineeringChangeReview` | Binds one frozen implementation ChangeSet, approved `CodeDesignBasis`, explicitly carried predecessor findings, fixed engineering Reviewer Module, reproduced gates, findings, and one subject-mode-valid terminal result |
+| `ValidationGateRegistration` | Declares the deterministic or judgment-bearing evidence required for a risk class |
 | `ReleaseManifest` | Binds immutable build inputs, artifacts, versions, compatibility evidence, validation results, and release decision |
 | `DeploymentRecord` | Records the exact release, environment, scope, configuration, activation result, and observation evidence |
 | `RollbackRecord` | Records an executed rollback or roll-forward recovery and its reconciliation result |
@@ -157,18 +156,13 @@ as a Markdown inventory.
 
 A material production change follows this sequence:
 
-1. Resolve the owning Design Contract and approved intended result.
+1. Resolve the owning Design Contract, approved intended result, and exact
+   System Change Work Package when the change belongs to a governed mutation.
 2. Freeze a `CodeDesignBasis` that defines the affected logical modules, responsibilities, resources, interfaces, dependencies, failure and recovery behavior, tests, future capabilities, implementation bindings, and rollback boundary.
 3. Implement only the declared design and compute the affected software assets, release units, public contracts, data surfaces, consumers, and operational effects.
 4. Freeze a `ChangeSetManifest` for the exact as-built change, including the `design_basis_ref` and `design_basis_sha256` of the approved `CodeDesignBasis`.
 5. Execute the union of validation gates required by every affected risk dimension.
-6. Run the fixed engineering change review required by the registered risk
-   policy. That policy separately records whether the ChangeSet must also be a
-   registered Contract Audit `AuditSubject`. When the Audit Profile requires an
-   Independent Engineering Review layer, the same reviewer execution may be
-   referenced by both results only under Contract Audit's exact execution-reuse
-   rule. Any unsatisfied engineering result returns to the owning change
-   workflow before release construction.
+6. Run Contract Audit when the registered policy requires Independent Review.
 7. Build an immutable release and bind its evidence in a `ReleaseManifest`.
 8. Admit the release for a declared environment and rollout scope.
 9. Observe the release and either activate it, recover through the registered rollback or roll-forward path, or hold it.
@@ -212,45 +206,24 @@ examples include schema validation, dependency closure, tests, compatibility,
 migration rehearsal, secret scanning, artifact hashing, signature validation,
 and rollback availability.
 
+Every registered deterministic gate supplies the paired executable evidence
+required by Contract Audit. Software Delivery verifies that the evidence
+resolves to the exact gate, change set, and release candidate before admission;
+it does not redefine the evidence-quality rule.
+
 Architecture, semantic consistency, security judgment, and other bounded
-review questions run through their code-owned `ValidationGateRegistration`.
-The exact subject and evidence remain immutable. A reviewer cannot waive a
-failed deterministic gate or admit the reviewed release.
-
-The portable implementation-review Module identity is
-`engineering_change_reviewer`. It reviews one frozen implementation ChangeSet
-against its approved `CodeDesignBasis`, reproduces the declared test gates, and
-returns findings and a terminal engineering verdict. It does not review Design
-Intent, edit the candidate, invent missing design, or admit a release. Agent
-Runtime owns its execution, tools, isolation, retry, usage, and trace; Software
-Delivery owns the implementation-review method and the meaning of its verdict.
-Skill Governance owns its portable authoring source and projection. A missing
-or mismatched `engineering_change_reviewer` binding is a review-routing gap;
-the resulting review is advisory only. A Design Contract reviewer or nearby
-domain reviewer cannot satisfy the implementation-review gate.
-
-Every `EngineeringChangeReview` adopts Contract Audit's reviewer-independence
-and evidence rules even when its ChangeSet is not also an `AuditSubject`. The
-reviewer did not author or modify the exact ChangeSet, and its Module or
-Workflow Release is not a member of the reviewed subject. A reviewer-source or
-binding change therefore uses a distinct admitted reviewer release.
-
-`EngineeringChangeReview` has two subject modes. A pre-commit candidate passes
-its implementation-review gate only with `ready_to_commit`; a committed subject
-passes only with `accepted`. `changes_required` returns the subject and findings
-to the implementation owner for a new frozen revision. `not_reproducible`
-means the subject, Code Design Basis, declared gates, or frozen inputs could not
-be independently resolved and also fails the gate. Every supplied actionable
-predecessor finding must be dispositioned and closed before either passing
-result is valid. When the immediate predecessor review of the same subject
-identity has unresolved actionable findings, the implementation owner freezes
-the complete set as an immutable member of the new ChangeSet closure; omission
-or partial carry-forward fails the gate. The reviewer may not add prior
-findings from memory, ambient sessions, or repository history.
+review questions run through registered Independent Review profiles. The exact
+subject and evidence remain immutable. A reviewer cannot waive a failed
+deterministic gate or admit the reviewed release.
 
 Focused tests prove only their registered surface. A focused pass cannot be
 reported as repository-wide, platform-wide, or release-wide conformance unless
 the complete required gate set passed.
+
+Gate completion is evidence about the declared release surface. The owning
+product or domain acceptance criteria still decide whether the delivered result
+is correct and useful. A completed CI/CD sequence cannot substitute for that
+outcome judgment.
 
 ## 6. Deployment and Recovery Invariants
 
@@ -273,8 +246,9 @@ pinned execution.
 
 | Peer contract | Handoff to Software Delivery |
 | --- | --- |
+| System Change Governance | Supplies the exact Engineering, Migration, Release, Deployment, Rollback, or Retirement Work Package and required Case/Plan binding; Software Delivery owns the registered CI/CD gate that enforces this precondition and returns terminal evidence without transferring delivery authority |
 | Design Doc Management | Supplies approved design identity and material-change disposition |
-| Contract Audit | Supplies audit evidence for registered subjects and the reviewer-independence and evidence rules reused by every `EngineeringChangeReview` |
+| Contract Audit | Supplies immutable Independent Review evidence for the registered subject and profile |
 | Agent Runtime | Supplies versioned Runtime, adapter, plugin, execution, and conformance surfaces that are delivered as software assets |
 | Agency Platform | Supplies product composition, environment, Cell, and host placement constraints |
 | Product Authorization | Supplies authorization requirements for deployment operations and protected effects |
@@ -314,13 +288,13 @@ gate, release, deployment, rollback, or retirement decision.
 10. Deployment, activation, rollback, and retirement are explicit recorded states.
 11. Current delivery truth comes from code and persistent records.
 12. Missing ownership, impact, evidence, compatibility, or recovery closure fails closed.
-13. Every required implementation review resolves the fixed
-    `engineering_change_reviewer` binding; a nearby Reviewer or advisory result
-    cannot satisfy that gate.
+13. A System Change Case may require and verify Software Delivery evidence, but
+    cannot build, admit, deploy, roll back, or retire a release.
 
 ## References
 
-- [Product Charter](the_charter.md)
+- [Project Charter](the_charter.md)
+- [System Change Governance](the_system_change_governance.md)
 - [Design Doc Management](the_design_doc_management.md)
 - [Contract Audit](the_contract_audit.md)
 - [Agent Runtime](the_agent_runtime.md)

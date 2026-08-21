@@ -1,0 +1,7 @@
+{
+  "case_id": "skill_candidate_reviewer_schema_drift_v1",
+  "case_kind": "schema_drift",
+  "module_id": "skill_candidate_reviewer",
+  "mutation": "output_schema_ref_hash_mismatch",
+  "expected_disposition": "registration_rejected"
+}

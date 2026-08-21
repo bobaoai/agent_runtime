@@ -38,13 +38,14 @@ scope:
   - executor-neutral audit semantics with a target fixed Agent Runtime workflow
 non_goals:
   - authoring or repairing the audited subject
+  - System Change scope assessment, Work Package coordination, Candidate Set assembly, or case closure
   - defining the subject's business, design, data, Runtime, or release rules
-  - defining Software Delivery's engineering-change terminal-result vocabulary
   - admitting, publishing, deploying, or activating the subject
   - requiring every subject family to expose prose or the same implementation surfaces
   - requiring Agent Runtime to be admitted before Agent Runtime itself can receive bootstrap audit
 inputs:
   - immutable registered subject package and hash
+  - exact System Change Contract Audit Work Package when an Audit Profile, reviewer binding, or verdict policy belongs to a governed mutation
   - registered Audit Profile and reviewer-independence evidence
 outputs:
   - immutable AuditResult
@@ -66,6 +67,7 @@ runtime_surface_ledger: generated from audit target, profile, execution, finding
 verification_hooks:
   - audit-profile closure and deterministic check replay
   - reviewer-independence and immutable-subject-hash validation
+  - exact repository subject isolation and paired deterministic predicate controls
 ```
 
 ## 1. Authority
@@ -87,6 +89,17 @@ Contract Audit does not own the audited subject. It owns the `AuditProfile`,
 `AuditExecution`, finding set, reviewer-independence evidence, and
 `AuditResult` that refer to that immutable subject.
 
+System Change Governance may require an `AuditResult` for an exact frozen
+subject and may verify that the result belongs to the current Case and
+Candidate Set. It cannot define the Audit Profile, select an undeclared
+reviewer, copy findings into a second review record, reinterpret the verdict,
+or use case closure as audit evidence.
+
+When Contract Audit itself is the changed subject, System Change Governance
+supplies the exact Contract Audit Work Package and current Case/Plan lineage.
+Contract Audit retains sole authority over Audit Profile, reviewer binding,
+independence, execution, findings, and verdict semantics.
+
 ## 2. Auditable Subject
 
 An auditable subject is an immutable package resolved through one admitted
@@ -97,6 +110,8 @@ explicit `legacy_unadmitted` disposition and cannot receive an admitted verdict.
 Examples include:
 
 - a T0 or T1 Design Contract release;
+- a structure-change proposal plus exact peer Registry snapshot declared by
+  the System Change Registry;
 - a machine Contract Specification release;
 - a Workflow or Agent component registration;
 - a Data Asset or schema registration;
@@ -115,6 +130,18 @@ Each subject package binds:
 
 Contract Audit does not discover authority by guessing from filenames or prose.
 An unresolved, mutable, or mixed-version subject is blocked before review.
+
+For repository work, the audit subject is either one exact commit or one frozen
+pre-commit candidate manifest over an exact base. The live working tree,
+branch name, stash inventory, and neighboring uncommitted files are recorded as
+separate context only. They cannot silently enter the subject or change its
+verdict. If the candidate moves during review, the execution is blocked and a
+new immutable subject is required.
+
+Structural operations use a Contract-Audit-owned registered assurance profile
+that selects an independent semantic reviewer for the immutable
+`StructureChangeProposal`. System Change Governance may require the resulting
+`AuditResult`; it cannot define the profile, reviewer, finding, or verdict.
 
 ## 3. Audit Profile
 
@@ -146,29 +173,30 @@ A profile may mark a non-applicable layer `not_required`. A code release does
 not need a prose layer merely because a Design Doc does. Silence and omitted
 results are not valid substitutes for an explicit profile decision.
 
-For a T0, T1, or T2 Design Intent subject, Design Doc Management owns the
+For a Charter, T0, T1, or T2 Design Intent subject, Design Doc Management owns the
 semantic check method and Contract Audit owns the immutable subject, profile,
 reviewer binding, execution, findings, and result. The profile binds a fixed
-Design Contract reviewer Workflow. It does not reuse an Engineering Change
+Design Contract reviewer Workflow. The exact exception is a System Change
+Governance Design candidate, whose owning T0 supplies the fixed
+`system_change_governance_reviewer` method; Contract Audit still owns its
+immutable subject, profile, binding, execution, findings, and result. Neither
+path reuses an Engineering Change
 Reviewer, because a Design candidate has no implementation diff, test plan, or
 Code Design Basis to reproduce. The later implementation ChangeSet is a
 separate subject with a separate engineering-review result.
 
-When an Audit Profile requires the Independent Engineering Review layer, it
-binds a fixed review Workflow that resolves the
-`engineering_change_reviewer` Module. One reviewer execution may be referenced
-by both an `AuditResult` and an `EngineeringChangeReview` only when the subject
-closure, Workflow Release, Module Release, required checks, and Audit Profile
-release match exactly. Otherwise the Audit Profile requires its own execution
-and result.
+Software Delivery owns the as-built `ChangeSetManifest` subject and its
+admission. Contract Audit owns the applicable Independent Engineering Review
+profile, reviewer binding, execution, findings, and verdict for that subject.
+The engineering workflow may invoke the review and return findings to the
+change owner, but it cannot become a second assurance authority or use a
+review result as delivery admission.
 
-Software Delivery may reuse this T0 layer's independence, evidence, and
-finding-severity rules for `EngineeringChangeReview`. That reuse does not make
-Contract Audit the owner of the engineering workflow, its frozen change
-subject, or its implementation-review verdict. Contract Audit owns only a
-formal registered `AuditSubject` review under an `AuditProfile`; Software
-Delivery owns the as-built change review, its terminal-result vocabulary, and
-its release-governance handoff.
+The portable Independent Engineering Review Module identity is
+`engineering_change_reviewer`. The Software-Delivery-facing Engineering Skill
+packages the Module source; Contract Audit owns its review method. A missing or
+mismatched binding is a routing gap and cannot be replaced by a semantic-only
+Design, System Change, or Skill reviewer.
 
 ## 4. Independent Review
 
@@ -179,22 +207,18 @@ A reviewer is independent only when all of the following hold:
 - the reviewer receives the immutable subject closure and declared profile;
 - the reviewer identity, component or human role, release, and execution are
   recorded;
-- the reviewer release or binding is not itself a member of the reviewed
-  subject;
 - the reviewer cannot silently widen the subject, evidence, tools, or policy;
 - the reviewer result is bound to the exact subject and profile hashes.
+
+An adjacent defect discovered during review is recorded as an out-of-scope lead
+with its likely owner and evidence. It enters the current verdict only when it
+changes the validity or closure of the frozen subject under the registered
+profile. Otherwise it requires a separately admitted subject or System Change
+scope revision. Discovery never authorizes an unbounded repository audit.
 
 Provider or model identity is execution metadata. It does not create review
 authority. A direct model response, terminal log, or manually written summary
 is advisory until it enters the registered audit protocol.
-
-When the subject changes a reviewer source, release, or binding, its required
-Independent Review uses a reviewer method whose instruction and binding are
-frozen outside the candidate. The normal path uses the last admitted reviewer
-release. During bootstrap, when no admitted Runtime reviewer release exists,
-the repository-governed predecessor review method may invoke an approved
-external reviewer directly and must record the bootstrap status. The candidate
-reviewer source, schema, or binding never reviews itself.
 
 The audit contract is executor-neutral. During bootstrap, the Primary Agent may
 assemble the frozen package and invoke an approved external reviewer directly.
@@ -250,6 +274,12 @@ Every finding records:
 - accountable owner;
 - required disposition.
 
+An out-of-scope lead is recorded as a `note` finding whose accountable owner is
+the owner of the adjacent subject. It affects the current aggregate verdict
+only when the registered profile says that lead breaks the frozen subject's
+identity, dependency, or evidence closure. This representation preserves the
+lead without adding a new record family or silently widening the audit subject.
+
 Every required audit layer records one disposition:
 
 - `passed`: the layer completed with no actionable finding;
@@ -272,17 +302,12 @@ evidence or rerun only affected review components for efficiency, but the final
 AuditResult must bind a coherent result set for one exact subject version and
 one exact profile release.
 
-When the immediate predecessor version of the same subject identity has
-unresolved actionable findings, the successor subject closure must carry all
-of them as immutable declared inputs. The subject owner cannot omit or select a
-subset. The reviewer must disposition every carried finding and cannot recover
-additional history from memory or ambient records. A missing or unresolved
-actionable predecessor finding blocks a passing result.
-
 ## 8. Admission Handoff
 
 An AuditResult is evidence, not authority to activate the subject:
 
+- System Change Governance records whether the exact required result has
+  reached a terminal state for the current Case; it does not admit the subject.
 - Design Doc Management decides Design Contract lifecycle and admission.
 - Agent Runtime decides Runtime registration admission under its contract.
 - Data Governance decides Data Asset and storage admission.
@@ -300,15 +325,20 @@ The implementation of this T0 requires code-owned contracts for:
 - `AuditSubject` and immutable package closure;
 - `AuditProfile` and check selection;
 - subject-kind-to-reviewer-Workflow binding, including the fixed Design
-  Contract reviewer for Design Intent profiles and the fixed Engineering
-  Change reviewer for Independent Engineering Review layers;
+  Contract reviewer for general Design Intent profiles and
+  `system_change_governance_reviewer` for System Change Governance Design
+  profiles;
 - per-layer `required` or `not_required` applicability;
 - `ReviewerBinding` and independence policy;
 - `AuditRun`, layer result, finding, and aggregate verdict;
 - executor binding and evidence references for bootstrap or Agent Runtime review;
-- result expiry, invalidation, dependency impact, and re-audit;
-- immediate predecessor AuditResult and complete carried-forward
-  prior-finding closure whenever actionable findings remain unresolved.
+- result expiry, invalidation, dependency impact, and re-audit.
+
+Every deterministic predicate used as admission evidence carries at least one
+live positive control and one counterexample that would expose a false pass.
+Shape-only tests, a successful happy path, or a negative that never reaches the
+predicate do not prove that the gate can distinguish conforming from
+non-conforming subjects.
 
 Exact schemas, provider bindings, reviewer inventories, commands, and current
 results belong to code and persistent stores. Generated inspection renders
@@ -326,14 +356,19 @@ them for operators and reviewers.
 8. AuditResult is bound to exact subject, profile, and reviewer evidence.
 9. Admission remains with the owning authority.
 10. Every correction creates a new subject version and re-audit record.
-11. A reviewer binding must match the subject kind and required review layer;
-    selecting a nearby or self-referential reviewer is a blocked routing
-    defect, not a valid audit.
+11. A reviewer binding must match the subject kind and semantic-review gate;
+    selecting a nearby reviewer is a blocked routing defect, not a valid audit.
+12. Repository review binds one exact commit or frozen candidate; dirty-tree
+    context and adjacent findings cannot widen that subject implicitly.
+13. Every admission-affecting deterministic predicate has a live positive
+    control and a false-pass counterexample.
 
 ## References
 
-- [Product Charter](the_charter.md)
+- [Project Charter](the_charter.md)
+- [System Change Governance](the_system_change_governance.md)
 - [Design Doc Management](the_design_doc_management.md)
+- [Skill Management](the_skill_management.md)
 - [Agent Runtime](the_agent_runtime.md)
 - [Data Governance](the_data_governance.md)
 - [Software Delivery](the_software_delivery.md)

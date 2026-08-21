@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:system_change_governance_reviewer_output@v6",
+  "title": "System Change Governance Review Result",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {"type": "string", "minLength": 1},
+        "severity": {"enum": ["block", "fix", "note"]},
+        "finding_class": {"enum": ["design_defect", "pending_implementation", "current_implementation_defect"]},
+        "target_kind": {"enum": ["scope_assessment", "system_change_plan", "work_package_candidate", "candidate_set", "external_result_requirement", "case_closure", "registry_projection", "design_contract"]},
+        "target_ref": {"type": "string", "minLength": 1},
+        "quoted_evidence": {"type": "string", "minLength": 1},
+        "requirement": {"type": "string", "minLength": 1},
+        "impact": {"type": "string", "minLength": 1},
+        "accountable_owner_ref": {"type": "string", "minLength": 1},
+        "required_change": {"type": "string", "minLength": 1}
+      },
+      "required": ["finding_id", "severity", "finding_class", "target_kind", "target_ref", "quoted_evidence", "requirement", "impact", "accountable_owner_ref", "required_change"]
+    }
+  },
+  "properties": {
+    "verdict": {"enum": ["passed", "non_pass", "blocked"]},
+    "topology_judgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capture_without_ownership": {"type": "string", "minLength": 1},
+        "scope_and_plan": {"type": "string", "minLength": 1},
+        "work_package_closure": {"type": "string", "minLength": 1},
+        "assurance_and_admission": {"type": "string", "minLength": 1},
+        "candidate_and_closure_join": {"type": "string", "minLength": 1},
+        "boundary_coherence": {"type": "string", "minLength": 1},
+        "implementability": {"type": "string", "minLength": 1}
+      },
+      "required": ["capture_without_ownership", "scope_and_plan", "work_package_closure", "assurance_and_admission", "candidate_and_closure_join", "boundary_coherence", "implementability"]
+    },
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "safe_implementation_scope": {"type": "string", "minLength": 1}
+  },
+  "required": ["verdict", "topology_judgment", "findings", "safe_implementation_scope"]
+}

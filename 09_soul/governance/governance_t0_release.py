@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -24,16 +25,35 @@ from typing import Any, Iterable
 MANIFEST_RELATIVE_PATH = Path(
     "09_soul/governance/governance_t0_manifest.json"
 )
-MANIFEST_VERSION = "governance_t0_manifest_v1"
+PROJECT_RELEASE_POLICY_RELATIVE_PATH = Path(
+    "governance_bindings/governance_release_policy.json"
+)
+MANIFEST_VERSION = "governance_t0_manifest_v2"
+PROJECT_RELEASE_POLICY_VERSION = "governance_release_policy_v2"
 SOURCE_PREFIX = PurePosixPath("09_soul/governance/t0")
 TARGET_PREFIX = PurePosixPath("designDoc")
+GOVERNANCE_PACKAGE_ROOT = PurePosixPath("09_soul/governance")
+GOVERNANCE_PACKAGE_ROOT_MEMBERS = {
+    "README.md",
+    "governance_t0_manifest.json",
+    "governance_t0_release.py",
+    "governance_skill_manifest.json",
+    "governance_skill_release.py",
+    "t0",
+    "skills",
+    "tests",
+}
 PORTABLE_SOURCE_FORBIDDEN_FRAGMENTS = (
     b"/Users/",
-    b"bobaoai/agent_runtime",
+    b"09_soul/",
     b"designDoc/temp/",
     b"src/",
     b"tests/",
-    b"trading_platform",
+    b".venv/",
+)
+_IDENTITY_SEPARATOR_PATTERN = re.compile(rb"[-_ ]+")
+_T0_REFERENCE_PATTERN = re.compile(
+    rb"(?:designDoc/)?(the_[a-z0-9_]+)\.md"
 )
 
 
@@ -53,6 +73,7 @@ class PortableT0Contract:
 class GovernanceT0Manifest:
     manifest_version: str
     charter_target: str
+    retired_t0_targets: tuple[str, ...]
     portable_t0_contracts: tuple[PortableT0Contract, ...]
 
 
@@ -74,8 +95,83 @@ class GovernanceT0ReleaseReport:
         return not self.issues
 
 
+@dataclass(frozen=True)
+class ProjectGovernanceReleasePolicy:
+    forbidden_source_fragments: tuple[bytes, ...]
+    retired_t0_targets: tuple[str, ...]
+
+
 def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _load_project_governance_release_policy(
+    project_root: Path,
+) -> ProjectGovernanceReleasePolicy:
+    path = project_root / PROJECT_RELEASE_POLICY_RELATIVE_PATH
+    if not path.exists():
+        return ProjectGovernanceReleasePolicy((), ())
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GovernanceT0ReleaseError(
+            f"cannot read project Governance release policy: {path}"
+        ) from exc
+    _require_exact_keys(
+        payload,
+        {
+            "schema_version",
+            "forbidden_source_fragments",
+            "retired_t0_targets",
+        },
+        context="project_release_policy",
+    )
+    if payload["schema_version"] != PROJECT_RELEASE_POLICY_VERSION:
+        raise GovernanceT0ReleaseError(
+            "unsupported project Governance release policy version: "
+            f"{payload['schema_version']}"
+        )
+    rows = payload["forbidden_source_fragments"]
+    if (
+        not isinstance(rows, list)
+        or any(not isinstance(item, str) or not item for item in rows)
+        or len(set(rows)) != len(rows)
+    ):
+        raise GovernanceT0ReleaseError(
+            "forbidden_source_fragments must be unique non-empty strings"
+        )
+    retired_rows = payload["retired_t0_targets"]
+    if (
+        not isinstance(retired_rows, list)
+        or any(not isinstance(item, str) or not item for item in retired_rows)
+        or len(set(retired_rows)) != len(retired_rows)
+    ):
+        raise GovernanceT0ReleaseError(
+            "retired_t0_targets must be unique non-empty strings"
+        )
+    return ProjectGovernanceReleasePolicy(
+        forbidden_source_fragments=tuple(
+            item.encode("utf-8") for item in rows
+        ),
+        retired_t0_targets=tuple(
+            _validated_relative_path(
+                item,
+                required_prefix=TARGET_PREFIX,
+                context=f"project retired_t0_targets[{index}]",
+            )
+            for index, item in enumerate(retired_rows)
+        )
+    )
+
+
+def _project_forbidden_source_fragments(project_root: Path) -> tuple[bytes, ...]:
+    return _load_project_governance_release_policy(
+        project_root
+    ).forbidden_source_fragments
+
+
+def _project_retired_t0_targets(project_root: Path) -> tuple[str, ...]:
+    return _load_project_governance_release_policy(project_root).retired_t0_targets
 
 
 def _require_exact_keys(
@@ -155,7 +251,12 @@ def load_governance_t0_manifest(
         raise GovernanceT0ReleaseError("manifest root must be an object")
     _require_exact_keys(
         raw,
-        {"manifest_version", "charter", "portable_t0_contracts"},
+        {
+            "manifest_version",
+            "charter",
+            "retired_t0_targets",
+            "portable_t0_contracts",
+        },
         context="manifest",
     )
     if raw["manifest_version"] != MANIFEST_VERSION:
@@ -174,6 +275,27 @@ def load_governance_t0_manifest(
         required_prefix=TARGET_PREFIX,
         context="charter.target",
     )
+
+    retired_rows = raw["retired_t0_targets"]
+    if (
+        not isinstance(retired_rows, list)
+        or any(not isinstance(item, str) or not item for item in retired_rows)
+    ):
+        raise GovernanceT0ReleaseError(
+            "retired_t0_targets must be an array of non-empty strings"
+        )
+    retired_t0_targets = tuple(
+        _validated_relative_path(
+            item,
+            required_prefix=TARGET_PREFIX,
+            context=f"retired_t0_targets[{index}]",
+        )
+        for index, item in enumerate(retired_rows)
+    )
+    if len(set(retired_t0_targets)) != len(retired_t0_targets):
+        raise GovernanceT0ReleaseError(
+            "retired_t0_targets must not contain duplicates"
+        )
 
     rows = raw["portable_t0_contracts"]
     if not isinstance(rows, list) or not rows:
@@ -237,10 +359,17 @@ def load_governance_t0_manifest(
         raise GovernanceT0ReleaseError(
             "project-specific Charter cannot be a portable contract target"
         )
+    active_targets = {row.target for row in contracts}
+    overlap = sorted(active_targets & set(retired_t0_targets))
+    if overlap:
+        raise GovernanceT0ReleaseError(
+            f"retired T0 targets overlap active contracts: {overlap}"
+        )
 
     return GovernanceT0Manifest(
         manifest_version=MANIFEST_VERSION,
         charter_target=charter_target,
+        retired_t0_targets=retired_t0_targets,
         portable_t0_contracts=tuple(contracts),
     )
 
@@ -250,6 +379,12 @@ def _validated_source_payloads(
     manifest: GovernanceT0Manifest,
 ) -> tuple[tuple[PortableT0Contract, bytes], ...]:
     payloads: list[tuple[PortableT0Contract, bytes]] = []
+    allowed_t0_references = {
+        contract.target for contract in manifest.portable_t0_contracts
+    } | {manifest.charter_target}
+    project_forbidden_fragments = _project_forbidden_source_fragments(
+        project_root
+    )
     for contract in manifest.portable_t0_contracts:
         source_path = _resolve_without_symlink_escape(project_root, contract.source)
         try:
@@ -271,6 +406,31 @@ def _validated_source_payloads(
                     f"implementation path or identity: {contract.source}: "
                     f"{fragment.decode('utf-8')}"
                 )
+        folded_payload = _IDENTITY_SEPARATOR_PATTERN.sub(
+            b"_", payload.lower()
+        )
+        for fragment in project_forbidden_fragments:
+            folded_fragment = _IDENTITY_SEPARATOR_PATTERN.sub(
+                b"_", fragment.lower()
+            )
+            if folded_fragment in folded_payload:
+                raise GovernanceT0ReleaseError(
+                    "portable T0 source contains a project-local "
+                    f"implementation path or identity: {contract.source}: "
+                    f"{fragment.decode('utf-8')}"
+                )
+        cited_t0_references = {
+            f"designDoc/{match.decode('ascii')}.md"
+            for match in _T0_REFERENCE_PATTERN.findall(payload)
+        }
+        unknown_t0_references = sorted(
+            cited_t0_references - allowed_t0_references
+        )
+        if unknown_t0_references:
+            raise GovernanceT0ReleaseError(
+                "portable T0 source cites unknown or retired T0 contracts: "
+                f"{contract.source}: {unknown_t0_references}"
+            )
         payloads.append((contract, payload))
     return tuple(payloads)
 
@@ -295,6 +455,29 @@ def check_governance_t0_release(
                 detail="the consuming project must supply its own Charter",
             )
         )
+    else:
+        charter_payload = charter_path.read_bytes()
+        allowed_t0_references = {
+            contract.target for contract in manifest.portable_t0_contracts
+        } | {manifest.charter_target}
+        cited_t0_references = {
+            f"designDoc/{match.decode('ascii')}.md"
+            for match in _T0_REFERENCE_PATTERN.findall(charter_payload)
+        }
+        unknown_t0_references = sorted(
+            cited_t0_references - allowed_t0_references
+        )
+        for unknown_reference in unknown_t0_references:
+            issues.append(
+                GovernanceT0ReleaseIssue(
+                    code="project_charter_unknown_t0_reference",
+                    path=manifest.charter_target,
+                    detail=(
+                        "project Charter cites an unknown or retired T0 "
+                        f"contract: {unknown_reference}"
+                    ),
+                )
+            )
 
     for contract, source_payload in payloads:
         target_path = _resolve_without_symlink_escape(root, contract.target)
@@ -318,6 +501,80 @@ def check_governance_t0_release(
                         f"expected={contract.sha256}; "
                         f"actual={_sha256_bytes(target_payload)}"
                     ),
+                )
+            )
+    project_retired_targets = _project_retired_t0_targets(root)
+    active_targets = {
+        contract.target for contract in manifest.portable_t0_contracts
+    }
+    overlap = sorted(active_targets & set(project_retired_targets))
+    if overlap:
+        raise GovernanceT0ReleaseError(
+            f"project retired T0 targets overlap active contracts: {overlap}"
+        )
+    effective_retired_targets = (
+        manifest.retired_t0_targets + project_retired_targets
+    )
+    for retired_target in effective_retired_targets:
+        retired_path = _resolve_without_symlink_escape(root, retired_target)
+        if retired_path.exists():
+            issues.append(
+                GovernanceT0ReleaseIssue(
+                    code="portable_t0_retired_target_present",
+                    path=retired_target,
+                    detail="retired portable T0 target remains discoverable",
+                )
+            )
+    discovered_targets = {
+        path.relative_to(root).as_posix()
+        for path in (root / "designDoc").glob("the_*.md")
+        if path.is_file() or path.is_symlink()
+    }
+    allowed_targets = (
+        active_targets
+        | {manifest.charter_target}
+        | set(effective_retired_targets)
+    )
+    for undeclared_target in sorted(discovered_targets - allowed_targets):
+        issues.append(
+            GovernanceT0ReleaseIssue(
+                code="portable_t0_undeclared_target",
+                path=undeclared_target,
+                detail="undeclared T0-like Design target remains discoverable",
+            )
+        )
+    declared_sources = {
+        contract.source for contract in manifest.portable_t0_contracts
+    }
+    source_root = _resolve_without_symlink_escape(
+        root, SOURCE_PREFIX.as_posix()
+    )
+    discovered_sources = {
+        path.relative_to(root).as_posix()
+        for path in source_root.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    for undeclared_source in sorted(discovered_sources - declared_sources):
+        issues.append(
+            GovernanceT0ReleaseIssue(
+                code="portable_t0_undeclared_source_member",
+                path=undeclared_source,
+                detail="portable T0 source root contains an undeclared member",
+            )
+        )
+
+    package_root = _resolve_without_symlink_escape(
+        root, GOVERNANCE_PACKAGE_ROOT.as_posix()
+    )
+    for entry in sorted(package_root.iterdir(), key=lambda item: item.name):
+        if entry.name == "__pycache__":
+            continue
+        if entry.name not in GOVERNANCE_PACKAGE_ROOT_MEMBERS:
+            issues.append(
+                GovernanceT0ReleaseIssue(
+                    code="governance_package_undeclared_root_member",
+                    path=entry.relative_to(root).as_posix(),
+                    detail="Governance package root contains an undeclared member",
                 )
             )
 
@@ -351,6 +608,8 @@ def _write_bytes_atomically(target_path: Path, payload: bytes) -> None:
 def apply_governance_t0_release(
     project_root: Path,
     manifest_path: Path | None = None,
+    *,
+    allow_projection_drift: bool = False,
 ) -> GovernanceT0ReleaseReport:
     """Write exact portable projections, then return the drift report."""
 
@@ -362,6 +621,18 @@ def apply_governance_t0_release(
         raise GovernanceT0ReleaseError(
             f"project-specific Charter is required before T0 release: "
             f"{manifest.charter_target}"
+        )
+    preflight = check_governance_t0_release(root, manifest_path)
+    drifted_targets = [
+        issue.path
+        for issue in preflight.issues
+        if issue.code == "portable_t0_target_drift"
+    ]
+    if drifted_targets and not allow_projection_drift:
+        raise GovernanceT0ReleaseError(
+            "portable T0 projection drift must be reviewed before apply; "
+            "use --allow-projection-drift only for an approved replacement: "
+            f"{sorted(drifted_targets)}"
         )
     for contract, source_payload in payloads:
         target_path = _resolve_without_symlink_escape(root, contract.target)
@@ -388,12 +659,20 @@ def main(argv: Iterable[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--allow-projection-drift",
+        action="store_true",
+        help="replace drifted T0 projections after explicit review",
+    )
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
         if args.apply:
-            report = apply_governance_t0_release(args.project_root)
+            report = apply_governance_t0_release(
+                args.project_root,
+                allow_projection_drift=args.allow_projection_drift,
+            )
         else:
             report = check_governance_t0_release(args.project_root)
     except GovernanceT0ReleaseError as exc:

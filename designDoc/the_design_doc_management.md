@@ -7,7 +7,7 @@ canonical_owner: designDoc/the_design_doc_management.md
 owned_system_object: Design Intent
 language: en
 reader_persona:
-  - Project Owner
+  - Principal Manager
   - Design Owner
   - Architecture Reviewer
   - Implementation Owner
@@ -16,11 +16,11 @@ reader_persona:
 # Design Doc Management
 
 **Purpose**: Govern the creation, change, review, lifecycle, and auditability of
-every T0, T1, and T2 Design Doc while keeping human intent separate from code-owned
-implementation truth.
+the project Charter and every T0, T1, and T2 Design Doc while keeping human
+intent separate from code-owned implementation truth.
 
 **Required reader gain**: A reader can write the minimum sufficient Design Doc,
-decide whether a proposed change requires owner acceptance before implementation,
+decide whether a proposed change requires approval before implementation,
 identify which facts belong in code, and distinguish Design Doc review from an
 external Independent Review.
 
@@ -33,28 +33,28 @@ status: candidate
 canonical_owner: designDoc/the_design_doc_management.md
 owned_system_object: Design Intent
 scope:
-  - all T0, T1, and T2 Design Docs
+  - the project Charter and all T0, T1, and T2 Design Docs
   - Design Doc creation, change, approval, audit, lifecycle, and retirement
   - project T0 authority assembled from the portable governance baseline and project Charter
   - separation of human intent, machine contract, code registration, persistent state, Skill projection, and generated inspection
   - design-first change control
 non_goals:
   - business semantics owned by another T0, T1, or T2
+  - System Change Case intake, scope assessment, cross-owner planning, Work Package coordination, or case closure
   - implementation inventories, current bindings, release state, or test results
   - external Independent Review execution
   - software release admission
 inputs:
-  - Project Owner or delegated design-owner intent
-  - proposed T0, T1, or T2 design change and affected contract set
-owned_specialization_contracts:
-  - designDoc/the_skill_management.md
+  - Principal Manager or accountable owner intent
+  - proposed Charter, T0, T1, or T2 design change and affected contract set
+  - exact System Change Design Work Package when the Design candidate is part of a governed mutation
 outputs:
   - approved or rejected design intent
   - material-change classification
-  - approved Code Design handoff for material implementation
+  - binding reference to the Software-Delivery-owned approved CodeDesignBasis for material implementation
   - required machine-contract and implementation handoff
   - Design Doc lifecycle decision
-  - project-local T0 Design Intent surface, including the product Charter
+  - project-local T0 Design Intent surface, including the Project Charter
 truth_surfaces:
   - designDoc/the_design_doc_management.md
   - logical:t0_contract_registry
@@ -62,23 +62,24 @@ runtime_triggers:
   - new Design Doc proposal
   - material Design Intent change or retirement proposal
 downstream_consumers:
-  - every T0, T1, and T2 design owner
+  - the Charter owner and every T0, T1, and T2 design owner
   - implementation, Contract Audit, and Software Delivery workflows
 open_decisions:
+  - code-owned DesignApprovalDecision and evidence binding required before approval-order enforcement becomes deterministic
   - one registered T1 lifecycle vocabulary replacing proposal and candidate aliases
-review_gate: Project Owner or delegated design-owner acceptance for material changes
+review_gate: Principal Manager or delegated design-owner approval for material changes
 runtime_surface_ledger: generated from code-owned design registrations after implementation
 verification_hooks:
-  - Contract Capsule validation and canonical-owner uniqueness
+  - Intent Capsule validation and canonical-owner uniqueness
   - registry, frontmatter, specialization-owner, and generated-index parity
+  - Artifact-Graph-resolved active inbound-reference closure before Design retirement
 ```
 
 ## 1. Authority
 
 Design Doc Management owns the rules for Design Docs as a class. Each Design
-Doc owner owns the intent inside that document. The Project Owner or an
-explicitly delegated design owner accepts material product and architecture
-decisions.
+Doc owner owns the intent inside that document. The Principal Manager owns
+material product and architecture decisions.
 
 Correct system outcomes take precedence over ceremonial process completion.
 Passing an authoring or review sequence does not make an incorrect design
@@ -88,8 +89,8 @@ shadow path is not added merely to preserve the prior process or structure.
 
 This contract answers:
 
-1. What must a T0, T1, or T2 Design Doc communicate?
-2. Which change is material and therefore requires owner acceptance before code work?
+1. What must the Charter or a T0, T1, or T2 Design Doc communicate?
+2. Which change is material and therefore requires approval before code work?
 3. Which statements belong in human-maintained intent and which belong in
    machine-readable or generated surfaces?
 4. How does a candidate become current, become superseded, or retire?
@@ -118,6 +119,28 @@ contracts must answer consistently. Every T0 uses this minimum scaffold:
 
 A T0 may use diagrams and examples to explain the design. It does not carry
 current implementation inventories or delivery logs.
+
+Every Charter and T0 uses the canonical section name `## 0. Intent Capsule`.
+The fenced YAML object contains exactly these stable fields:
+`layer`, the applicable stable identity (`t0_layer_id` for T0), `status`,
+`canonical_owner`, `owned_system_object`, `scope`, `non_goals`, `inputs`,
+`outputs`, `truth_surfaces`, `runtime_triggers`, `downstream_consumers`,
+`open_decisions`, `review_gate`, `runtime_surface_ledger`, and
+`verification_hooks`. The Charter may omit `t0_layer_id` because it is the
+parent authority rather than a peer T0.
+
+`inputs` means admitted work-plane inputs or an exact System Change Work
+Package accepted by this authority. Parent, peer, dependency, and inherited
+contract references belong in References and peer-boundary sections, not in
+`inputs`. Current implementation paths and mutable evidence never enter the
+Capsule.
+
+A portable T0 Intent does not maintain `owned_specialization_contracts`,
+`adjacent_contracts`, or another project-local child-path inventory. The
+consuming project's code-owned Design Registry owns current specialization,
+parent, dependency, and lifecycle bindings and exposes them through generated
+inspection. This keeps reusable law separate from one project's filenames and
+prevents a path list from overriding the T1/T2 naming and parent rules below.
 
 ### 2.2 T1 contract
 
@@ -168,10 +191,11 @@ decision.
 When a governing Design Doc changes, affected Skills are regenerated or
 rewritten after the machine contract and implementation have been aligned.
 
-[Skill Governance](the_skill_management.md) is the sole owner of Skill
-classification, authoring, migration, managed projection, and direct-entry
-retirement. This T0 requires Design Docs to name affected Skills and their
-governance owner; it does not duplicate Skill rules.
+[Skill Management](the_skill_management.md) is the peer T0 authority for Skill
+definition, classification, authoring, projection, migration, and retirement.
+Design Doc Management governs the lifecycle of the Design Contract that owns a
+Skill's task meaning. It requires Design Docs to name affected Skills and then
+hands the Skill artifact change to Skill Management.
 
 ## 3. Intent and Code-as-Truth Boundary
 
@@ -244,42 +268,45 @@ stateDiagram-v2
 ```
 
 Design lifecycle records whether one Design Contract release is candidate,
-under review, current, superseded, or retired. Design acceptance is a separate
-decision about whether the reviewed intent may become canonical and guide
-production implementation.
+under review, current, superseded, or retired. Design approval is a separate
+decision about whether implementation may begin.
+
+For a Design Contract identity, `reference closure completes` means the current
+Artifact Graph resolves every active inbound reference to the replacement,
+records an explicit owning-authority disposition, or removes that reference
+from active discovery. Design Doc Management consumes that graph-owned closure
+result before retirement; it does not redefine graph edges. Historical
+provenance and a non-routable tombstone remain traceable without counting as
+active authority.
 
 ```mermaid
 stateDiagram-v2
     [*] --> PendingDecision
-    PendingDecision --> AcceptedForImplementation: Project Owner accepts
+    PendingDecision --> ApprovedForImplementation: accountable owner approves
     PendingDecision --> Rejected: owner rejects or redirects
-    AcceptedForImplementation --> SupersededDecision: candidate or scope changes
+    ApprovedForImplementation --> SupersededDecision: candidate or scope changes
 ```
 
-The Project Owner's acceptance is recorded against the exact reviewed candidate
-in the project change record, review artifact, or commit history. This T0 does
-not require a universal approval service or a separate portfolio object.
-Implementation progress belongs to Software Delivery and never acts as design
-acceptance evidence.
+The target code-owned `DesignApprovalDecision` binds the exact candidate hash,
+decision owner, scope, decision time, evidence reference, and supersession. A
+`candidate` may therefore be approved for implementation while still awaiting
+review and current-status admission. Implementation progress belongs to
+Software Delivery and never acts as approval evidence.
 
 The required order for a material design change is:
 
-1. Record the intended result, affected authority boundary, and current code
-   truth.
-2. When the proposal creates, promotes, splits, merges, replaces, or renames a
-   registered structure, compare the complete same-level peer set and record
-   every keep, merge, move, replace, or retire disposition in the candidate or
-   its rewrite plan. This analysis is part of the design subject, not a separate
-   `PeerStructureDecision` service or approval object.
-3. Freeze the complete Design Intent candidate and run Independent Review when
-   the registered profile requires it.
-4. The Project Owner or delegated design owner accepts, rejects, or redirects
-   the reviewed candidate.
-5. Freeze the Code Design Basis and define or change the machine contract.
-6. Implement code, migrations, tests, and generated inspection.
-7. Run deterministic conformance and independent Engineering Change Review.
-8. Admit the canonical design, implementation, and software release through
-   their separate owning gates.
+1. Record the proposed intent and affected authority boundary.
+2. When the proposal creates, promotes, splits, merges, replaces, renames, or
+   retires a registered structure, consume the exact `PeerRegistrySnapshotRef`,
+   `StructureReviewResultRef`, and `ParentAuthorityDecisionRef` required by
+   System Change Governance. The Design author cannot supply the independent
+   review or accountable decision for its own candidate.
+3. Obtain Principal Manager or delegated design-owner approval.
+4. Define or change the machine contract.
+5. Implement code, migrations, tests, and generated inspection.
+6. Run deterministic design and implementation conformance.
+7. Run Contract Audit when the registered profile requires Independent Review.
+8. Admit the design and implementation through their separate owning gates.
 
 Implementation work may explore a disposable prototype before approval when it
 is explicitly isolated and cannot become production truth. Production code,
@@ -291,7 +318,7 @@ silently establish a new design.
 A change is material when it changes any of the following:
 
 - canonical identity or owner;
-- T0, T1, or T2 responsibility boundary;
+- Charter, T0, T1, or T2 responsibility boundary;
 - authority, entitlement, human gate, or canonical-write decision;
 - public input, output, state, error, or compatibility semantics;
 - required evidence, quality gate, or Independent Review condition;
@@ -301,8 +328,11 @@ A change is material when it changes any of the following:
 
 Editorial clarification, corrected links, and generated projection refreshes
 are non-material when they preserve all of those meanings.
+They still bind a lightweight System Change Case and exact Design Work Package;
+the non-material disposition removes material approval and review gates, not
+change capture or owner resolution.
 
-## 5.1 Project-Facing T0 Authority
+### 5.1 Project-Facing T0 Authority
 
 Inside a consuming project, `designDoc/the_*.md` is the complete project-facing
 T0 authority surface. Primary Agents, T1/T2 owners, and reviewers route against
@@ -326,8 +356,8 @@ flowchart LR
 
 The Charter supplies product identity, scope, and human decision authority.
 The other T0 contracts remain reusable governance definitions and do not need
-to be reclassified as trading-platform-specific, Runtime-specific, or
-Knowledge-Graph-specific. Product differences belong in the Charter, local Code
+to be reclassified as product-specific, Runtime-specific, or domain-specific.
+Product differences belong in the Charter, local Code
 Projection, and T1/T2 specialization.
 
 Reusable governance intent is reviewed when its portable release changes.
@@ -359,14 +389,14 @@ authoring and change review. These checks include:
 Design authoring and review must also run a **boundary coherence** check. A
 candidate must keep these dimensions distinguishable:
 
-1. semantic owner — who may define the meaning;
-2. authoring authority — who may form or revise the candidate;
-3. operator or execution surface — what performs the approved behavior;
-4. independent review method — who judges the frozen candidate and under which
+1. semantic owner: who may define the meaning;
+2. authoring authority: who may form or revise the candidate;
+3. operator or execution surface: what performs the approved behavior;
+4. independent review method: who judges the frozen candidate and under which
    profile;
-5. persistence or data owner — what owns durable truth and write policy;
-6. implementation binding — which current technology realizes the contract;
-7. approval or admission authority — who may make the candidate effective.
+5. persistence or data owner: what owns durable truth and write policy;
+6. implementation binding: which current technology realizes the contract;
+7. approval or admission authority: who may make the candidate effective.
 
 A paragraph, table, or diagram may relate several dimensions, but it must label
 the relation and cannot present unlike dimensions as peer responsibilities.
@@ -387,8 +417,8 @@ Audit does not author or repair the Design Doc.
 
 ### 6.1 Independent semantic design review
 
-Independent semantic design review applies to a frozen T0, T1, or T2 Design
-Intent candidate. It is not an Engineering Change Review. A candidate becomes
+Independent semantic design review applies to a frozen Charter, T0, T1, or T2
+Design Intent candidate. It is not an Engineering Change Review. A candidate becomes
 an engineering-review subject only after an approved design has been expressed
 as an exact implementation ChangeSet with its own Code Design Basis, paths,
 tests, and rollback boundary.
@@ -414,7 +444,8 @@ invent control-plane metadata.
 The semantic reviewer judges:
 
 1. intended user result and reader decision;
-2. T0, T1, or T2 identity, owner, parent, and same-level peer coherence;
+2. Charter, T0, T1, or T2 identity, owner, applicable parent, and same-level
+   peer coherence;
 3. owned-object uniqueness, authority direction, inheritance, and dependency
    closure;
 4. separation of semantic owner, author, operator, reviewer, persistence owner,
@@ -442,7 +473,10 @@ subject.
 
 The portable semantic Module identity is `design_contract_reviewer`. Each
 project Code Projection binds that fixed Module through one Design Contract
-review Workflow to the applicable Design Intent profiles. If that binding is
+review Workflow to the applicable Design Intent profiles. A System Change
+Governance Design candidate is the exact carve-out: its owning T0 supplies
+`system_change_governance_reviewer`, while Design Doc Management retains the
+Design Intent lifecycle and authoring law. If the applicable binding is
 missing, the correct outcome is a review-routing gap or advisory-only review.
 The project must not substitute an Engineering Change Reviewer or a nearby
 domain reviewer.
@@ -452,14 +486,15 @@ domain reviewer.
 The implementation of this T0 requires code-owned contracts for:
 
 - Design Doc identity, owner, layer, lifecycle, and version;
+- Intent Capsule canonical section name, exact field-set, and input-semantics validation;
 - installed governance-baseline release identity and source hashes;
 - project Charter generation and local T0 release mapping;
 - deterministic upstream-to-project projection and drift detection;
-- T0, T1, and T2 registration, unique-domain-root, and dependency closure;
+- Charter binding plus T0, T1, and T2 registration, unique-domain-root, and
+  dependency closure;
 - material-change classification;
-- approved `CodeDesignBasis` identity and its binding to the owning Design Intent;
-- exact candidate hash and project-owned acceptance evidence when material
-  intent becomes canonical;
+- binding to the Software-Delivery-owned approved `CodeDesignBasis` identity;
+- DesignApprovalDecision identity, candidate hash, accountable owner, scope, evidence, and supersession;
 - required scaffold and conformance profile;
 - Design Contract review subject, semantic-check profile, fixed reviewer
   binding, complete check coverage, and immutable review-result reference;
@@ -468,6 +503,12 @@ The implementation of this T0 requires code-owned contracts for:
 - mutable Current Inspection derived from release, lifecycle, admission, implementation, and evidence records;
 - supersession, compatibility, and retirement records;
 - deterministic validation results and Independent Review references.
+
+The portable T0 release validator checks the portable peer set and the project
+Charter. The consuming project's Design Registry and Artifact Graph validator
+own active T1 and T2 references to retired T0 identities. Project retirement is
+non-conformant while any such active reference remains unresolved; the portable
+validator does not claim coverage of project-local Design inventory.
 
 The physical schema and module layout are implementation decisions. They must
 be reviewable against the responsibilities above and exposed through generated
@@ -488,9 +529,10 @@ status.
 
 | Concern | Canonical owner |
 | --- | --- |
+| System Change Case, scope, cross-owner Plan, Work Package join, and overall closure | System Change Governance |
 | Design Doc class, scaffold, lifecycle, and design audit | Design Doc Management |
-| Intent inside one contract | That T0, T1, or T2 design owner |
-| Product-level material decision | Project Owner or explicitly delegated design owner |
+| Intent inside one contract | That Charter, T0, T1, or T2 design owner |
+| Product-level material decision | Principal Manager or explicitly delegated owner |
 | Portable governance package and deployment scaffold | Governance distribution owner |
 | Project Charter and `designDoc/the_*.md` T0 authority | The consuming project |
 | Finite machine representation of approved intent | Owning machine contract and code |
@@ -507,8 +549,7 @@ status.
 3. Every T1 names its inherited T0 constraints.
 4. Every active domain has exactly one active `<domain>_00_*` T1 root.
 5. Every active same-domain non-`00` Design Contract is T2 under that root.
-6. Material Design Intent is independently reviewed and accepted before
-   production implementation.
+6. Material design approval precedes production implementation.
 7. Material production implementation also requires an approved Code Design Basis that converts the accepted intent into independently reviewable logical modules without making physical file layout the design authority.
 8. Machine-decidable obligations are implemented in code.
 9. Current implementation state comes from code and persistent records.
@@ -522,11 +563,15 @@ status.
     exact implementation ChangeSet and approved Code Design Basis also exist.
 17. Missing Design Contract reviewer binding is reported as a routing gap; a
     nearby reviewer cannot satisfy the independent semantic design-review gate.
+18. A Design candidate that belongs to a governed mutation binds its exact
+    System Change Work Package; Design lifecycle and admission remain owned by
+    Design Doc Management rather than the parent Case.
 
 ## References
 
-- [Product Charter](the_charter.md)
+- [Project Charter](the_charter.md)
+- [System Change Governance](the_system_change_governance.md)
 - [Contract Audit](the_contract_audit.md)
 - [Software Delivery](the_software_delivery.md)
 - [Agent Runtime](the_agent_runtime.md)
-- [Skill Governance](the_skill_management.md)
+- [Skill Management](the_skill_management.md)

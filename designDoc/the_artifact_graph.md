@@ -40,11 +40,13 @@ scope:
   - code-owned graph registration and generated Project Workflow Index
 non_goals:
   - semantic task classification or route selection
+  - System Change scope assessment, impact decision, Work Package planning, or case closure
   - Product Authorization or Entitlement evaluation
   - domain workflow state meaning, quality rubric, or business transition policy
-  - Dagster, Agent Runtime, provider, model, adapter, retry, or context execution
+  - deterministic integration, Agent Runtime, provider, model, adapter, retry, or context execution
   - physical data placement, retention, backup, or migration
 inputs:
+  - exact System Change Artifact Graph Work Package when graph authority or registration belongs to a governed mutation
   - registered T0 and T1 Design Contract identities
   - domain-owned Workflow and Operation registrations
   - Artifact type and dependency registrations
@@ -73,6 +75,7 @@ runtime_surface_ledger: generated from code-owned graph registrations; the prede
 verification_hooks:
   - owner, dependency, edge, and immutable-provenance closure
   - predecessor identity and dependency parity during migration
+  - zero unresolved active inbound references before retirement
 ```
 
 ## 1. Authority
@@ -134,7 +137,7 @@ provenance. The owning domain persists the instance. Artifact Graph owns the
 cross-project relation and eligibility law applied to that instance.
 
 An Operation is a logical unit of work. It is not a provider call, CLI command,
-Dagster op, Agent Runtime Step, UI action, or Skill merely because one of those
+deterministic-engine operation, Agent Runtime Step, UI action, or Skill merely because one of those
 surfaces implements or projects it. Implementation identities attach by typed
 reference and may change without silently changing logical Operation identity.
 
@@ -178,13 +181,12 @@ workflow beneath its registered entry.
 flowchart TB
     PROJECT["Project Workflow Index<br/>Artifact Graph T0"]
 
-    PROJECT --> INGEST["Ingestion Workflow<br/>owning T1"]
-    PROJECT --> DIGEST["Digestion Workflow<br/>owning T1"]
-    PROJECT --> THEME["Theme Report Workflow<br/>owning T1"]
-    PROJECT --> TRADE["Trade Workflow<br/>owning T1"]
+    PROJECT --> A["Domain A Workflow<br/>owning T1"]
+    PROJECT --> B["Domain B Workflow<br/>owning T1"]
+    PROJECT --> C["Domain C Workflow<br/>owning T1"]
 
-    THEME --> OPS["Domain-owned internal graph<br/>Writer / Verifiers / revision loops / PM handoff"]
-    DIGEST --> DOPS["Domain-owned internal graph<br/>Source / Evidence / KG operations"]
+    A --> AOPS["Domain-owned internal graph<br/>operations / gates / revision loops"]
+    B --> BOPS["Domain-owned internal graph<br/>inputs / outputs / terminal decisions"]
 ```
 
 The project graph records that a Workflow exists, where its contract lives,
@@ -247,7 +249,7 @@ provide at least these views:
 - each Workflow, its Operations, and their input and output Artifacts;
 - upstream, downstream, required, optional, gate, trigger, and loop edges;
 - domain-level and cross-domain Mermaid graphs;
-- implementation, Dagster, Agent Runtime, Skill, CLI, and service references
+- implementation, deterministic-integration, Agent Runtime, Skill, CLI, and service references
   as non-authoritative projections;
 - registration lifecycle and implementation coverage;
 - unresolved owners, missing docs, missing endpoints, illegal cycles, and stale
@@ -262,6 +264,7 @@ hand-maintained workflow table or diagram is explanatory only.
 
 | Peer T0 | Boundary |
 | --- | --- |
+| System Change Governance | Supplies the exact Artifact Graph Work Package and current Case/Plan lineage; it may consume registered identity and dependency evidence, while Artifact Graph alone decides graph meaning and registration |
 | Task Routing | Selects one authorized logical workflow or owner; it may resolve candidate identities through the Project Workflow Index but does not modify the graph |
 | Product Authorization | Decides whether a Principal may discover, invoke, read, mutate, share, or export a registered object; graph visibility is not permission and cross-scope permission is not an implicit edge |
 | Agency Platform | Resolves a selected Workflow to its admitted execution class and target through the Workflow Control Plane |
@@ -281,6 +284,13 @@ health commands. Migration to the target registration model must prove
 identity and edge parity before retiring any predecessor entry. A new schema or
 Design Doc is not permission to discard an existing workflow or dependency.
 
+Retirement is complete only when the current graph resolves every active
+inbound reference to the replacement, records an explicit owning-authority
+disposition, or removes the reference from active discovery. Generated
+inspection must report zero unresolved active inbound references before the
+predecessor identity becomes retired. Historical provenance and a non-routable
+tombstone may remain; neither counts as an active dependency.
+
 The target implementation may normalize or split the predecessor registry, but
 the generated Project Workflow Index must preserve every still-valid Workflow,
 Operation, Artifact, owner, and relationship and must expose unresolved legacy
@@ -297,7 +307,9 @@ The project graph is non-conformant when:
 - a relation is inferred rather than registered;
 - a current workflow or edge disappears during schema or platform migration
   without explicit retirement evidence;
-- Task Routing, Product Authorization, Dagster, Agent Runtime, a provider, or a
+- a registered identity is retired while an active inbound reference remains
+  unresolved or still routes to the predecessor;
+- Task Routing, Product Authorization, the deterministic integration, Agent Runtime, a provider, or a
   UI silently becomes the owner of graph semantics;
 - an implementation reference is treated as logical identity or permission;
 - an undeclared control cycle exists, or an immutable Artifact provenance cycle
@@ -310,10 +322,11 @@ The project graph is non-conformant when:
 
 ## References
 
-- [Enterprise Constitution](the_charter.md)
+- [Project Charter](the_charter.md)
 - [Agency Platform](the_agency_platform.md)
 - [Agent Runtime](the_agent_runtime.md)
 - [Product Authorization](the_product_authorization.md)
+- [System Change Governance](the_system_change_governance.md)
 - [Task Routing](the_task_routing.md)
 - [Data Governance](the_data_governance.md)
 - [Timestamp and Clock Semantics](the_timestamp_semantic.md)

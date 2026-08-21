@@ -24,7 +24,7 @@ intent classification, understand what a `RoutingDecision` may contain, and
 resolve ambiguity or failure without exposing unauthorized routes or silently
 falling back to a nearby workflow.
 
-## 0. Contract Capsule
+## 0. Intent Capsule
 
 ```yaml
 layer: T0
@@ -39,6 +39,7 @@ scope:
   - code-owned task-mainline registration and generated projections
 non_goals:
   - Principal, Entitlement, route-eligibility, workflow, or operation authorization
+  - System Change scope assessment, impact closure, Work Package selection, or case completion
   - product workflow release lifecycle or executable workflow binding
   - provider, model, execution profile, adapter, Runtime release, process, or host selection
   - domain workflow graph, context management, evaluation, recovery, or artifact readiness
@@ -48,7 +49,6 @@ inputs:
   - authenticated request envelope
   - Product Authorization RouteEligibilityDecision
   - code-owned task-mainline registry release
-  - Artifact Graph WorkflowIndexRelease
 outputs:
   - immutable RoutingDecision or bounded routing failure
 truth_surfaces:
@@ -59,6 +59,7 @@ runtime_triggers:
   - explicit reroute request against a new immutable request or registry release
 downstream_consumers:
   - Product task-intake services
+  - System Change Governance for requests that mutate a governed system surface
   - Artifact Graph Project Workflow Index and Workflow Control Plane
   - selected domain or engineering owner
 open_decisions:
@@ -69,11 +70,12 @@ review_gate: design_doc_review and independent routing-registry review
 runtime_surface_ledger: generated from code-owned mainline, classifier, registry-release, authorization-input, and RoutingDecision records; current facts are never copied into this contract
 verification_hooks:
   - mainline identity, classifier-rule, authorized-candidate, ambiguity, failure, release, and decision-replay conformance
+  - target-name non-authority and downstream entry-subject rejection handling
 ```
 
 This contract defines the admission target. The generated
-[Task Routing inspection](generated/task_routing_index.md) owns current
-implementation coverage and failure boundaries. A catalog row alone never
+`logical:task_routing_inspection` owns current implementation coverage and
+failure boundaries. A catalog row alone never
 proves semantic classification, registry-release admission, authorization
 integration, decision persistence, or execution.
 
@@ -110,6 +112,13 @@ Routing begins with the requested outcome, not with a noun mentioned in the
 request. A ticker, Theme, account, Source, file, model, framework, or UI surface
 may be context without being the requested result.
 
+A target name is only locating evidence. A Design Contract title, T0 name,
+Skill ID, directory, filename, Reviewer name, or implementation component
+cannot win a route by lexical similarity. Classification must first establish
+the requested durable outcome, its governed layer, and the logical owner that
+can accept that result. Only then may a downstream host resolve an operating
+method such as a Skill projection.
+
 The router keeps these dimensions separate:
 
 | Dimension | Question | Owner after routing |
@@ -119,7 +128,7 @@ The router keeps these dimensions separate:
 | Required truth | Which authoritative inputs must the owner consume? | Owning domain contract and typed input contracts |
 | Context overlay | What may affect the work without changing ownership? | Owning domain consumes authorized overlay refs |
 | Presentation | How is an already prepared result expressed or delivered? | Writer, renderer, or delivery surface |
-| Execution | Which admitted release and infrastructure perform the work? | Workflow Control Plane, Product Authorization, Dagster, and Agent Runtime |
+| Execution | Which admitted release and infrastructure perform the work? | Workflow Control Plane, Product Authorization, the admitted deterministic integration, and Agent Runtime |
 
 A logical target is a product or domain T1 contract registered as an eligible
 mainline and resolvable as a Workflow or owner in the Artifact Graph Project
@@ -197,7 +206,7 @@ rename a route.
 
 The requirements above define admission law, not implementation inventory.
 The code-owned routing registry and its generated
-[Task Routing Index](generated/task_routing_index.md) report independently
+`logical:task_routing_inspection` report independently
 whether the selected release provides a catalog, executable classifier,
 admission-grade rule schema, authorized-candidate resolver, immutable release,
 authorization integration, and decision persistence. Descriptive request
@@ -221,26 +230,24 @@ and product outcome has:
 - a lifecycle, supersession and replay rule; and
 - at least one positive, negative, ambiguity and owner-rejection evaluation.
 
-The governance subset must distinguish at least design authoring, Skill
-authoring, Runtime Module registration, engineering implementation,
-engineering change review, formal contract audit, software release/deployment,
-and bounded session handoff. A broad label such as `artifact_review` may remain
-only when its dynamic owner and output contract are deterministically
-resolvable; it cannot hide several incompatible review authorities.
+The governance subset must distinguish ordinary read-only governance requests,
+formal contract audit, bounded session handoff, and one
+`system_change_intake` outcome for every requested mutation of a governed
+surface. Design authoring, Skill authoring, Runtime registration, Engineering
+implementation or review, and Software Delivery may remain registered branch
+entry identities, but every branch invocation that mutates a governed surface
+is valid only when it binds the exact active `SystemChangeCase`,
+`SystemChangePlan`, and
+`SystemChangeWorkPackage`. A parentless mutation routes to
+`system_change_intake`; a branch name, file, Skill, or implementation surface
+cannot bypass that parent.
 
-For System Change Governance, completeness is evaluated on two routes and their
-join:
-
-- initiation routing resolves the change request, primary authority, affected
-  authorities, implementation surfaces, authoring branches, and candidate
-  freeze point;
-- review routing resolves the exact frozen subject, applicable independent
-  review methods, accountable finding recipients, re-review rules, and the
-  distinct approval or admission owner.
-
-A route that can start work but cannot select the correct review path is
-incomplete. A review request with no originating `SystemChangeCase`, exact
-candidate, or accountable revision branch is also incomplete.
+Task Routing ends after selecting `system_change_intake`. System Change
+Governance owns changed-subject classification, impact closure, specialist
+Work Package selection, Candidate Set coherence, and case completion. The
+router may validate an exact parent binding before exposing a registered branch
+entry, but that guard is not semantic classification and creates no change
+coordination record.
 
 ## 5. Ambiguity and Failure Law
 
@@ -269,12 +276,23 @@ as a routing decision or cause the router to choose a nearby mainline.
 
 After an admitted routing decision:
 
-1. the Artifact Graph resolves the selected identity in the exact
+1. when the selected result mutates a governed surface, System Change
+   Governance creates or resolves the exact Case and Plan before any specialist
+   authoring branch begins;
+2. the Artifact Graph resolves the selected identity in the exact
    `WorkflowIndexRelease`, including its owning T1 workflow or action release;
-2. the Workflow Control Plane resolves the admitted execution class and target;
-3. Product Authorization evaluates that exact target and input closure;
-4. Dagster or Agent Runtime records the execution under its admitted contract;
-5. the owning domain decides semantic acceptance of the resulting Artifact.
+3. the Workflow Control Plane resolves the admitted execution class and target;
+4. Product Authorization evaluates that exact target and input closure;
+5. the admitted deterministic integration or Agent Runtime records the execution under its contract;
+6. the owning domain decides semantic acceptance of the resulting Artifact.
+
+Every downstream operating method validates its declared entry-subject class
+against the exact routed request or System Change Work Package before it acts.
+If that method rejects applicability, it stops without changing the subject and
+returns the rejection to Task Routing or the current System Change Scope
+Assessment. When the rejection identifies a wrong logical owner, the caller
+records the existing `wrong_logical_owner` Routing Gap; it cannot keep executing
+the named method or silently try a nearby Skill.
 
 This list identifies authority handoffs, not a protocol owned by Task Routing.
 Their exact records, retries, clock fencing, invalidation, context, and recovery
@@ -289,6 +307,9 @@ Routing is non-conformant when:
   timing, or error detail;
 - a mentioned entity or implementation surface replaces the requested outcome
   as the classification anchor;
+- a Design, T0, Skill, directory, file, Reviewer, or component name is treated
+  as sufficient evidence of the requested outcome, governed layer, or logical
+  owner;
 - a provider, model, profile, adapter, Runtime release, workflow engine, or
   physical Skill projection is selected by Task Routing;
 - logical owner identity changes because an executable binding is absent;
@@ -298,8 +319,11 @@ Routing is non-conformant when:
   mislabeled as routing;
 - a manually edited projection or Design Doc table is treated as the concrete
   mainline registry; or
-- a routing mainline has no resolvable Workflow or owner in the pinned Artifact
-  Graph `WorkflowIndexRelease`.
+- a routing mainline identity has no admitted logical owner in the pinned Task
+  Routing Registry release. Artifact Graph resolution of the admitted identity
+  remains the downstream handoff in Section 6, not a routing-turn input.
+- a downstream entry-subject rejection is ignored, relabeled as successful
+  routing, or followed by execution of the same or a nearby operating method.
 
 ## 8. Routing Gap and Release Iteration
 
@@ -348,8 +372,9 @@ authorize automatic semantic-owner changes.
 
 ## References
 
-- `[T0-Charter]` [Product Charter](the_charter.md)
+- `[T0-Charter]` [Project Charter](the_charter.md)
 - `[T0-Authz]` [Product Authorization and Entitlement Governance Contract](the_product_authorization.md)
 - `[T0-Runtime]` [Agent Runtime Contract](the_agent_runtime.md)
 - `[T0-Artifact]` [Artifact Graph Contract](the_artifact_graph.md)
+- [System Change Governance](the_system_change_governance.md)
 - `[Routing-Registry]` project-local code-owned Task Routing registry

@@ -42,17 +42,17 @@ scope:
   - default-deny enforcement and decision auditability
 non_goals:
   - authentication protocol, identity-provider choice, or credential custody
+  - System Change Case intake, scope assessment, Work Package coordination, Candidate Set assembly, or case closure
   - workload credential issuance or service-mesh implementation
   - tenant or Cell storage placement and database role implementation
   - semantic routing, workflow definition, or Runtime execution
   - domain quality, human approval, or Artifact acceptance
 inputs:
   - validated identity and session evidence
+  - exact System Change Authorization Work Package when the policy candidate belongs to a governed mutation
   - Product Principal, Group, Entitlement, and assignment state
   - code-owned ResourcePermissionManifest and policy releases
   - exact requested principal, action, resource, and trusted context
-owned_specialization_contracts:
-  - designDoc/product_authorization_00_service_and_persistence_contract.md
 outputs:
   - AuthorizationDecision
   - ExecutionAuthorizationContext
@@ -70,7 +70,7 @@ downstream_consumers:
 open_decisions:
   - production policy-engine adoption after the local request model is stable
 review_gate: design_doc_review and independent authorization-boundary review
-runtime_surface_ledger: generated from code-owned authorization releases and PostgreSQL records
+runtime_surface_ledger: generated from code-owned authorization releases and registered policy-store records
 verification_hooks:
   - default-deny, scope, expiry, revocation, cross-tenant, and enforcement negatives
   - workload actor and initiating Principal audit reconstruction
@@ -93,7 +93,7 @@ flowchart LR
     authz["Product Authorization<br/>decide permission"]
     runtime["Agent Runtime<br/>carry execution context"]
     gateway["Resource Service or Gateway<br/>enforce decision"]
-    database["PostgreSQL<br/>role, GRANT, and RLS"]
+    database["Registered relational store<br/>role, privilege, and row policy"]
     isolation["Data Governance<br/>tenant, Cell, and data boundary"]
 
     identity --> authz
@@ -114,7 +114,7 @@ flowchart LR
 | Execution context, ordering, retry, and trace | Agent Runtime |
 | Final Module and user permission conjunction | Data Access Gateway |
 | Business operation invariants | Owning Domain Contract |
-| Database object and row enforcement | PostgreSQL role, privilege, and RLS configuration |
+| Database object and row enforcement | Registered store role, privilege, and row-policy configuration |
 
 Authentication is not authorization. Authorization is not tenant isolation.
 Tenant isolation is not database ownership. A successful result from one layer
@@ -276,6 +276,7 @@ Product Authorization break-glass mechanism.
 
 | Peer T0 | Boundary |
 | --- | --- |
+| System Change Governance | Supplies the exact Authorization Work Package and current Case/Plan lineage; Product Authorization alone decides Principal, Entitlement, permission, delegation, grant, and revocation meaning |
 | Artifact Graph | Supplies registered Workflow, Operation, Artifact, and owner identities; graph visibility is not permission |
 | Task Routing | Consumes route eligibility and selects only inside the permitted set; it never grants access |
 | Agency Platform | Hosts Product Authorization and user or tenant administration without owning policy semantics |
@@ -295,11 +296,11 @@ Code owns:
 
 - permission, Entitlement, resource-manifest, and evaluator releases;
 - exact request, decision, context, grant, and status schemas;
-- PostgreSQL DDL, roles, privileges, RLS policies, and migrations;
+- registered policy-store schema, roles, privileges, row policies, and migrations;
 - service and enforcement bindings; and
 - conformance and negative-test results.
 
-The PostgreSQL Product Authorization store owns operational Principal, Group,
+The registered Product Authorization policy store owns operational Principal, Group,
 assignment, decision, and revocation state. Generated inspection renders the
 current surface without exposing policy bodies or customer data.
 
@@ -326,7 +327,8 @@ Product Authorization is non-conformant when:
 
 ## References
 
-- [Enterprise Constitution](the_charter.md)
+- [Project Charter](the_charter.md)
+- [System Change Governance](the_system_change_governance.md)
 - [Agency Platform](the_agency_platform.md)
 - [Agent Runtime](the_agent_runtime.md)
 - [Task Routing](the_task_routing.md)
@@ -335,5 +337,3 @@ Product Authorization is non-conformant when:
 - [Timestamp and Clock Semantics](the_timestamp_semantic.md)
 - [Contract Audit](the_contract_audit.md)
 - [Software Delivery](the_software_delivery.md)
-- [Product Authorization Service and Persistence](product_authorization_00_service_and_persistence_contract.md)
-- [Data Access Gateway Authorization Enforcement](data_governance_10_data_access_gateway_contract.md)

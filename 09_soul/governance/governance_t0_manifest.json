@@ -1,69 +1,86 @@
 {
-  "manifest_version": "governance_t0_manifest_v1",
+  "manifest_version": "governance_t0_manifest_v2",
   "charter": {
     "mode": "project_specific",
     "target": "designDoc/the_charter.md"
   },
+  "retired_t0_targets": [
+    "designDoc/the_capability_management.md",
+    "designDoc/the_data_residency.md",
+    "designDoc/the_workflow_management.md"
+  ],
   "portable_t0_contracts": [
     {
       "t0_layer_id": "the_agency_platform",
       "source": "09_soul/governance/t0/the_agency_platform.md",
       "target": "designDoc/the_agency_platform.md",
-      "sha256": "92f4c6e39bcb755c827d6b7b2936ac56d99e82a91a746b66af5d0cd4b540605a"
+      "sha256": "a152cfdd680e4777ec3a454eeb4db58f006058f8d430f75425e301f1c31dea23"
     },
     {
       "t0_layer_id": "the_agent_runtime",
       "source": "09_soul/governance/t0/the_agent_runtime.md",
       "target": "designDoc/the_agent_runtime.md",
-      "sha256": "824920e0f796fe3771198b777c222d60a39415a40653b2737a08f6d319a6637d"
+      "sha256": "595b2650cd718921c69121329a21dc9370f38e1e8c83bcba91d451ac3729fefd"
     },
     {
       "t0_layer_id": "the_product_authorization",
       "source": "09_soul/governance/t0/the_product_authorization.md",
       "target": "designDoc/the_product_authorization.md",
-      "sha256": "22ecc4a50474fedfd9670cccea54e4ee9f7a9a5c708c552400f50984c6020bfc"
+      "sha256": "24fa97f6aaef7c709d2908b0520678a6c9b0fc4eff00c321b5816d8eec6515e1"
     },
     {
       "t0_layer_id": "the_task_routing",
       "source": "09_soul/governance/t0/the_task_routing.md",
       "target": "designDoc/the_task_routing.md",
-      "sha256": "c43365852b8d90be7857b5273b08fd9cd45b40b9a9058f4ce8514dd83106287c"
+      "sha256": "94279148755bbea4e02263598b26b575bfef2e0a07ae9c36fde79629e9be7c2c"
+    },
+    {
+      "t0_layer_id": "the_system_change_governance",
+      "source": "09_soul/governance/t0/the_system_change_governance.md",
+      "target": "designDoc/the_system_change_governance.md",
+      "sha256": "a350be39512265c531026d53582aae4f16f78c7b8584bb29c273df7efd022c49"
     },
     {
       "t0_layer_id": "the_artifact_graph",
       "source": "09_soul/governance/t0/the_artifact_graph.md",
       "target": "designDoc/the_artifact_graph.md",
-      "sha256": "1bc7860217dc2fefd8d8b7e5050aac5f696b3dbb3e6ddd444e58dec6bfed0fb4"
+      "sha256": "72dc7a5764e1bb4c58e45b629a91411a245bf83ae26bc8d0427d8c0f5f78b43e"
     },
     {
       "t0_layer_id": "the_data_governance",
       "source": "09_soul/governance/t0/the_data_governance.md",
       "target": "designDoc/the_data_governance.md",
-      "sha256": "167ddbaaaf3d126f735965268739da48bd89045b616891417e2c1546fc5f3441"
+      "sha256": "ab6aee778d873c460b9ec6fc62a823d49a757effcb12802fdd46b5d5b41c181b"
     },
     {
       "t0_layer_id": "the_timestamp_semantic",
       "source": "09_soul/governance/t0/the_timestamp_semantic.md",
       "target": "designDoc/the_timestamp_semantic.md",
-      "sha256": "ee027ea43eba0af454606215fe1ab445395a3d31bbbcfa2b685e1c66286f3e53"
+      "sha256": "685fe32760780264aca04ec2d5e26a673d5f808d3ec9bdaa8d4ec76e84025406"
     },
     {
       "t0_layer_id": "the_design_doc_management",
       "source": "09_soul/governance/t0/the_design_doc_management.md",
       "target": "designDoc/the_design_doc_management.md",
-      "sha256": "379be6b4eacd40abb531a4c38da888a8ed0d6d6bcf78d88c2753788c049a9a45"
+      "sha256": "65e93ceda0f5a4c8344f05aaaed92add439e5196b0f24af2d0910856ad9c6814"
+    },
+    {
+      "t0_layer_id": "the_skill_management",
+      "source": "09_soul/governance/t0/the_skill_management.md",
+      "target": "designDoc/the_skill_management.md",
+      "sha256": "d615d71613ba63587b63c612ebcb22a14c707f8f2a70371be5b0340a4b1a1a37"
     },
     {
       "t0_layer_id": "the_contract_audit",
       "source": "09_soul/governance/t0/the_contract_audit.md",
       "target": "designDoc/the_contract_audit.md",
-      "sha256": "d20d185e23a4935bab4b037fc0cbc3176707ad0fadcd9dd34b76d6daf810244f"
+      "sha256": "63dc9e0f3e40d52d61c320ba8b6f908bd6d247c03f656711d63fd721fccb1dba"
     },
     {
       "t0_layer_id": "the_software_delivery",
       "source": "09_soul/governance/t0/the_software_delivery.md",
       "target": "designDoc/the_software_delivery.md",
-      "sha256": "e7a3e575ddc4bf81a7881b55b589b04ddb6de0834838f96a45ef46df4c359d6c"
+      "sha256": "429d4294f73ac8be86a19acefe766b7e1215ac1f295bb410e8e4332b8cb3a23a"
     }
   ]
 }
