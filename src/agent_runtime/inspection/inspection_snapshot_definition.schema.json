@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:workflow_review_bundle@v1",
+  "title": "Agent Runtime Workflow Review Bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workflow_id",
+    "workflow_execution_id",
+    "inspection",
+    "contents",
+    "bundle_id",
+    "bundle_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "workflow_review_bundle_v1"},
+    "workflow_id": {"type": "string", "minLength": 1},
+    "workflow_execution_id": {"type": "string", "minLength": 1},
+    "inspection": {
+      "type": "object",
+      "required": ["trace", "workflow_release", "modules"],
+      "properties": {
+        "trace": {"type": "object"},
+        "workflow_release": {"type": ["object", "null"]},
+        "modules": {"type": "array"}
+      }
+    },
+    "contents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["content_ref", "content_sha256", "media_type", "redaction_state", "body", "redaction_reason"],
+        "properties": {
+          "content_ref": {"type": "string", "minLength": 3},
+          "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "media_type": {"type": "string", "minLength": 3},
+          "redaction_state": {"enum": ["content_read_granted", "metadata_only", "redacted", "unavailable"]},
+          "body": {},
+          "redaction_reason": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "bundle_id": {"type": "string", "minLength": 3},
+    "bundle_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "schema_version": "public_repository_manifest_v2",
+  "product_id": "agent_runtime_core",
+  "required_paths": [
+    ".gitignore",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "pyproject.toml",
+    "public_repository_manifest.json",
+    "designDoc/the_charter.md",
+    "designDoc/the_agent_runtime.md",
+    "src/agent_runtime/__init__.py",
+    "src/agent_runtime/design_contract/manifest.json",
+    "tools/build_agent_runtime_design_contract_bundle.py",
+    "tools/public_repository_validation.py",
+    "tests/test_public_repository_validation.py"
+  ],
+  "allowed_exact_paths": [
+    ".gitignore",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "pyproject.toml",
+    "public_repository_manifest.json",
+    "designDoc/the_charter.md",
+    "designDoc/the_agent_runtime.md",
+    "tools/__init__.py",
+    "tools/build_agent_runtime_design_contract_bundle.py",
+    "tools/public_repository_validation.py",
+    "tests/test_public_repository_validation.py",
+    "tests/test_workflow_execution_ledger_recording.py"
+  ],
+  "allowed_path_prefixes": [
+    "src/agent_runtime/",
+    "examples/runtime_authoring_reference/"
+  ],
+  "allowed_path_patterns": [
+    "designDoc/agent_runtime_00_*.md",
+    "designDoc/agent_runtime_01_*.md",
+    "designDoc/agent_runtime_03_*.md",
+    "designDoc/agent_runtime_06_*.md",
+    "designDoc/agent_runtime_07_*.md",
+    "designDoc/agent_runtime_08_*.md",
+    "designDoc/agent_runtime_09_*.md",
+    "tests/test_agent_runtime_*.py",
+    "tests/test_runtime_*.py"
+  ],
+  "forbidden_path_segment_sha256": [],
+  "forbidden_content_fingerprints": []
+}

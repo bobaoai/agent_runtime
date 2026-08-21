@@ -1,0 +1,10 @@
+{
+  "schema_version": "runtime_execution_variant_policy_source_v1",
+  "policy_id": "opaque_review_default",
+  "policy_version": "v1",
+  "origin_kind": "workflow",
+  "origin_source_id": "opaque_review",
+  "bindings": [
+    {"position_id":"write","execution_profile_source_id":"opaque_profile"}
+  ]
+}

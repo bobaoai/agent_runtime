@@ -1,0 +1,19 @@
+{
+  "schema_version": "runtime_authoring_inventory_v1",
+  "inventory_id": "opaque_review",
+  "inventory_version": "v1",
+  "plugin_id": "opaque_review",
+  "plugin_version": "v1",
+  "sources": [
+    {"source_kind": "agent_module", "source_id": "opaque_writer", "manifest_path": "examples/runtime_authoring_reference/modules/opaque_writer/module_registration.json"},
+    {"source_kind": "behavior_policy", "source_id": "opaque_behavior", "manifest_path": "examples/runtime_authoring_reference/policies/behavior_policy.json"},
+    {"source_kind": "evaluation_policy", "source_id": "opaque_evaluation", "manifest_path": "examples/runtime_authoring_reference/policies/evaluation_policy.json"},
+    {"source_kind": "execution_profile", "source_id": "opaque_profile", "manifest_path": "examples/runtime_authoring_reference/profiles/execution_profile.json"},
+    {"source_kind": "execution_variant_policy", "source_id": "opaque_review_default", "manifest_path": "examples/runtime_authoring_reference/variants/default_variant.json"},
+    {"source_kind": "non_agent_module", "source_id": "opaque_sink", "manifest_path": "examples/runtime_authoring_reference/modules/opaque_sink/module_registration.json"},
+    {"source_kind": "non_agent_module", "source_id": "opaque_transform", "manifest_path": "examples/runtime_authoring_reference/modules/opaque_transform/module_registration.json"},
+    {"source_kind": "retry_policy", "source_id": "opaque_retry", "manifest_path": "examples/runtime_authoring_reference/policies/retry_policy.json"},
+    {"source_kind": "workflow", "source_id": "opaque_review", "manifest_path": "examples/runtime_authoring_reference/workflows/opaque_review.json"}
+  ],
+  "root_workflow_source_ids": ["opaque_review"]
+}

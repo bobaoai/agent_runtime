@@ -1,0 +1,19 @@
+{
+  "schema_version": "runtime_execution_profile_source_v1",
+  "execution_profile_id": "opaque_profile",
+  "release_version": "v1",
+  "executor_adapter_id": "opaque_adapter",
+  "executor_adapter_revision": "v1",
+  "transport_kind": "in_process_test",
+  "provider_id": "opaque_provider",
+  "model_id": "opaque_model",
+  "reasoning_profile": "none",
+  "execution_mode": "tool_free",
+  "semantic_input_delivery_mode": "inline",
+  "attempt_workspace_policy": "none",
+  "gateway_access_reasons": [],
+  "output_constraint_mode": "prompt_only_json",
+  "tool_policy": [],
+  "network_policy": "denied",
+  "timeout_seconds": 60
+}

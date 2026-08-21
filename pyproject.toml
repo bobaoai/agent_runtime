@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-runtime-core"
+version = "0.2.0.dev0"
+description = "Provider-neutral execution infrastructure for registered agent workflows"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["jsonschema>=4.23"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+[project.urls]
+Repository = "https://github.com/bobaoai/agent_runtime"
+
+[project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.2.128"]
+temporal = ["temporalio>=1.31"]
+postgres = ["psycopg[binary]>=3.2"]
+test = [
+  "build>=1.2",
+  "claude-agent-sdk>=0.2.128",
+  "psycopg[binary]>=3.2",
+  "pytest>=8",
+  "setuptools>=77",
+  "temporalio>=1.31",
+]
+
+[project.scripts]
+agent-runtime-inspect = "agent_runtime.inspection.inspection_snapshot_exporting:main"
+agent-runtime-live-inspect = "agent_runtime.inspection.inspection_http_serving:main"
+
+[tool.setuptools]
+packages = [
+  "agent_runtime",
+  "agent_runtime.conformance",
+  "agent_runtime.contracts",
+  "agent_runtime.design_contract",
+  "agent_runtime.durability",
+  "agent_runtime.execution",
+  "agent_runtime.foundation",
+  "agent_runtime.inspection",
+  "agent_runtime.invocation",
+  "agent_runtime.ledger",
+  "agent_runtime.registry",
+  "agent_runtime.testing",
+]
+
+[tool.setuptools.package-dir]
+"agent_runtime" = "src/agent_runtime"
+
+[tool.setuptools.package-data]
+"agent_runtime" = ["README.md", "design_contract/*.md", "design_contract/*.json"]
+"agent_runtime.inspection" = ["*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

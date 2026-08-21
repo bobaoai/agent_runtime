@@ -1,0 +1,25 @@
+{
+  "schema_version": "runtime_workflow_source_v1",
+  "workflow_id": "opaque_review",
+  "workflow_version": "v1",
+  "workflow_contract_version": "v1",
+  "owner_contract_ref": "contract:opaque_review@v1",
+  "owner_contract_path": "examples/runtime_authoring_reference/contracts/opaque_review.md",
+  "graph_ref": "workflow-graph:opaque_review@v1",
+  "initial_node_id": "transform",
+  "nodes": [
+    {"node_id":"transform","node_kind":"module","module_source_id":"opaque_transform","input_mapping_ref":"input-map:opaque_transform@v1","input_mapping_document":{"schema_version":"input_mapping_v1","source":"workflow_input"}},
+    {"node_id":"write","node_kind":"module","module_source_id":"opaque_writer","input_mapping_ref":"input-map:opaque_writer@v1","input_mapping_document":{"schema_version":"input_mapping_v1","source":"transform"}},
+    {"node_id":"sink","node_kind":"module","module_source_id":"opaque_sink","input_mapping_ref":"input-map:opaque_sink@v1","input_mapping_document":{"schema_version":"input_mapping_v1","source":"write"}}
+  ],
+  "edges": [
+    {"source_node_id":"transform","outcome_id":"completed","target_node_id":"write","terminal":false},
+    {"source_node_id":"write","outcome_id":"completed","target_node_id":"sink","terminal":false},
+    {"source_node_id":"sink","outcome_id":"completed","target_node_id":null,"terminal":true}
+  ],
+  "parallel_groups": [],
+  "authorization_manifest_ref": "authorization-manifest:opaque_review@v1",
+  "authorization_manifest_document": {"schema_version":"authorization_manifest_v1","allowed_operation_ids":["model_execute","opaque_sink_write"]},
+  "execution_binding_ref": "execution-binding:opaque_review@v1",
+  "execution_binding_document": {"schema_version":"execution_binding_v1","workflow_id":"opaque_review"}
+}

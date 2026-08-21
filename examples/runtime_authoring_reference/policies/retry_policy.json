@@ -1,0 +1,1 @@
+{"schema_version":"runtime_retry_policy_source_v1","policy_id":"opaque_retry","policy_version":"v1","max_attempts":2}
