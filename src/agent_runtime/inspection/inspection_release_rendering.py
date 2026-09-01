@@ -14,7 +14,6 @@ import json
 from typing import Any, Sequence
 
 from ..durability.durability_backend_registration import TEMPORAL_DESCRIPTOR
-from ..contracts.registry_release_definition import ReleaseSubjectKind
 from .inspection_architecture_rendering import (
     build_runtime_architecture_projection,
     render_runtime_architecture_markdown,
@@ -25,25 +24,7 @@ from ..registry.registry_release_registration import RuntimeReleaseRegistry
 
 
 INVENTORY_SCHEMA_VERSION = "agent_runtime_inventory_v3"
-RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v3"
-
-
-def _latest_admission_state(
-    release_registry: RuntimeReleaseRegistry,
-    subject_kind: ReleaseSubjectKind,
-    release_ref: str,
-) -> str | None:
-    """Return the latest state without treating an unadmitted release as invalid."""
-
-    try:
-        return release_registry.get_admission_state(
-            subject_kind,
-            release_ref,
-        ).value
-    except RuntimeError as exc:
-        if str(exc).startswith("release has no admission record:"):
-            return None
-        raise
+RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v4"
 
 
 def build_runtime_inventory(
@@ -155,11 +136,6 @@ def build_runtime_release_inventory(
                 "formatter_id": release.formatter_id,
                 "formatter_version": release.formatter_version,
                 "formatted_content_sha256": release.formatted_content_sha256,
-                "latest_admission_state": _latest_admission_state(
-                    release_registry,
-                    ReleaseSubjectKind.PROMPT_COMPONENT,
-                    release.release_ref,
-                ),
             }
             for release in snapshot.prompt_components
         ],
@@ -169,13 +145,52 @@ def build_runtime_release_inventory(
                 "version": release.prompt_bundle_version,
                 "release_ref": release.release_ref,
                 "release_sha256": release.release_sha256,
-                "latest_admission_state": _latest_admission_state(
-                    release_registry,
-                    ReleaseSubjectKind.PROMPT_BUNDLE,
-                    release.release_ref,
-                ),
             }
             for release in snapshot.prompt_bundles
+        ],
+        "behavior_policies": [
+            {
+                "policy_id": release.policy_id,
+                "version": release.policy_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "policy_schema_ref": release.policy_schema_ref,
+                "policy_schema_sha256": release.policy_schema_sha256,
+            }
+            for release in snapshot.behavior_policies
+        ],
+        "evaluation_policies": [
+            {
+                "policy_id": release.policy_id,
+                "version": release.policy_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "policy_schema_ref": release.policy_schema_ref,
+                "policy_schema_sha256": release.policy_schema_sha256,
+            }
+            for release in snapshot.evaluation_policies
+        ],
+        "retry_policies": [
+            {
+                "policy_id": release.policy_id,
+                "version": release.policy_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "policy_schema_ref": release.policy_schema_ref,
+                "policy_schema_sha256": release.policy_schema_sha256,
+            }
+            for release in snapshot.retry_policies
+        ],
+        "execution_variant_policies": [
+            {
+                "policy_id": release.policy_id,
+                "version": release.policy_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "policy_schema_ref": release.policy_schema_ref,
+                "policy_schema_sha256": release.policy_schema_sha256,
+            }
+            for release in snapshot.execution_variant_policies
         ],
         "execution_profiles": [
             {
@@ -189,11 +204,6 @@ def build_runtime_release_inventory(
                 "model_id": release.model_id,
                 "reasoning_profile": release.reasoning_profile,
                 "output_constraint_mode": release.output_constraint_mode,
-                "latest_admission_state": _latest_admission_state(
-                    release_registry,
-                    ReleaseSubjectKind.EXECUTION_PROFILE,
-                    release.release_ref,
-                ),
             }
             for release in snapshot.execution_profiles
         ],
@@ -204,16 +214,14 @@ def build_runtime_release_inventory(
                 "release_ref": release.release_ref,
                 "release_sha256": release.release_sha256,
                 "module_kind": release.module_kind.value,
-                "source_skill_id": release.source_skill_id,
+                "owner_contract_ref": release.owner_contract_ref,
                 "entry_policy": release.entry_policy.value,
                 "declared_operation_ids": list(
                     release.declared_operation_ids
                 ),
-                "latest_admission_state": _latest_admission_state(
-                    release_registry,
-                    ReleaseSubjectKind.RUNTIME_MODULE,
-                    release.release_ref,
-                ),
+                "active": snapshot.active_release_refs.get(
+                    f"runtime_module:{release.module_id}"
+                ) == release.release_ref,
             }
             for release in snapshot.modules
         ],
@@ -231,24 +239,11 @@ def build_runtime_release_inventory(
                 "parallel_groups": [
                     group.as_dict() for group in release.parallel_groups
                 ],
-                "latest_admission_state": _latest_admission_state(
-                    release_registry,
-                    ReleaseSubjectKind.WORKFLOW,
-                    release.release_ref,
-                ),
+                "active": snapshot.active_release_refs.get(
+                    f"workflow:{release.workflow_id}"
+                ) == release.release_ref,
             }
             for release in snapshot.workflows
-        ],
-        "admissions": [
-            {
-                "admission_id": admission.admission_id,
-                "subject_kind": admission.subject_kind.value,
-                "subject_id": admission.subject_id,
-                "release_ref": admission.release_ref,
-                "state": admission.state.value,
-                "recorded_at_utc": admission.recorded_at_utc,
-            }
-            for admission in snapshot.admissions
         ],
         "active_release_refs": dict(snapshot.active_release_refs),
     }
@@ -281,17 +276,23 @@ def render_runtime_release_markdown(
         f"| Schema Asset | `{len(inventory['schema_assets'])}` |",
         f"| Prompt Component | `{len(inventory['prompt_components'])}` |",
         f"| Prompt Bundle | `{len(inventory['prompt_bundles'])}` |",
+        f"| Behavior Policy | `{len(inventory['behavior_policies'])}` |",
+        f"| Evaluation Policy | `{len(inventory['evaluation_policies'])}` |",
+        f"| Retry Policy | `{len(inventory['retry_policies'])}` |",
+        (
+            "| Execution Variant Policy | "
+            f"`{len(inventory['execution_variant_policies'])}` |"
+        ),
         f"| Execution Profile | `{len(inventory['execution_profiles'])}` |",
         f"| Runtime Module | `{len(inventory['modules'])}` |",
         f"| Workflow | `{len(inventory['workflows'])}` |",
-        f"| Admission record | `{len(inventory['admissions'])}` |",
         f"| Active release pointer | `{len(inventory['active_release_refs'])}` |",
         "",
         "## Workflows",
         "",
         (
             "| Workflow | Release version | Contract version | Nodes | Edges | "
-            "Parallel groups | Admission | Release |"
+            "Parallel groups | Active | Release |"
         ),
         "| --- | --- | --- | ---: | ---: | ---: | --- | --- |",
     ]
@@ -301,7 +302,7 @@ def render_runtime_release_markdown(
             f"`{workflow['contract_version']}` | `{len(workflow['nodes'])}` | "
             f"`{len(workflow['edges'])}` | "
             f"`{len(workflow['parallel_groups'])}` | "
-            f"`{workflow['latest_admission_state']}` | "
+            f"`{workflow['active']}` | "
             f"`{workflow['release_ref']}` |"
         )
     lines.extend(
@@ -310,19 +311,18 @@ def render_runtime_release_markdown(
             "## Runtime Modules",
             "",
             (
-                "| Module | Version | Kind | Entry policy | Source Skill | "
-                "Admission |"
+                "| Module | Version | Kind | Entry policy | Owner contract | "
+                "Active |"
             ),
             "| --- | --- | --- | --- | --- | --- |",
         ]
     )
     for module in inventory["modules"]:
-        source_skill_id = module["source_skill_id"] or "deterministic_code"
         lines.append(
             f"| `{module['module_id']}` | `{module['version']}` | "
             f"`{module['module_kind']}` | `{module['entry_policy']}` | "
-            f"`{source_skill_id}` | "
-            f"`{module['latest_admission_state']}` |"
+            f"`{module['owner_contract_ref']}` | "
+            f"`{module['active']}` |"
         )
     lines.extend(
         [
@@ -347,7 +347,7 @@ def render_runtime_release_markdown(
             "",
             (
                 "| Component | Version | Kind | Formatter | Content hash | "
-                "Admission |"
+                "Release |"
             ),
             "| --- | --- | --- | --- | --- | --- |",
         ]
@@ -358,8 +358,29 @@ def render_runtime_release_markdown(
             f"`{component['version']}` | `{component['component_kind']}` | "
             f"`{component['formatter_id']}@{component['formatter_version']}` | "
             f"`{component['formatted_content_sha256']}` | "
-            f"`{component['latest_admission_state']}` |"
+            f"`{component['release_ref']}` |"
         )
+    lines.extend(
+        [
+            "",
+            "## Policies",
+            "",
+            "| Family | Policy | Version | Schema | Release |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for family, inventory_key in (
+        ("Behavior", "behavior_policies"),
+        ("Evaluation", "evaluation_policies"),
+        ("Retry", "retry_policies"),
+        ("Execution Variant", "execution_variant_policies"),
+    ):
+        for policy in inventory[inventory_key]:
+            lines.append(
+                f"| {family} | `{policy['policy_id']}` | "
+                f"`{policy['version']}` | `{policy['policy_schema_ref']}` | "
+                f"`{policy['release_ref']}` |"
+            )
     lines.extend(
         [
             "",
@@ -367,7 +388,7 @@ def render_runtime_release_markdown(
             "",
             (
                 "| Profile | Version | Adapter | Transport | Provider | Model | "
-                "Reasoning | Output constraint | Admission |"
+                "Reasoning | Output constraint | Release |"
             ),
             "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
@@ -379,7 +400,7 @@ def render_runtime_release_markdown(
             f"`{profile['transport_kind']}` | `{profile['provider_id']}` | "
             f"`{profile['model_id']}` | `{profile['reasoning_profile']}` | "
             f"`{profile['output_constraint_mode']}` | "
-            f"`{profile['latest_admission_state']}` |"
+            f"`{profile['release_ref']}` |"
         )
     lines.extend(
         [

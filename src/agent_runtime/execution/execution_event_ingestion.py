@@ -35,8 +35,7 @@ from ..contracts.execution_event_definition import (
     ExternalEventIngressRequest,
 )
 from ..contracts.registry_release_definition import (
-    ReleaseAdmissionState,
-    ReleaseSubjectKind,
+    ModuleExecutionPurpose,
     WorkflowRelease,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
@@ -518,14 +517,10 @@ class InMemoryExternalEventIngress:
             workflow_release_ref,
             workflow_release_sha256,
         )
-        if release_registry.get_admission_state(
-            ReleaseSubjectKind.WORKFLOW,
-            workflow.release_ref,
-        ) not in {
-            ReleaseAdmissionState.PRODUCTION_CANARY,
-            ReleaseAdmissionState.ACTIVE,
-        }:
-            raise PermissionError("Workflow Release is not admitted for ingress")
+        release_registry.assert_workflow_execution_allowed(
+            workflow,
+            ModuleExecutionPurpose.WORKFLOW,
+        )
         self._validate_prepare_closure(
             request=request,
             trusted_context=trusted_context,

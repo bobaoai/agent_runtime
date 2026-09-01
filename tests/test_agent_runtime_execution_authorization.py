@@ -15,7 +15,7 @@ from agent_runtime.contracts.registry_release_definition import (
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
-    RuntimeModuleRelease,
+    ModuleRelease,
 )
 from agent_runtime.execution.execution_authorization_coordination import (
     ExecutionAuthorizationController,
@@ -74,15 +74,14 @@ class _Client:
 def _module(
     *,
     operation_ids: tuple[str, ...] = ("knowledge_search", "publish_report"),
-) -> RuntimeModuleRelease:
-    return RuntimeModuleRelease.build(
+) -> ModuleRelease:
+    return ModuleRelease.build(
         module_id="research_writer",
         module_version="1.0.0",
         release_ref="runtime-module:research_writer@1",
         module_kind=ModuleKind.AGENT,
         owner_contract_ref="design-doc:research-writer@1",
         owner_contract_sha256="1" * 64,
-        source_skill_id="research-writer",
         executable_ref=None,
         executable_sha256=None,
         input_schema_ref="schema:research-writer-input@1",
@@ -92,8 +91,8 @@ def _module(
         prompt_bundle_ref="prompt:research-writer@1",
         prompt_bundle_sha256="6" * 64,
         declared_operation_ids=operation_ids,
-        context_policy_ref="context-policy:task-scoped@1",
-        context_policy_sha256="7" * 64,
+        behavior_policy_ref="behavior-policy:task-scoped@1",
+        behavior_policy_sha256="7" * 64,
         evaluation_policy_ref="evaluation-policy:research-writer@1",
         evaluation_policy_sha256="8" * 64,
         retry_policy_ref="retry-policy:bounded@1",
@@ -105,14 +104,14 @@ def _module(
 
 
 class _ModuleReleaseClient:
-    def __init__(self, module: RuntimeModuleRelease) -> None:
+    def __init__(self, module: ModuleRelease) -> None:
         self.module = module
 
     def resolve_registered_module_release(
         self,
         release_ref: str,
         release_sha256: str,
-    ) -> RuntimeModuleRelease:
+    ) -> ModuleRelease:
         if (
             release_ref != self.module.release_ref
             or release_sha256 != self.module.release_sha256
@@ -122,7 +121,7 @@ class _ModuleReleaseClient:
 
 
 def _controller(
-    module: RuntimeModuleRelease | None = None,
+    module: ModuleRelease | None = None,
 ) -> tuple[ExecutionAuthorizationController, _Client]:
     envelope = _envelope()
     client = _Client(envelope)

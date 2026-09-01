@@ -50,9 +50,7 @@ from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
     ModuleExecutionPurpose,
     OutputResolutionPolicy,
-    ReleaseAdmissionState,
-    ReleaseSubjectKind,
-    RuntimeModuleRelease,
+    ModuleRelease,
 )
 from ..contracts.ledger_lineage_definition import (
     ModuleAttemptRecord,
@@ -185,7 +183,7 @@ class _AttemptExecutionHost:
         *,
         request: AuthorizedAgentExecutionRequest,
         artifact_host: ModuleArtifactHost,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
         profile: ExecutionProfileRelease,
         purpose: ModuleExecutionPurpose,
         authority: ModuleExecutionAuthority | None,
@@ -512,13 +510,47 @@ def _run_module(
         request.module_release_ref,
         request.module_release_sha256,
     )
+    behavior_policy = release_registry.get_behavior_policy(
+        module.behavior_policy_ref,
+        module.behavior_policy_sha256,
+    )
+    evaluation_policy = release_registry.get_evaluation_policy(
+        module.evaluation_policy_ref,
+        module.evaluation_policy_sha256,
+    )
+    retry_policy = release_registry.get_retry_policy(
+        module.retry_policy_ref,
+        module.retry_policy_sha256,
+    )
+    behavior_mode = behavior_policy.policy_document()["context_isolation"]
+    if behavior_mode != "workflow_execution_isolated":
+        raise ValueError("unsupported Module Behavior Policy")
+    evaluation_mode = evaluation_policy.policy_document()["evaluation_mode"]
+    max_attempts = retry_policy.policy_document()["max_attempts"]
     release_registry.assert_module_execution_allowed(module, request.purpose)
-    _assert_module_dependencies_shadow_executable(release_registry, module)
     model_operation_ids = tuple(
         operation_id
         for operation_id in module.declared_operation_ids
         if operation_id in _MODEL_INVOCATION_OPERATION_IDS
     )
+    candidate_purpose = request.purpose in {
+        ModuleExecutionPurpose.TEST,
+        ModuleExecutionPurpose.EVALUATION,
+    }
+    if evaluation_mode == "module_candidate":
+        if not candidate_purpose or len(model_operation_ids) != 1:
+            raise ValueError(
+                "module_candidate Evaluation Policy requires a candidate "
+                "purpose and one model operation"
+            )
+    elif evaluation_mode == "deterministic_candidate":
+        if not candidate_purpose or model_operation_ids:
+            raise ValueError(
+                "deterministic_candidate Evaluation Policy requires a "
+                "candidate purpose and no model operation"
+            )
+    elif evaluation_mode != "none":
+        raise ValueError("unsupported Module Evaluation Policy")
     if module.declared_operation_ids and len(model_operation_ids) != 1:
         raise ValueError(
             "the model-backed slice admits exactly one declared model operation"
@@ -585,7 +617,6 @@ def _run_module(
             variant_request.execution_profile_ref,
             variant_request.execution_profile_sha256,
         )
-        _assert_profile_shadow_executable(release_registry, profile)
         if profile.transport_kind not in module.compatible_transport_kinds:
             raise ValueError("Execution Profile transport is incompatible with Module")
         if module.declared_operation_ids:
@@ -618,7 +649,16 @@ def _run_module(
             profile.release_sha256,
             variant_request.prompt_envelope_sha256 or "none",
         )
-        attempt_id = _stable_id("module_attempt", variant_id, "1")
+        attempt_ordinal = (
+            request.attempt_ordinal
+            if type(request) is WorkflowModuleExecutionRequest
+            else 1
+        )
+        if attempt_ordinal > max_attempts:
+            raise ValueError("Attempt ordinal exceeds Retry Policy max_attempts")
+        attempt_id = _stable_id(
+            "module_attempt", variant_id, str(attempt_ordinal)
+        )
         resolved_profiles.append(profile)
         resolved_adapters.append(adapter)
         variant_records.append(
@@ -640,7 +680,7 @@ def _run_module(
                 module_run_id=module_run_id,
                 variant_id=variant_id,
                 attempt_id=attempt_id,
-                attempt_ordinal=1,
+                attempt_ordinal=attempt_ordinal,
                 recorded_at_utc=started_at_utc,
             )
         )
@@ -664,6 +704,9 @@ def _run_module(
             module=module,
             variants=tuple(variant_records),
             profiles=tuple(resolved_profiles),
+            retry_policy_ref=retry_policy.release_ref,
+            retry_policy_sha256=retry_policy.release_sha256,
+            max_attempts=max_attempts,
             recorded_at_utc=started_at_utc,
         )
 
@@ -732,7 +775,7 @@ def _run_module(
 def _execute_attempt(
     *,
     run_request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     profile: ExecutionProfileRelease,
     adapter: AuthorizedAgentExecutionAdapter,
     variant_request: ModuleVariantRequest,
@@ -757,6 +800,7 @@ def _execute_attempt(
             attempt_id=attempt_start.attempt_id,
             attempt_ordinal=attempt_start.attempt_ordinal,
             recorded_at_utc=attempt_start.recorded_at_utc,
+            parent_attempt_id=run_request.parent_attempt_id,
         )
 
     evidence: _AttemptAuthorizationEvidence | None = None
@@ -1082,7 +1126,7 @@ def _execute_attempt(
 def _authorize_model_attempt(
     *,
     authority: ModuleExecutionAuthority,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     profile: ExecutionProfileRelease,
     purpose: ModuleExecutionPurpose,
     module_run_id: str,
@@ -1161,7 +1205,7 @@ def _authorize_model_attempt(
 def _build_canonical_request(
     *,
     run_request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     profile: ExecutionProfileRelease,
     variant_request: ModuleVariantRequest,
     variant: ModuleExecutionVariantRecord,
@@ -1336,7 +1380,7 @@ def _record_failed_attempt(
     ledger: ModuleExecutionLedger,
     workflow_ledger: WorkflowModuleLedgerRecorder | None = None,
     workflow_request: WorkflowModuleExecutionRequest | None = None,
-    module: RuntimeModuleRelease | None = None,
+    module: ModuleRelease | None = None,
     profile: ExecutionProfileRelease | None = None,
     tool_calls: tuple[ModuleToolCallObservation, ...] = (),
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
@@ -1412,7 +1456,7 @@ def _assert_result_lineage_resolvable(
 def _assert_staged_output_conforms(
     release_registry: RuntimeReleaseRegistry,
     *,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     output_slot_id: str,
     content: bytes,
 ) -> None:
@@ -1515,25 +1559,8 @@ def _failed_attempt(
     )
 
 
-def _assert_profile_shadow_executable(
-    release_registry: RuntimeReleaseRegistry,
-    profile: ExecutionProfileRelease,
-) -> None:
-    state = release_registry.get_admission_state(
-        ReleaseSubjectKind.EXECUTION_PROFILE,
-        profile.release_ref,
-    )
-    if state not in {
-        ReleaseAdmissionState.CANDIDATE,
-        ReleaseAdmissionState.SHADOW_EXECUTABLE,
-        ReleaseAdmissionState.PRODUCTION_CANARY,
-        ReleaseAdmissionState.ACTIVE,
-    }:
-        raise PermissionError(f"Execution Profile is not shadow-executable: {state.value}")
-
-
 def _assert_admitted_test_evaluation_profile(
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     profile: ExecutionProfileRelease,
 ) -> None:
     """Admit the exact model-backed Test/Evaluation capability slices.
@@ -1591,45 +1618,8 @@ def _assert_admitted_test_evaluation_profile(
     )
 
 
-def _assert_module_dependencies_shadow_executable(
-    release_registry: RuntimeReleaseRegistry,
-    module: RuntimeModuleRelease,
-) -> None:
-    dependencies: list[tuple[ReleaseSubjectKind, str]] = []
-    if module.prompt_bundle_ref is not None:
-        if module.prompt_bundle_sha256 is None:
-            raise ValueError("Module Prompt Bundle hash is missing")
-        prompt_bundle = release_registry.get_prompt_bundle(
-            module.prompt_bundle_ref,
-            module.prompt_bundle_sha256,
-        )
-        dependencies.append(
-            (ReleaseSubjectKind.PROMPT_BUNDLE, module.prompt_bundle_ref)
-        )
-        dependencies.extend(
-            (
-                ReleaseSubjectKind.PROMPT_COMPONENT,
-                member.member_ref,
-            )
-            for member in prompt_bundle.members
-            if member.member_ref.startswith("prompt-component:")
-        )
-    allowed = {
-        ReleaseAdmissionState.CANDIDATE,
-        ReleaseAdmissionState.SHADOW_EXECUTABLE,
-        ReleaseAdmissionState.PRODUCTION_CANARY,
-        ReleaseAdmissionState.ACTIVE,
-    }
-    for kind, release_ref in dependencies:
-        state = release_registry.get_admission_state(kind, release_ref)
-        if state not in allowed:
-            raise PermissionError(
-                f"{kind.value} dependency is not shadow-executable: {state.value}"
-            )
-
-
 def _resolve_shadow_outputs(
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     module_run_id: str,
     variants: tuple[ModuleExecutionVariantRecord, ...],
     attempts: tuple[ModuleAttemptRecord, ...],

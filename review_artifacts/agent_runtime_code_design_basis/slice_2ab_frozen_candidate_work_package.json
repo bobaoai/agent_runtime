@@ -1,0 +1,30 @@
+{
+  "schema_version": "system_change_work_package_v1",
+  "system_change_work_package_ref": "system-change-work-package:agent-runtime-architecture-rebuild/slice-2ab-frozen-candidate@v1",
+  "parent_change_ref": "engineering_change_route:agent_runtime_architecture_rebuild@v1",
+  "entry_subject_class": "engineering_change_candidate",
+  "accountable_specialist_owner": "runtime_registry",
+  "engineering_code_design_owner": "engineering_code_design",
+  "independent_review_owner": "engineering_change_reviewer",
+  "approved_result_ref": "design-owner-decision:runtime-slice-2ab-frozen-candidate@2026-08-18",
+  "included_review_slices": [
+    "slice_2a_runtime_module_candidate_io",
+    "slice_2b_in_memory_registry_closure"
+  ],
+  "completion_contract": "Slice 2A and Slice 2B focused gates pass against one exact isolated candidate; excluded downstream code is not used as evidence; independent Opus 5 xhigh review accepts the frozen candidate; and the resulting commit/hash is published only as the immutable upstream input for later Runtime Slices.",
+  "non_goals": [
+    "replace the current shared Runtime baseline",
+    "pass the complete predecessor Runtime test suite",
+    "execute a complete Workflow",
+    "migrate Trading Platform host authoring or real domain Workflows",
+    "apply registered Policies through Execution or Ledger",
+    "persist Registry state in PostgreSQL"
+  ],
+  "deferred_consumers": [
+    "slice_2d_registered_policy_execution",
+    "runtime_predecessor_cutover",
+    "slice_2e_registered_host_cutover",
+    "slice_2c_registry_postgres_persistence"
+  ],
+  "rollback_boundary": "Before push, discard only the isolated candidate worktree. After push, retire the candidate ref or revert its candidate branch commit; no shared Runtime release, PostgreSQL schema, or host binding is changed."
+}

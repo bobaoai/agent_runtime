@@ -236,6 +236,8 @@ class WorkflowModuleExecutionRequest:
     variants: tuple[ModuleVariantRequest, ...]
     idempotency_key: str
     request_sha256: str
+    attempt_ordinal: int = 1
+    parent_attempt_id: str | None = None
 
     def _payload(self) -> dict[str, Any]:
         return {
@@ -253,6 +255,8 @@ class WorkflowModuleExecutionRequest:
             "input_closure_sha256": self.input_closure_sha256,
             "variants": [variant.as_dict() for variant in self.variants],
             "idempotency_key": self.idempotency_key,
+            "attempt_ordinal": self.attempt_ordinal,
+            "parent_attempt_id": self.parent_attempt_id,
         }
 
     def validate(self) -> None:
@@ -267,6 +271,14 @@ class WorkflowModuleExecutionRequest:
             ("idempotency_key", self.idempotency_key),
         ):
             validate_id(label, value)
+        validate_int("attempt_ordinal", self.attempt_ordinal, minimum=1)
+        if self.attempt_ordinal == 1:
+            if self.parent_attempt_id is not None:
+                raise ValueError("first Attempt cannot declare a parent Attempt")
+        else:
+            if self.parent_attempt_id is None:
+                raise ValueError("retry Attempt requires parent_attempt_id")
+            validate_id("parent_attempt_id", self.parent_attempt_id)
         if type(self.purpose) is not ModuleExecutionPurpose:
             raise ValueError("purpose must be a ModuleExecutionPurpose")
         if self.purpose not in {

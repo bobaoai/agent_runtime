@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
 
 from agent_runtime.contracts.registry_release_definition import (
+    PromptBundleRelease,
     PromptComponentKind,
     PromptComponentRelease,
-    PromptBundleRelease,
     ReleaseMember,
-)
-from agent_runtime.registry.registry_postgres_persistence import (
-    postgres_release_ddl,
-    serialize_registry_tables,
+    SchemaAssetRelease,
 )
 from agent_runtime.registry.registry_release_compilation import (
     compile_prompt_bundle_release,
@@ -47,7 +42,7 @@ def _component(
     )
 
 
-def test_prompt_components_are_registered_before_their_prompt_bundle() -> None:
+def test_prompt_components_register_before_their_prompt_bundle() -> None:
     instruction = _component(
         "example_task_instruction",
         PromptComponentKind.TASK_INSTRUCTION,
@@ -56,7 +51,7 @@ def test_prompt_components_are_registered_before_their_prompt_bundle() -> None:
     output = _component(
         "example_output_constraint",
         PromptComponentKind.OUTPUT_CONSTRAINT,
-        "## Output Constraint\n\nReturn one object.\n",
+        "Return one object.\n",
     )
     bundle = compile_prompt_bundle_release(
         prompt_bundle_id="example_prompt_bundle",
@@ -65,7 +60,6 @@ def test_prompt_components_are_registered_before_their_prompt_bundle() -> None:
         components=(instruction, output),
     )
     registry = RuntimeReleaseRegistry()
-
     registry.register_bundle(
         RuntimeReleaseBundle(
             prompt_components=(instruction, output),
@@ -73,14 +67,7 @@ def test_prompt_components_are_registered_before_their_prompt_bundle() -> None:
         )
     )
 
-    snapshot = registry.snapshot()
-    assert snapshot.prompt_components == (output, instruction)
-    assert bundle.compiled_static_body == (
-        "Do the task.\n## Output Constraint\n\nReturn one object.\n"
-    )
-    assert serialize_registry_tables(snapshot)[
-        "prompt_component_release"
-    ][0]["payload"]["formatted_content"]
+    assert registry.snapshot().prompt_components == (output, instruction)
 
 
 def test_prompt_bundle_rejects_an_unregistered_component_member() -> None:
@@ -132,19 +119,59 @@ def test_prompt_bundle_body_must_equal_ordered_component_content() -> None:
         )
 
 
-def test_prompt_component_rejects_content_mutation_in_place() -> None:
-    component = _component(
-        "immutable_task_instruction",
-        PromptComponentKind.TASK_INSTRUCTION,
-        "Original.\n",
+def test_prompt_component_requires_exact_registered_schema_source() -> None:
+    schema = SchemaAssetRelease.build(
+        schema_asset_id="prompt_output",
+        schema_asset_version="v1",
+        release_ref="schema:prompt_output@v1",
+        schema_document={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "schema:prompt_output@v1",
+            "type": "object",
+        },
     )
 
-    with pytest.raises(ValueError, match="content hash mismatch"):
-        replace(component, formatted_content="Changed.\n").validate()
+    def component(schema_sha256: str) -> PromptComponentRelease:
+        return PromptComponentRelease.build(
+            prompt_component_id="schema_bound_output_constraint",
+            prompt_component_version="v1",
+            release_ref="prompt-component:schema_bound_output_constraint@v1",
+            component_kind=PromptComponentKind.OUTPUT_CONSTRAINT,
+            media_type="text/markdown",
+            formatter_id="json_schema_output_formatter",
+            formatter_version="v1",
+            source_members=(
+                ReleaseMember(
+                    member_ref=schema.release_ref,
+                    member_sha256=schema_sha256,
+                    media_type="application/schema+json",
+                ),
+            ),
+            formatted_content="Return the registered shape.\n",
+        )
 
+    with pytest.raises(KeyError, match="unknown Schema Asset"):
+        RuntimeReleaseRegistry().register_bundle(
+            RuntimeReleaseBundle(prompt_components=(component(schema.schema_sha256),))
+        )
 
-def test_postgres_ddl_has_dedicated_prompt_component_table() -> None:
-    ddl = "\n".join(postgres_release_ddl())
+    with pytest.raises(ValueError, match="Schema Asset hash mismatch"):
+        RuntimeReleaseRegistry().register_bundle(
+            RuntimeReleaseBundle(
+                schema_assets=(schema,),
+                prompt_components=(component("f" * 64),),
+            )
+        )
 
-    assert "agent_runtime_control.prompt_component_release" in ddl
-    assert "payload JSONB NOT NULL" in ddl
+    registry = RuntimeReleaseRegistry()
+    exact = component(schema.schema_sha256)
+    registry.register_bundle(
+        RuntimeReleaseBundle(
+            schema_assets=(schema,),
+            prompt_components=(exact,),
+        )
+    )
+    assert registry.get_prompt_component(
+        exact.release_ref,
+        exact.release_sha256,
+    ) == exact

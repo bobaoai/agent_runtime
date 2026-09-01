@@ -265,6 +265,7 @@ RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
         technology_id="postgresql",
         implementation_source_paths=(
             "src/agent_runtime/registry/registry_postgres_persistence.py",
+            "src/agent_runtime/registry/registry_schema_migration.py",
         ),
     ),
     RuntimeImplementationBindingRegistration(
@@ -454,6 +455,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "registry",
+        "migration",
+        "candidate_set",
+        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+    ),
+    _source(
+        "registry",
         "release",
         "retrieval",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
@@ -468,6 +475,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "registry",
         "module",
         "loading",
+        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+    ),
+    _source(
+        "registry",
+        "module",
+        "authoring",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
     ),
     _source(
@@ -673,6 +686,13 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         implementation_binding_id="registry_postgres_persistence",
     ),
     _source(
+        "registry",
+        "schema",
+        "migration",
+        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+        implementation_binding_id="registry_postgres_persistence",
+    ),
+    _source(
         "inspection",
         "architecture",
         "rendering",
@@ -752,6 +772,16 @@ RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
         subject="schema",
         nominalized_action="traversal",
         owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path=(
+            "src/agent_runtime/foundation/foundation_json_schema_validation.py"
+        ),
+        supporting_plane_id="foundation",
+        source_directory_id="foundation",
+        subject="json_schema",
+        nominalized_action="validation",
+        owner_contract_ref="designDoc/agent_runtime_01_module_contract_and_assembly.md",
     ),
     RuntimeSupportingSourceFileRegistration(
         source_path=(

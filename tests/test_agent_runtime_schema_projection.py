@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from agent_runtime.invocation.invocation_prompt_assembly import (
     codex_native_output_schema,
@@ -104,6 +105,35 @@ def test_codex_projection_defers_one_of_to_canonical_validation() -> None:
 
     assert "oneOf" not in projected
     assert projected["properties"] == canonical_schema["properties"]
+
+
+def test_codex_projection_defers_unique_items_to_canonical_validation() -> None:
+    canonical_schema = {
+        "type": "object",
+        "properties": {
+            "finding_ids": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["finding_ids"],
+        "additionalProperties": False,
+    }
+
+    projected = codex_native_output_schema(canonical_schema)
+
+    assert "uniqueItems" not in projected["properties"]["finding_ids"]
+    assert not list(
+        Draft202012Validator(canonical_schema).iter_errors(
+            {"finding_ids": ["same", "different"]}
+        )
+    )
+    assert list(
+        Draft202012Validator(canonical_schema).iter_errors(
+            {"finding_ids": ["same", "same"]}
+        )
+    )
 
 
 def test_claude_projection_does_not_treat_property_maps_as_schema_nodes() -> None:

@@ -22,22 +22,21 @@ from agent_runtime.contracts.registry_release_definition import (
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
-    RuntimeModuleRelease,
+    ModuleRelease,
 )
 
 
 NOW = "2026-08-05T12:00:00Z"
 
 
-def _module() -> RuntimeModuleRelease:
-    return RuntimeModuleRelease.build(
+def _module() -> ModuleRelease:
+    return ModuleRelease.build(
         module_id="research_source_verifier",
         module_version="1.0.0",
         release_ref="runtime-module:research_source_verifier@1",
         module_kind=ModuleKind.DETERMINISTIC,
         owner_contract_ref="design-doc:research-source-verifier@1",
         owner_contract_sha256="1" * 64,
-        source_skill_id=None,
         executable_ref="python:tests.test_agent_runtime_authorization._module",
         executable_sha256="0" * 64,
         input_schema_ref="schema:source-verifier-input@1",
@@ -47,8 +46,8 @@ def _module() -> RuntimeModuleRelease:
         prompt_bundle_ref=None,
         prompt_bundle_sha256=None,
         declared_operation_ids=("knowledge_search",),
-        context_policy_ref="context-policy:isolated@1",
-        context_policy_sha256="4" * 64,
+        behavior_policy_ref="behavior-policy:isolated@1",
+        behavior_policy_sha256="4" * 64,
         evaluation_policy_ref="evaluation-policy:source-fidelity@1",
         evaluation_policy_sha256="5" * 64,
         retry_policy_ref="retry-policy:bounded@1",
@@ -103,7 +102,7 @@ def _status(
 
 def _request(
     binding: ExecutionAuthorizationBinding,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     *,
     operation_id: str = "knowledge_search",
     binding_ref: str | None = None,
@@ -277,7 +276,7 @@ def test_binding_or_module_substitution_fails_before_product_call() -> None:
         )
 
     other_module = _module()
-    other_module = RuntimeModuleRelease.build(
+    other_module = ModuleRelease.build(
         **{
             key: value
             for key, value in other_module.__dict__.items()

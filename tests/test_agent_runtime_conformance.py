@@ -121,11 +121,19 @@ def test_shared_fixture_modules_define_no_domain_vocabulary(
         ) is None
 
 
-def test_runtime_core_defines_no_domain_role_vocabulary() -> None:
+def test_runtime_role_vocabulary_is_confined_to_module_authoring() -> None:
     runtime_root = Path(__file__).resolve().parents[1] / "src" / "agent_runtime"
+    role_source = runtime_root / "registry/registry_module_authoring.py"
 
     for runtime_path in sorted(runtime_root.rglob("*.py")):
         source = runtime_path.read_text(encoding="utf-8").lower()
+        if runtime_path == role_source:
+            for domain_token in ("research", "theme", "thesis", "pm"):
+                assert re.search(
+                    rf"(?<![a-z]){domain_token}(?![a-z])",
+                    source,
+                ) is None, runtime_path
+            continue
         for domain_role_token in (
             "theme",
             "writer",

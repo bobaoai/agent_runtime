@@ -61,7 +61,7 @@ from ..foundation.foundation_contract_validation import (
 )
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
-    RuntimeModuleRelease,
+    ModuleRelease,
 )
 from ..invocation.invocation_tool_definition import (
     ModuleArtifactHost,
@@ -155,15 +155,25 @@ class WorkflowModuleLedgerRecorder:
         self,
         *,
         request: WorkflowModuleExecutionRequest,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
         variants: tuple[ModuleExecutionVariantRecord, ...],
         profiles: tuple[ExecutionProfileRelease, ...],
+        retry_policy_ref: str,
+        retry_policy_sha256: str,
+        max_attempts: int,
         recorded_at_utc: str,
     ) -> None:
         """Commit Module Run and all immutable Variant identities once."""
 
         request.validate()
         module.validate()
+        if (
+            retry_policy_ref != module.retry_policy_ref
+            or retry_policy_sha256 != module.retry_policy_sha256
+        ):
+            raise ValueError("Retry Policy primitives differ from the Module binding")
+        if type(max_attempts) is not int or not 1 <= max_attempts <= 100:
+            raise ValueError("Retry Policy max_attempts must be between 1 and 100")
         if len(variants) != len(profiles) or len(variants) != len(
             request.variants
         ):
@@ -205,7 +215,7 @@ class WorkflowModuleLedgerRecorder:
                 context_mode=profile.semantic_input_delivery_mode,
                 output_schema_sha256=module.output_schema_sha256,
                 timeout_seconds=profile.timeout_seconds,
-                max_attempts=profile.max_attempts,
+                max_attempts=max_attempts,
                 execution_profile_sha256=profile.release_sha256,
                 recorded_at_utc=recorded_at_utc,
                 prompt_envelope_ref=variant.prompt_envelope_ref,
@@ -253,7 +263,7 @@ class WorkflowModuleLedgerRecorder:
         self,
         *,
         request: WorkflowModuleExecutionRequest,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
     ) -> ModuleRunResult | None:
         """Reconstruct a committed result without re-entering a provider."""
 
@@ -508,18 +518,28 @@ class WorkflowModuleLedgerRecorder:
         resolved_execution_output_refs: tuple[str, ...],
         recorded_at_utc: str,
     ) -> ModuleOutputResolutionRecord:
-        """Build direct output authority from the committed Attempt bundle."""
+        """Build direct output authority from this dispatch's Attempt bundle."""
 
+        invocation = self.record_store.get_committed_invocation(
+            request.workflow_execution_id,
+            request.dispatch_id,
+        )
+        if invocation is None or invocation.terminal_status != "completed":
+            raise ValueError(
+                "direct_single resolution requires a completed invocation"
+            )
         bundles = tuple(
             row
             for row in self.record_store.load_trace(
                 request.workflow_execution_id
             ).records_of_type(AttemptOutputBundle)
             if row.module_run_id == request.module_run_id
+            and row.attempt_id == invocation.attempt_id
         )
         if len(bundles) != 1:
             raise ValueError(
-                "direct_single resolution requires one canonical Attempt bundle"
+                "direct_single resolution requires this dispatch's canonical "
+                "Attempt bundle"
             )
         bundle = bundles[0]
         if tuple(resolved_execution_output_refs) != tuple(
@@ -613,6 +633,47 @@ class WorkflowModuleLedgerRecorder:
                 )
             self._claims[attempt_id] = claim
             return claim
+        starts = tuple(
+            row
+            for row in trace.records_of_type(WorkflowAttemptStartedRecord)
+            if row.module_run_id == request.module_run_id
+            and row.variant_id == variant.variant_id
+        )
+        if any(row.attempt_ordinal == attempt_ordinal for row in starts):
+            raise ValueError(
+                "Attempt ordinal is already bound to another durable Attempt"
+            )
+        if attempt_ordinal == 1:
+            if parent_attempt_id is not None:
+                raise ValueError("first durable Attempt cannot declare a parent")
+        else:
+            predecessors = tuple(
+                row
+                for row in starts
+                if row.attempt_ordinal == attempt_ordinal - 1
+            )
+            if len(predecessors) != 1:
+                raise ValueError(
+                    "retry Attempt requires one contiguous durable predecessor"
+                )
+            predecessor = predecessors[0]
+            if parent_attempt_id != predecessor.attempt_id:
+                raise ValueError(
+                    "retry parent_attempt_id differs from durable predecessor"
+                )
+            terminal = _one_by_id(
+                trace.records_of_type(WorkflowAttemptRecord),
+                "attempt_id",
+                predecessor.attempt_id,
+            )
+            if terminal is None:
+                raise ValueError(
+                    "retry Attempt requires a terminal durable predecessor"
+                )
+            if terminal.status != "failed":
+                raise ValueError(
+                    "retry Attempt requires a failed durable predecessor"
+                )
         receipt = self.record_store.begin_attempt(
             LegacyAttemptBeginBatch(
                 workflow_execution_id=request.workflow_execution_id,
@@ -900,7 +961,7 @@ class WorkflowModuleLedgerRecorder:
         self,
         *,
         request: WorkflowModuleExecutionRequest,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
         profile: ExecutionProfileRelease,
         attempt: ModuleAttemptRecord,
         outputs: tuple[ModuleOutputBinding, ...],

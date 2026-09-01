@@ -6,6 +6,7 @@ the code-owned migration-debt set is retired.
 """
 
 from .contracts import (
+    BehaviorPolicyRelease,
     AgenticWorkflowConformancePackage,
     ModuleInputProjection,
     ModuleInputProjectionContract,
@@ -17,6 +18,8 @@ from .contracts import (
     WorkflowRuntimeRegistration,
     validate_domain_runtime_manifest,
     ExecutionProfileRelease,
+    EvaluationPolicyRelease,
+    ExecutionVariantPolicyRelease,
     PromptComponentKind,
     PromptComponentRelease,
     ModuleEntryPolicy,
@@ -25,16 +28,13 @@ from .contracts import (
     ModuleOutputResolutionRecord,
     OutputResolutionPolicy,
     PromptBundleRelease,
-    ReleaseAdmissionRecord,
-    ReleaseAdmissionState,
     ReleaseMember,
     ReleaseSubjectKind,
-    RuntimeModuleRelease,
+    RetryPolicyRelease,
+    ModuleRelease,
     SchemaAssetRelease,
     WorkflowEdge,
-    WorkflowExecutionProfileSelection,
     WorkflowNodeBinding,
-    WorkflowNodeExecutionProfileBinding,
     WorkflowParallelGroupBinding,
     WorkflowParallelJoinPolicy,
     WorkflowRelease,
@@ -124,7 +124,13 @@ from .execution.execution_module_invocation import (
     run_workflow_module,
 )
 from .contracts.ledger_lineage_definition import ModuleUsageObservation
-from .registry.registry_release_retrieval import RuntimeModuleReleaseClient
+from .registry.registry_release_retrieval import ModuleReleaseClient
+from .registry.registry_module_authoring import (
+    EXECUTION_PROFILE_UNAVAILABLE,
+    Module,
+    ModuleExport,
+    ModuleReviewer,
+)
 from .contracts.execution_host_definition import (
     AgentRuntimeProductHostApi,
     RuntimeCancellationRequest,
@@ -141,8 +147,11 @@ from .registry.registry_plugin_registration import (
     register_runtime_plugin,
 )
 from .registry.registry_release_registration import (
+    RuntimeActiveReleasePointerResult,
     RuntimeReleaseBundle,
+    RuntimeReleaseRegistrationResult,
     RuntimeReleaseRegistry,
+    RuntimeReleaseRegistrySnapshot,
 )
 from .registry.registry_workflow_registration import WorkflowRuntimeRegistry
 from .ledger.ledger_usage_aggregation import aggregate_model_usage
@@ -188,6 +197,7 @@ __all__ = [
     "ExecutionAuthorizationStatus",
     "ExecutionAuthorizationStatusEvidence",
     "ExecutionControlFenceStatus",
+    "EXECUTION_PROFILE_UNAVAILABLE",
     "ExecutionSnapshotToken",
     "ExternalActionAuthorizationEvidence",
     "AuthorizedExternalEvent",
@@ -203,6 +213,8 @@ __all__ = [
     "InMemoryExecutionAuthorizationLedger",
     "InMemoryExternalEventIngress",
     "ModuleEntryPolicy",
+    "Module",
+    "ModuleExport",
     "ModuleExecutionAuthority",
     "ModuleExecutionPurpose",
     "ModuleExecutionRequest",
@@ -231,13 +243,16 @@ __all__ = [
     "ProductOperationAuthorizationClient",
     "ProtectedOperationIntent",
     "ProviderOperationIntent",
-    "ReleaseAdmissionRecord",
-    "ReleaseAdmissionState",
+    "BehaviorPolicyRelease",
+    "EvaluationPolicyRelease",
+    "ExecutionVariantPolicyRelease",
     "ReleaseMember",
     "ReleaseSubjectKind",
+    "RetryPolicyRelease",
     "RuntimeModulePlugin",
-    "RuntimeModuleReleaseClient",
-    "RuntimeModuleRelease",
+    "ModuleReleaseClient",
+    "ModuleRelease",
+    "ModuleReviewer",
     "SchemaAssetRelease",
     "RuntimeProtectedOperationClient",
     "RuntimeAuthorizationCoordinator",
@@ -247,19 +262,20 @@ __all__ = [
     "RuntimeExecutionView",
     "RuntimeReconciliationResult",
     "RuntimeWorkflowStartRequest",
+    "RuntimeActiveReleasePointerResult",
     "RuntimeReleaseBundle",
+    "RuntimeReleaseRegistrationResult",
     "RuntimeReleaseRegistry",
+    "RuntimeReleaseRegistrySnapshot",
     "TrustedRequestContext",
     "WorkflowAdmissionState",
     "WorkflowManagementLifecycle",
     "WorkflowRuntimeRegistration",
     "WorkflowEdge",
-    "WorkflowExecutionProfileSelection",
     "WorkflowExecutionArtifactHost",
     "WorkflowExecutionLedgerBinding",
     "WorkflowExecutionLedgerRecorder",
     "WorkflowNodeBinding",
-    "WorkflowNodeExecutionProfileBinding",
     "WorkflowParallelGroupBinding",
     "WorkflowParallelJoinPolicy",
     "WorkflowRelease",

@@ -4,20 +4,20 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ..contracts.registry_release_definition import RuntimeModuleRelease
+from ..contracts.registry_release_definition import ModuleRelease
 
 
-class RuntimeModuleReleaseClient(Protocol):
+class ModuleReleaseClient(Protocol):
     """Resolve one Module Release produced by Runtime registration."""
 
     def resolve_registered_module_release(
         self,
         release_ref: str,
         release_sha256: str,
-    ) -> RuntimeModuleRelease:
-        """Resolve one exact registered Runtime Module Release."""
+    ) -> ModuleRelease:
+        """Resolve one exact registered Module Release."""
 
         ...
 
 
-__all__ = ["RuntimeModuleReleaseClient"]
+__all__ = ["ModuleReleaseClient"]

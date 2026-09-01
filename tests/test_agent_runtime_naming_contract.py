@@ -137,6 +137,7 @@ def test_canonical_runtime_names_reject_non_snake_case(
 def test_runtime_design_docs_use_snake_case_canonical_inline_names() -> None:
     allowed_python_projection_names = {
         "`AuthorizationAdapter`",
+        "`DataAccessAdapter`",
         "`PascalCase`",
         "`Z1`",
         "`Z2`",

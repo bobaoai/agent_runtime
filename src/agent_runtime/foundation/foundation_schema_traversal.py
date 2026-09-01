@@ -120,8 +120,42 @@ def resolve_local_schema_reference(
     return {**resolved, **siblings}
 
 
+def strict_output_schema_projection(
+    canonical_schema: dict[str, object],
+) -> dict[str, object]:
+    """Project one registered Schema Asset into provider-neutral strict form."""
+
+    hidden = {"$schema", "$id", "$comment", "title"}
+    projected = transform_json_schema_nodes(
+        canonical_schema,
+        lambda node: {
+            key: value for key, value in node.items() if key not in hidden
+        },
+    )
+
+    def declares_type(node: dict[str, object], expected: str) -> bool:
+        declared = node.get("type")
+        return declared == expected or (
+            isinstance(declared, list) and expected in declared
+        )
+
+    for path, node in iter_json_schema_nodes(projected):
+        if any(
+            keyword in node
+            for keyword in ("properties", "required", "additionalProperties")
+        ) and not declares_type(node, "object"):
+            raise ValueError(f"strict output schema needs type object at {path}")
+        if any(
+            keyword in node
+            for keyword in ("items", "minItems", "maxItems", "uniqueItems")
+        ) and not declares_type(node, "array"):
+            raise ValueError(f"strict output schema needs type array at {path}")
+    return projected
+
+
 __all__ = [
     "iter_json_schema_nodes",
     "resolve_local_schema_reference",
+    "strict_output_schema_projection",
     "transform_json_schema_nodes",
 ]

@@ -18,9 +18,9 @@ from ..contracts.execution_authorization_definition import (
     ProductAuthorizationContextStatus,
     ProtectedOperationIntent,
 )
-from ..contracts.registry_release_definition import RuntimeModuleRelease
+from ..contracts.registry_release_definition import ModuleRelease
 from ..foundation.foundation_contract_validation import validate_utc_timestamp
-from ..registry.registry_release_retrieval import RuntimeModuleReleaseClient
+from ..registry.registry_release_retrieval import ModuleReleaseClient
 from .execution_authorization_resolution import ProductAuthorizationContextClient
 from .execution_operation_resolution import RuntimeProtectedOperationClient
 
@@ -241,7 +241,7 @@ class ExecutionAuthorizationController:
         *,
         client: ProductAuthorizationContextClient,
         ledger: InMemoryExecutionAuthorizationLedger,
-        module_release_client: RuntimeModuleReleaseClient | None = None,
+        module_release_client: ModuleReleaseClient | None = None,
     ) -> None:
         self._client = client
         self._ledger = ledger
@@ -414,7 +414,7 @@ class ExecutionAuthorizationController:
                 module_release_sha256,
             )
         )
-        if type(module_release) is not RuntimeModuleRelease:
+        if type(module_release) is not ModuleRelease:
             raise TypeError("Module Release client returned an invalid release")
         module_release.validate()
         if (

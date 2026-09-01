@@ -358,7 +358,9 @@ from agent_runtime.ledger import PostgresRuntimeExecutionRecordStore
 from agent_runtime.registry import PostgresRuntimeReleaseStore
 
 database_url = "postgresql://runtime@localhost/runtime"
-PostgresRuntimeReleaseStore.from_dsn(database_url).initialize_schema()
+PostgresRuntimeReleaseStore.from_dsn(database_url).create_schema(
+    installed_at_utc="2026-08-17T20:00:00Z",
+)
 PostgresRuntimeExecutionRecordStore.from_dsn(database_url).initialize_schema()
 ```
 
@@ -452,17 +454,17 @@ or keep a parallel shadow trace.
 | Execution purpose | Why is this run being performed? | `test`, `evaluation`, `workflow`, `standalone`, `replay` |
 | Provider transport | How is the adapter reached? | `transport_kind`: `in_process_test`, `claude_agent_sdk`, `codex_cli`; `transport_family`: `in_process`, `sdk`, `cli`, `api` |
 | Capability profile | What may the model do and receive? | `execution_mode`, semantic input delivery, Attempt workspace, Gateway tools, and network policy |
-| Runtime admission | May this exact request execute now? | Purpose gate, release state, Module operations, exact profile, registered adapter identity and capability coverage, and — for model operations — committed AR09 authorization evidence must all pass |
+| Runtime execution gate | May this exact request execute now? | Purpose gate, exact registered releases, Module operations, exact profile, registered adapter identity and capability coverage, and — for model operations — committed AR09 authorization evidence must all pass; Workflow/Standalone entry additionally resolves its active pointer |
 
-`production` is not a `ModuleExecutionPurpose` value. It describes a lifecycle
-and admission scope normally entered through `workflow` or `standalone`; those
+`production` is not a `ModuleExecutionPurpose` value. It describes a deployment
+scope normally entered through `workflow` or `standalone`; those
 purposes are not admitted by the current public entry point.
 
 ### Current Module-execution admission matrix
 
 | Purpose and Module shape | Capability profile | Registered transport | Current result |
 | --- | --- | --- | --- |
-| `test` or `evaluation`, no protected operation | Exact registered profile | `in_process` transport family only; a provider transport requires a declared model operation | Admitted without authorization evidence, subject to release and adapter checks |
+| `test` or `evaluation`, no protected operation | Exact registered profile | `in_process` transport family only; a provider transport requires a declared model operation | Admitted without authorization evidence, subject to exact release and adapter checks |
 | `test` or `evaluation`, exactly one model operation (`invoke_model` or `model_execute`) and no other operation | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible, explicitly registered Claude SDK or Codex CLI adapter | Admitted with a required `ModuleExecutionAuthority`; a Product `DENY` or closed fence fails the Attempt with zero Provider invocation |
 | `test` or `evaluation`, exactly one model operation and no other operation | `agent` + `inline` + workspace `own_draft_read_write` + empty Gateway tool policy + network `denied` | Exact Claude SDK inline-draft adapter revision | Admitted. Every exposed Read/Write/Edit is checked against the Attempt root; the model receives no governed Gateway resource and no general network |
 | `test` or `evaluation`, exactly one model operation plus one or more declared Gateway read operations | `agent` + `gateway_read` + workspace `none` + exact non-empty tool policy and access reason + network `gateway_only` | Claude SDK Gateway adapter with dynamic-operation authorization support | Admitted. Model dispatch is authorized first; every tool call then requires a fresh Stack-A decision and Runtime receipt before the resource callable is entered |
@@ -519,8 +521,8 @@ capability.
 Two boundaries are intentionally still explicit integration gates. Runtime
 defines `AgentRuntimeProductHostApi`, but a concrete product-host controller
 belongs to the composing host rather than this domain-neutral package.
-`WorkflowExecutionProfileSelection` is a validated contract, while the current
-PostgreSQL authorities pin the effective profile in execution Variant and
-Attempt facts rather than persisting that pre-execution selection as a separate
-control-plane authority. A production host must close and test that selection
+`ExecutionVariantPolicyRelease` is the admitted pre-execution selection
+contract. PostgreSQL execution authorities pin the resolved profile in Variant
+and Attempt facts rather than creating a second control-plane selection
+authority. A production host must close and test that registered selection
 handoff for its own start path.

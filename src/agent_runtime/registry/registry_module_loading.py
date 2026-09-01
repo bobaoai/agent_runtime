@@ -1,34 +1,29 @@
-"""Load fixed Git authoring sources for Agent Runtime Module registration.
-
-The working tree is never a production execution authority.  This reader is
-used only by registration and release tooling to load one closed, reviewable
-Module source before its validated values, prompt bytes, and source hashes are
-compiled into immutable Runtime releases.
-"""
+"""Load one exact host Module registration for Runtime authoring."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
-from ..foundation.foundation_contract_validation import validate_snake_case_name
 from ..contracts.registry_release_definition import (
     ModuleEntryPolicy,
     OutputResolutionPolicy,
 )
 
 
-MODULE_REGISTRATION_DIRECTORY = "runtime_modules"
+MODULE_REGISTRATION_SCHEMA_VERSION = "runtime_module_registration_v2"
 MODULE_REGISTRATION_FILENAME = "module_registration.json"
 MODULE_PROMPT_FILENAME = "prompt.md"
-SKILL_PROJECTION_FILENAME = "SKILL.md"
-MODULE_REGISTRATION_SCHEMA_VERSION = "runtime_module_registration_v2"
-MODULE_REGISTRATION_HOST_ROOT = PurePosixPath(".claude", "skills")
+MODULE_INPUT_SCHEMA_PATH = PurePosixPath("schemas/input.schema.json")
+MODULE_OUTPUT_SCHEMA_PATH = PurePosixPath("schemas/output.schema.json")
+MODULE_AUTHORING_ROOT = PurePosixPath(".claude/skills")
 
 _SKILL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+_MODULE_ID_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 _ROOT_ENTRY_NAMES = frozenset(
     {MODULE_REGISTRATION_FILENAME, MODULE_PROMPT_FILENAME, "schemas", "tests"}
 )
@@ -44,7 +39,7 @@ _MANIFEST_KEYS = frozenset(
         "output_schema_path",
         "declared_operation_ids",
         "compatible_transport_kinds",
-        "context_policy_ref",
+        "behavior_policy_ref",
         "evaluation_policy_ref",
         "retry_policy_ref",
         "entry_policy",
@@ -53,48 +48,45 @@ _MANIFEST_KEYS = frozenset(
 )
 
 
-def _repo_path(label: str, value: Any) -> str:
-    if type(value) is not str or not value:
-        raise ValueError(f"{label} must be a non-empty repository-relative path")
-    path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or "." in path.parts:
-        raise ValueError(f"{label} must stay inside the repository")
-    if path.as_posix() != value:
-        raise ValueError(f"{label} must use normalized POSIX syntax")
+def _non_empty_string(label: str, value: Any) -> str:
+    if type(value) is not str or not value or "\x00" in value:
+        raise ValueError(f"{label} must be a non-empty string")
     return value
 
 
-def _reject_symlink_path(
+def _sorted_unique_strings(label: str, value: Any) -> tuple[str, ...]:
+    if type(value) is not list or not value:
+        raise ValueError(f"{label} must be a non-empty JSON array")
+    if any(type(item) is not str or not item for item in value):
+        raise ValueError(f"{label} must contain non-empty strings")
+    result = tuple(value)
+    if result != tuple(sorted(set(result))):
+        raise ValueError(f"{label} must be sorted and unique")
+    return result
+
+
+def _repository_path(label: str, value: Any) -> PurePosixPath:
+    text = _non_empty_string(label, value)
+    path = PurePosixPath(text)
+    if path.is_absolute() or "." in path.parts or ".." in path.parts:
+        raise ValueError(f"{label} must stay inside the repository")
+    if path.as_posix() != text:
+        raise ValueError(f"{label} must use normalized POSIX syntax")
+    return path
+
+
+def _checked_entry(
     project_root: Path,
     relative_path: PurePosixPath,
     *,
     label: str,
+    expected_kind: str,
 ) -> Path:
-    """Return one logical repo path only when no child component is a symlink."""
-
     candidate = project_root
     for component in relative_path.parts:
         candidate = candidate / component
         if candidate.is_symlink():
             raise ValueError(f"{label} cannot traverse a symlink: {candidate}")
-    return candidate
-
-
-def _checked_repo_entry(
-    project_root: Path,
-    relative_path: str | PurePosixPath,
-    *,
-    label: str,
-    expected_kind: str,
-) -> Path:
-    """Resolve one required symlink-free repository file or directory."""
-
-    logical_path = PurePosixPath(relative_path)
-    candidate = _reject_symlink_path(
-        project_root,
-        logical_path,
-        label=label,
-    )
     try:
         resolved = candidate.resolve(strict=True)
     except FileNotFoundError as exc:
@@ -108,410 +100,264 @@ def _checked_repo_entry(
     return candidate
 
 
-def _module_schema_path(
-    label: str,
-    value: Any,
-    *,
-    relative_directory: PurePosixPath,
-) -> str:
-    """Resolve one portable Module-relative schema path for compilation."""
-
-    relative_path = PurePosixPath(_repo_path(label, value))
-    if not relative_path.parts or relative_path.parts[0] != "schemas":
-        raise ValueError(f"{label} must stay inside the Module schemas directory")
-    return (relative_directory / relative_path).as_posix()
-
-
-def _string(label: str, value: Any) -> str:
-    if type(value) is not str or not value or "\x00" in value:
-        raise ValueError(f"{label} must be a non-empty string")
+def _read_utf8(path: Path, *, label: str) -> str:
+    try:
+        value = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} must be UTF-8") from exc
+    if not value.strip() or "\x00" in value:
+        raise ValueError(f"{label} must be non-empty UTF-8 text")
     return value
 
 
-def _sorted_unique_strings(label: str, value: Any) -> tuple[str, ...]:
-    if type(value) is not list or not value:
-        raise ValueError(f"{label} must be a non-empty JSON array")
-    if any(type(item) is not str or not item for item in value):
-        raise ValueError(f"{label} must contain non-empty strings")
-    values = tuple(value)
-    if len(values) != len(set(values)):
-        raise ValueError(f"{label} must not contain duplicates")
-    if values != tuple(sorted(values)):
-        raise ValueError(f"{label} must be sorted")
-    return values
-
-
-def _read_utf8_text(path: Path, *, label: str) -> str:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(f"{label} must be UTF-8") from exc
-    if not text.strip():
-        raise ValueError(f"{label} must be non-empty")
-    if "\x00" in text:
-        raise ValueError(f"{label} contains a null byte")
-    return text
-
-
 def _declares_identifier(text: str, identifier: str) -> bool:
-    """Return whether prose declares one exact snake_case identifier token."""
-
     return re.search(
         rf"(?<![a-z0-9_]){re.escape(identifier)}(?![a-z0-9_])",
         text,
     ) is not None
 
 
-def _validate_module_owned_schema_closure(
+def _module_schema_ref(
+    label: str,
+    value: Any,
     *,
-    project_root: Path,
-    relative_directory: PurePosixPath,
-    directory: Path,
-    schema_paths: tuple[str, str],
-) -> None:
-    """Reject undeclared or misplaced schema files in one Module directory."""
-
-    declared_owned_paths: set[str] = set()
-    for schema_path in schema_paths:
-        pure_schema_path = PurePosixPath(schema_path)
-        try:
-            module_relative = pure_schema_path.relative_to(relative_directory)
-        except ValueError:
-            continue
-        if not module_relative.parts or module_relative.parts[0] != "schemas":
-            raise ValueError(
-                "Module-owned schema path must stay inside the Module schemas directory"
-            )
-        declared_owned_paths.add(schema_path)
-
-    schema_root = directory / "schemas"
-    if not schema_root.exists():
-        if declared_owned_paths:
-            raise ValueError("Module-owned schemas directory is missing")
-        return
-    if not schema_root.is_dir() or schema_root.is_symlink():
-        raise ValueError("Runtime Module schemas entry must be a real directory")
-
-    actual_owned_paths: set[str] = set()
-    for entry in schema_root.rglob("*"):
-        if entry.is_symlink() or not entry.is_file():
-            raise ValueError(
-                "Runtime Module schemas directory may contain only regular files"
-            )
-        actual_owned_paths.add(entry.relative_to(project_root).as_posix())
-    if actual_owned_paths != declared_owned_paths:
-        missing = sorted(declared_owned_paths - actual_owned_paths)
-        extra = sorted(actual_owned_paths - declared_owned_paths)
+    module_id: str,
+    direction: str,
+) -> str:
+    schema_ref = _non_empty_string(label, value)
+    schema_name, separator, version = schema_ref.removeprefix("schema:").rpartition(
+        "@"
+    )
+    if (
+        not schema_ref.startswith("schema:")
+        or not separator
+        or schema_name != f"{module_id}_{direction}"
+        or not version
+    ):
         raise ValueError(
-            "Runtime Module schema closure differs from registration: "
-            f"missing={missing}, extra={extra}"
+            f"{label} must use schema:{module_id}_{direction}@<version>"
         )
+    return schema_ref
 
 
 @dataclass(frozen=True)
-class RuntimeModuleRegistrationSource:
-    """One closed Module registration source loaded from a Skill."""
+class ModuleRegistrationSource:
+    """Exact path-free content loaded from one Module registration."""
 
     skill_id: str
     module_id: str
-    owner_contract_path: str
+    owner_contract_ref: str
+    owner_contract_content: str
     input_schema_ref: str
-    input_schema_path: str
+    input_schema_document: str
     output_schema_ref: str
-    output_schema_path: str
+    output_schema_document: str
+    instruction_text: str
     declared_operation_ids: tuple[str, ...]
     compatible_transport_kinds: tuple[str, ...]
-    context_policy_ref: str
+    behavior_policy_ref: str
     evaluation_policy_ref: str
     retry_policy_ref: str
     entry_policy: ModuleEntryPolicy
     output_resolution_policy: OutputResolutionPolicy
-    module_directory_path: str
-    registration_path: str
-    prompt_path: str
-    prompt_text: str
 
     @property
-    def owner_contract_ref(self) -> str:
-        """Return the repository ref for the Module owner contract."""
-
-        return f"repo-file:{self.owner_contract_path}"
+    def instruction_source_ref(self) -> str:
+        return f"skill-instruction:{self.skill_id}:{self.module_id}"
 
 
-def _load_json_object(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"Module registration must be valid UTF-8 JSON: {path}"
-        ) from exc
-    if type(payload) is not dict:
-        raise ValueError("Module registration must be one JSON object")
-    if payload.get("schema_version") != MODULE_REGISTRATION_SCHEMA_VERSION:
-        raise ValueError("unsupported Runtime Module registration schema_version")
-    if set(payload) != _MANIFEST_KEYS:
-        missing = sorted(_MANIFEST_KEYS - set(payload))
-        extra = sorted(set(payload) - _MANIFEST_KEYS)
-        raise ValueError(
-            "Module registration has an invalid shape: "
-            f"missing={missing}, extra={extra}"
-        )
-    return payload
-
-
-def load_runtime_module_registration(
+def load_module_registration(
     project_root: Path,
     *,
     skill_id: str,
     module_id: str,
-) -> RuntimeModuleRegistrationSource:
-    """Load one Module only from the fixed Skill authoring channel."""
+) -> ModuleRegistrationSource:
+    """Read one fixed `.claude/skills/<skill>/runtime_modules/<module>` source."""
 
-    if type(skill_id) is not str or not _SKILL_ID_PATTERN.fullmatch(skill_id):
+    project_root = project_root.resolve()
+    if type(skill_id) is not str or _SKILL_ID_PATTERN.fullmatch(skill_id) is None:
         raise ValueError("skill_id must use canonical kebab-case")
-    validate_snake_case_name("module_id", module_id)
+    if type(module_id) is not str or _MODULE_ID_PATTERN.fullmatch(module_id) is None:
+        raise ValueError("module_id must use canonical snake_case")
     relative_directory = (
-        MODULE_REGISTRATION_HOST_ROOT
-        / skill_id
-        / MODULE_REGISTRATION_DIRECTORY
-        / module_id
+        MODULE_AUTHORING_ROOT / skill_id / "runtime_modules" / module_id
     )
-    directory = _checked_repo_entry(
+    directory = _checked_entry(
         project_root,
         relative_directory,
-        label="Runtime Module registration directory",
+        label="Module authoring directory",
         expected_kind="directory",
     )
-
     root_entries = tuple(directory.iterdir())
-    symlink_entries = sorted(
-        entry.name for entry in root_entries if entry.is_symlink()
-    )
-    if symlink_entries:
-        raise ValueError(
-            "Runtime Module registration root cannot contain symlinks: "
-            f"{symlink_entries}"
-        )
-    entry_names = {entry.name for entry in root_entries}
-    unexpected = sorted(entry_names - _ROOT_ENTRY_NAMES)
+    if any(entry.is_symlink() for entry in root_entries):
+        raise ValueError("Module authoring root cannot contain symlinks")
+    unexpected = sorted({entry.name for entry in root_entries} - _ROOT_ENTRY_NAMES)
     if unexpected:
-        raise ValueError(
-            f"Runtime Module registration has undeclared root entries: {unexpected}"
-        )
+        raise ValueError(f"Module authoring has undeclared root entries: {unexpected}")
 
-    registration_path = _checked_repo_entry(
+    registration_path = _checked_entry(
         project_root,
         relative_directory / MODULE_REGISTRATION_FILENAME,
-        label="Runtime Module registration",
+        label="Module registration",
         expected_kind="file",
     )
-    prompt_path = _checked_repo_entry(
+    prompt_path = _checked_entry(
         project_root,
         relative_directory / MODULE_PROMPT_FILENAME,
-        label="Runtime Module prompt",
+        label="Module prompt",
         expected_kind="file",
     )
+    input_schema_path = _checked_entry(
+        project_root,
+        relative_directory / MODULE_INPUT_SCHEMA_PATH,
+        label="Module input schema",
+        expected_kind="file",
+    )
+    output_schema_path = _checked_entry(
+        project_root,
+        relative_directory / MODULE_OUTPUT_SCHEMA_PATH,
+        label="Module output schema",
+        expected_kind="file",
+    )
+    for entry in directory.rglob("*"):
+        if entry.is_symlink():
+            raise ValueError("Module authoring closure cannot contain symlinks")
+        if not entry.is_file() and not entry.is_dir():
+            raise ValueError("Module authoring closure has a special entry")
+    schema_files = {
+        entry.relative_to(directory).as_posix()
+        for entry in (directory / "schemas").rglob("*")
+        if entry.is_file()
+    }
+    if schema_files != {
+        MODULE_INPUT_SCHEMA_PATH.as_posix(),
+        MODULE_OUTPUT_SCHEMA_PATH.as_posix(),
+    }:
+        raise ValueError(
+            "Module schemas must be exactly schemas/input.schema.json and "
+            "schemas/output.schema.json"
+        )
 
-    payload = _load_json_object(registration_path)
+    try:
+        payload = json.loads(registration_path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Module registration must be UTF-8 JSON") from exc
+    if type(payload) is not dict or set(payload) != _MANIFEST_KEYS:
+        missing = sorted(
+            _MANIFEST_KEYS - set(payload)
+            if isinstance(payload, dict)
+            else _MANIFEST_KEYS
+        )
+        extra = sorted(set(payload) - _MANIFEST_KEYS) if isinstance(payload, dict) else []
+        raise ValueError(
+            "Module registration has an invalid v2 shape: "
+            f"missing={missing}, extra={extra}"
+        )
+    if payload["schema_version"] != MODULE_REGISTRATION_SCHEMA_VERSION:
+        raise ValueError("unsupported Module registration schema_version")
     if payload["skill_id"] != skill_id:
         raise ValueError("registration skill_id differs from its Skill directory")
     if payload["module_id"] != module_id:
         raise ValueError("registration module_id differs from its Module directory")
-    owner_contract_path = _repo_path(
+    if payload["input_schema_path"] != MODULE_INPUT_SCHEMA_PATH.as_posix():
+        raise ValueError("input_schema_path must use the fixed Module-local name")
+    if payload["output_schema_path"] != MODULE_OUTPUT_SCHEMA_PATH.as_posix():
+        raise ValueError("output_schema_path must use the fixed Module-local name")
+
+    owner_contract_path = _repository_path(
         "owner_contract_path", payload["owner_contract_path"]
     )
-    input_schema_path = _module_schema_path(
-        "input_schema_path",
-        payload["input_schema_path"],
-        relative_directory=relative_directory,
-    )
-    output_schema_path = _module_schema_path(
-        "output_schema_path",
-        payload["output_schema_path"],
-        relative_directory=relative_directory,
-    )
-    checked_files = {
-        label: _checked_repo_entry(
-            project_root,
-            relative_path,
-            label=label,
-            expected_kind="file",
-        )
-        for label, relative_path in (
-            ("owner_contract_path", owner_contract_path),
-            ("input_schema_path", input_schema_path),
-            ("output_schema_path", output_schema_path),
-        )
-    }
-    _validate_module_owned_schema_closure(
-        project_root=project_root,
-        relative_directory=relative_directory,
-        directory=directory,
-        schema_paths=(input_schema_path, output_schema_path),
-    )
-
-    skill_path = _checked_repo_entry(
+    owner_path = _checked_entry(
         project_root,
-        MODULE_REGISTRATION_HOST_ROOT / skill_id / SKILL_PROJECTION_FILENAME,
-        label="Skill registration projection",
+        owner_contract_path,
+        label="Module owner Design Doc",
         expected_kind="file",
     )
-    skill_text = _read_utf8_text(skill_path, label="Skill registration projection")
-    if not _declares_identifier(skill_text, module_id):
-        raise ValueError(
-            "Skill registration projection does not declare exact module_id: "
-            f"{module_id}"
-        )
-
-    module_owner_path = checked_files["owner_contract_path"]
-    module_owner_text = _read_utf8_text(
-        module_owner_path,
-        label="Module owner Design Doc",
+    skill_path = _checked_entry(
+        project_root,
+        MODULE_AUTHORING_ROOT / skill_id / "SKILL.md",
+        label="canonical Skill projection",
+        expected_kind="file",
     )
-    if not _declares_identifier(module_owner_text, module_id):
-        raise ValueError(
-            "Module owner Design Doc does not declare exact module_id: "
-            f"{module_id}"
-        )
+    skill_content = _read_utf8(skill_path, label="canonical Skill projection")
+    owner_content = _read_utf8(owner_path, label="Module owner Design Doc")
+    if not _declares_identifier(skill_content, module_id):
+        raise ValueError(f"canonical Skill does not declare module_id: {module_id}")
+    if not _declares_identifier(owner_content, module_id):
+        raise ValueError(f"owner Design Doc does not declare module_id: {module_id}")
 
-    prompt_text = _read_utf8_text(prompt_path, label="Runtime Module prompt")
-    if not prompt_text.endswith("\n"):
-        raise ValueError("Runtime Module prompt must end with one newline")
-    if prompt_text.startswith("---\n"):
-        raise ValueError("Runtime Module prompt must not contain frontmatter")
-    if "\x00" in prompt_text:
-        raise ValueError("Runtime Module prompt contains a null byte")
-
+    prompt = _read_utf8(prompt_path, label="Module prompt")
+    if not prompt.endswith("\n"):
+        raise ValueError("Module prompt must end with one newline")
+    if prompt.startswith("---\n"):
+        raise ValueError("Module prompt must not contain frontmatter")
+    input_schema = _read_utf8(input_schema_path, label="Module input schema")
+    output_schema = _read_utf8(output_schema_path, label="Module output schema")
+    try:
+        input_document = json.loads(input_schema)
+        output_document = json.loads(output_schema)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Module schema must be valid JSON") from exc
+    if type(input_document) is not dict or type(output_document) is not dict:
+        raise ValueError("Module schema must be one JSON object")
+    input_schema_ref = _module_schema_ref(
+        "input_schema_ref",
+        payload["input_schema_ref"],
+        module_id=module_id,
+        direction="input",
+    )
+    output_schema_ref = _module_schema_ref(
+        "output_schema_ref",
+        payload["output_schema_ref"],
+        module_id=module_id,
+        direction="output",
+    )
+    if input_document.get("$id") != input_schema_ref:
+        raise ValueError("input_schema_ref differs from input schema $id")
+    if output_document.get("$id") != output_schema_ref:
+        raise ValueError("output_schema_ref differs from output schema $id")
     try:
         entry_policy = ModuleEntryPolicy(payload["entry_policy"])
-        output_resolution_policy = OutputResolutionPolicy(
-            payload["output_resolution_policy"]
-        )
+        output_policy = OutputResolutionPolicy(payload["output_resolution_policy"])
     except ValueError as exc:
         raise ValueError("Module registration contains an invalid policy") from exc
 
-    return RuntimeModuleRegistrationSource(
+    return ModuleRegistrationSource(
         skill_id=skill_id,
         module_id=module_id,
-        owner_contract_path=owner_contract_path,
-        input_schema_ref=_string("input_schema_ref", payload["input_schema_ref"]),
-        input_schema_path=input_schema_path,
-        output_schema_ref=_string(
-            "output_schema_ref", payload["output_schema_ref"]
+        owner_contract_ref=(
+            "owner-contract-sha256:"
+            + hashlib.sha256(owner_content.encode("utf-8")).hexdigest()
         ),
-        output_schema_path=output_schema_path,
+        owner_contract_content=owner_content,
+        input_schema_ref=input_schema_ref,
+        input_schema_document=input_schema,
+        output_schema_ref=output_schema_ref,
+        output_schema_document=output_schema,
+        instruction_text=prompt,
         declared_operation_ids=_sorted_unique_strings(
             "declared_operation_ids", payload["declared_operation_ids"]
         ),
         compatible_transport_kinds=_sorted_unique_strings(
-            "compatible_transport_kinds",
-            payload["compatible_transport_kinds"],
+            "compatible_transport_kinds", payload["compatible_transport_kinds"]
         ),
-        context_policy_ref=_string(
-            "context_policy_ref", payload["context_policy_ref"]
+        behavior_policy_ref=_non_empty_string(
+            "behavior_policy_ref", payload["behavior_policy_ref"]
         ),
-        evaluation_policy_ref=_string(
+        evaluation_policy_ref=_non_empty_string(
             "evaluation_policy_ref", payload["evaluation_policy_ref"]
         ),
-        retry_policy_ref=_string(
+        retry_policy_ref=_non_empty_string(
             "retry_policy_ref", payload["retry_policy_ref"]
         ),
         entry_policy=entry_policy,
-        output_resolution_policy=output_resolution_policy,
-        module_directory_path=relative_directory.as_posix(),
-        registration_path=(
-            relative_directory / MODULE_REGISTRATION_FILENAME
-        ).as_posix(),
-        prompt_path=(relative_directory / MODULE_PROMPT_FILENAME).as_posix(),
-        prompt_text=prompt_text,
+        output_resolution_policy=output_policy,
     )
-
-
-def load_skill_runtime_module_registrations(
-    project_root: Path,
-    *,
-    skill_id: str,
-) -> tuple[RuntimeModuleRegistrationSource, ...]:
-    """Load every Module registration source in one Skill in stable order."""
-
-    if type(skill_id) is not str or not _SKILL_ID_PATTERN.fullmatch(skill_id):
-        raise ValueError("invalid skill_id")
-    root = _checked_repo_entry(
-        project_root,
-        MODULE_REGISTRATION_HOST_ROOT
-        / skill_id
-        / MODULE_REGISTRATION_DIRECTORY,
-        label="Skill Runtime Module registration directory",
-        expected_kind="directory",
-    )
-    module_entries = tuple(root.iterdir())
-    if any(entry.is_symlink() for entry in module_entries):
-        raise ValueError(
-            "runtime_modules cannot contain symlinked Module directories"
-        )
-    module_ids = tuple(sorted(entry.name for entry in module_entries))
-    if not module_ids or any(
-        not (root / module_id).is_dir() for module_id in module_ids
-    ):
-        raise ValueError("runtime_modules may contain only Module directories")
-    return tuple(
-        load_runtime_module_registration(
-            project_root,
-            skill_id=skill_id,
-            module_id=module_id,
-        )
-        for module_id in module_ids
-    )
-
-
-def load_project_runtime_module_registrations(
-    project_root: Path,
-) -> tuple[RuntimeModuleRegistrationSource, ...]:
-    """Load every fixed Runtime Module registration in one repository."""
-
-    skill_root = _reject_symlink_path(
-        project_root,
-        MODULE_REGISTRATION_HOST_ROOT,
-        label="Skill registration host root",
-    )
-    if not skill_root.exists():
-        return ()
-    skill_root = _checked_repo_entry(
-        project_root,
-        MODULE_REGISTRATION_HOST_ROOT,
-        label="Skill registration host root",
-        expected_kind="directory",
-    )
-    skill_entries = tuple(skill_root.iterdir())
-    if any(entry.is_symlink() for entry in skill_entries):
-        raise ValueError("Skill registration host root cannot contain symlinks")
-    skill_ids = tuple(
-        sorted(
-            entry.name
-            for entry in skill_entries
-            if entry.is_dir() and (entry / MODULE_REGISTRATION_DIRECTORY).exists()
-        )
-    )
-    registrations: list[RuntimeModuleRegistrationSource] = []
-    for skill_id in skill_ids:
-        registrations.extend(
-            load_skill_runtime_module_registrations(
-                project_root,
-                skill_id=skill_id,
-            )
-        )
-    return tuple(registrations)
 
 
 __all__ = [
-    "MODULE_REGISTRATION_HOST_ROOT",
-    "MODULE_REGISTRATION_DIRECTORY",
-    "MODULE_PROMPT_FILENAME",
-    "MODULE_REGISTRATION_FILENAME",
+    "MODULE_AUTHORING_ROOT",
     "MODULE_REGISTRATION_SCHEMA_VERSION",
-    "SKILL_PROJECTION_FILENAME",
-    "RuntimeModuleRegistrationSource",
-    "load_project_runtime_module_registrations",
-    "load_runtime_module_registration",
-    "load_skill_runtime_module_registrations",
+    "ModuleRegistrationSource",
+    "load_module_registration",
 ]

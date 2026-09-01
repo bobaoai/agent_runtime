@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -56,9 +57,6 @@ from agent_runtime.contracts.ledger_record_definition import (
 from agent_runtime.contracts.registry_release_definition import (
     ModuleExecutionPurpose,
     OutputResolutionPolicy,
-    ReleaseAdmissionRecord,
-    ReleaseAdmissionState,
-    ReleaseSubjectKind,
 )
 from agent_runtime.execution.execution_authorization_coordination import (
     ExecutionAuthorizationController,
@@ -68,6 +66,7 @@ from agent_runtime.execution.execution_content_staging import InMemoryCellArtifa
 from agent_runtime.execution.execution_module_invocation import (
     AgentExecutionAdapterRegistry,
     ModuleExecutionAuthority,
+    _run_module,
     isolated_execution_scope_id,
     run_module,
     run_workflow_module,
@@ -86,6 +85,7 @@ from agent_runtime.invocation.invocation_workspace_preparation import (
 from agent_runtime.invocation.invocation_tool_definition import (
     ProviderToolDefinition,
 )
+from agent_runtime.inspection import build_runtime_execution_inspection
 from agent_runtime.invocation.invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     OUTPUT_SCHEMA_MARKER,
@@ -106,9 +106,17 @@ from agent_runtime.ledger.ledger_workflow_module_recording import (
     WorkflowModuleLedgerRecorder,
 )
 from agent_runtime.registry.registry_release_compilation import (
-    AgentModuleReleaseSpec,
-    candidate_admission_record,
+    AgentModuleReleaseCandidate,
+    BehaviorPolicyReleaseCandidate,
+    EvaluationPolicyReleaseCandidate,
+    ExecutionProfileReleaseSpec,
+    RetryPolicyReleaseCandidate,
     compile_agent_module_release,
+    compile_behavior_policy_release,
+    compile_evaluation_policy_release,
+    compile_execution_profile_release,
+    compile_retry_policy_release,
+    runtime_owned_policy_schema_assets,
 )
 from agent_runtime.registry.registry_release_registration import (
     RuntimeReleaseBundle,
@@ -151,86 +159,65 @@ def _compile_native_module(
     tool_policy: tuple[str, ...] = (),
     network_policy: str = "denied",
 ):
-    owner = tmp_path / "designDoc" / "owner.md"
-    owner.parent.mkdir()
-    owner.write_text(
-        "# Owner\n\nRegistered Module: `native_module`.\n",
-        encoding="utf-8",
+    del tmp_path
+    behavior_policy = compile_behavior_policy_release(
+        BehaviorPolicyReleaseCandidate(
+            policy_id="workflow_execution_isolated",
+            policy_version="v1",
+            context_isolation="workflow_execution_isolated",
+        )
     )
-    module_root = (
-        tmp_path
-        / ".claude"
-        / "skills"
-        / "native-skill"
-        / "runtime_modules"
-        / "native_module"
+    evaluation_policy = compile_evaluation_policy_release(
+        EvaluationPolicyReleaseCandidate(
+            policy_id="native",
+            policy_version="v1",
+            evaluation_mode="module_candidate",
+        )
     )
-    module_root.mkdir(parents=True)
-    schema_root = module_root / "schemas"
-    schema_root.mkdir()
-    (schema_root / "input.schema.json").write_text(
-        json.dumps(
-            {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "$id": "schema:native_input@v1",
-                "type": "object",
-                "properties": {"value": {"type": "string"}},
-                "required": ["value"],
-                "additionalProperties": False,
-            }
-        ),
-        encoding="utf-8",
+    retry_policy = compile_retry_policy_release(
+        RetryPolicyReleaseCandidate(
+            policy_id="bounded",
+            policy_version="v1",
+            max_attempts=3,
+        )
     )
-    (schema_root / "output.schema.json").write_text(
-        json.dumps(_OUTPUT_SCHEMA),
-        encoding="utf-8",
-    )
-    (module_root.parent.parent / "SKILL.md").write_text(
-        "# Native Skill\n\nManaged Module: `native_module`.\n",
-        encoding="utf-8",
-    )
-    (module_root / "prompt.md").write_text(
-        "Produce the native result.\n",
-        encoding="utf-8",
-    )
-    (module_root / "module_registration.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "runtime_module_registration_v2",
-                "skill_id": "native-skill",
-                "module_id": "native_module",
-                "owner_contract_path": "designDoc/owner.md",
-                "input_schema_ref": "schema:native_input@v1",
-                "input_schema_path": "schemas/input.schema.json",
-                "output_schema_ref": "schema:native_output@v1",
-                "output_schema_path": "schemas/output.schema.json",
-                "declared_operation_ids": list(declared_operation_ids),
-                "compatible_transport_kinds": [transport_kind],
-                "context_policy_ref": (
-                    "context-policy:workflow_execution_isolated@v1"
-                ),
-                "evaluation_policy_ref": "evaluation-policy:native@v1",
-                "retry_policy_ref": "retry-policy:bounded@v1",
-                "entry_policy": "workflow_bound",
-                "output_resolution_policy": output_resolution_policy.value,
-            }
-        ),
-        encoding="utf-8",
-    )
-    return compile_agent_module_release(
-        tmp_path,
-        AgentModuleReleaseSpec(
+    input_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "schema:native_input@v1",
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    compiled = compile_agent_module_release(
+        AgentModuleReleaseCandidate(
             module_id="native_module",
-            skill_id="native-skill",
-            skill_projection_path=(
-                ".claude/skills/native-skill/runtime_modules/"
-                "native_module/prompt.md"
-            ),
+            module_version="candidate_v1",
             owner_contract_ref="repo-file:designDoc/owner.md",
-            owner_contract_path="designDoc/owner.md",
+            owner_contract_content=(
+                "# Owner\n\nRegistered Module: `native_module`.\n"
+            ),
             input_schema_ref="schema:native_input@v1",
+            input_schema_document=json.dumps(input_schema),
             output_schema_ref="schema:native_output@v1",
+            output_schema_document=json.dumps(_OUTPUT_SCHEMA),
+            instruction_source_ref=(
+                "host-source:native-skill/native_module/prompt@candidate_v1"
+            ),
+            instruction_text="Produce the native result.\n",
             declared_operation_ids=declared_operation_ids,
+            compatible_transport_kinds=(transport_kind,),
+            behavior_policy_ref=behavior_policy.release_ref,
+            behavior_policy_sha256=behavior_policy.release_sha256,
+            evaluation_policy_ref=evaluation_policy.release_ref,
+            evaluation_policy_sha256=evaluation_policy.release_sha256,
+            retry_policy_ref=retry_policy.release_ref,
+            retry_policy_sha256=retry_policy.release_sha256,
+            output_resolution_policy=output_resolution_policy,
+        )
+    )
+    profile = compile_execution_profile_release(
+        ExecutionProfileReleaseSpec(
             execution_profile_id=execution_profile_id,
             executor_adapter_id=executor_adapter_id,
             executor_adapter_revision=executor_adapter_revision,
@@ -238,27 +225,26 @@ def _compile_native_module(
             provider_id=provider_id,
             model_id=model_id,
             reasoning_profile=reasoning_profile,
-            output_constraint_mode=NATIVE_STRUCTURED_OUTPUT,
-            timeout_seconds=timeout_seconds,
             execution_mode=execution_mode,
-            semantic_input_delivery_mode=semantic_input_delivery_mode,
+            semantic_input_delivery_mode=(semantic_input_delivery_mode),
             attempt_workspace_policy=attempt_workspace_policy,
             gateway_access_reasons=gateway_access_reasons,
+            output_constraint_mode=NATIVE_STRUCTURED_OUTPUT,
             tool_policy=tool_policy,
             network_policy=network_policy,
-            input_schema_path=(
-                ".claude/skills/native-skill/runtime_modules/native_module/"
-                "schemas/input.schema.json"
-            ),
-            output_schema_path=(
-                ".claude/skills/native-skill/runtime_modules/native_module/"
-                "schemas/output.schema.json"
-            ),
-            compatible_transport_kinds=(transport_kind,),
-            evaluation_policy_ref="evaluation-policy:native@v1",
-            retry_policy_ref="retry-policy:bounded@v1",
-            output_resolution_policy=output_resolution_policy,
-        ),
+            timeout_seconds=timeout_seconds,
+            release_version="candidate_v1",
+        )
+    )
+    return SimpleNamespace(
+        schema_assets=compiled.schema_assets,
+        prompt_components=compiled.prompt_components,
+        prompt_bundle=compiled.prompt_bundle,
+        module=compiled.module,
+        execution_profile=profile,
+        behavior_policy=behavior_policy,
+        evaluation_policy=evaluation_policy,
+        retry_policy=retry_policy,
     )
 
 
@@ -267,24 +253,20 @@ _RUN_PROVIDER_INTEGRATION = os.environ.get("RUN_PROVIDER_INTEGRATION") == "1"
 
 
 def _register_compiled_for_evaluation(compiled) -> RuntimeReleaseRegistry:
-    admissions = tuple(
-        candidate_admission_record(record, recorded_at_utc=_TEST_TIME)
-        for record in (
-            *compiled.prompt_components,
-            compiled.prompt_bundle,
-            compiled.execution_profile,
-            compiled.module,
-        )
-    )
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(
         RuntimeReleaseBundle(
-            schema_assets=compiled.schema_assets,
+            schema_assets=(
+                *runtime_owned_policy_schema_assets(),
+                *compiled.schema_assets,
+            ),
+            behavior_policies=(compiled.behavior_policy,),
+            evaluation_policies=(compiled.evaluation_policy,),
+            retry_policies=(compiled.retry_policy,),
             prompt_components=compiled.prompt_components,
             prompt_bundles=(compiled.prompt_bundle,),
             execution_profiles=(compiled.execution_profile,),
             modules=(compiled.module,),
-            admissions=admissions,
         )
     )
     return registry
@@ -872,6 +854,306 @@ def test_workflow_module_replays_after_resolution_commit_crash(
             workflow_request.workflow_execution_id
         ).records_of_type(ModuleOutputResolutionRecord)
     ) == 1
+
+
+def test_workflow_module_retry_executes_two_attempts_under_one_variant(
+    tmp_path: Path,
+) -> None:
+    """A Retry Policy admits a new Attempt, not a replacement Module Run."""
+
+    compiled = _stub_compiled(tmp_path)
+    artifact_host = InMemoryCellArtifactStore()
+    registry, adapters, adapter = _registered_stub(
+        compiled,
+        artifact_host,
+        terminal_status="failed",
+    )
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="workflow_retry",
+    )
+    input_content = b'{"value":"workflow_retry_input"}'
+    input_ref = artifact_host.put_bytes(
+        artifact_kind_id="native_input",
+        schema_version="v1",
+        schema_ref=compiled.module.input_schema_ref,
+        schema_sha256=compiled.module.input_schema_sha256,
+        media_type="application/json",
+        content=input_content,
+        idempotency_key="workflow_retry_input",
+        logical_name="task_input",
+    )
+    input_binding = ModuleInputBinding(
+        logical_name="task_input",
+        input_ref=input_ref.artifact_ref,
+        input_sha256=input_ref.artifact_sha256,
+        schema_ref=compiled.module.input_schema_ref,
+        schema_sha256=compiled.module.input_schema_sha256,
+        media_type="application/json",
+    )
+    workflow_execution_id = "execution_workflow_retry"
+    module_run_id = "module_run_workflow_retry"
+
+    def request_for_attempt(
+        ordinal: int,
+        *,
+        parent_attempt_id: str | None,
+    ) -> WorkflowModuleExecutionRequest:
+        return WorkflowModuleExecutionRequest.build(
+            request_id=f"request_workflow_retry_{ordinal}",
+            purpose=ModuleExecutionPurpose.EVALUATION,
+            workflow_execution_id=workflow_execution_id,
+            dispatch_id=f"dispatch_workflow_retry_{ordinal}",
+            workflow_node_id="state_native_module",
+            module_run_id=module_run_id,
+            module_release_ref=compiled.module.release_ref,
+            module_release_sha256=compiled.module.release_sha256,
+            input_package_ref=input_ref.artifact_ref,
+            input_package_sha256=input_ref.artifact_sha256,
+            inputs=(input_binding,),
+            variants=(
+                ModuleVariantRequest(
+                    arm_key="default",
+                    replicate_index=0,
+                    execution_profile_ref=(
+                        compiled.execution_profile.release_ref
+                    ),
+                    execution_profile_sha256=(
+                        compiled.execution_profile.release_sha256
+                    ),
+                    prompt_envelope_ref=prompt_ref.artifact_ref,
+                    prompt_envelope_sha256=prompt_ref.artifact_sha256,
+                ),
+            ),
+            idempotency_key=f"idempotency_workflow_retry_{ordinal}",
+            attempt_ordinal=ordinal,
+            parent_attempt_id=parent_attempt_id,
+        )
+
+    class _AttemptContentStore:
+        def __init__(self) -> None:
+            self.staged = {}
+
+        def stage_content(self, content):
+            content.validate()
+            self.staged[content.content_ref] = content
+            return content
+
+        def commit_content(self, content):
+            raise AssertionError("Attempt outputs must stage before finalization")
+
+        def contains(self, output) -> bool:
+            content = self.staged.get(output.output_ref)
+            return (
+                content is not None
+                and content.content_sha256 == output.output_sha256
+            )
+
+    content_store = _AttemptContentStore()
+    record_store = InMemoryRuntimeExecutionRecordStore(
+        execution_output_integrity_check=content_store.contains
+    )
+    record_store.commit(
+        RuntimeRecordBatch(
+            workflow_execution_id=workflow_execution_id,
+            transaction_id="transaction_workflow_retry_bootstrap",
+            records=(
+                WorkflowExecutionRecord(
+                    workflow_execution_id=workflow_execution_id,
+                    workflow_id="workflow_native_module",
+                    workflow_contract_version="v1",
+                    tenant_id="tenant_test",
+                    cell_id="cell_test",
+                    principal_id="principal_test",
+                    execution_release_ref="execution-release:native-workflow@v1",
+                    graph_sha256="a" * 64,
+                    runtime_execution_binding_ref=(
+                        "runtime-binding:native-workflow@v1"
+                    ),
+                    runtime_execution_binding_sha256="b" * 64,
+                    authorization_decision_ref=(
+                        "authorization-decision:native-workflow@v1"
+                    ),
+                    authorization_decision_sha256="c" * 64,
+                    execution_principal_delegation_ref=(
+                        "delegation:native-workflow@v1"
+                    ),
+                    execution_principal_delegation_sha256="d" * 64,
+                    entitlement_snapshot_ref="entitlement:native-workflow@v1",
+                    entitlement_snapshot_hash="e" * 64,
+                    execution_input_package_refs=(
+                        input_ref.artifact_ref,
+                    ),
+                    execution_input_package_sha256=input_ref.artifact_sha256,
+                    recorded_at_utc=_TEST_TIME,
+                ),
+                ExecutionInputRef(
+                    execution_input_id="execution_input_workflow_retry",
+                    workflow_execution_id=workflow_execution_id,
+                    input_type_id="native_input",
+                    schema_version="v1",
+                    input_ref=input_ref.artifact_ref,
+                    input_sha256=input_ref.artifact_sha256,
+                    byte_size=len(input_content),
+                    media_type="application/json",
+                    recorded_at_utc=_TEST_TIME,
+                    logical_name="task_input",
+                ),
+            ),
+        )
+    )
+    recorder = WorkflowModuleLedgerRecorder(
+        WorkflowModuleLedgerBinding(
+            record_store=record_store,
+            entitlement_snapshot_hash="e" * 64,
+            claim_token_secret=b"workflow-ledger-test-secret-32-bytes",
+            content_store=content_store,
+        )
+    )
+
+    first_request = request_for_attempt(1, parent_attempt_id=None)
+    authority, _ = _evaluation_authority(
+        registry,
+        first_request,
+        scope_id=workflow_execution_id,
+    )
+    first_result = run_workflow_module(
+        first_request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        workflow_ledger=recorder,
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+    assert first_result.attempts[0].status == "failed"
+    assert first_result.resolution is None
+
+    skipped_retry = request_for_attempt(
+        3,
+        parent_attempt_id=first_result.attempts[0].attempt_id,
+    )
+    with pytest.raises(
+        ValueError,
+        match="contiguous durable predecessor",
+    ):
+        run_workflow_module(
+            skipped_retry,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            workflow_ledger=recorder,
+            authority=authority,
+            clock=lambda: "2026-08-09T12:00:00.500000Z",
+        )
+    assert adapter.calls == 1
+
+    adapter._terminal_status = "completed"
+    second_request = request_for_attempt(
+        2,
+        parent_attempt_id=first_result.attempts[0].attempt_id,
+    )
+    second_result = run_workflow_module(
+        second_request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        workflow_ledger=recorder,
+        authority=authority,
+        clock=lambda: "2026-08-09T12:00:01Z",
+    )
+    assert second_result.attempts[0].status == "completed"
+    assert second_result.resolution is not None
+    assert adapter.calls == 2
+
+    trace = record_store.load_trace(workflow_execution_id)
+    assert len(trace.records_of_type(WorkflowModuleRunRecord)) == 1
+    assert len(
+        trace.records_of_type(WorkflowModuleExecutionVariantRecord)
+    ) == 1
+    attempts = trace.records_of_type(WorkflowAttemptRecord)
+    assert [attempt.attempt_ordinal for attempt in attempts] == [1, 2]
+    assert [attempt.status for attempt in attempts] == ["failed", "completed"]
+    assert attempts[1].parent_attempt_id == attempts[0].attempt_id
+    assert len(trace.records_of_type(ModelCallRecord)) == 2
+    usage = trace.records_of_type(UsageEvent)
+    assert [(row.input_tokens, row.output_tokens) for row in usage] == [
+        (3, 2),
+        (3, 2),
+    ]
+    inspection = build_runtime_execution_inspection(trace)
+    assert inspection["modules"][0]["module_run"]["status"] == "completed"
+    assert [
+        attempt["status"] for attempt in inspection["modules"][0]["attempts"]
+    ] == ["failed", "completed"]
+
+    wrong_parent_retry = request_for_attempt(
+        3,
+        parent_attempt_id=first_result.attempts[0].attempt_id,
+    )
+    with pytest.raises(
+        ValueError,
+        match="differs from durable predecessor",
+    ):
+        run_workflow_module(
+            wrong_parent_retry,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            workflow_ledger=recorder,
+            authority=authority,
+            clock=lambda: "2026-08-09T12:00:01.500000Z",
+        )
+
+    completed_parent_retry = request_for_attempt(
+        3,
+        parent_attempt_id=second_result.attempts[0].attempt_id,
+    )
+    with pytest.raises(
+        ValueError,
+        match="requires a failed durable predecessor",
+    ):
+        run_workflow_module(
+            completed_parent_retry,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            workflow_ledger=recorder,
+            authority=authority,
+            clock=lambda: "2026-08-09T12:00:01.750000Z",
+        )
+    assert adapter.calls == 2
+
+    over_limit = request_for_attempt(
+        4,
+        parent_attempt_id=second_result.attempts[0].attempt_id,
+    )
+    with pytest.raises(
+        ValueError,
+        match="Attempt ordinal exceeds Retry Policy max_attempts",
+    ):
+        run_workflow_module(
+            over_limit,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            workflow_ledger=recorder,
+            authority=authority,
+            clock=lambda: "2026-08-09T12:00:02Z",
+        )
+    assert adapter.calls == 2
+    assert len(
+        record_store.load_trace(workflow_execution_id).records_of_type(
+            WorkflowAttemptStartedRecord
+        )
+    ) == 2
 
 
 def _failure_detail(run, artifact_host) -> dict[str, object]:
@@ -1786,6 +2068,42 @@ def test_wrong_adapter_revision_is_zero_invocation(tmp_path: Path) -> None:
     assert adapter.calls == 0
 
 
+def test_module_candidate_policy_rejects_non_candidate_purpose_before_invocation(
+    tmp_path: Path,
+) -> None:
+    compiled = _stub_compiled(tmp_path)
+    artifact_host = InMemoryCellArtifactStore()
+    registry, adapters, adapter = _registered_stub(compiled, artifact_host)
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="evaluation_policy_purpose",
+    )
+    request = _evaluation_request(
+        compiled,
+        prompt_ref,
+        suffix="evaluation_policy_purpose",
+        purpose=ModuleExecutionPurpose.REPLAY,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="module_candidate Evaluation Policy requires",
+    ):
+        _run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            authority=None,
+            workflow_ledger=None,
+            clock=lambda: _TEST_TIME,
+        )
+
+    assert adapter.calls == 0
+
+
 def test_descriptor_capability_mismatch_is_zero_invocation(
     tmp_path: Path,
 ) -> None:
@@ -1945,9 +2263,53 @@ def _operation_free_release(
         ExecutionProfileRelease,
         ModuleEntryPolicy,
         ModuleKind,
-        RuntimeModuleRelease,
+        ModuleRelease,
+        SchemaAssetRelease,
     )
 
+    behavior_policy = compile_behavior_policy_release(
+        BehaviorPolicyReleaseCandidate(
+            policy_id="operation_free_isolated",
+            policy_version="v1",
+            context_isolation="workflow_execution_isolated",
+        )
+    )
+    evaluation_policy = compile_evaluation_policy_release(
+        EvaluationPolicyReleaseCandidate(
+            policy_id="operation_free",
+            policy_version="v1",
+            evaluation_mode="deterministic_candidate",
+        )
+    )
+    retry_policy = compile_retry_policy_release(
+        RetryPolicyReleaseCandidate(
+            policy_id="operation_free",
+            policy_version="v1",
+            max_attempts=1,
+        )
+    )
+    input_schema = SchemaAssetRelease.build(
+        schema_asset_id="operation_free_input",
+        schema_asset_version="v1",
+        release_ref="schema:operation_free_input@v1",
+        schema_document={
+            "$id": "schema:operation_free_input@v1",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": True,
+        },
+    )
+    output_schema = SchemaAssetRelease.build(
+        schema_asset_id="operation_free_output",
+        schema_asset_version="v1",
+        release_ref="schema:operation_free_output@v1",
+        schema_document={
+            "$id": "schema:operation_free_output@v1",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": True,
+        },
+    )
     profile = ExecutionProfileRelease.build(
         execution_profile_id="profile_operation_free",
         execution_profile_version="v1",
@@ -1965,48 +2327,47 @@ def _operation_free_release(
         output_constraint_mode="prompt_only_json",
         tool_policy=(),
         network_policy="denied",
-        context_policy_ref="context-policy:operation-free@v1",
-        context_policy_sha256="a" * 64,
         timeout_seconds=60,
-        max_attempts=1,
     )
-    module = RuntimeModuleRelease.build(
+    module = ModuleRelease.build(
         module_id="module_operation_free",
         module_version="v1",
         release_ref="runtime-module:module-operation-free@v1",
         module_kind=ModuleKind.DETERMINISTIC,
         owner_contract_ref="contract:operation-free@v1",
         owner_contract_sha256="a" * 64,
-        source_skill_id=None,
         executable_ref="callable:operation-free@v1",
         executable_sha256="a" * 64,
-        input_schema_ref="schema:operation_free_input@v1",
-        input_schema_sha256="a" * 64,
-        output_schema_ref="schema:operation_free_output@v1",
-        output_schema_sha256="a" * 64,
+        input_schema_ref=input_schema.release_ref,
+        input_schema_sha256=input_schema.schema_sha256,
+        output_schema_ref=output_schema.release_ref,
+        output_schema_sha256=output_schema.schema_sha256,
         prompt_bundle_ref=None,
         prompt_bundle_sha256=None,
         declared_operation_ids=(),
-        context_policy_ref="context-policy:operation-free@v1",
-        context_policy_sha256="a" * 64,
-        evaluation_policy_ref="evaluation-policy:operation-free@v1",
-        evaluation_policy_sha256="a" * 64,
-        retry_policy_ref="retry-policy:operation-free@v1",
-        retry_policy_sha256="a" * 64,
+        behavior_policy_ref=behavior_policy.release_ref,
+        behavior_policy_sha256=behavior_policy.release_sha256,
+        evaluation_policy_ref=evaluation_policy.release_ref,
+        evaluation_policy_sha256=evaluation_policy.release_sha256,
+        retry_policy_ref=retry_policy.release_ref,
+        retry_policy_sha256=retry_policy.release_sha256,
         compatible_transport_kinds=(transport_kind,),
         entry_policy=ModuleEntryPolicy.STANDALONE_ALLOWED,
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
     )
-    admissions = tuple(
-        candidate_admission_record(record, recorded_at_utc=_TEST_TIME)
-        for record in (profile, module)
-    )
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(
         RuntimeReleaseBundle(
+            schema_assets=(
+                *runtime_owned_policy_schema_assets(),
+                input_schema,
+                output_schema,
+            ),
+            behavior_policies=(behavior_policy,),
+            evaluation_policies=(evaluation_policy,),
+            retry_policies=(retry_policy,),
             execution_profiles=(profile,),
             modules=(module,),
-            admissions=admissions,
         )
     )
     return registry, module, profile
@@ -3315,16 +3676,7 @@ def test_codex_native_structured_output_executes_end_to_end(
     monkeypatch,
 ) -> None:
     compiled = _compile_native_module(tmp_path)
-    registry = RuntimeReleaseRegistry()
-    registry.register_bundle(
-        RuntimeReleaseBundle(
-            schema_assets=compiled.schema_assets,
-            prompt_components=compiled.prompt_components,
-            prompt_bundles=(compiled.prompt_bundle,),
-            execution_profiles=(compiled.execution_profile,),
-            modules=(compiled.module,),
-        )
-    )
+    registry = _register_compiled_for_evaluation(compiled)
     artifact_host = InMemoryCellArtifactStore()
     envelope = build_inline_provider_prompt(
         compiled_static_body=compiled.prompt_bundle.compiled_static_body,
@@ -3500,41 +3852,26 @@ def test_adapters_no_longer_reference_the_removed_prompt_bundle_local() -> None:
         assert "prompt_bundle" not in loaded_names, module_name
 
 
-def test_execution_profile_release_pins_bounded_max_attempts() -> None:
+def test_retry_policy_release_pins_bounded_max_attempts() -> None:
     from agent_runtime.contracts.registry_release_definition import (
-        ExecutionProfileRelease,
+        RetryPolicyRelease,
     )
 
-    def _profile_fields(max_attempts: int) -> dict:
-        return dict(
-            execution_profile_id="profile_bounded_attempts",
-            execution_profile_version="v1",
-            release_ref="execution-profile:profile-bounded-attempts@v1",
-            executor_adapter_id="claude_agent_sdk",
-            executor_adapter_revision="v1",
-            transport_kind="in_process",
-            provider_id="anthropic",
-            model_id="model_stub",
-            reasoning_profile="none",
-            execution_mode="tool_free",
-            semantic_input_delivery_mode="inline",
-            attempt_workspace_policy="none",
-            gateway_access_reasons=(),
-            output_constraint_mode="prompt_only_json",
-            tool_policy=(),
-            network_policy="denied",
-            context_policy_ref="context-policy:bounded-attempts@v1",
-            context_policy_sha256="a" * 64,
-            timeout_seconds=60,
-            max_attempts=max_attempts,
+    def compile_policy(max_attempts: int):
+        return compile_retry_policy_release(
+            RetryPolicyReleaseCandidate(
+                policy_id="bounded_attempts",
+                policy_version="v1",
+                max_attempts=max_attempts,
+            )
         )
 
-    profile = ExecutionProfileRelease.build(**_profile_fields(3))
-    assert profile.max_attempts == 3
-    rebuilt = ExecutionProfileRelease.from_dict(profile.as_dict())
-    assert rebuilt.max_attempts == 3
-    assert rebuilt.release_sha256 == profile.release_sha256
+    policy = compile_policy(3)
+    assert policy.policy_document()["max_attempts"] == 3
+    rebuilt = RetryPolicyRelease.from_dict(policy.as_dict())
+    assert rebuilt.policy_document()["max_attempts"] == 3
+    assert rebuilt.release_sha256 == policy.release_sha256
 
     for out_of_bounds in (0, 101):
         with pytest.raises(ValueError, match="max_attempts"):
-            ExecutionProfileRelease.build(**_profile_fields(out_of_bounds))
+            compile_policy(out_of_bounds)

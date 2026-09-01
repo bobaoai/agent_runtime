@@ -1,0 +1,120 @@
+{
+  "case_id": "digestion_evidence_router_module_candidate_v1",
+  "policies": {
+    "behavior": {
+      "policy_id": "workflow_execution_isolated",
+      "policy_version": "v1",
+      "context_isolation": "workflow_execution_isolated"
+    },
+    "evaluation": {
+      "policy_id": "module_candidate",
+      "policy_version": "v1",
+      "evaluation_mode": "module_candidate"
+    },
+    "retry": {
+      "policy_id": "bounded_candidate",
+      "policy_version": "v1",
+      "max_attempts": 3
+    }
+  },
+  "module": {
+    "module_id": "digestion_evidence_router",
+    "module_version": "candidate_v1",
+    "owner_contract_ref": "host-content:digestion/source-to-evidence@v1",
+    "owner_contract_content": "# Digestion Evidence Router\n\nSelect every useful registered expertise and lens pair for one frozen Source.\n",
+    "instruction_source_ref": "host-content:digestion/evidence-router/instruction@v1",
+    "instruction_text": "Read the supplied Source and authorized Expertise catalog. Return every useful registered expertise and lens pair. Do not invent identities or write Evidence.",
+    "input_schema_ref": "schema:digestion_evidence_router_input@v1",
+    "input_schema": {
+      "$id": "schema:digestion_evidence_router_input@v1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "source_content": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authorized_expertise": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expertise_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "expertise_id",
+              "description"
+            ]
+          }
+        }
+      },
+      "required": [
+        "source_content",
+        "authorized_expertise"
+      ],
+      "type": "object"
+    },
+    "output_schema_ref": "schema:digestion_evidence_router_output@v1",
+    "output_schema": {
+      "$id": "schema:digestion_evidence_router_output@v1",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "selected_routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expertise_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "lens_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "expertise_id",
+              "lens_id",
+              "rationale"
+            ]
+          }
+        },
+        "unmatched_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "selected_routes",
+        "unmatched_reason"
+      ],
+      "type": "object"
+    },
+    "declared_operation_ids": [
+      "invoke_model"
+    ],
+    "compatible_transport_kinds": [
+      "claude_agent_sdk",
+      "codex_cli"
+    ],
+    "entry_policy": "workflow_bound",
+    "output_resolution_policy": "evaluated_single"
+  }
+}

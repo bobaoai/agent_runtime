@@ -21,7 +21,8 @@ from agent_runtime.contracts.registry_release_definition import (
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
-    RuntimeModuleRelease,
+    ModuleRelease,
+    SchemaAssetRelease,
     WorkflowEdge,
     WorkflowNodeBinding,
     WorkflowNodeKind,
@@ -53,39 +54,92 @@ from agent_runtime.registry.registry_release_registration import (
     RuntimeReleaseBundle,
     RuntimeReleaseRegistry,
 )
+from agent_runtime.registry.registry_release_compilation import (
+    BehaviorPolicyReleaseCandidate,
+    EvaluationPolicyReleaseCandidate,
+    RetryPolicyReleaseCandidate,
+    compile_behavior_policy_release,
+    compile_evaluation_policy_release,
+    compile_retry_policy_release,
+    runtime_owned_policy_schema_assets,
+)
 
 
-def _module() -> RuntimeModuleRelease:
-    return RuntimeModuleRelease.build(
+_BEHAVIOR_POLICY = compile_behavior_policy_release(
+    BehaviorPolicyReleaseCandidate(
+        policy_id="parallel_isolated",
+        policy_version="v1",
+        context_isolation="workflow_execution_isolated",
+    )
+)
+_EVALUATION_POLICY = compile_evaluation_policy_release(
+    EvaluationPolicyReleaseCandidate(
+        policy_id="parallel_none",
+        policy_version="v1",
+        evaluation_mode="none",
+    )
+)
+_RETRY_POLICY = compile_retry_policy_release(
+    RetryPolicyReleaseCandidate(
+        policy_id="parallel_bounded",
+        policy_version="v1",
+        max_attempts=3,
+    )
+)
+_PARALLEL_INPUT_SCHEMA = SchemaAssetRelease.build(
+    schema_asset_id="parallel_input",
+    schema_asset_version="v1",
+    release_ref="schema:parallel_input@v1",
+    schema_document={
+        "$id": "schema:parallel_input@v1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": True,
+    },
+)
+_PARALLEL_OUTPUT_SCHEMA = SchemaAssetRelease.build(
+    schema_asset_id="parallel_output",
+    schema_asset_version="v1",
+    release_ref="schema:parallel_output@v1",
+    schema_document={
+        "$id": "schema:parallel_output@v1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": True,
+    },
+)
+
+
+def _module() -> ModuleRelease:
+    return ModuleRelease.build(
         module_id="parallel_test_module",
         module_version="1.0.0",
         release_ref="runtime-module:parallel_test_module@1",
         module_kind=ModuleKind.DETERMINISTIC,
         owner_contract_ref="design-doc:parallel-test@1",
         owner_contract_sha256="1" * 64,
-        source_skill_id=None,
         executable_ref="python:tests.parallel_test_module",
         executable_sha256="2" * 64,
-        input_schema_ref="schema:parallel-input@1",
-        input_schema_sha256="3" * 64,
-        output_schema_ref="schema:parallel-output@1",
-        output_schema_sha256="4" * 64,
+        input_schema_ref=_PARALLEL_INPUT_SCHEMA.release_ref,
+        input_schema_sha256=_PARALLEL_INPUT_SCHEMA.schema_sha256,
+        output_schema_ref=_PARALLEL_OUTPUT_SCHEMA.release_ref,
+        output_schema_sha256=_PARALLEL_OUTPUT_SCHEMA.schema_sha256,
         prompt_bundle_ref=None,
         prompt_bundle_sha256=None,
         declared_operation_ids=(),
-        context_policy_ref="context-policy:isolated@1",
-        context_policy_sha256="5" * 64,
-        evaluation_policy_ref="evaluation-policy:none@1",
-        evaluation_policy_sha256="6" * 64,
-        retry_policy_ref="retry-policy:bounded@1",
-        retry_policy_sha256="7" * 64,
+        behavior_policy_ref=_BEHAVIOR_POLICY.release_ref,
+        behavior_policy_sha256=_BEHAVIOR_POLICY.release_sha256,
+        evaluation_policy_ref=_EVALUATION_POLICY.release_ref,
+        evaluation_policy_sha256=_EVALUATION_POLICY.release_sha256,
+        retry_policy_ref=_RETRY_POLICY.release_ref,
+        retry_policy_sha256=_RETRY_POLICY.release_sha256,
         compatible_transport_kinds=("in_process_test",),
         entry_policy=ModuleEntryPolicy.WORKFLOW_BOUND,
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
     )
 
 
-def _module_node(node_id: str, module: RuntimeModuleRelease) -> WorkflowNodeBinding:
+def _module_node(node_id: str, module: ModuleRelease) -> WorkflowNodeBinding:
     return WorkflowNodeBinding(
         node_id=node_id,
         node_kind=WorkflowNodeKind.MODULE,
@@ -96,7 +150,25 @@ def _module_node(node_id: str, module: RuntimeModuleRelease) -> WorkflowNodeBind
     )
 
 
-def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
+def _release_bundle(
+    module: ModuleRelease,
+    workflow: WorkflowRelease,
+) -> RuntimeReleaseBundle:
+    return RuntimeReleaseBundle(
+        schema_assets=(
+            *runtime_owned_policy_schema_assets(),
+            _PARALLEL_INPUT_SCHEMA,
+            _PARALLEL_OUTPUT_SCHEMA,
+        ),
+        behavior_policies=(_BEHAVIOR_POLICY,),
+        evaluation_policies=(_EVALUATION_POLICY,),
+        retry_policies=(_RETRY_POLICY,),
+        modules=(module,),
+        workflows=(workflow,),
+    )
+
+
+def _workflow(module: ModuleRelease) -> WorkflowRelease:
     return WorkflowRelease.build(
         workflow_id="parallel_review",
         workflow_version="1.0.0",
@@ -163,7 +235,7 @@ def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
     )
 
 
-def _workflow_with_prelude(module: RuntimeModuleRelease) -> WorkflowRelease:
+def _workflow_with_prelude(module: ModuleRelease) -> WorkflowRelease:
     base = _workflow(module)
     return WorkflowRelease.build(
         workflow_id="parallel_review_with_prelude",
@@ -364,7 +436,7 @@ def _coordinator(
     module = _module()
     workflow = _workflow(module)
     registry = RuntimeReleaseRegistry()
-    registry.register_bundle(RuntimeReleaseBundle(modules=(module,), workflows=(workflow,)))
+    registry.register_bundle(_release_bundle(module, workflow))
     cursor = _Cursor(workflow)
     bridge = _Bridge(fail_fidelity_once=fail_fidelity_once)
     return (
@@ -422,7 +494,7 @@ def test_parallel_group_is_persisted_and_projected_for_inspection() -> None:
     module = _module()
     workflow = _workflow(module)
     registry = RuntimeReleaseRegistry()
-    registry.register_bundle(RuntimeReleaseBundle(modules=(module,), workflows=(workflow,)))
+    registry.register_bundle(_release_bundle(module, workflow))
 
     rows = serialize_registry_tables(registry.snapshot())
     inventory = build_runtime_release_inventory(registry)
@@ -471,7 +543,7 @@ def test_parallel_group_waits_for_next_drive_instead_of_partial_dispatch() -> No
     workflow = _workflow_with_prelude(module)
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(
-        RuntimeReleaseBundle(modules=(module,), workflows=(workflow,))
+        _release_bundle(module, workflow)
     )
     cursor = _Cursor(workflow)
     bridge = _Bridge()
@@ -516,7 +588,7 @@ def test_committed_parallel_wait_blocks_persistent_sibling_failure_on_replay() -
     workflow = _workflow(module)
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(
-        RuntimeReleaseBundle(modules=(module,), workflows=(workflow,))
+        _release_bundle(module, workflow)
     )
     cursor = _Cursor(workflow)
 
@@ -576,7 +648,7 @@ def test_committed_parallel_wait_precedes_sibling_retry_scan_exhaustion() -> Non
     workflow = _workflow(module)
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(
-        RuntimeReleaseBundle(modules=(module,), workflows=(workflow,))
+        _release_bundle(module, workflow)
     )
     cursor = _Cursor(workflow)
 

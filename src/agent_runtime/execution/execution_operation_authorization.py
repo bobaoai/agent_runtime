@@ -20,7 +20,7 @@ from ..contracts.execution_operation_definition import (
     OperationGrantBindingRecord,
     ProductOperationAuthorizationResult,
 )
-from ..contracts.registry_release_definition import RuntimeModuleRelease
+from ..contracts.registry_release_definition import ModuleRelease
 
 
 def _utc_now() -> str:
@@ -124,7 +124,7 @@ class RuntimeAuthorizationCoordinator:
         request: OperationAuthorizationRequest,
         execution_binding: ExecutionAuthorizationBinding,
         status_evidence: ExecutionAuthorizationStatusEvidence,
-        module_release: RuntimeModuleRelease,
+        module_release: ModuleRelease,
     ) -> BoundOperationAuthorization:
         """Resolve one exact Product result and bind an allow before Gateway use."""
 
@@ -138,8 +138,8 @@ class RuntimeAuthorizationCoordinator:
             raise ValueError(
                 "status_evidence must be exact ExecutionAuthorizationStatusEvidence"
             )
-        if type(module_release) is not RuntimeModuleRelease:
-            raise ValueError("module_release must be an exact RuntimeModuleRelease")
+        if type(module_release) is not ModuleRelease:
+            raise ValueError("module_release must be an exact ModuleRelease")
 
         request.validate()
         execution_binding.validate()
@@ -258,7 +258,7 @@ class RuntimeAuthorizationCoordinator:
         request: OperationAuthorizationRequest,
         execution_binding: ExecutionAuthorizationBinding,
         status_evidence: ExecutionAuthorizationStatusEvidence,
-        module_release: RuntimeModuleRelease,
+        module_release: ModuleRelease,
     ) -> None:
         if (
             request.workflow_execution_id

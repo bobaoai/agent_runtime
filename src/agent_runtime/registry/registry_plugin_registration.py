@@ -25,6 +25,7 @@ from ..contracts.durability_topology_definition import (
 )
 from .registry_release_registration import (
     RuntimeReleaseBundle,
+    RuntimeReleaseRegistrationResult,
     RuntimeReleaseRegistry,
 )
 
@@ -45,7 +46,10 @@ class WorkflowRegistrationSink(Protocol):
 class RuntimeReleaseRegistrationSink(Protocol):
     """Minimal target-model registry capability required by a Module plugin."""
 
-    def register_bundle(self, bundle: RuntimeReleaseBundle) -> None:
+    def register_bundle(
+        self,
+        bundle: RuntimeReleaseBundle,
+    ) -> RuntimeReleaseRegistrationResult:
         """Atomically register one dependency-closed target-model bundle."""
 
 
@@ -120,11 +124,11 @@ def register_runtime_plugin(
 def register_runtime_module_plugin(
     registry: RuntimeReleaseRegistrationSink,
     plugin: RuntimeModulePlugin,
-) -> None:
+) -> RuntimeReleaseRegistrationResult:
     """Validate and atomically install one explicitly loaded Module plugin."""
 
     plugin.validate()
-    registry.register_bundle(plugin.release_bundle)
+    return registry.register_bundle(plugin.release_bundle)
 
 
 __all__ = [

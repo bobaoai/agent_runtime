@@ -27,7 +27,6 @@ from ..foundation.foundation_contract_validation import (
 
 
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}$")
-_SKILL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _MEDIA_TYPE_PATTERN = re.compile(
     r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$"
 )
@@ -120,15 +119,20 @@ class OutputResolutionPolicy(StrEnum):
 class ReleaseSubjectKind(StrEnum):
     """Persisted release family governed by an admission record."""
 
+    SCHEMA_ASSET = "schema_asset"
     PROMPT_COMPONENT = "prompt_component"
     PROMPT_BUNDLE = "prompt_bundle"
+    BEHAVIOR_POLICY = "behavior_policy"
+    EVALUATION_POLICY = "evaluation_policy"
+    RETRY_POLICY = "retry_policy"
+    EXECUTION_VARIANT_POLICY = "execution_variant_policy"
     EXECUTION_PROFILE = "execution_profile"
     RUNTIME_MODULE = "runtime_module"
     WORKFLOW = "workflow"
 
 
-class ReleaseAdmissionState(StrEnum):
-    """Append-only admission state of one exact immutable release."""
+class LegacyReleaseAdmissionState(StrEnum):
+    """Retired v1 state decoded only while migrating predecessor rows."""
 
     CANDIDATE = "candidate"
     SHADOW_EXECUTABLE = "shadow_executable"
@@ -328,6 +332,177 @@ class SchemaAssetRelease:
             schema_sha256=payload["schema_sha256"],
             release_sha256=payload["release_sha256"],
         )
+
+
+@dataclass(frozen=True)
+class _PolicyRelease:
+    """Shared immutable payload shape for one typed Runtime policy family."""
+
+    record_type: ClassVar[str] = "policy_release"
+    release_prefix: ClassVar[str] = "policy"
+
+    policy_id: str
+    policy_version: str
+    release_ref: str
+    policy_schema_ref: str
+    policy_schema_sha256: str
+    canonical_policy_json: str
+    policy_sha256: str
+    release_sha256: str
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "release_ref": self.release_ref,
+            "policy_schema_ref": self.policy_schema_ref,
+            "policy_schema_sha256": self.policy_schema_sha256,
+            "canonical_policy_json": self.canonical_policy_json,
+            "policy_sha256": self.policy_sha256,
+        }
+
+    def policy_document(self) -> dict[str, Any]:
+        """Return a fresh JSON-compatible policy document."""
+
+        payload = json.loads(self.canonical_policy_json)
+        if type(payload) is not dict:  # pragma: no cover - guarded by validate
+            raise ValueError("policy document must be one JSON object")
+        return payload
+
+    def validate(self) -> None:
+        """Validate policy identity, canonical content, and hashes."""
+
+        validate_snake_case_name("policy_id", self.policy_id)
+        _validate_token("policy_version", self.policy_version)
+        expected_ref = (
+            f"{self.release_prefix}:{self.policy_id}@{self.policy_version}"
+        )
+        if self.release_ref != expected_ref:
+            raise ValueError(
+                f"{type(self).__name__} release_ref must match ID and version"
+            )
+        validate_opaque_ref("policy_schema_ref", self.policy_schema_ref)
+        validate_sha256("policy_schema_sha256", self.policy_schema_sha256)
+        if type(self.canonical_policy_json) is not str:
+            raise ValueError("canonical_policy_json must be a string")
+        try:
+            document = json.loads(self.canonical_policy_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("canonical_policy_json must be valid JSON") from exc
+        if type(document) is not dict:
+            raise ValueError("policy document must be one JSON object")
+        canonical = json.dumps(
+            document,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if canonical != self.canonical_policy_json:
+            raise ValueError("policy JSON must use canonical serialization")
+        validate_sha256("policy_sha256", self.policy_sha256)
+        observed_policy_sha256 = hashlib.sha256(
+            self.canonical_policy_json.encode("utf-8")
+        ).hexdigest()
+        if self.policy_sha256 != observed_policy_sha256:
+            raise ValueError("policy content hash mismatch")
+        validate_sha256("release_sha256", self.release_sha256)
+        if self.release_sha256 != _canonical_sha256(self._payload()):
+            raise ValueError(f"{type(self).__name__} release hash mismatch")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the canonical JSON-compatible policy release."""
+
+        self.validate()
+        return {**self._payload(), "release_sha256": self.release_sha256}
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        policy_id: str,
+        policy_version: str,
+        release_ref: str,
+        policy_schema_ref: str,
+        policy_schema_sha256: str,
+        policy_document: Mapping[str, Any],
+    ) -> "_PolicyRelease":
+        """Build one hash-complete typed policy release."""
+
+        if not isinstance(policy_document, Mapping):
+            raise ValueError("policy_document must be a mapping")
+        canonical_policy_json = json.dumps(
+            dict(policy_document),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        fields = {
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "release_ref": release_ref,
+            "policy_schema_ref": policy_schema_ref,
+            "policy_schema_sha256": policy_schema_sha256,
+            "canonical_policy_json": canonical_policy_json,
+            "policy_sha256": hashlib.sha256(
+                canonical_policy_json.encode("utf-8")
+            ).hexdigest(),
+        }
+        provisional = cls(**fields, release_sha256="0" * 64)
+        record = cls(
+            **fields,
+            release_sha256=_canonical_sha256(provisional._payload()),
+        )
+        record.validate()
+        return record
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "_PolicyRelease":
+        """Reconstruct one persisted typed policy release."""
+
+        record = cls(
+            policy_id=payload["policy_id"],
+            policy_version=payload["policy_version"],
+            release_ref=payload["release_ref"],
+            policy_schema_ref=payload["policy_schema_ref"],
+            policy_schema_sha256=payload["policy_schema_sha256"],
+            canonical_policy_json=payload["canonical_policy_json"],
+            policy_sha256=payload["policy_sha256"],
+            release_sha256=payload["release_sha256"],
+        )
+        record.validate()
+        return record
+
+
+@dataclass(frozen=True)
+class BehaviorPolicyRelease(_PolicyRelease):
+    """Immutable Context-isolation behavior selected by one Module."""
+
+    record_type: ClassVar[str] = "behavior_policy_release"
+    release_prefix: ClassVar[str] = "behavior-policy"
+
+
+@dataclass(frozen=True)
+class EvaluationPolicyRelease(_PolicyRelease):
+    """Immutable evaluation behavior selected by one Module."""
+
+    record_type: ClassVar[str] = "evaluation_policy_release"
+    release_prefix: ClassVar[str] = "evaluation-policy"
+
+
+@dataclass(frozen=True)
+class RetryPolicyRelease(_PolicyRelease):
+    """Immutable retry limit selected by one Module."""
+
+    record_type: ClassVar[str] = "retry_policy_release"
+    release_prefix: ClassVar[str] = "retry-policy"
+
+
+@dataclass(frozen=True)
+class ExecutionVariantPolicyRelease(_PolicyRelease):
+    """Immutable ordered Execution Profile selection for one exact origin."""
+
+    record_type: ClassVar[str] = "execution_variant_policy_release"
+    release_prefix: ClassVar[str] = "execution-variant-policy"
 
 
 @dataclass(frozen=True)
@@ -552,7 +727,7 @@ class PromptBundleRelease:
 
 @dataclass(frozen=True)
 class ExecutionProfileRelease:
-    """Immutable behavior-complete Executor configuration available to Variants."""
+    """Immutable provider and execution configuration available to Variants."""
 
     record_type: ClassVar[str] = "execution_profile_release"
 
@@ -572,10 +747,7 @@ class ExecutionProfileRelease:
     output_constraint_mode: str
     tool_policy: tuple[str, ...]
     network_policy: str
-    context_policy_ref: str
-    context_policy_sha256: str
     timeout_seconds: int
-    max_attempts: int
     release_sha256: str
 
     def _payload(self) -> dict[str, Any]:
@@ -596,10 +768,7 @@ class ExecutionProfileRelease:
             "output_constraint_mode": self.output_constraint_mode,
             "tool_policy": list(self.tool_policy),
             "network_policy": self.network_policy,
-            "context_policy_ref": self.context_policy_ref,
-            "context_policy_sha256": self.context_policy_sha256,
             "timeout_seconds": self.timeout_seconds,
-            "max_attempts": self.max_attempts,
         }
 
     def validate(self) -> None:
@@ -717,10 +886,7 @@ class ExecutionProfileRelease:
             raise ValueError(
                 "draft workspace requires agent execution mode"
             )
-        validate_opaque_ref("context_policy_ref", self.context_policy_ref)
-        validate_sha256("context_policy_sha256", self.context_policy_sha256)
         validate_int("timeout_seconds", self.timeout_seconds, minimum=1, maximum=86_400)
-        validate_int("max_attempts", self.max_attempts, minimum=1, maximum=100)
         validate_sha256("release_sha256", self.release_sha256)
         if self.release_sha256 != _canonical_sha256(self._payload()):
             raise ValueError("Execution Profile release hash mismatch")
@@ -763,168 +929,13 @@ class ExecutionProfileRelease:
             output_constraint_mode=payload["output_constraint_mode"],
             tool_policy=tuple(payload["tool_policy"]),
             network_policy=payload["network_policy"],
-            context_policy_ref=payload["context_policy_ref"],
-            context_policy_sha256=payload["context_policy_sha256"],
             timeout_seconds=payload["timeout_seconds"],
-            max_attempts=payload["max_attempts"],
             release_sha256=payload["release_sha256"],
         )
 
 
 @dataclass(frozen=True)
-class WorkflowNodeExecutionProfileBinding:
-    """One workflow node bound to an exact execution-time profile release."""
-
-    record_type: ClassVar[str] = "workflow_node_execution_profile_binding"
-
-    node_id: str
-    module_release_ref: str
-    module_release_sha256: str
-    execution_profile_release_ref: str
-    execution_profile_release_sha256: str
-
-    def validate(self) -> None:
-        """Validate the exact Module/Profile pair selected for one node."""
-
-        validate_snake_case_name("node_id", self.node_id)
-        validate_opaque_ref("module_release_ref", self.module_release_ref)
-        validate_sha256("module_release_sha256", self.module_release_sha256)
-        validate_opaque_ref(
-            "execution_profile_release_ref",
-            self.execution_profile_release_ref,
-        )
-        validate_sha256(
-            "execution_profile_release_sha256",
-            self.execution_profile_release_sha256,
-        )
-
-    def as_dict(self) -> dict[str, str]:
-        """Return the canonical JSON-compatible binding."""
-
-        self.validate()
-        return {
-            "node_id": self.node_id,
-            "module_release_ref": self.module_release_ref,
-            "module_release_sha256": self.module_release_sha256,
-            "execution_profile_release_ref": self.execution_profile_release_ref,
-            "execution_profile_release_sha256": (
-                self.execution_profile_release_sha256
-            ),
-        }
-
-    @classmethod
-    def from_dict(
-        cls,
-        payload: Mapping[str, Any],
-    ) -> "WorkflowNodeExecutionProfileBinding":
-        """Reconstruct one persisted exact profile binding."""
-
-        expected_keys = {
-            "node_id",
-            "module_release_ref",
-            "module_release_sha256",
-            "execution_profile_release_ref",
-            "execution_profile_release_sha256",
-        }
-        if set(payload) != expected_keys:
-            raise ValueError("workflow node profile binding has an invalid shape")
-        record = cls(**payload)
-        record.validate()
-        return record
-
-
-@dataclass(frozen=True)
-class WorkflowExecutionProfileSelection:
-    """Execution-scoped exact profile choices for Agent nodes in one Workflow Release."""
-
-    record_type: ClassVar[str] = "workflow_execution_profile_selection"
-
-    selection_ref: str
-    workflow_release_ref: str
-    workflow_release_sha256: str
-    bindings: tuple[WorkflowNodeExecutionProfileBinding, ...]
-    selection_sha256: str
-
-    def _payload(self) -> dict[str, Any]:
-        return {
-            "selection_ref": self.selection_ref,
-            "workflow_release_ref": self.workflow_release_ref,
-            "workflow_release_sha256": self.workflow_release_sha256,
-            "bindings": [binding.as_dict() for binding in self.bindings],
-        }
-
-    def validate(self) -> None:
-        """Validate exact node uniqueness, release identity, and content hash."""
-
-        validate_opaque_ref("selection_ref", self.selection_ref)
-        validate_opaque_ref("workflow_release_ref", self.workflow_release_ref)
-        validate_sha256("workflow_release_sha256", self.workflow_release_sha256)
-        validate_exact_record_tuple(
-            "bindings",
-            self.bindings,
-            expected_type=WorkflowNodeExecutionProfileBinding,
-            item_validator=lambda binding: binding.validate(),
-            unique_key=lambda binding: binding.node_id,
-            unique_key_label="node_id",
-            require_non_empty=False,
-        )
-        validate_sha256("selection_sha256", self.selection_sha256)
-        if self.selection_sha256 != _canonical_sha256(self._payload()):
-            raise ValueError("Workflow execution profile selection hash mismatch")
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return the canonical JSON-compatible selection."""
-
-        self.validate()
-        return {**self._payload(), "selection_sha256": self.selection_sha256}
-
-    @classmethod
-    def build(cls, **fields: Any) -> "WorkflowExecutionProfileSelection":
-        """Build one hash-complete execution profile selection."""
-
-        provisional = cls(**fields, selection_sha256="0" * 64)
-        record = cls(
-            **fields,
-            selection_sha256=_canonical_sha256(provisional._payload()),
-        )
-        record.validate()
-        return record
-
-    @classmethod
-    def from_dict(
-        cls,
-        payload: Mapping[str, Any],
-    ) -> "WorkflowExecutionProfileSelection":
-        """Reconstruct one persisted execution profile selection."""
-
-        expected_keys = {
-            "selection_ref",
-            "workflow_release_ref",
-            "workflow_release_sha256",
-            "bindings",
-            "selection_sha256",
-        }
-        if set(payload) != expected_keys:
-            raise ValueError("workflow execution profile selection has an invalid shape")
-        raw_bindings = payload["bindings"]
-        if type(raw_bindings) is not list:
-            raise ValueError("workflow execution profile bindings must be a list")
-        record = cls(
-            selection_ref=payload["selection_ref"],
-            workflow_release_ref=payload["workflow_release_ref"],
-            workflow_release_sha256=payload["workflow_release_sha256"],
-            bindings=tuple(
-                WorkflowNodeExecutionProfileBinding.from_dict(binding)
-                for binding in raw_bindings
-            ),
-            selection_sha256=payload["selection_sha256"],
-        )
-        record.validate()
-        return record
-
-
-@dataclass(frozen=True)
-class RuntimeModuleRelease:
+class ModuleRelease:
     """One immutable, independently executable Runtime Module contract."""
 
     record_type: ClassVar[str] = "runtime_module_release"
@@ -935,7 +946,6 @@ class RuntimeModuleRelease:
     module_kind: ModuleKind
     owner_contract_ref: str
     owner_contract_sha256: str
-    source_skill_id: str | None
     executable_ref: str | None
     executable_sha256: str | None
     input_schema_ref: str
@@ -945,8 +955,8 @@ class RuntimeModuleRelease:
     prompt_bundle_ref: str | None
     prompt_bundle_sha256: str | None
     declared_operation_ids: tuple[str, ...]
-    context_policy_ref: str
-    context_policy_sha256: str
+    behavior_policy_ref: str
+    behavior_policy_sha256: str
     evaluation_policy_ref: str
     evaluation_policy_sha256: str
     retry_policy_ref: str
@@ -964,7 +974,6 @@ class RuntimeModuleRelease:
             "module_kind": self.module_kind.value,
             "owner_contract_ref": self.owner_contract_ref,
             "owner_contract_sha256": self.owner_contract_sha256,
-            "source_skill_id": self.source_skill_id,
             "executable_ref": self.executable_ref,
             "executable_sha256": self.executable_sha256,
             "input_schema_ref": self.input_schema_ref,
@@ -974,8 +983,8 @@ class RuntimeModuleRelease:
             "prompt_bundle_ref": self.prompt_bundle_ref,
             "prompt_bundle_sha256": self.prompt_bundle_sha256,
             "declared_operation_ids": list(self.declared_operation_ids),
-            "context_policy_ref": self.context_policy_ref,
-            "context_policy_sha256": self.context_policy_sha256,
+            "behavior_policy_ref": self.behavior_policy_ref,
+            "behavior_policy_sha256": self.behavior_policy_sha256,
             "evaluation_policy_ref": self.evaluation_policy_ref,
             "evaluation_policy_sha256": self.evaluation_policy_sha256,
             "retry_policy_ref": self.retry_policy_ref,
@@ -986,7 +995,7 @@ class RuntimeModuleRelease:
         }
 
     def validate(self) -> None:
-        """Validate Module contracts, Skill binding rules, and release hash."""
+        """Validate Module contracts, executable closure, and release hash."""
 
         validate_snake_case_name("module_id", self.module_id)
         _validate_token("module_version", self.module_version)
@@ -995,17 +1004,11 @@ class RuntimeModuleRelease:
             raise ValueError("module_kind must be a ModuleKind")
         validate_opaque_ref("owner_contract_ref", self.owner_contract_ref)
         validate_sha256("owner_contract_sha256", self.owner_contract_sha256)
-        if self.source_skill_id is not None and not _SKILL_ID_PATTERN.fullmatch(
-            self.source_skill_id
-        ):
-            raise ValueError("source_skill_id must use canonical kebab-case")
         prompt_binding = (self.prompt_bundle_ref, self.prompt_bundle_sha256)
         executable_binding = (self.executable_ref, self.executable_sha256)
         if self.module_kind is ModuleKind.AGENT:
-            if self.source_skill_id is None or any(
-                value is None for value in prompt_binding
-            ):
-                raise ValueError("Agent Module requires source Skill and Prompt Bundle")
+            if any(value is None for value in prompt_binding):
+                raise ValueError("Agent Module requires a Prompt Bundle")
             if any(value is not None for value in executable_binding):
                 raise ValueError("Agent Module cannot own a direct executable binding")
             if not self.declared_operation_ids:
@@ -1013,12 +1016,8 @@ class RuntimeModuleRelease:
                     "Agent Module must declare its protected operations"
                 )
         else:
-            if self.source_skill_id is not None or any(
-                value is not None for value in prompt_binding
-            ):
-                raise ValueError(
-                    "non-Agent Module cannot own an Agent Skill or Prompt binding"
-                )
+            if any(value is not None for value in prompt_binding):
+                raise ValueError("non-Agent Module cannot own a Prompt binding")
             if any(value is None for value in executable_binding):
                 raise ValueError("non-Agent Module requires an executable binding")
         _validate_optional_opaque_ref("executable_ref", self.executable_ref)
@@ -1036,7 +1035,7 @@ class RuntimeModuleRelease:
             require_non_empty=False,
         )
         for label, ref, digest in (
-            ("context_policy", self.context_policy_ref, self.context_policy_sha256),
+            ("behavior_policy", self.behavior_policy_ref, self.behavior_policy_sha256),
             (
                 "evaluation_policy",
                 self.evaluation_policy_ref,
@@ -1069,8 +1068,8 @@ class RuntimeModuleRelease:
         return {**self._payload(), "release_sha256": self.release_sha256}
 
     @classmethod
-    def build(cls, **fields: Any) -> "RuntimeModuleRelease":
-        """Build a hash-complete immutable Runtime Module Release."""
+    def build(cls, **fields: Any) -> "ModuleRelease":
+        """Build a hash-complete immutable Module Release."""
 
         provisional = cls(**fields, release_sha256="0" * 64)
         record = cls(**fields, release_sha256=_canonical_sha256(provisional._payload()))
@@ -1078,8 +1077,8 @@ class RuntimeModuleRelease:
         return record
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "RuntimeModuleRelease":
-        """Reconstruct a persisted Runtime Module Release."""
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ModuleRelease":
+        """Reconstruct a persisted Module Release."""
 
         return cls(
             module_id=payload["module_id"],
@@ -1088,7 +1087,6 @@ class RuntimeModuleRelease:
             module_kind=ModuleKind(payload["module_kind"]),
             owner_contract_ref=payload["owner_contract_ref"],
             owner_contract_sha256=payload["owner_contract_sha256"],
-            source_skill_id=payload.get("source_skill_id"),
             executable_ref=payload.get("executable_ref"),
             executable_sha256=payload.get("executable_sha256"),
             input_schema_ref=payload["input_schema_ref"],
@@ -1098,8 +1096,8 @@ class RuntimeModuleRelease:
             prompt_bundle_ref=payload.get("prompt_bundle_ref"),
             prompt_bundle_sha256=payload.get("prompt_bundle_sha256"),
             declared_operation_ids=tuple(payload["declared_operation_ids"]),
-            context_policy_ref=payload["context_policy_ref"],
-            context_policy_sha256=payload["context_policy_sha256"],
+            behavior_policy_ref=payload["behavior_policy_ref"],
+            behavior_policy_sha256=payload["behavior_policy_sha256"],
             evaluation_policy_ref=payload["evaluation_policy_ref"],
             evaluation_policy_sha256=payload["evaluation_policy_sha256"],
             retry_policy_ref=payload["retry_policy_ref"],
@@ -1115,7 +1113,7 @@ class RuntimeModuleRelease:
 
 @dataclass(frozen=True)
 class WorkflowNodeBinding:
-    """Workflow-local position bound to one exact Runtime Module Release."""
+    """Workflow-local position bound to one exact Module Release."""
 
     record_type: ClassVar[str] = "workflow_node_binding"
 
@@ -1292,7 +1290,7 @@ class WorkflowParallelGroupBinding:
 
 @dataclass(frozen=True)
 class WorkflowRelease:
-    """Immutable graph assembled only from exact Runtime Module Releases."""
+    """Immutable graph assembled only from exact Module Releases."""
 
     record_type: ClassVar[str] = "workflow_release"
 
@@ -1540,8 +1538,8 @@ class WorkflowRelease:
 
 
 @dataclass(frozen=True)
-class ReleaseAdmissionRecord:
-    """Append-only admission decision for one exact immutable release."""
+class LegacyReleaseAdmissionRecord:
+    """Retired v1 record decoded only while removing predecessor state."""
 
     record_type: ClassVar[str] = "release_admission_record"
 
@@ -1550,7 +1548,7 @@ class ReleaseAdmissionRecord:
     subject_id: str
     release_ref: str
     release_sha256: str
-    state: ReleaseAdmissionState
+    state: LegacyReleaseAdmissionState
     evidence_members: tuple[ReleaseMember, ...]
     recorded_at_utc: str
     admission_sha256: str
@@ -1576,8 +1574,8 @@ class ReleaseAdmissionRecord:
         validate_snake_case_name("subject_id", self.subject_id)
         validate_opaque_ref("release_ref", self.release_ref)
         validate_sha256("release_sha256", self.release_sha256)
-        if type(self.state) is not ReleaseAdmissionState:
-            raise ValueError("state must be a ReleaseAdmissionState")
+        if type(self.state) is not LegacyReleaseAdmissionState:
+            raise ValueError("state must be a LegacyReleaseAdmissionState")
         validate_exact_record_tuple(
             "evidence_members",
             self.evidence_members,
@@ -1599,7 +1597,7 @@ class ReleaseAdmissionRecord:
         return {**self._payload(), "admission_sha256": self.admission_sha256}
 
     @classmethod
-    def build(cls, **fields: Any) -> "ReleaseAdmissionRecord":
+    def build(cls, **fields: Any) -> "LegacyReleaseAdmissionRecord":
         """Build a hash-complete append-only admission record."""
 
         provisional = cls(**fields, admission_sha256="0" * 64)
@@ -1611,7 +1609,10 @@ class ReleaseAdmissionRecord:
         return record
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "ReleaseAdmissionRecord":
+    def from_dict(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> "LegacyReleaseAdmissionRecord":
         """Reconstruct a persisted release admission record."""
 
         return cls(
@@ -1620,7 +1621,7 @@ class ReleaseAdmissionRecord:
             subject_id=payload["subject_id"],
             release_ref=payload["release_ref"],
             release_sha256=payload["release_sha256"],
-            state=ReleaseAdmissionState(payload["state"]),
+            state=LegacyReleaseAdmissionState(payload["state"]),
             evidence_members=tuple(
                 ReleaseMember.from_dict(member)
                 for member in payload["evidence_members"]
@@ -1631,7 +1632,10 @@ class ReleaseAdmissionRecord:
 
 
 __all__ = [
+    "BehaviorPolicyRelease",
     "EXECUTION_MODES",
+    "EvaluationPolicyRelease",
+    "ExecutionVariantPolicyRelease",
     "is_prompt_component_member_ref",
     "ExecutionProfileRelease",
     "ModuleEntryPolicy",
@@ -1644,17 +1648,14 @@ __all__ = [
     "PromptComponentRelease",
     "OutputResolutionPolicy",
     "PromptBundleRelease",
-    "ReleaseAdmissionRecord",
-    "ReleaseAdmissionState",
     "ReleaseMember",
     "ReleaseSubjectKind",
-    "RuntimeModuleRelease",
+    "RetryPolicyRelease",
+    "ModuleRelease",
     "SchemaAssetRelease",
     "WorkflowEdge",
-    "WorkflowExecutionProfileSelection",
     "WorkflowNodeKind",
     "WorkflowNodeBinding",
-    "WorkflowNodeExecutionProfileBinding",
     "WorkflowParallelGroupBinding",
     "WorkflowParallelJoinPolicy",
     "WorkflowRelease",

@@ -1,0 +1,37 @@
+{
+  "gate_schema_version": "runtime_real_downstream_gate_v1",
+  "gate_id": "trading_platform_runtime_composition",
+  "recorded_on": "2026-08-17",
+  "status": "failing",
+  "runtime_repository": "/Users/bokanbao/Documents/GitHub/the_agent_runtime",
+  "runtime_commit": "1152cb4",
+  "runtime_import_path": "/Users/bokanbao/Documents/GitHub/the_agent_runtime/src/agent_runtime/__init__.py",
+  "consumer_id": "trading_platform",
+  "consumer_repository": "/Users/bokanbao/Documents/GitHub/trading_platform",
+  "consumer_commit": "bdaf1391453a7ab3ad9ec0e8c8a45e026cee2f50",
+  "consumer_python": "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python",
+  "command": [
+    "/Users/bokanbao/Documents/GitHub/trading_platform/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "tests/test_runtime_host_release_registration.py",
+    "tests/test_split_workflow_driver_smoke.py"
+  ],
+  "observed_result": {
+    "passed": 5,
+    "failed": 7,
+    "failure_type": "consumer_import_failure",
+    "exception_type": "ModuleNotFoundError",
+    "missing_import": "agent_runtime.registry.registry_module_exporting",
+    "reached_postgresql": false,
+    "reached_provider_invocation": false
+  },
+  "owner_disposition": {
+    "correction_slice": "agent_runtime_architecture_rebuild_slice_2",
+    "compatibility_shim_allowed": false,
+    "required_green_gate_before_slice_acceptance": true,
+    "runtime_boundary": "accept repository-independent structured release candidates",
+    "host_boundary": "discover host authoring sources and convert them into structured candidates"
+  }
+}

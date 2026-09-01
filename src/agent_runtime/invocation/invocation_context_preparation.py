@@ -11,7 +11,7 @@ from ..contracts.invocation_adapter_definition import (
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
     ModuleKind,
-    RuntimeModuleRelease,
+    ModuleRelease,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_prompt_assembly import (
@@ -39,7 +39,7 @@ class InvocationExecutionExpectation:
 class PreparedInvocationContext:
     """Exact resolved releases, model-visible prompt, and output schema."""
 
-    module: RuntimeModuleRelease
+    module: ModuleRelease
     profile: ExecutionProfileRelease
     prompt: str
     registered_output_schema: dict[str, object]

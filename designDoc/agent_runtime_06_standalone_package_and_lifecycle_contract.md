@@ -1,596 +1,234 @@
 ---
-title: Agent Runtime Standalone Package and Execution Lifecycle Contract
-status: proposal
-layer: T1
+title: Agent Runtime Inspection
+status: candidate
+layer: T2
 canonical_owner: designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md
-parent: designDoc/the_agent_runtime.md
+parent: designDoc/agent_runtime_00_execution_charter.md
+owned_system_object: Runtime inspection projection
+language: zh-CN
 reader_persona:
+  - Runtime Operator
   - Runtime Maintainer
-  - Provider Integration Maintainer
-  - Durable Workflow Maintainer
-  - PostgreSQL Maintainer
-  - Workflow Review Maintainer
-  - Release Engineer
+  - Host Integrator
+  - Security Reviewer
+  - Engineering Reviewer
 ---
 
-# Agent Runtime Standalone Package and Execution Lifecycle Contract
+# Agent Runtime Inspection
 
-**Purpose**: Define the independently publishable Runtime package, its
-three-axis architecture registration, its inspection surface, and its
-append-only execution lifecycle.
-
-**Required reader gain**: A maintainer can identify what every top-level source
-module and file does, find its canonical Design Contract, install Runtime in a
-different product, inspect formal Workflow records through the live Inspector,
-and prove the commit order around invocation and recovery.
-
-## 0. Contract Capsule
+## 0. Intent Capsule
 
 ```yaml
-layer: T1
-status: proposal
+layer: T2
+status: candidate
 canonical_owner: designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md
-parent: designDoc/the_agent_runtime.md
+parent: designDoc/agent_runtime_00_execution_charter.md
+owned_system_object: Runtime inspection projection
 scope:
-  - standalone public namespace and distribution boundary
-  - responsibility-based source modules and three-part code naming
-  - source-file to Design Contract ownership
-  - PostgreSQL-backed live Workflow Inspector
-  - durable backend start receipt
-  - append-only Attempt lifecycle and active claim
-  - protected-operation observation ordering
-  - invocation finalization and stale-result handling
-  - Outcome checkpoint and backend acknowledgement
-  - persistence compare-and-commit requirements
+  - host-accepted read-only views of Runtime release and execution facts
+  - deterministic projection from Registry and Ledger truth
+  - current snapshot and content-addressed offline export
+  - query validity, source completeness, and projection failure boundary
 non_goals:
-  - domain roles, graphs, artifacts, prompts, or quality verdicts
-  - Temporal implementation, owned by agent_runtime_07
-  - Claude SDK or Codex CLI mechanics, owned by agent_runtime_08
-  - Product Authorization policy, Entitlement state, or grant issuance
+  - release registration, active-pointer mutation, or execution control
+  - Workflow/Module dispatch, provider invocation, retry, recovery, or cancellation
+  - business data, domain artifact, authorization-policy, or publication ownership
+  - UI framework, renderer, database, transport, or export-format product selection
 inputs:
-  - designDoc/the_agent_runtime.md
-  - designDoc/the_timestamp_semantic.md
-  - designDoc/agent_runtime_09_authorization_integration_contract.md
+  - host-accepted exact inspection query
+  - Registry release/active-pointer facts and Ledger execution facts
+  - registered projection specification
 outputs:
-  - agent_runtime public package boundary
-  - registry_architecture_registration
-  - live read-only Workflow Inspector contract
-  - backend start, Attempt, invocation, Outcome, checkpoint, and acknowledgement lifecycle
-  - protected-operation observation lifecycle
-  - persistence compare-and-commit protocol
+  - Runtime inspection snapshot
+  - optional content-addressed offline inspection export
 truth_surfaces:
-  - pyproject.toml
-  - src/agent_runtime/README.md
-  - src/agent_runtime/registry/registry_architecture_registration.py
-  - src/agent_runtime/contracts/
-  - src/agent_runtime/registry/
-  - src/agent_runtime/execution/
-  - src/agent_runtime/invocation/
-  - src/agent_runtime/durability/
-  - src/agent_runtime/ledger/
-  - src/agent_runtime/inspection/
-  - tests/test_agent_runtime_packaging_boundary.py
-  - tests/test_runtime_architecture_validation.py
-  - tests/test_agent_runtime_execution_records.py
-  - tests/test_agent_runtime_inspection_interface.py
-generated_projection_surfaces:
-  - agent_runtime.inspection.inspection_architecture_rendering:build_runtime_architecture_projection
-  - agent_runtime.inspection.inspection_architecture_rendering:render_runtime_architecture_markdown
-runtime_triggers: none
+  - designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md
+  - authoritative Registry and Ledger records
+  - code-owned inspection projection specifications
+runtime_triggers:
+  - host-accepted release inspection query
+  - host-accepted execution inspection query
+  - offline export request over an exact inspection snapshot
+downstream_consumers:
+  - Runtime operators, host integrations, Software Delivery, and security review
 open_decisions: []
-review_gate: contract review followed by clean-wheel and lifecycle conformance tests
+review_gate: independent design_contract_reviewer review and accountable Inspection owner decision before implementation
+runtime_surface_ledger: Inspection emits projections only; Registry and Ledger remain systems of record
 verification_hooks:
-  - ./.venv/bin/python -m pytest tests/test_agent_runtime_packaging_boundary.py tests/test_runtime_architecture_validation.py tests/test_agent_runtime_execution_records.py tests/test_agent_runtime_inspection_interface.py -q
-future_release_gate:
-  - python -m agent_runtime.inspection.inspection_http_serving
+  - query-scope and field-projection tests
+  - Registry/Ledger source completeness and consistency tests
+  - deterministic projection and offline-export hash tests
+  - no-write and incomplete-source failure tests
 ```
 
-## 1. Portable Product Boundary
-
-Agent Runtime is an independently installable infrastructure product. The
-`trading_platform` repository is one host; Research, Digestion, Trade, and
-other domain semantics are not part of Runtime package identity.
+## 1. Primary System Flow
 
 ```mermaid
 flowchart LR
-    REGISTRY["Registry"] --> EXECUTION["Execution"]
-    EXECUTION --> INVOCATION["Invocation"]
-    EXECUTION <--> DURABILITY["Durability"]
-    EXECUTION --> LEDGER["Execution Ledger"]
-    LEDGER --> INSPECTION["Inspection"]
+    QR["Host-accepted exact release query"] -->|"runtime_release_inspect"| A["Validate query and requested fields"]
+    QE["Host-accepted exact execution query"] -->|"runtime_execution_inspect"| A
+    A --> R["Read exact Registry facts"]
+    A --> L["Read exact Ledger facts"]
+    R --> P["Project typed inspection snapshot"]
+    L --> P
+    P --> S["Return RuntimeInspectionSnapshot"]
+    S -->|"runtime_inspection_export"| E["Content-addressed offline export"]
+    A -->|INSPECTION_QUERY_INVALID| F["Return caller"]
+    R -->|INSPECTION_RELEASE_NOT_FOUND| F
+    L -->|INSPECTION_EXECUTION_NOT_FOUND| F
+    P -->|INSPECTION_SOURCE_INCOMPLETE| F
+    P -->|INSPECTION_PROJECTION_FAILED| F
+    S -->|INSPECTION_SNAPSHOT_INVALID| F
 ```
 
-The canonical import namespace is `agent_runtime.*`. Runtime has no required
-domain plugin or Product host dependency. Provider SDKs and Temporal remain
-optional integrations. PostgreSQL is required by a production deployment
-because registered releases and formal execution records cannot be rebuilt
-from an in-memory process after failure.
-
-## 2. Architecture Axes and Naming
-
-Architecture is registered through three independent axes. Membership on one
-axis never implies membership on another. A logical responsibility and its
-primary source directory may share an identifier as a naming convention
-without merging the two axes.
-
-### 2.1 Logical responsibilities
-
-| Logical responsibility | Owns | Canonical Design Contract |
-| --- | --- | --- |
-| `registry` | Release compilation, validation, registration, activation, and exact retrieval | `agent_runtime_01` |
-| `execution` | Workflow initiation and advancement, Module invocation coordination, Cell-local staging, Evaluation, Resolution, checkpoint, and recovery | `agent_runtime_00` and `agent_runtime_06` |
-| `invocation` | Prompt assembly plus registered model and tool invocation | `agent_runtime_08` |
-| `durability` | Acknowledged commands, waits, retries, replay, and recovery | `agent_runtime_07` |
-| `ledger` | Authoritative execution lineage, Attempts, usage, outcomes, and Resolution facts | `agent_runtime_06` |
-| `inspection` | Authorized read models and Workflow Inspector rendering | `agent_runtime_06` |
-
-### 2.2 Physical source organization
-
-Physical directories are `contracts`, `registry`, `execution`, `invocation`,
-`durability`, `ledger`, `inspection`, and `testing`. `contracts/` and
-`testing/` are supporting directories, not logical responsibilities. A file in
-`contracts/` retains the owning logical responsibility as its filename prefix.
-
-### 2.3 Implementation bindings
-
-Database engines, durable backends, provider SDKs and CLIs, and renderers are
-concrete technologies. Each registered binding names exactly one logical
-responsibility, one technology, and the exact implementation source files.
-The generated architecture projection enumerates the current binding set.
-Technology names cannot appear in the logical-responsibility registry.
-
-Every source file uses:
-
-```text
-module_subject_nominalized_action.py
-```
-
-The module identifies responsibility, the subject identifies what is acted on,
-and the final term names the action as a noun. A filename must remain meaningful
-outside its directory. Language-native type names use the same three semantic
-terms in `PascalCase`; public functions and serialized names remain
-`snake_case`.
-
-The package-level directory map is stable. Exact source filenames, logical
-owners, physical directories, Design Contract owners, and migration-debt paths
-are generated from `registry_architecture_registration`; this contract does not
-maintain a second hand-written file inventory.
-
-```text
-agent_runtime/
-  README.md
-  design_contract/
-  contracts/
-  registry/
-  execution/
-  invocation/
-  durability/
-  ledger/
-  inspection/
-  testing/
-```
-
-The code-owned `registry_architecture_registration` maintains distinct record
-types for logical responsibilities, physical directories, implementation
-bindings, and source-file mappings. Repository validation fails on mixed axes,
-an unregistered or misplaced file, a technology registered as a logical
-responsibility, a cross-responsibility binding, a missing contract, duplicate
-disposition, or stale debt path.
-
-The logical call and committed-fact flow is:
-
-```mermaid
-flowchart LR
-    REGISTRY["Registry"] --> EXECUTION["Execution"]
-    EXECUTION --> INVOCATION["Invocation"]
-    EXECUTION <--> DURABILITY["Durability"]
-    EXECUTION --> LEDGER["Execution Ledger"]
-    LEDGER --> INSPECTION["Inspection"]
-```
-
-Every node is a logical responsibility. Arrows mean Runtime calls or committed
-fact flow; they do not mean source imports, directory containment, or
-implementation selection.
-
-Import dependency topology is a separate source-architecture view. Until a
-dedicated code-owned import policy and AST validator are admitted, this
-three-axis registry does not claim or enforce a complete intra-Runtime import
-direction.
-
-Only `registry_release_compilation` may read editable Module authoring files.
-Production Execution reads admitted releases. Invocation and Durability
-implementations cannot choose releases or Workflow edges. Inspection reads
-registered and committed Runtime facts and cannot mutate them.
-
-### 2.4 Migration debt
-
-Every remaining predecessor source file is enumerated in
-`RUNTIME_MIGRATION_DEBT_PATHS` and excluded from target implementation.
-Structural package initializers may temporarily re-export predecessor symbols
-for existing callers. Those exports are compatibility-only, cannot be used by
-new integrations, and retire with the owning debt entry.
-
-This repository is still an unreleased `0.x.dev` extraction (`0.2.0.dev0`
-at this revision) with no tagged
-public package predecessor. Compatibility applies only to symbols explicitly
-exported by the current package initializers; it does not preserve the former
-host repository's physical `postgres`, `provider`, or `review` package layout.
-Before the first standalone release is pinned, the host migration gate must
-scan and replace those vendored import paths with the registered `registry`,
-`invocation`, `inspection`, and `ledger` surfaces. The standalone wheel must
-not be presented as an in-place upgrade until that consumer migration passes.
-
-The Runtime defines no backward-compatibility or predecessor record variants as
-part of its contract. Any `Legacy*` record type is migration-debt scaffolding
-only, carries no contract obligation, and retires with its debt entry before the
-first standalone release; new integrations target the current record contract
-exclusively.
-
-## 3. Published and Operated Interfaces
-
-Every Runtime release contains:
-
-| Published surface | Content |
-| --- | --- |
-| `README.md` | Product purpose, module map, registration, execution, PostgreSQL, Temporal, provider, and Inspector quick starts |
-| Design Contract bundle | Generated, hash-bound copies of Runtime-owned T0 and T1 contracts |
-| Python API and JSON schemas | Public definitions and callable Runtime operations |
-| PostgreSQL migrations | Release, execution, content, and query indexes owned by Runtime |
-| Workflow Inspector | Read-only web assets and query endpoints over formal PostgreSQL records |
-
-Canonical Design Contracts remain in the repository `designDoc/` surface.
-Software Delivery generates the packaged `design_contract/` directory and
-fails when its manifest hashes differ. The packaged copy is never edited by
-hand.
-
-### 3.1 Live Workflow Inspector
-
-The primary Review interface is a live read-only application. Its HTML is an
-application shell and contains no embedded Workflow Execution data.
-
-```mermaid
-flowchart LR
-    LEDGER["Runtime PostgreSQL execution records"] --> QUERY["Authorized execution retrieval"]
-    CONTENT["Runtime PostgreSQL execution content"] --> QUERY
-    RELEASES["Runtime PostgreSQL releases"] --> QUERY
-    AUTH["Product content-read decision"] --> QUERY
-    QUERY --> PAGE["Live Workflow Inspector"]
-```
-
-This diagram is a production deployment data-flow view. Its nodes name bound
-record stores and retrieval services; its arrows mean authorized data flow.
-
-The Inspector lists every Workflow Execution allowed by the caller's current
-Product grant. Selecting an execution loads its exact registered Workflow graph
-and all committed Module Run, Variant, Attempt, retry, failure, Prompt, input,
-output, usage, Evaluation, Selection, Resolution, Context, and recovery
-records. Repeated graph nodes remain separate Module Run occurrences.
-
-Prompt, input, output, tool, and failure bodies require an exact content-read
-decision. Metadata remains visible only to the degree authorized by the trace
-grant. A content hash mismatch is an integrity failure, not a redaction.
-
-The page cannot start, retry, cancel, approve, publish, or alter an execution.
-It does not write demo data when starting. A Product host may embed or proxy the
-Runtime page after authentication, but it does not own another execution or
-review schema.
-
-An offline execution snapshot may exist later as an explicit export. It is not
-the primary interface, a release requirement, or a second persisted truth.
-
-### 3.2 External Authority and Integration Boundary
-
-The Product host supplies an admitted Workflow binding and execution
-authorization context. Runtime never reads Product Entitlement bodies.
-`execution_authorization_coordination` obtains or validates current Product
-decisions. `execution_operation_resolution` exposes exact Runtime-owned intent
-and binding references to the enforcing Resource Gateway; the Gateway, not
-Runtime, retrieves authorized product data. External Product Authorization and
-Data Access components own those decisions and data policies.
-
-Provider integration receives one exact admitted invocation and returns a
-normalized result. Temporal coordinates durable Workflow progress using
-references only. PostgreSQL owns Runtime facts. None of those implementations
-may choose domain routing, change a release, or reinterpret a quality verdict.
-
-Public serialized values reject ambiguous Python-only forms: IDs, refs, hashes,
-and tokens require exact strings; integers reject booleans and floats; booleans
-require exact booleans; usage numbers reject non-finite values; immutable
-collections validate member type and uniqueness.
-
-## 4. Durable Backend Start Receipt
-
-After a durable adapter creates or resolves a backend execution, Runtime is the
-sole writer of `BackendStartReceiptRecord`. It binds:
-
-- Workflow Execution and durable backend identity;
-- backend execution reference;
-- exact start request identity;
-- execution admission and authorization context references;
-- backend start idempotency key; and
-- ledger-assigned recorded time.
-
-The same Workflow Execution and start request return the same logical receipt.
-Changed request, authorization context, or backend reference conflicts. If the
-backend creates work but the response or receipt commit is lost, Runtime repeats
-the same idempotent start or uses the adapter reconciliation operation. It does
-not create another backend identity.
-
-## 5. Append-Only Attempt Lifecycle
-
-### 5.1 Execution model invariants
-
-The append-only lifecycle rests on a fixed model of what is deterministic and
-what is not.
-
-**Determinism boundary.** Only a Module's upstream inputs are deterministic and
-content-addressed — the input package and Prompt Envelope are pinned by SHA-256.
-Model output is non-deterministic: it is committed once and frozen as the
-authoritative Outcome. Every retry, recovery, and durable replay returns the
-committed Outcome and never re-invokes the model. Determinism holds over
-recorded facts and control flow, never over model re-execution.
-
-**Single-step variant comparison and single resolved Outcome.** Variant (A/B)
-comparison is scoped to one dispatch fanning out over a single pinned upstream
-input. A dispatch resolves to exactly one committed `ModuleOutcome` under its
-`output_resolution_policy` (`direct_single` or `evaluated_single`); non-selected
-variant outputs are recorded as stale. The control plane never branches on
-variant comparison — it carries one resolved Outcome per dispatch.
-
-**Bounded execution and single-source reconstruction.** A Workflow Execution's
-whole committed history — its control facts plus the modest per-call observation
-records — is bounded, on the order of tens of records, because dispatches are
-bounded and each resolves to one Outcome. The execution ledger validates each
-appended batch by reconstructing the reference state from all of that one
-Execution's own committed facts; reconstruction is linear and needs no in-process
-or cross-execution cache. Any caching or storage plane split is a non-contractual
-optimization, unnecessary at this scale, and must never change which committed
-facts are authoritative.
-
-**Authority versus evidence.** Control facts (claims, admissions,
-`ModuleOutcome`s, external-event applications, finalizations) are authoritative:
-they determine the execution's state. Observation facts (model-call, tool-call,
-and usage records) are evidence — the per-run, per-variant payload for
-evaluation, recorded immutably and read back through the same trace. Both are
-normalized atomic records in one ledger; a denormalized read view is the
-sanctioned way to serve variant comparison, not a second storage plane.
-
-`inspection_execution_projecting.build_runtime_execution_inspection`
-mechanically rebuilds that denormalized view from one immutable
-`RuntimeExecutionTrace` plus its optional registered `WorkflowRelease`. It
-persists nothing, accepts no tenant or status overrides, and makes no Product
-authorization decision. Live and offline Inspector surfaces consume this same
-Runtime-owned projection; a host supplies only authenticated request context,
-current read authorization, deployment wiring, and separately authorized
-content dereference.
-
-**Idempotency identity.** Idempotent convergence is keyed on a stable content
-hash of an operation's identity fields; a conflicting retry converges on the
-already-committed fact and is not re-compared field by field. Clock-derived and
-staging timestamps (`recorded_at_utc` and equivalents) never participate in
-idempotency identity. Replay lookups sit above the authority gates by design:
-a replay reads the committed content-free result without re-authorizing the
-execution, because committed facts are read facts — access to the referenced
-content stays governed by the inspection authorization surface, and no replay
-can re-invoke a provider or mint new records.
-
-**Single execution kernel and purpose-scoped authority.** One canonical
-adapter contract — `AuthorizedAgentExecutionAdapter` consuming an
-`AuthorizedAgentExecutionRequest` and returning an `AgentExecutionResult` —
-carries every Module invocation, including in-process test doubles. Execution
-purpose selects the authority source, never a second code path. A Module that
-declares a model operation requires committed authorization evidence — the
-execution authorization context binding, protected-operation intent, Product
-operation decision, and Gateway authorization observation of
-`agent_runtime_09` — resolved and validated before the provider transport is
-entered, under `test` and `evaluation` purposes as much as under production
-purposes; a host-registered test authority changes where the evidence comes
-from, not whether it exists. Empty authorization evidence is admissible only
-for the conjunction of `test`/`evaluation` purpose, `in_process` transport
-family, zero declared operations, and no provider, model, or tool callable.
-Finalization of provider results follows section 7: the committed
-execution-authorization fence is re-read inside the same atomic commit that
-would make outputs authoritative — an open fence commits outputs with the
-completed Attempt; a closed fence commits a failed Attempt that preserves
-usage evidence while staged outputs stay unreferenced and no resolution is
-recorded. A request never fabricates a Workflow Execution identity: it carries
-either the Workflow Execution ID or the isolated Module scope, exactly one of
-the two.
-
-### 5.2 Attempt records and active claim
-
-One provider, tool, or Gateway invocation has an immutable start record and at
-most one immutable terminal Attempt record.
-
-`AttemptStartedRecord` binds:
-
-- Workflow Execution when present, dispatch, Module Run, Variant, and Attempt;
-- parent Attempt and ordinal;
-- exact request and input closure;
-- execution profile and execution authorization context;
-- active claim-token hash and timeout; and
-- ledger-assigned `recorded_at_utc`.
-
-The terminal record uses `period_start_at_utc` and `period_end_at_utc` for the
-Attempt interval and its own `recorded_at_utc` for terminal-record commit. The
-only terminal statuses are `completed`, `failed`, and `cancelled`.
-
-An orphaned start remains visible. Recovery appends an orphan disposition,
-invalidates provider context created by the orphan, and may create a new
-Attempt ordinal. It never overwrites or silently reuses the first Attempt.
-
-The begin transaction creates one active claim for:
-
-```text
-Workflow Execution + dispatch + Module Run + Variant + Attempt + request identity
-```
-
-Finalization must present the same claim token. A second live claim for the same
-logical dispatch fails unless the registered retry policy has terminalized the
-prior claim.
-
-## 6. Protected-Operation Ordering
-
-Every provider, model, tool, search, data read, external send, publication, and
-protected-context invocation follows this order:
-
-```mermaid
-sequenceDiagram
-    participant kernel as Runtime Kernel
-    participant ledger as Execution Ledger
-    participant adapter as Provider or Gateway Adapter
-    participant gateway as Resource Gateway
-    participant backend as Durable Backend
-
-    kernel->>ledger: commit Module/Variant and Attempt start
-    ledger-->>kernel: durable begin receipt
-    kernel->>gateway: resolve Product authorization for the exact operation
-    gateway-->>kernel: committed AR09 intent, decision, and observation refs
-    kernel->>ledger: commit pre-effect operation grant
-    kernel->>adapter: context-bound invocation
-    opt resource Gateway operation
-        adapter->>gateway: operation and execution authorization context
-        gateway-->>adapter: result plus decision/effect references
-    end
-    adapter-->>kernel: normalized result and observations
-    kernel->>ledger: finalize Attempt, calls with AR09 refs, and InvocationCommitRecord
-    kernel->>ledger: commit ModuleOutcome and pre-ack checkpoint
-    backend->>ledger: append backend acknowledgement
-```
-
-The operation intent exists before the external callable is entered. A resource
-Gateway obtains or validates the current Product Authorization decision and
-returns its reference. If the admitted action is high risk, the intent also
-binds the required `OperationGrant` reference and the Gateway returns its
-terminal disposition.
-
-Ordinary operations require decision evidence but no single-use grant. The
-execution ledger fails finalization when a required decision, pre-materialized
-input reference, effect observation, or high-risk grant disposition is absent
-or belongs to another execution lineage.
-
-`run_workflow_module()` is the public workflow-bound composition of this
-lifecycle. Its `WorkflowModuleExecutionRequest` carries the durable dispatch,
-graph-position, Module Run, frozen input closure, and one Variant. The
-`WorkflowModuleLedgerRecorder` writes the formal Module/Variant, Attempt claim,
-operation, output, call, usage, invocation-commit, and output-resolution rows.
-If the same dispatch already has an `InvocationCommitRecord`, Runtime
-reconstructs the committed result and does not call the Provider again. Formal
-tool-call rows carry immutable request and response content refs, so Gateway
-Attempts replay with the same provider-neutral tool observations. If a process
-dies after atomic invocation finalization but before the separate direct-output
-resolution commit, replay derives that resolution only from the committed
-Attempt output bundle and appends the missing row before returning.
-
-`WorkflowExecutionLedgerRecorder` owns the surrounding Workflow facts that are
-not one provider Attempt: it atomically records the Workflow Execution and its
-frozen input members, appends deterministic derived outputs with their exact
-source-artifact refs, and commits every Domain Outcome with its local recovery
-checkpoint. A domain Runtime Services adapter calls this interface; it does
-not construct ledger rows or maintain a second execution trace.
-
-## 7. Invocation Finalization
-
-`finalize_attempt(expected_claim_token, batch)` performs one
-compare-and-commit:
-
-1. validate the active claim and exact Attempt start;
-2. recheck execution, Cell, authorization context, input closure, profile,
-   Variant, and dispatch state;
-3. verify immutable output bytes already exist;
-4. verify required authorization and effect observations;
-5. append the terminal Attempt, output bundle, execution output references,
-   calls, source usage, context events, and `InvocationCommitRecord` atomically;
-   and
-6. close the active claim and return an immutable receipt.
-
-`InvocationCommitRecord` proves that an invocation result is durable. A crash
-after this record and before domain Outcome commit reconstructs the same result
-without repeating the provider, tool, Gateway operation, or side effect.
-
-Output bodies reach immutable content-addressed storage before their references
-are committed. An unreferenced staged blob is non-authoritative and excluded
-from inspection. The current `0.2.0.dev0` PostgreSQL adapter retains that blob;
-a future controlled-retention migration may delete it only after proving that no
-committed record references it. A committed output reference with missing bytes
-is a failed transaction.
-
-## 8. Crash, Stale Result, and Recovery
-
-Recovery follows the highest committed boundary:
-
-| Highest boundary | Required recovery | Prohibited behavior |
-| --- | --- | --- |
-| Attempt start without invocation commit | Orphan or terminalize; retry may create the next Attempt ordinal | Treat staged output as committed |
-| Invocation commit without Module Outcome | Reconstruct committed invocation and continue evaluation or resolution | Repeat provider, tool, Gateway, or protected operation |
-| Module Outcome and checkpoint without backend acknowledgement | Return committed Outcome and append only missing acknowledgement | Create another Attempt or domain effect |
-
-If finalization observes a newer claim, invalid authorization context, changed
-input closure, terminal dispatch, or cancellation, Runtime quarantines the late
-result. It preserves trustworthy usage and call audit, appends a bounded stale
-disposition, invalidates new provider context, and does not publish normal
-downstream output.
-
-## 9. Outcome and Backend Acknowledgement
-
-`CheckpointRecord` is the local pre-ack commit boundary. It binds the exact
-committed Outcome and output resolution when output flows downstream.
-
-`BackendAcknowledgementRecord` separately acknowledges a Module Outcome,
-external event, or cancellation. There is no mutable
-`backend_acknowledged` boolean. Identical replay is idempotent; changed authority
-identity, snapshot, transition sequence, or hash conflicts.
-
-## 10. Persistence Protocol
-
-The portable store exposes typed lifecycle operations:
-
-```python
-class RuntimeExecutionRecordStore(Protocol):
-    def commit_backend_start_receipt(self, record): ...
-    def get_backend_start_receipt(self, workflow_execution_id): ...
-    def begin_attempt(self, batch): ...
-    def commit_protected_operation_intent(self, batch): ...
-    def commit_operation_observation(self, batch): ...
-    def finalize_attempt(self, claim, batch): ...
-    def orphan_attempt(self, claim, batch): ...
-    def commit_outcome(self, batch): ...
-    def acknowledge_backend(self, record): ...
-    def get_committed_invocation(self, workflow_execution_id, dispatch_id): ...
-    def load_trace(self, workflow_execution_id): ...
-```
-
-An internal generic batch primitive may exist, but production callers use typed
-operations so ordering and compare-and-commit cannot be bypassed accidentally.
-Exact method signatures and record fields are code-owned.
-
-## 11. Admission and Conformance Tests
-
-The package and lifecycle suites prove:
-
-- clean wheel and optional-dependency isolation;
-- external opaque plugin registration and execution;
-- backend response-loss and receipt-commit-loss reconciliation;
-- Attempt start uniqueness, orphan closure, and next ordinal;
-- protected-operation intent precedes the external callable;
-- missing decision or required high-risk grant proves zero protected effect;
-- ordinary authorized operation succeeds without a single-use grant;
-- finalization replay, stale claim rejection, and missing-output failure;
-- all three crash windows avoid duplicate invocation or effect;
-- Outcome and pre-ack checkpoint atomicity;
-- append-only backend acknowledgement; and
-- content-leak scans over shared records and backend payloads.
-
-Code-owned schemas, PostgreSQL implementations, Runtime architecture
-registration, generated architecture reports, and tests are the current
-implementation truth. Historical
-predecessor fields cannot be resolved as executable authority after migration.
-
-## References
-
-- [Agent Runtime](the_agent_runtime.md)
-- [Execution Charter](agent_runtime_00_execution_charter.md)
-- [Authorization Integration](agent_runtime_09_authorization_integration_contract.md)
-- [Temporal Durable Adapter](agent_runtime_07_temporal_durable_adapter_contract.md)
-- [Agent Execution Adapter](agent_runtime_08_agent_execution_adapter_contract.md)
+## 2. User Intent
+
+Runtime Operator 能在不读取数据库私有结构、不修改 execution、不依赖 provider session 的情况下，还原
+一个 release 或 execution 的权威状态和 lineage。Inspection 服务透明度，但不成为新的 Registry、
+Ledger 或业务事实 authority。
+
+## 3. Reader Gain
+
+- Runtime Operator 能查询 release、active pointer、Attempt、usage、failure、Outcome 和 Resolution。
+- Host Integrator 能消费稳定 typed snapshot，而不解析 Runtime store。
+- Security Reviewer 能判断 query 请求了哪些字段、projection 实际返回了哪些字段。
+- Runtime Maintainer 能区分 source fact、current snapshot、offline export 和 renderer binding。
+- Engineering Reviewer 能证明 projection deterministic、read-only、complete，且不会隐藏 missing、conflicting
+  或 uncommitted source facts。
+
+## 4. Capability and Operation
+
+本 T2 拥有一个 `Runtime inspection projection` capability。它完成：
+
+1. 验证 host-accepted inspection query 的 shape、exact identity 和 requested fields；
+2. 按 exact identity 读取 Registry、Ledger 或两者的闭合 facts；
+3. 通过 registered projection specification 生成 typed snapshot；
+4. 需要时把 exact snapshot 生成 content-addressed offline export。
+
+Inspection 不执行 command、不改变 active pointer、不推进 Workflow、不重试 Attempt、不确认业务 effect。
+HTML、JSON、CLI、API 或其他 renderer/transport 是 replaceable binding。
+
+### 4.1 Structural Ownership Cutover
+
+本 candidate 是 target T2 06 的唯一 Inspection owner。Predecessor 06 中：
+
+- standalone package、public API、Design bundle、install/import 和 dependency-isolation meaning 由 target
+  T2 05 接收；
+- Attempt、Outcome、Resolution 和 committed execution facts 由 T2 04 Ledger 接收；
+- retry/replay/recovery 由 T2 07 Durability 接收；
+- Context/provider finalization 由 T2 08 Invocation 接收；
+- protected-operation ordering 与 invalidation fence 由 T2 09 接收；
+- execution state advancement 和 backend acknowledgement 由 T2 10 Execution 接收。
+
+06 只保留 read-only inspection/projection meaning。05 与 06 target candidates 必须在同一 Design-set
+cutover 中移除 predecessor overlap；本 candidate 不修改 peer candidate。
+
+## 5. Inspection Object Model
+
+`RuntimeInspectionSnapshot` 至少绑定：
+
+- snapshot type 和 projection-spec ref/hash；
+- query ref/hash；
+- source Registry/Ledger record refs、hashes 和 authoritative observation boundary；
+- release、execution、Module Run、Variant、Attempt、Outcome 或 Resolution identity；
+- requested fields、projected fields 和 applied redaction disposition；
+- source completeness result；
+- canonical snapshot hash。
+
+Snapshot 是某一 exact source closure 的 immutable returned value，不是新的 persistent store。Current
+inspection 通过重新解析 authoritative facts 返回新 snapshot document/hash；不会修改先前返回值。Observed
+time 记录观察边界，不参与被观察 release/execution identity。
+
+`OfflineInspectionExport` 绑定 exact snapshot document/hash、registered renderer/export spec、media type、
+payload hash 和 generated-at time。Inspection 只返回 export payload/hash；是否保存、删除或重建由 host 决定。
+
+## 6. Release Inspection
+
+Release inspection 可读取 exact release、dependency refs/hashes、active pointer、owner contract、
+Prompt/Schema/Policy/Profile/Workflow closure 和 conformance refs。
+
+按 stable subject kind/id 的 current query 必须同时返回所观察的 active-pointer source facts。Exact ref/hash
+query 可以返回任意 registered release；它不改变 active pointer，也不授予 execution。
+
+## 7. Execution Inspection
+
+Execution inspection 可读取 Workflow Execution、Module Run、Variant、Attempt、input closure、selected
+release/Profile、authorization binding、provider result、usage、failure、retry relation、checkpoint、Outcome
+和 Resolution refs。
+
+Inspection 只展示 Ledger 已提交 facts。Provider session、Temporal history、workspace file 或 live process
+不能替代缺失 Ledger record。尚未 committed 的 effect 不能投影为完成；source conflict 返回失败而不是猜测
+顺序。
+
+## 8. Query Scope and Redaction
+
+Host public API access gate 在 query 进入 Runtime 前决定 caller eligibility；host denial 保留 host owner，
+不成为 Inspection error。Inspection 只执行 host-accepted query 中明确给出的 snapshot type、subject scope
+和 requested field set，不扩大 query，也不读取未请求 field。
+
+Redaction disposition 是 projection fact：它说明哪些 registered field classes 被允许、遮蔽或省略，但不
+复制 credential、secret、domain data 或 peer policy。既有 export 的 custody/retention 由其 host owner 管理。
+
+## 9. Public Interface and Effects
+
+| `interface_id` | Input | Successful output | Effect | Errors |
+| --- | --- | --- | --- | --- |
+| `runtime_release_inspect` | host-accepted exact release/subject query, requested fields, and projection spec | `RuntimeInspectionSnapshot` | reads Registry facts and returns a projection; no persistent write | `INSPECTION_QUERY_INVALID`, `INSPECTION_RELEASE_NOT_FOUND`, `INSPECTION_SOURCE_INCOMPLETE`, `INSPECTION_PROJECTION_FAILED` |
+| `runtime_execution_inspect` | host-accepted exact execution query, requested fields, and projection spec | `RuntimeInspectionSnapshot` | reads Ledger facts and returns a projection; no persistent write | `INSPECTION_QUERY_INVALID`, `INSPECTION_EXECUTION_NOT_FOUND`, `INSPECTION_SOURCE_INCOMPLETE`, `INSPECTION_PROJECTION_FAILED` |
+| `runtime_inspection_export` | exact snapshot document/hash plus renderer/export spec | `OfflineInspectionExport` payload/hash | returns replaceable export; no persistent write | `INSPECTION_SNAPSHOT_INVALID`, `INSPECTION_PROJECTION_FAILED` |
+
+## 10. Completion, Failure, and Recovery
+
+| `error_code` | Condition | Meaning | Caller action |
+| --- | --- | --- | --- |
+| `INSPECTION_QUERY_INVALID` | query shape、identity、snapshot type or requested field set unsupported | no facts read or returned | return caller to correct the exact query; do not broaden or guess scope |
+| `INSPECTION_RELEASE_NOT_FOUND` | exact release or subject query has no Registry result | no release snapshot | return caller; do not select latest-like identity |
+| `INSPECTION_EXECUTION_NOT_FOUND` | execution identity has no Ledger closure | no execution snapshot | return caller; verify exact identity |
+| `INSPECTION_SOURCE_INCOMPLETE` | required Registry/Ledger facts missing、conflicting or uncommitted | no trustworthy snapshot | return Registry/Ledger owner with missing refs; never synthesize completion |
+| `INSPECTION_SNAPSHOT_INVALID` | export input snapshot document cannot reproduce supplied canonical hash | no export produced | return caller to provide the exact snapshot document/hash |
+| `INSPECTION_PROJECTION_FAILED` | projection/export spec unresolved or deterministic rendering fails | no snapshot/export produced | return Inspection implementation owner; source facts remain unchanged |
+
+Completion requires a valid host-accepted query、complete exact source closure、registered projection spec、deterministic
+snapshot hash and no write to Registry/Ledger/Execution or an Inspection store. Export completion additionally requires
+exact snapshot document/hash binding and payload hash；host persistence is outside this interface。
+
+Recovery fixes query、source closure or projection implementation and creates a new snapshot/export. It never
+edits authoritative source facts or silently reuses a failed partial output.
+
+## 11. Dependencies and Verification
+
+Allowed dependencies：
+
+- parent T1 domain boundary；
+- Registry T2 public exact-release and active-pointer query results；
+- Ledger T2 public execution-fact query results；
+- code-owned projection specifications and replaceable renderer/export adapters。
+
+Prohibited dependencies：
+
+- Registry/Ledger private store layout or write interface；
+- Execution、Invocation or Durability control interface；
+- provider session、Temporal history or workspace as authority；
+- business data schema、domain artifact body、credential or secret；
+- UI/renderer technology as Design authority。
+
+最低 verification closure：
+
+1. exact/invalid query、subject-scope 与 field-projection cases；
+2. exact Registry release/active-pointer snapshot；
+3. exact Ledger execution/Attempt/Outcome/Resolution snapshot；
+4. missing、conflicting、uncommitted source negatives；
+5. snapshot deterministic replay and content hash；
+6. current query produces new snapshot without mutating predecessor；
+7. offline export hash/parity and rebuildability；
+8. no-write guards for Registry、Ledger and Execution stores；
+9. renderer/transport replacement does not change snapshot semantics。
+
+## 12. References
+
+- [Agent Runtime Charter](the_charter.md)
+- [Agent Runtime T0](the_agent_runtime.md)
+- [Agent Runtime Domain Root](agent_runtime_00_execution_charter.md)
+- [Registry](agent_runtime_01_module_contract_and_assembly.md)
+- [Standalone Release Conformance](agent_runtime_05_delivery_roadmap.md)
 - [Timestamp Semantics](the_timestamp_semantic.md)

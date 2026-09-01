@@ -1,10 +1,11 @@
 ---
-title: Agent Runtime Contract
+title: Agent Runtime 合同（Agent Runtime Contract）
 status: candidate
 layer: T0
 t0_layer_id: the_agent_runtime
 canonical_owner: designDoc/the_agent_runtime.md
 owned_system_object: provider-neutral Agent execution
+language: zh-CN with exact English identifiers
 reader_persona:
   - Platform Architect
   - Runtime Maintainer
@@ -12,20 +13,14 @@ reader_persona:
   - Security Reviewer
 ---
 
-# Agent Runtime Contract
+# Agent Runtime 合同（Agent Runtime Contract）
 
-**Purpose**: Define a standalone, business-neutral infrastructure product for
-registering independently owned Runtime Modules from fixed authoring sources, assembling Workflow
-Graphs from those Modules, and executing, evaluating, observing, recovering,
-and evolving each Module independently.
+本文只冻结 Agent Runtime 的 portable 顶层语义：它准入并执行 provider-neutral Agent Module
+与 Workflow，形成可重现、可检查的 execution result。Runtime 的当前开发进度、object field、
+state transition、provider、durable backend、database、host binding、deployment 与 project-local
+specialization 不属于本 T0，由代码或 Agent Runtime 自己的 T1/T2 Design 持有。
 
-**Required reader gain**: A reader can separate Runtime law from domain
-behavior, Skill authoring, product authorization, logical workflow ownership,
-data governance, host deployment, and software delivery; identify the portable
-plugin and adapter seams; and run one registered Module without relying on a
-particular provider, Workflow, or durable backend.
-
-## 0. Contract Capsule
+## 0. Intent Capsule
 
 ```yaml
 layer: T0
@@ -34,714 +29,221 @@ status: candidate
 canonical_owner: designDoc/the_agent_runtime.md
 owned_system_object: provider-neutral Agent execution
 scope:
-  - standalone public Runtime contracts and plugin SDK
-  - Runtime admission of independently registered Module candidates
-  - dependency-closed Runtime Module and Workflow Release admission
-  - Workflow Execution, Module Run, Execution Variant, Attempt, Execution Output, Evaluation, Selection, and Resolution lineage
-  - provider-neutral Module invocation
-  - provider-specific SDK and CLI invocation governance
-  - Temporal Workflow coordination and recovery integration
-  - PostgreSQL release, execution, and recorded-content persistence
-  - Product Authorization and governed Data Access integration
-  - task-scoped portable context
-  - authorization-evidence consumption and execution-local fencing
-  - data isolation, telemetry, checkpoint, recovery, evaluation, testing, and Module evolution
-  - independently distributable Runtime core and extension boundary
+  - executable Module 与 Workflow release admission
+  - provider-neutral Module 与 Workflow execution
+  - immutable execution identity、lineage、outcome 与 usage fact
+  - replaceable provider、durability、record-store、data-access 与 host integration seam
+  - independently publishable Runtime core 与 conformance surface
 non_goals:
-  - domain roles, graph meaning, content rubrics, revision policy, or terminal business decisions
-  - Principal, Entitlement, policy, delegation, or grant issuance
-  - logical product action, domain workflow meaning, business lifecycle, or route selection
-  - physical data placement, retention, residency, canonical domain schema, or canonical write approval
-  - durable backend, provider, model, SDK, API, CLI, PostgreSQL hosting, driver, pooling, or deployment-topology selection
-  - host product composition, user interface, pricing, or software-delivery status
+  - current Runtime implementation progress、schema、field、state、release version 或 deployment
+  - product objective、domain workflow meaning、content quality 或 terminal business decision
+  - permission assignment、authorization policy 或 data-access decision
+  - canonical domain data、domain SQL、migration 或 write approval
+  - database credential 的解析、签发、刷新或保管，以及 connection pool、provider account 或 deployment topology
+  - provider、model、durable backend、database product 或 host-product selection
+  - software build、deployment、publication 或 product release admission
 inputs:
-  - designDoc/the_charter.md
-  - designDoc/the_agency_platform.md
-  - designDoc/the_product_authorization.md
-  - designDoc/the_artifact_graph.md
-  - designDoc/the_data_governance.md
-  - designDoc/the_software_delivery.md
-  - designDoc/the_skill_management.md
-owned_specialization_contracts:
-  - designDoc/agent_runtime_00_execution_charter.md
-  - designDoc/agent_runtime_01_module_contract_and_assembly.md
-  - designDoc/agent_runtime_03_authorized_external_event_ingress.md
-  - designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md
-  - designDoc/agent_runtime_07_temporal_durable_adapter_contract.md
-  - designDoc/agent_runtime_08_agent_execution_adapter_contract.md
-  - designDoc/agent_runtime_09_authorization_integration_contract.md
-adjacent_contracts:
-  - designDoc/agent_runtime_02_product_target_topology.md
-  - designDoc/agent_runtime_05_delivery_roadmap.md
-  - designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md
+  - dependency-closed Runtime release candidate
+  - admitted Runtime target reference
+  - frozen Module input closure
+  - target owner-declared governed-data references
+  - host-injected database credential 与 binding（仅在 database access 时）
 outputs:
-  - public Runtime contract and plugin seam
-  - registered Schema Asset, Prompt Component, Prompt Bundle, Execution Profile, Module, and Workflow Releases
-  - immutable execution, output-reference, evaluation, resolution, context, telemetry, and recovery lineage
-  - provider-neutral conformance and standalone-distribution requirements
+  - immutable Runtime release disposition
+  - execution root 与 Runtime-owned lineage
+  - resolved execution output 或明确失败
+  - read-only inspection projection
 truth_surfaces:
   - logical:agent_runtime_release_registry
-  - logical:agent_runtime_architecture_registry
+  - logical:agent_runtime_execution_ledger
 runtime_triggers:
-  - admitted Workflow Execution request
-  - admitted external event or protected-operation request through a Runtime service boundary
+  - admitted direct Module request
+  - admitted Workflow request
+  - Runtime release qualification request
 downstream_consumers:
-  - host composition roots
-  - domain workflow plugins
-  - provider, Temporal, and PostgreSQL implementations
-  - assurance, security, and software-delivery gates
+  - product host
+  - domain workflow owner
+  - assurance 与 software-delivery gate
 open_decisions: []
-review_gate: design_doc_review, standalone import-boundary conformance, and independent engineering review
+review_gate: Design Doc Management 所属 Reviewer 对 exact candidate 的独立 Design review；Agent Runtime owner 单独作出 owner decision
 runtime_surface_ledger:
-  - generated from the project-local Runtime architecture registry and Runtime Release Registry
-  - never maintained manually in this portable T0 contract
+  - current implementation 与 release fact 只来自 code-owned Runtime registry、validator 与 committed execution record
 verification_hooks:
-  - Release Registry and generated architecture-report parity
-  - single-registration-authority enforcement
-  - synthetic opaque-plugin and adapter conformance
-  - execution lineage, isolation, recovery, telemetry, and release compatibility tests
+  - release closure 与 single-authority enforcement
+  - provider-neutral execution、adapter conformance 与 database credential opaque-carry/non-custody checks
+  - execution lineage、replay、isolation 与 inspection test
+  - standalone import-boundary conformance
 ```
 
-## 1. Runtime Outcome
-
-Agent Runtime is an independently distributable infrastructure product. It
-registers explicit business-owned plugins, executes their admitted Workflows,
-commits execution facts to its Execution Ledger, and exposes authorized
-read-only projections without interpreting business meaning.
-
-Arrows below mean logical call or committed-fact flow. Concrete technology
-bindings are intentionally absent.
+## 1. Primary System Flow
 
 ```mermaid
 flowchart LR
-    DOMAIN["Domain plugin"] --> REGISTRY["Registry"]
-    HOST["Product host"] --> EXECUTION["Execution"]
-    AUTH["Authorization context"] --> EXECUTION
-    REGISTRY --> EXECUTION
-    EXECUTION --> INVOCATION["Invocation"]
-    EXECUTION <--> DURABILITY["Durability"]
-    EXECUTION --> LEDGER["Execution Ledger"]
-    LEDGER --> INSPECTION["Inspection"]
+    T0["Agent Runtime T0 semantics"] --> T1["Runtime T1/T2 Design 与 code-owned contracts"]
+    C["Dependency-closed Runtime release candidate"] --> A["Runtime release admission"]
+    T1 --> A
+    A --> R["Admitted Runtime release"]
+    H["Product host request"] --> E["Runtime execution"]
+    X["Target owner-declared<br/>governed input refs"] --> E
+    D["Data Governance-designated project data-access owner<br/>via product host<br/>database credential + binding<br/>only for database access"] --> E
+    T1 --> E
+    R --> E
+    E --> I["Provider / tool invocation through admitted Adapter"]
+    I --> E
+    E --> L["Execution Ledger"]
+    E --> O["Resolved output 或明确失败"]
+    L --> P["Read-only inspection"]
 ```
 
-The Runtime core understands identities, versions, references, hashes, lifecycle states, and declared contracts. It treats domain states, roles, artifacts, evaluator meanings, and terminal outcomes as opaque values.
+| `interface_id` | Owner | 输入 | 输出 | Effect | `error_code` |
+| --- | --- | --- | --- | --- | --- |
+| `runtime_release_admission` | Agent Runtime | Dependency-closed Runtime release candidate 与 conformance evidence | Immutable admitted release ref 或 rejection | 只在成功时创建一项 Runtime execution authority | `RUNTIME_RELEASE_CLOSURE_INVALID` |
+| `runtime_execution` | Agent Runtime | Execution-start identity、admitted target ref、frozen input closure、target owner-declared governed-data refs，以及 host-injected database credential 与 binding（仅在 database access 时） | Execution ref 加 resolved output，或明确失败 | 创建一个 execution root，并提交该 root 的 Runtime lineage；同一已确认 identity 只返回既有 committed facts | `RUNTIME_EXECUTION_INPUT_INVALID` / `RUNTIME_EXECUTION_TERMINAL_FAILURE`；database operation 的 Product Authorization 或 adapter failure 保留真实 owner，不在 Runtime 重定义 |
+| `runtime_inspection` | Agent Runtime | Exact query over committed Runtime facts | Read-only inspection projection | 不修改 Registry、Ledger 或 domain state；需要 database read 时使用 project data-access adapter，并保留其 allow/deny 或 failure identity | — |
 
-The owning product or domain T1 defines the logical workflow or product action.
-The host Workflow Control Plane resolves its admitted execution class and
-supplies an immutable `runtime_execution_binding` for Agent work. Runtime Intake
-validates that binding against the exact `workflow_release` in the Runtime
-Release Registry and the supplied authorization evidence. Host resolution never
-writes, extends, or replaces Runtime Release Registry authority.
+| `error_code` | Owner | 触发条件 | 含义 | Caller action |
+| --- | --- | --- | --- | --- |
+| `RUNTIME_RELEASE_CLOSURE_INVALID` | Agent Runtime | Candidate identity、dependency、contract 或 conformance closure 不完整 | Candidate 没有 Runtime execution authority | 修复同一 owner 的 candidate closure，生成新 candidate 后重新请求 admission |
+| `RUNTIME_EXECUTION_INPUT_INVALID` | Agent Runtime | Target、input closure 或 required binding 不完整或不一致 | 本次 request 无法建立合法 execution root | 修复 request/input binding，并以新 request identity 重试 |
+| `RUNTIME_EXECUTION_TERMINAL_FAILURE` | Agent Runtime | 已准入执行无法产生 resolved output | Execution 已 terminal，但没有可推进的 Runtime output | 读取 committed failure lineage；按 owning workflow 的 recovery/stop rule 决定后续动作 |
 
-### 1.1 Canonical registration and execution flow
+## 2. User Intent
 
-Registration establishes what may execute. Execution never reconstructs that
-authority from a working-tree Skill or provider session.
+产品可以把已准入的 Agent Module 或 Workflow 交给一个可独立分发、provider-neutral 的 Runtime
+执行，并获得可重现、可检查的结果；调用方不需要把 provider session、host directory、domain
+data store 或 product-specific workflow 当作 Runtime truth。
 
-```mermaid
-flowchart LR
-    INTENT["Domain intent and Module contracts"] --> SOURCE["Selected Module authoring source"]
-    SOURCE --> COMPILE["Import Schema Assets and compile Module, Prompt, Profile, and Workflow releases"]
-    COMPILE --> BUNDLE["Dependency-closed runtime_release_bundle"]
-    BUNDLE --> REGISTRY_CANDIDATE["Runtime Release Registry<br/>candidate"]
-    REGISTRY_CANDIDATE --> TEST["Direct Module tests, Evaluation, and workflow shadow run"]
-    TEST --> ADMIT["Atomic release admission"]
-```
+## 3. Reader Gain
 
-Execution carries the admitted releases, authorized data, provider capability,
-and output lineage through distinct stages.
+- Platform Architect 能判断一项能力属于 Runtime 顶层 authority、下层 Runtime specialization，
+  还是相邻 product、data、authorization 或 delivery authority。
+- Runtime Maintainer 能沿 admitted release、execution root、Invocation、Ledger 与 Inspection
+  追踪一次执行，同时把当前 object schema 与 lifecycle 留给代码和下层 Design。
+- Domain Plugin Owner 能把 domain semantics 当作 opaque input/output 使用，而不把 domain SQL、database
+  credential 解析、acceptance 或 publication 责任塞进 Runtime。
+- Security Reviewer 能确认 provider、tool、workspace 与 network 只使用已声明 capability；database access
+  只通过 project data-access adapter，并且 Runtime 不解析 `user_key`、permission result 或 database credential。
 
-```mermaid
-flowchart LR
-    REQUEST["Product request"] --> AUTH["Execution authorization context"]
-    REQUEST --> BIND["Exact Workflow and Module release binding"]
-    AUTH --> GATE["Data Access Gateway"]
-    PG["Governed PG data"] --> GATE
-    BIND --> INPUT["Frozen module_input_closure"]
-    GATE --> INPUT
-    INPUT --> RUN["Module Run"]
-    RUN --> VARIANT["Execution Variant<br/>exact Prompt and Execution Profile"]
-    VARIANT --> ATTEMPT["Attempt<br/>tool-free or Agent execution"]
-    ATTEMPT --> OUTPUT["Validated execution output"]
-    OUTPUT --> EVAL["Evaluation and Selection when required"]
-    EVAL --> RESOLVE["Module output resolution"]
-    RESOLVE --> NEXT["Next Module or caller"]
-```
+## 4. Owned System Object
 
-The Release Registry contains executable control-plane releases. Governed
-content stays in its owning PG-backed data service or Cell-local execution
-store. The provider receives the semantic projection of the frozen input plus
-only the capabilities admitted by the exact Execution Profile.
+Agent Runtime 只拥有一个 system object：`provider-neutral Agent execution`。该对象包括 Runtime
+release admission、统一 execution kernel、Runtime-owned execution facts、replaceable integration seam
+与 read-only inspection。具体 release type、record field、state transition、retry、checkpoint、adapter
+profile、storage schema 与 host composition 都是下层或 code-owned projection，不形成第二个 T0 object。
 
-## 2. Authority Boundaries
+## 5. Authority
 
-| Concern | Canonical owner | Runtime relationship |
+只有 Agent Runtime 可以定义：
+
+1. 什么条件使一个 executable Runtime release 获得 Runtime execution authority；
+2. direct Module 与 Workflow node 必须共用的 provider-neutral execution boundary；
+3. 哪些 identity、lineage、outcome 与 usage fact 属于 Runtime record authority；
+4. Invocation、Execution、Ledger 与 Inspection 之间的顶层 fact ownership；
+5. provider、durability、record-store 与 host integration 必须可替换的 conformance boundary；
+6. Runtime release admission 只授予 Runtime execution authority，不能推出 software deployment、
+   domain acceptance 或 product publication。
+
+Agent Runtime 不定义 product action、domain meaning、permission、data policy、domain write、software
+deployment 或 publication decision，也不把当前 Runtime implementation 状态写入 portable T0。
+
+## 6. Runtime 顶层语义
+
+### 6.1 Release 与 execution 分离
+
+Runtime release admission 只回答一个 executable release 是否可被 Runtime 执行；Software Delivery
+单独回答软件是否可安装或部署，product/domain authority 单独回答 output 是否可被业务使用。行为变化
+必须产生新的 immutable release；既有 execution 继续固定在原 release。
+
+### 6.2 统一 execution kernel
+
+Standalone-capable Module 可以直接启动，Workflow 可以组织多个 Module 与 durable transition；两者
+必须进入同一套 execution identity、frozen input、invocation、lineage、resolution 与 inspection
+control。Direct execution 不是 synthetic Workflow，也不能获得更弱的 control。
+
+### 6.3 Provider-neutral invocation
+
+Model 或 tool call 只能通过 admitted Adapter。Module 定义 task behavior；Execution Profile 定义
+provider-facing execution choice；Adapter 负责执行并规范化 provider result。Provider-native session
+可以优化 continuation，但不能成为唯一 canonical state 或跨越 incompatible isolation boundary。
+
+### 6.4 Frozen input 与 bounded capability
+
+每次 execution 接收一个 exact frozen input closure 与显式 capability。Model 或 provider process
+不获得 ambient repository、host filesystem、authorization table 或 undeclared prior state。只有 database
+access 会携带 database credential：product host 把 exact credential 与 binding 注入 Runtime execution
+context，Runtime 与 Module 原样携带到受控 `DataAccessAdapter`，不读取其内容，不签发、不刷新、不持久
+保管，也不扩大 scope。非数据库 provider/tool invocation 不进入这一 credential 模型。Data Governance
+指定的 project data-access owner 负责 database credential 的取得与注入以及 Adapter implementation；
+Data Governance 定义 admitted database binding 与 shared `DataAccessAdapter` boundary；domain owner
+定义 domain SQL、migration、query 与 canonical write。这里固定的是 portable authority boundary，不要求或
+修改任何 project T1/T2 contract。
+
+### 6.5 Runtime facts、recovery 与 inspection
+
+Invocation 返回 observation；Execution 验证并提交 Runtime fact；Execution Ledger 保存 authoritative
+committed fact；Inspection 只做 read-only projection。Recovery 不能重复已 committed provider
+call 或 protected effect，也不能暗中采用新的 release、input、Profile、data scope 或 owner-supplied binding。
+同一已确认 execution-start identity 的重复提交返回既有 committed facts；实质不同的 request 使用新的
+identity 并创建新的 execution root。Identity field、claim 与 crash-window rule 由下层 contract 持有。
+
+Runtime 自己的 T1/T2 Design 与 code-owned contracts 承担 object family、field、state machine、retry、
+checkpoint、durability、provider request、record-store schema、adapter profile、test fixture 与 current
+release binding。portable T0 不维护这些 inventory 或开发进度。
+
+## 7. System-wide Invariants
+
+1. Runtime core 不 import host 或 domain implementation。
+2. 超过一个 authority 不得准入或修改 Runtime release。
+3. Provider、host、Skill file、generated projection 或 handwritten log 不能成为 Runtime truth。
+4. Model 或 tool call 必须具有可重建的 release、execution、input、capability、output 与 usage lineage。
+5. Runtime 不解释 domain meaning、permission、review result、product acceptance 或 publication decision。
+6. Runtime 或 Module 只携带 host 注入的 database credential 与 binding，不解析、不签发、不刷新、不扩大
+   scope、不持久保管，也不创建 ambient database connection 或持有 domain SQL/write；非数据库
+   provider/tool 与该 credential 无关。
+7. Direct Module 不得绕过 Workflow Module node 所受的 execution control。
+8. Recovery 不得重复 committed invocation，或暗中采用新的 release、input、Profile、data scope 或 owner-supplied binding。
+9. Provider-native state 不得成为唯一 continuity source，也不得跨 isolation boundary。
+10. Inspection、telemetry 或 durable history 不得创建 fact、修改 Ledger，或越权暴露 protected content。
+11. 未 resolved 的 output 不得推进为 Runtime success。
+12. Runtime output 不得被表述为 domain admission、artifact readiness、product publication 或 software deployment evidence。
+
+Code-owned registry、validator、persisted Runtime record 与 generated inspection 是 implemented/current
+状态的 truth。portable T0 只定义上述 stable meaning 与 enforcement obligation。
+
+## 8. Peer Boundaries
+
+| External authority | Runtime consumes | Runtime must not do |
 | --- | --- | --- |
-| Business objective, graph meaning, content quality, revision, and terminal semantics | Owning domain Intent Contract and typed graph | Consumes opaque releases and validates structural closure |
-| Logical product action, behavior release, and business lifecycle | Owning product or domain T1 | Consumes one exact host-resolved Runtime binding without interpreting business meaning |
-| Product Principal, Entitlement, resource permission, policy evaluation, Authorization Decision, execution authorization context, revocation, and high-risk grant issuance | [Product Authorization](the_product_authorization.md) | Consumes an execution authorization context and decision or grant references without reading Entitlement bodies |
-| Runtime Module and Workflow execution, lineage, context, evaluation mechanics, recovery, and telemetry | Agent Runtime | Owns portable execution records and enforcement |
-| Provider, model, execution mode, tool policy, Attempt workspace, network policy, and Context transport | Execution Profile Release and Agent Execution Adapter | Runtime pins the exact profile and admits only an Adapter revision that can enforce every declared capability |
-| Stable Project Workflow identity plus Operation, Artifact, Design Contract, dependency, readiness, freshness, and provenance graph | [Artifact Graph](the_artifact_graph.md) and the owning domain | Runtime consumes exact registered identities and emits typed execution evidence; it does not own the project index, create an accepted `artifact_instance`, or grant product-level consumability |
-| Physical placement, residency, retention, backup, export, and destruction | [Data Governance](the_data_governance.md) | Uses registered storage bindings and preserves isolation |
-| Build, package, release admission, deployment, rollback, and retirement evidence | [Software Delivery](the_software_delivery.md) | Exposes versioned Runtime release units and conformance evidence |
-| Product composition, deployment topology, and operator experience | [Agency Platform](the_agency_platform.md) | Is loaded and operated by the host without importing the host into core |
-| Skill semantics, authoring, review identity, and lifecycle | [Skill Governance](the_skill_management.md) | Runtime receives fixed Module sources, records stable `source_skill_id` provenance, and owns executable Module admission and invocation |
-
-Domain workflow admission, product authorization, Runtime admission, domain acceptance, and canonical mutation are separate decisions. No record from one authority substitutes for another.
-
-## 3. Public Contract and Plugin Seam
-
-### 3.1 Canonical naming
-
-Every Runtime-owned source file uses the same three-part semantic name:
-
-```text
-module_subject_nominalized_action
-```
-
-The first term identifies the owning logical responsibility, the second
-identifies the subject being acted on, and the third names the action as a
-noun. Examples
-include `registry_release_registration`, `execution_module_invocation`,
-`ledger_record_persistence`, `invocation_prompt_assembly`,
-`durability_temporal_coordination`, `registry_postgres_persistence`, and
-`inspection_release_rendering`.
-
-The name must remain understandable when copied without its directory. Bare
-implementation-pattern or role names such as `service`, `manager`, `utils`,
-`helpers`, `store`, `api`, `adapter`, `ports`, `release_control`, or
-`persistence` are not valid Runtime filenames. A fully qualified three-part
-name may contain `persistence` or `adaptation` as its action only when its
-logical responsibility and subject make the behavior explicit. Logical
-responsibility identifiers are governed by the architecture registry instead
-of this filename guard.
-
-Runtime-owned canonical names use `snake_case`. This includes source and schema
-files, directories, variables, functions, fields, tables, columns, events,
-serialized `record_type` values, and stable identifiers. A Python class may use
-the `PascalCase` projection of the same three semantic terms. Opaque identifiers
-owned by an external protocol remain byte-exact. Provider-required filenames
-such as `SKILL.md` are protocol exceptions.
-
-The independently published Runtime exposes stable logical responsibilities,
-not source directories or currently selected technologies:
-
-| Logical responsibility | Owns |
-| --- | --- |
-| Registry | Release compilation, validation, registration, activation, and exact retrieval |
-| Execution | Workflow initiation and advancement, Module invocation coordination, Cell-local staging, Evaluation, output Resolution, checkpoint, and recovery |
-| Invocation | Prompt assembly plus registered model and tool invocation |
-| Durability | Acknowledged commands, waits, retries, replay, and recovery through a replaceable durable backend |
-| Ledger | Authoritative execution lineage, Attempts, usage, outcomes, and Resolution facts |
-| Inspection | Authorized read models and Workflow Inspector rendering |
-
-Authorization and governed Data Access are external authorities consumed by
-Execution. Their Runtime clients carry exact execution context; they are not
-alternate Runtime control planes.
-
-Database engines, durable backends, provider SDKs and CLIs, and renderers become
-implementation bindings only through the code-owned architecture registry.
-Each registered binding implements exactly one logical responsibility and
-cannot become a peer responsibility or record authority. The generated
-architecture projection enumerates the current binding set. Physical source
-directories likewise do not become logical responsibilities.
-
-A domain plugin submits one dependency-closed `runtime_release_bundle` through a
-`runtime_module_plugin`. The bundle may contain Schema Asset, Prompt
-Component, Prompt Bundle, Execution Profile, Runtime Module,
-Workflow, and admission
-releases. Runtime
-validates identity, uniqueness, exact hash closure, declared operation closure,
-and release compatibility. It does not infer behavior from names, inspect
-domain prose to invent a release, or maintain a parallel stable-registration
-object beside the immutable releases.
-
-Logical call and committed-fact flow is fixed. Every node below is a logical
-responsibility; arrows do not mean source placement or technology binding:
-
-```mermaid
-flowchart LR
-    PLUGIN["Domain plugin"] --> REGISTRY["Registry"]
-    REGISTRY --> EXECUTION["Execution"]
-    HOST["Product host"] --> EXECUTION
-    EXECUTION --> INVOCATION["Invocation"]
-    EXECUTION <--> DURABILITY["Durability"]
-    EXECUTION --> LEDGER["Execution Ledger"]
-    LEDGER --> INSPECTION["Inspection"]
-```
-
-Runtime imports no domain package, host catalog, product route table, or Skill
-projection during production execution. The host installs compatible Runtime,
-provider, durability, and domain-plugin releases explicitly. Discovery alone
-grants no execution authority.
-
-A code-owned Runtime architecture registration separately registers logical
-responsibilities, physical source directories, and concrete implementation
-bindings. Every shipped source file maps to exactly one logical responsibility,
-one physical directory, and one canonical Design Contract. Only a concrete
-technology implementation may also map to an implementation binding.
-Repository CI rejects mixed axes, an unregistered or misplaced file, a missing
-contract, a generic filename, a duplicate disposition, or undeclared debt.
-README and stable Design Contracts explain the module law; the generated
-architecture report is the exhaustive current file inventory.
-
-### 3.2 Agentic workflow conformance invariant
-
-Every model-backed workflow that is admitted as a managed product or
-engineering workflow binds one immutable, versioned Agentic Workflow
-Conformance Package. The package proves the closure of Intent, graph,
-Module Releases, typed inputs and outputs, authorization, context and data
-boundaries, evaluation, recovery, telemetry, tests, and release evidence. The
-package is provider-neutral and domain-neutral; it does not standardize the
-business graph, role semantics, rubric, or terminal meaning.
-
-The complete package is control-plane authority. A Module Run receives only a
-hash-bound task-plane projection containing the authorized materials and
-operations required for that Module. A complete package is therefore not a
-license to put every referenced document, prior output, or accessible Source
-into every prompt. Runtime rejects both a missing required input and an
-undeclared extra input.
-
-Control-plane identity never becomes model task content merely because Runtime
-needs it for admission or replay. Artifact refs, content hashes, release and
-schema identities, authorization evidence, Entitlement metadata, tenancy,
-Cell identity, execution IDs, and accounting fields remain in the Runtime
-closure. Before invocation, code creates a declared model-input projection
-containing only the semantic content and minimum semantic identifiers that can
-change the Module answer. The provider workspace and prompt expose that
-projection, not Runtime manifests or the private closure. Runtime joins the
-model output back to the private closure and deterministically adds required
-lineage after schema validation.
-
-Direct SDK, API, CLI, or primary-Agent execution may exist only in the
-`developing` or `migration_planned` lifecycle as bootstrap or advisory
-evidence. It is outside formal managed execution and cannot be relabeled by
-adding a log after the call. Promotion to `managed` requires the conformance
-package, Runtime lineage, required tests and evaluations, and admitted adapter
-bindings. `direct_entry_retired` isolates the direct execution entry while
-retaining the managed Skill and interface projections.
-
-Agentic workflow authoring is registration-first. Before a model-backed graph
-node is accepted as a workflow candidate, its owning plugin declares the exact
-Module authoring source and stable source Skill ID, concrete input and output schema assets, declared
-operations, Context policy, Evaluation policy, retry policy, output-resolution
-policy, Prompt Bundle closure, and focused conformance fixtures needed for one
-Runtime Module Release. A Workflow candidate references exact Module Release
-refs and hashes; it cannot use a role name, Skill path, prompt file, model call,
-or schema-ref string as a substitute for Module registration. Skill authoring
-and workflow authoring fail closed when this registration closure is absent.
-
-Repository paths are authoring-time import locators only. Registration imports
-the exact schema and prompt content into the Runtime control-plane store. A
-production Module Run resolves those persisted releases by ref and hash, so the
-standalone Runtime distribution requires neither the originating repository
-layout nor a mounted Skill directory.
-
-## 4. Execution Object Model
-
-```mermaid
-flowchart LR
-    O["Workflow node or direct Module request"] --> S["Module Run"]
-    S --> V1["Execution Variant A"]
-    S --> V2["Execution Variant B"]
-    V1 --> A1["Attempt"]
-    V2 --> A2["Attempt"]
-    A1 --> O1["Immutable attempt_output_bundle"]
-    A2 --> O2["Immutable attempt_output_bundle"]
-    O1 --> E["evaluation_set"]
-    O2 --> E
-    E --> SEL["Selection when required"]
-    O1 --> R["module_output_resolution_record"]
-    E --> R
-    SEL --> R
-    R --> NEXT["Downstream consumption"]
-```
-
-- A **Workflow Execution** pins one exact admitted `workflow_release`, its graph, execution release, authorization closure, and storage scope for its complete lifecycle.
-- A **Module Run** pins one exact Runtime Module Release, execution purpose,
-  optional workflow graph position, authorization scope, and immutable input
-  closure. It may also be the root of an authorized standalone, Evaluation,
-  test, or replay execution.
-- An **Execution Variant** pins one behavior-affecting execution configuration.
-  Provider, model profile, adapter revision, execution mode, input delivery
-  plan, tool policy, network policy, Context policy, or output-normalization
-  change creates another Variant under the same Module Run.
-- An **Attempt** is one immutable invocation try under one Variant. Retry appends an Attempt and never rewrites a prior result.
-- An **attempt_output_bundle** is a Runtime-owned immutable record of output
-  handles, hashes, declared output types, and producing lineage. An
-  **execution_output_ref** identifies one exact output in that bundle. Neither is
-  an Artifact Graph `artifact_instance`; only the Artifact Service and owning
-  domain can register a candidate Artifact and determine product readiness or
-  canonical admission. Provider workspaces are not outputs or Artifacts.
-- An **evaluation_run** judges one exact candidate through a registered evaluator. An **evaluation_set** proves required candidate-by-evaluator coverage.
-- A **Selection** identifies the chosen candidate when policy requires comparison.
-- A **module_output_resolution_record** is the sole Runtime authority for selecting
-  which execution output may advance to a downstream Module or be
-  returned to the domain plugin. It grants no Artifact Graph readiness,
-  product delivery eligibility, domain acceptance, or canonical admission.
-
-Every Module Release declares one resolution policy: direct single output,
-evaluated single output, or selected output. Multiple eligible Variants require
-closed evaluation coverage and immutable Selection. A raw Attempt, unresolved
-execution output, score, or provider response cannot bypass Resolution.
-Product-level consumption additionally requires every Artifact Graph and
-domain gate declared for that use.
-
-The product handoff is explicit and ordered:
-
-```mermaid
-flowchart LR
-    RESOLVE["module_output_resolution_record"] --> OUTPUT["Resolved execution_output_ref"]
-    OUTPUT --> CANDIDATE["Artifact Service<br/>candidate registration"]
-    CANDIDATE --> ADMISSION["Owning-domain admission"]
-    ADMISSION --> PRODUCT["artifact_instance<br/>readiness / canonical admission"]
-```
-
-Runtime owns only the first two identities and returns the exact resolved
-`execution_output_ref` with its bundle and Resolution lineage. Artifact Service
-candidate registration and owning-domain admission occur outside Runtime. An
-execution output does not become an Artifact Graph object merely because it was
-committed, resolved, returned, or registered as a candidate.
-
-## 5. Adapter Neutrality and Context Portability
-
-Runtime defines replaceable service-provider interfaces for durable execution,
-Agent execution, authorization integration, and host composition. Runtime
-selects PostgreSQL as the production system of record for its own releases,
-execution lineage, and recorded execution content. PostgreSQL hosting, driver,
-pooling, and deployment topology remain replaceable implementation choices;
-the persistence semantics and canonical schema do not. No implementation may
-choose a domain edge, reinterpret a domain verdict, mutate domain state
-directly, or redefine Runtime identity.
-
-An immutable `prompt_component_release` is the Runtime-owned storage
-unit for formatted static content that may enter a model Context. Its initial
-kinds are task instruction and output constraint. It stores
-the exact model-ready content, content hash, producing Formatter version, and
-source-release refs and hashes. An ordered `prompt_bundle_release` references
-those component releases and stores the complete compiled static Context.
-Component and bundle rows are canonical after admission; Markdown is a
-generated inspection and recovery projection only.
-
-Execution-selected domain context is not a Prompt Component and does not create
-another Module Release. The owning domain stores and versions that semantic
-asset. After routing, the authorized Runtime caller resolves its body, ref, and
-hash and freezes them into the Module input closure. Runtime records that exact
-input binding and the final Prompt Envelope, so every Variant under the same
-Module Run receives the same domain context bytes.
-
-An Agent Execution Adapter receives one frozen Variant-bound request and
-returns a structured terminal result, immutable output reference, normalized
-failure class, Context event, and usage fields available from the provider. It
-loads the admitted Prompt Bundle bound by the Module Release and produces the
-exact provider request pinned to that Variant. A
-content-bearing final provider request is committed in the Cell-local Prompt
-Envelope before invocation. The Executor reads that committed UTF-8 body and
-sends it unchanged; it must not privately append, reconstruct, or replace
-prompt text after the recorded envelope hash is fixed. Consequently an
-Inspector can show the actual request from first character to last rather than
-reconstructing an approximation from Prompt Bundle members and input metadata.
-A durable backend persists scheduling and content-free workflow continuity. A
-PostgreSQL implementation enforces the registered Runtime schema and isolation
-binding. Provider and durability implementations produce the same public
-lineage regardless of implementation.
-
-An Adapter may use refs and hashes to resolve and verify inputs, but it must not
-stage a control-plane manifest in the model-readable workspace or render those
-fields into the provider prompt. Model-visible filenames, instructions, input
-bodies, and output-shape rendering are part of the auditable task-plane
-projection.
-
-Permissions are code-enforced Execution Profile and Adapter configuration,
-never behavioral prose. Runtime supports two base execution modes. A
-`tool_free` Module uses inline delivery only and is admitted only when the
-complete semantic projection fits its conservative provider input budget. An
-`agent` Module may use inline, Gateway-read, managed-attachment, or hybrid
-delivery plus an isolated Attempt work root to write, reread, revise, and
-validate its own draft inside one provider invocation. Governed research data
-stays behind the PG-backed Data Access Gateway. Local attachments are an
-exceptional transport for exact binary objects, not a search surface.
-
-Filesystem and command access are also Profile capabilities; they are not
-globally forbidden merely because most content Modules do not need them. A
-Module may receive an exact `managed_read_only_tree` execution input when its
-registered task must inspect a multi-file artifact such as a frozen source
-tree, repository candidate, or build package. The tree is resolved before
-invocation, bound by manifest and hash, and mounted only inside that Attempt.
-It is not an ambient repository checkout and does not grant access to the host
-workspace. A Profile may also expose a sandbox command capability, including a
-provider-native `bash` tool, when Runtime can enforce its declared filesystem,
-command or executable, cwd, environment, network, timeout, and writable-root
-boundary. Such execution is a protected operation and is recorded by Runtime.
-The ordinary research/content Profile continues to receive neither capability.
-
-Network is an independent profile dimension: `denied`, `gateway_only`, or
-`direct_sandboxed`. Some Verifier, Reviewer, and research Modules require
-external retrieval and therefore use an admitted network-capable profile;
-others receive a complete frozen input closure and remain offline. A prompt
-warning cannot substitute for sandbox or Gateway enforcement.
-
-Canonical governed content is resolved before invocation through the enforcing
-data service and the execution authorization context. Runtime freezes the
-`module_input_closure`, computes a context budget, and pins an
-`input_delivery_plan`. Small closed content may be inlined. Long Sources,
-Evidence, drafts, packages, and background corpora use entitlement-filtered,
-bounded Gateway reads from PG. Exact binary objects may use managed attachments
-when a registered read API cannot carry them. Required content is never
-silently truncated, and an Agent never receives a raw PG credential.
-
-Claude Agent SDK, Claude Skill, Codex CLI, and future model or host adapters
-are Runtime extensions. Runtime owns their descriptors, release admission,
-version compatibility, conformance tests, authorization callbacks, context and
-usage normalization, and execution lineage. The owning domain supplies opaque
-task semantics and an admitted Skill or prompt release; it does not own or
-silently construct the provider adapter. Skill Governance owns the Skill
-artifact itself, not its executable provider integration.
-
-Every provider invocation passes through an admitted adapter and creates Module Run,
-Variant, Attempt, attempt_output_bundle, usage, and terminal records. A direct
-provider invocation is outside Runtime authority and cannot later become
-conformant through a handwritten log.
-
-Context is task-scoped, Module-Run-scoped, Variant-scoped, and
-data-scope-scoped. Native continuation is an optimization permitted only while
-the complete compatibility tuple remains unchanged. That tuple includes
-Workflow and Module releases, Prompt Bundle, provider-facing
-profile, adapter revision, Context type, resume and read-isolation policies,
-execution mode, tool policy, network policy, input-package and Prompt Envelope
-hashes, authorization closure, and contract versions.
-
-An incompatible or cross-provider Variant reconstructs context from authorized
-immutable input refs, the resolved prior `execution_output_ref`, continuity
-state, and a typed task or revision packet. When an input is an Artifact Graph
-object, its exact admitted `artifact_instance` ref and authorization evidence
-are pinned. Opaque provider state never crosses Variants, executions, tenants,
-Cells, providers, or authorization closures.
-
-### 5.1 Task-specific semantic context assembly
-
-Static Prompt Components define reusable Module instructions and output
-constraints. Execution-specific domain knowledge is a separate, schema-bound
-Module input. It is not copied into a global Prompt Component merely because a
-model needs it for one task.
-
-The host integration may resolve task context through a generic selector:
-
-```yaml
-category: expertise
-content_key: optical_interconnect
-release_id: optical_interconnect.v3
-```
-
-`category`, `content_key`, and `release_id` are opaque domain identifiers. The
-generic interface assigns no parent-child meaning to categories: `expertise`
-and `lens`, for example, may occupy peer keys in one task schema. A different
-workflow may declare entirely different keys through its own registered Schema
-Asset without changing Runtime core.
-
-An authorized domain resolver reads each exact immutable content release from
-its PG-backed owner. The resulting `task_prompt_context_resolution` contains:
-
-- a task-schema ref and hash;
-- the schema-shaped semantic `content_tree`;
-- private selector, release, ordinal, and content-hash bindings; and
-- a hash of the complete frozen resolution.
-
-Runtime carries this resolution inside the immutable Module input closure and
-validates it against the registered task-context Schema Asset. The model-visible
-projection contains only `content_tree`; selector provenance, release refs,
-hashes, authorization evidence, tenant data, and storage identity stay in the
-private execution closure. Neither the model nor its provider process receives
-a raw PG credential or an ambient Skill/repository checkout. An exact frozen
-tree may be exposed only through a separately declared `managed_read_only_tree`
-execution input and matching Execution Profile. Changing selected content
-creates a new input closure and Module Run; changing Module instruction or
-schema creates a new Module Release.
-
-## 6. Authorization and Data Isolation
-
-Product Authorization owns effective Entitlements and every allow or deny
-decision. Runtime consumes one immutable `execution_authorization_context` and
-records Product decision or high-risk grant references returned by enforcing
-Gateways. It never reads policy tables, interprets Entitlement bodies, creates a
-grant, or widens an externally issued scope. The initiating Product Principal
-and authenticated Runtime workload remain distinct subject and actor identities;
-a Workflow Execution is not a new Product Principal.
-
-An in-flight execution cannot gain access from a later Entitlement expansion. Loss, expiry, revocation, or invalidation of required authority fences new work, closes or quarantines affected provider state and uncommitted outputs, preserves committed lineage, and requires a newly authorized Workflow Execution for any continued or broader scope. Exact ordering and record shapes belong to the authorization integration specialization.
-
-Each dynamic read, search, model, tool, external action, or canonical effect
-must pass the enforcing service for that exact operation. Runtime records the
-declared operation intent before dispatch and binds the returned decision and
-effect references to the execution origin, Module Run, Variant, Attempt, and
-Module declaration. Actions classified as high risk additionally carry a
-bounded `operation_grant`; ordinary authorized operations do not. A domain
-approval or Resolution does not grant resource access, and an authorization
-decision or grant does not establish domain quality.
-
-Data isolation follows these invariants:
-
-- every execution and context is pinned to one tenant and execution data scope;
-- content-bearing inputs, outputs, credentials, and authorization-filtered results remain in their governed stores;
-- durable histories and shared telemetry carry only permitted identities, references, hashes, timings, usage, and bounded classifications;
-- adapters receive scoped resolvers or pre-materialized inputs rather than unrestricted database, filesystem, or provider credentials;
-- Runtime does not move, retain, export, or destroy managed data outside registered Data Governance bindings.
-
-## 7. Telemetry, Checkpoint, and Recovery
-
-Runtime code generates execution records. Agents never author their own execution, search, authorization, token, cost, or billing logs.
-
-Telemetry binds each event to its valid execution scope and records trace
-identity, Module and release identity, input and output refs and hashes,
-provider and adapter metadata, tool or search activity, latency, terminal
-classification, and input, output, cache-read, and cache-creation tokens when
-exposed. Missing trustworthy usage or cost remains `unknown`; it is never
-estimated into authoritative billing data. Shared observability excludes
-customer content and secrets.
-
-Checkpoint and recovery preserve committed work and prevent duplicate work:
-
-1. Begin an immutable Attempt and bind required authority before a protected invocation.
-2. Finalize the Attempt, `attempt_output_bundle`, calls, usage, and invocation result atomically or leave a recoverable incomplete claim.
-3. Complete required Evaluation and Resolution before committing the Module outcome.
-4. Commit a checkpoint before acknowledging workflow advancement to the durable backend.
-5. Replay an acknowledged identity by returning committed records, not by repeating a provider call or protected effect.
-
-A crash before invocation commitment may create a new Attempt under retry
-policy. A crash after invocation commitment reconstructs from committed
-records. A crash after Module outcome commitment returns the existing outcome.
-Recovery remains pinned to the original graph, Module, Prompt, profile, and
-execution releases; it never adopts a latest version silently.
-
-## 8. Evaluation, Testing, and Module Evolution
-
-Domain owners define evaluation meaning, rubrics, veto rules, and required
-evaluator sets. Runtime owns evaluator isolation, execution lineage,
-scheduling, coverage closure, comparison, Selection, and mechanical Resolution
-enforcement. A model-backed evaluator is an ordinary admitted Runtime Module
-with its own Module Run, Variant, Attempt, attempt_output_bundle, authorization,
-usage, and Context lineage.
-
-Runtime must support independent tests and evaluations at Module scope:
-
-- input, output, declared operation, and permission contract tests;
-- graph closure, loop, wait, and terminal simulation using opaque domain values;
-- provider, durable, persistence, authorization, and host adapter conformance;
-- context compatibility and cross-provider reconstruction;
-- tenant, data-scope, and authorization-isolation negatives;
-- retry, crash-window, replay, cancellation, and stale-output recovery;
-- telemetry completeness and content-leak detection;
-- representative-data provider-request inspection proving that the compiled
-  instructions and every model-visible input contain no undeclared
-  control-plane fields;
-- evaluation coverage, veto, Selection, and Resolution enforcement;
-- Module compatibility, canary, rollback, and pinned-execution recovery;
-- import-boundary tests proving that Runtime core has no domain or host dependency.
-
-Every executable Module and adapter has an immutable release. A
-behavior-changing update creates a new release and a new Variant, Module Run,
-or Workflow Execution at the correct scope, computes affected release bindings,
-runs impacted tests and evaluations, and follows Software Delivery admission.
-In-flight executions remain pinned, drain under policy, or restart as newly
-authorized executions. Runtime never patches an admitted release in place.
-
-## 9. Standalone Distribution
-
-The Runtime is publishable independently of any host application or domain
-plugin. Its public distribution contains the product README, a generated and
-hash-bound bundle of Runtime-owned Design Contracts, core contracts, Release
-Registry and Execution modules, provider and Temporal integration definitions,
-PostgreSQL migrations, conformance fixtures, and the live read-only Workflow
-Inspector. Provider implementations and domain plugins may ship as separately
-versioned extension distributions.
-
-Standalone conformance requires:
-
-- a clean installation with no host or domain dependency;
-- public API compatibility and deterministic Release Registry validation;
-- explicit extension loading by the host;
-- synthetic opaque-plugin execution and failure tests;
-- no built-in business role, graph, rubric, artifact meaning, or provider choice;
-- every shipped source file mapped by the Runtime architecture registration to
-  one logical responsibility and one canonical Design Contract;
-- packaged Design Contract hashes equal the canonical Runtime-owned contract
-  sources; and
-- the Workflow Inspector lists and renders authorized formal PostgreSQL records
-  without a provider credential or mutation endpoint.
-
-The host may select and pin compatible provider, durability, and PostgreSQL
-client implementations. PostgreSQL remains the production Runtime record
-authority; client-library and deployment selection are release configuration,
-not a competing storage contract.
-
-## 10. Owned and Adjacent Contracts
-
-This T0 document owns portable invariants. The owner column distinguishes
-Runtime specializations from adjacent Agency Platform and Software Delivery
-contracts.
-
-| Contract | Owner | Responsibility |
-| --- | --- | --- |
-| [agent_runtime_00](agent_runtime_00_execution_charter.md) | Agent Runtime | Workflow and Module execution lifecycle, Context, telemetry, recovery, Evaluation, testing, and Module evolution |
-| [agent_runtime_01](agent_runtime_01_module_contract_and_assembly.md) | Agent Runtime | Module registration sources, Module and Workflow Releases, Prompt releases, graph assembly, execution records, and generated architecture reports |
-| [agent_runtime_02](agent_runtime_02_product_target_topology.md) | Agency Platform | Deployment topology, Cell placement, and backend deployment conformance |
-| [agent_runtime_03](agent_runtime_03_authorized_external_event_ingress.md) | Agent Runtime | Authorized external-event ingress and acknowledged application |
-| `publication transaction specialization` | Owning product or domain | Protected canonical publication and idempotent recovery outside Runtime |
-| [agent_runtime_05](agent_runtime_05_delivery_roadmap.md) | Software Delivery | Delivery sequencing and current engineering status |
-| [agent_runtime_06](agent_runtime_06_standalone_package_and_lifecycle_contract.md) | Agent Runtime | Standalone package boundary and append-only execution lifecycle |
-| [agent_runtime_07](agent_runtime_07_temporal_durable_adapter_contract.md) | Agent Runtime | One concrete durable-backend adapter specialization and its conformance |
-| [agent_runtime_08](agent_runtime_08_agent_execution_adapter_contract.md) | Agent Runtime | Provider-neutral Agent Execution and provider-facing Skill Adapter protocols and adapter admission |
-| [agent_runtime_09](agent_runtime_09_authorization_integration_contract.md) | Agent Runtime | Execution authorization context integration, protected-operation handoff, fencing, and invalidation |
-| [agent_runtime_10](agent_runtime_10_workflow_execution_binding_and_admission_contract.md) | Agency Platform | Product-workflow-to-execution binding and host admission |
-
-No specialization may widen Runtime core into domain semantics, product policy, data authority, or host composition.
-
-## 11. Conformance Invariants
-
-An implementation is non-conformant when any of these signals is present:
-
-- Runtime core imports a domain or host package.
-- A shared Runtime type embeds a business role, content rubric, or domain edge.
-- A discovered plugin, Skill projection, product workflow row, or provider session is treated as execution authority.
-- A model or tool call lacks complete Module Run, Variant, Attempt, output, usage, and authorization lineage.
-- A behavior-affecting configuration change mutates an existing Variant.
-- Provider-native context is the only continuity source or crosses an isolation boundary.
-- A raw Attempt, unresolved execution output, evaluation result, or losing Variant advances to another Runtime Module without Resolution.
-- A `module_output_resolution_record` is presented as Artifact readiness, product delivery eligibility, domain acceptance, or canonical admission.
-- An Agent writes or repairs its own audit log.
-- Durable history or shared telemetry contains protected content or secrets.
-- Recovery repeats a committed invocation or protected side effect.
-- An in-flight execution silently adopts a new graph, Module, Prompt, adapter, data scope, or authorization closure.
-- Runtime interprets Entitlements, issues authorization, approves domain content, or writes another domain's canonical state.
-- A second workflow, Module, or active-release registration authority exists
-  beside `runtime_release_registry`.
-
-## 12. As-Built Truth
-
-Human Design Docs own purpose, boundaries, and invariants. Code-owned schemas
-and validators plus the persisted Runtime Release Registry are the sole authority for
-whichever Module, Prompt, Workflow, execution-release, adapter,
-and admission facts are currently implemented. Runtime inspection is their
-deterministic human-readable projection.
-
-This document does not list the current host composition, installed plugins,
-selected providers, selected durable backend, commands, implementation
-maturity, or delivery status. Those facts belong to code-owned registries,
-generated architecture reports, deployment composition, and Software Delivery
-records. A manually edited inventory cannot override them.
-
-Each product-local Runtime implementation publishes its own generated
-architecture and release inspection from its code-owned registries. This T0
-contract defines portable law; it does not supply or override local
-implementation facts.
-
-## 13. References
-
-- [Enterprise Constitution](the_charter.md)
-- [Agency Platform Boundary Contract](the_agency_platform.md)
-- [Product Authorization and Entitlement Governance](the_product_authorization.md)
-- [Data Governance, Residency, and Records Management](the_data_governance.md)
-- [Software Delivery and Change Governance](the_software_delivery.md)
-- [Skill Governance](the_skill_management.md)
-- [Contract Audit](the_contract_audit.md)
+| Product 或 domain owner | Exact executable target 与 opaque task semantics | 选择 product action 或重新解释 domain decision |
+| Product Authorization | Runtime 可以把 `user_key` 作为 frozen target input 原样交给 project data-access adapter | 判断、缓存或扩大 database permission，或把 database permission 当作 workflow-start authorization |
+| Governed data owner | Exact input ref 与 bounded read result | 选择 data policy 或持有 domain SQL |
+| Data Governance 指定的 project data-access owner | 经 product host 注入的 database credential 与 binding | 取得、解析、签发、刷新、持久保管或扩大 database credential |
+| Data Governance | Admitted database binding 与 shared `DataAccessAdapter` boundary | 绕过 admitted binding，或接管 domain SQL 与 canonical write |
+| Subject Design authority | Reviewer meaning、subject boundary 与 subject-specific checklist | 让 Runtime 推断 Reviewer 语义或改写 review result |
+| Review Contract | 通用 Reviewer instruction 与 prompt layout | 把 Review Contract 当作通用 review 入口或 subject checklist owner |
+| Skill Management | Immutable Skill 与 declared Module export | 把 working-tree Skill 当作 execution authority |
+| Agency Platform 或 product host | Exact Runtime target binding 与 compatible host composition | 允许 host composition 修改 Runtime release authority |
+| Software Delivery | Installed software 与 deployment evidence | 把 Runtime release admission 当作 software deployment admission |
+| Timestamp Semantics | Runtime fact 的 timestamp role、clock-domain 与 comparison law | 自行发明 time-field meaning 或用 wall-clock order 替代 causal/runtime order |
+
+Reviewer 执行遵循唯一分工：subject authority 提供 Reviewer meaning 与 subject-specific checklist；
+Review Contract 提供通用 instruction；Agent Runtime 只按已注册 Module Release、frozen subject、input
+closure 与 Execution Profile 执行 Reviewer Module，并记录 Runtime execution evidence。Runtime 不决定
+Reviewer 是否适用、不补写 finding、不解释 verdict。
+
+Frozen Runtime Design candidate 接受 Design Doc Management 所属 Reviewer 的 independent semantic
+review，由 Agent Runtime owner 决定是否接受 Design。后续 Code Design、software release、Runtime
+release admission 与 product/domain acceptance 分别由各自 authority 决定，任何一个 decision 都不能
+替代另一个。
+
+## 9. References
+
+- [Project Charter](the_charter.md)
+- [Design Doc Management](the_design_doc_management.md)
+- [Review Contract](the_review_contract.md)
+- [Agency Platform](the_agency_platform.md)
+- [Product Authorization](the_product_authorization.md)
+- [Data Governance](the_data_governance.md)
+- [Timestamp and Clock Semantics](the_timestamp_semantic.md)
+- [Software Delivery](the_software_delivery.md)
+- [Skill Management](the_skill_management.md)

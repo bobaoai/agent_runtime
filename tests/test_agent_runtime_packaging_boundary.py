@@ -341,7 +341,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
     """Prove the published target release model without predecessor registration."""
 
     wheel_path = _build_runtime_wheel(tmp_path)
-    result = _run_isolated_python(
+    result = _run_isolated_python_with_dependencies(
         """
         import json
         import sys
@@ -363,10 +363,8 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             ModuleExecutionPurpose,
             ModuleKind,
             OutputResolutionPolicy,
-            ReleaseAdmissionRecord,
-            ReleaseAdmissionState,
-            ReleaseSubjectKind,
-            RuntimeModuleRelease,
+            ModuleRelease,
+            SchemaAssetRelease,
         )
         from agent_runtime.ledger.ledger_lineage_recording import (
             InMemoryModuleExecutionLedger,
@@ -382,9 +380,61 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             RuntimeReleaseBundle,
             RuntimeReleaseRegistry,
         )
+        from agent_runtime.registry.registry_release_compilation import (
+            BehaviorPolicyReleaseCandidate,
+            EvaluationPolicyReleaseCandidate,
+            RetryPolicyReleaseCandidate,
+            compile_behavior_policy_release,
+            compile_evaluation_policy_release,
+            compile_retry_policy_release,
+            runtime_owned_policy_schema_assets,
+        )
 
         HASH = "a" * 64
         TIME = "2026-08-08T12:00:00Z"
+        behavior_policy = compile_behavior_policy_release(
+            BehaviorPolicyReleaseCandidate(
+                policy_id="workflow_execution_isolated",
+                policy_version="v1",
+                context_isolation="workflow_execution_isolated",
+            )
+        )
+        evaluation_policy = compile_evaluation_policy_release(
+            EvaluationPolicyReleaseCandidate(
+                policy_id="deterministic_candidate",
+                policy_version="v1",
+                evaluation_mode="deterministic_candidate",
+            )
+        )
+        retry_policy = compile_retry_policy_release(
+            RetryPolicyReleaseCandidate(
+                policy_id="one_attempt",
+                policy_version="v1",
+                max_attempts=1,
+            )
+        )
+        input_schema = SchemaAssetRelease.build(
+            schema_asset_id="opaque_input",
+            schema_asset_version="v1",
+            release_ref="schema:opaque_input@v1",
+            schema_document={
+                "$id": "schema:opaque_input@v1",
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": True,
+            },
+        )
+        output_schema = SchemaAssetRelease.build(
+            schema_asset_id="opaque_output",
+            schema_asset_version="v1",
+            release_ref="schema:opaque_output@v1",
+            schema_document={
+                "$id": "schema:opaque_output@v1",
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": True,
+            },
+        )
         profile = ExecutionProfileRelease.build(
             execution_profile_id="profile_opaque_test",
             execution_profile_version="v1",
@@ -402,72 +452,48 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             output_constraint_mode="prompt_only_json",
             tool_policy=(),
             network_policy="denied",
-            context_policy_ref="context-policy:opaque@v1",
-            context_policy_sha256=HASH,
             timeout_seconds=60,
-            max_attempts=1,
         )
-        module = RuntimeModuleRelease.build(
+        module = ModuleRelease.build(
             module_id="module_opaque_test",
             module_version="v1",
             release_ref="runtime-module:module-opaque-test@v1",
             module_kind=ModuleKind.DETERMINISTIC,
             owner_contract_ref="contract:opaque@v1",
             owner_contract_sha256=HASH,
-            source_skill_id=None,
             executable_ref="callable:opaque@v1",
             executable_sha256=HASH,
-            input_schema_ref="schema:opaque_input@v1",
-            input_schema_sha256=HASH,
-            output_schema_ref="schema:opaque_output@v1",
-            output_schema_sha256=HASH,
+            input_schema_ref=input_schema.release_ref,
+            input_schema_sha256=input_schema.schema_sha256,
+            output_schema_ref=output_schema.release_ref,
+            output_schema_sha256=output_schema.schema_sha256,
             prompt_bundle_ref=None,
             prompt_bundle_sha256=None,
             declared_operation_ids=(),
-            context_policy_ref="context-policy:opaque@v1",
-            context_policy_sha256=HASH,
-            evaluation_policy_ref="evaluation-policy:opaque@v1",
-            evaluation_policy_sha256=HASH,
-            retry_policy_ref="retry-policy:opaque@v1",
-            retry_policy_sha256=HASH,
+            behavior_policy_ref=behavior_policy.release_ref,
+            behavior_policy_sha256=behavior_policy.release_sha256,
+            evaluation_policy_ref=evaluation_policy.release_ref,
+            evaluation_policy_sha256=evaluation_policy.release_sha256,
+            retry_policy_ref=retry_policy.release_ref,
+            retry_policy_sha256=retry_policy.release_sha256,
             compatible_transport_kinds=("in_process_test",),
             entry_policy=ModuleEntryPolicy.STANDALONE_ALLOWED,
             output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         )
 
-        def admission(admission_id, kind, subject_id, release_ref, release_sha256):
-            return ReleaseAdmissionRecord.build(
-                admission_id=admission_id,
-                subject_kind=kind,
-                subject_id=subject_id,
-                release_ref=release_ref,
-                release_sha256=release_sha256,
-                state=ReleaseAdmissionState.CANDIDATE,
-                evidence_members=(),
-                recorded_at_utc=TIME,
-            )
-
         release_registry = RuntimeReleaseRegistry()
         release_registry.register_bundle(
             RuntimeReleaseBundle(
+                schema_assets=(
+                    *runtime_owned_policy_schema_assets(),
+                    input_schema,
+                    output_schema,
+                ),
+                behavior_policies=(behavior_policy,),
+                evaluation_policies=(evaluation_policy,),
+                retry_policies=(retry_policy,),
                 execution_profiles=(profile,),
                 modules=(module,),
-                admissions=(
-                    admission(
-                        "admission_profile_opaque",
-                        ReleaseSubjectKind.EXECUTION_PROFILE,
-                        profile.execution_profile_id,
-                        profile.release_ref,
-                        profile.release_sha256,
-                    ),
-                    admission(
-                        "admission_module_opaque",
-                        ReleaseSubjectKind.RUNTIME_MODULE,
-                        module.module_id,
-                        module.release_ref,
-                        module.release_sha256,
-                    ),
-                ),
             )
         )
 
@@ -714,7 +740,7 @@ def test_canonical_runtime_truth_surface_paths_exist() -> None:
         if not (REPO_ROOT / path).exists()
     ]
 
-    assert len(declared) == 63
+    assert len(declared) == 28
     assert missing == []
 
 
