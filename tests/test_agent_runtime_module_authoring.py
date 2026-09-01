@@ -9,7 +9,10 @@ import pytest
 
 from agent_runtime import (
     EXECUTION_PROFILE_UNAVAILABLE,
+    MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
+    MODULE_OPERATION_DECLARATION_INVALID,
     Module,
+    ModuleAuthoringError,
     ModuleEntryPolicy,
     ModuleExecutionPurpose,
     ModuleReviewer,
@@ -28,6 +31,11 @@ from agent_runtime.registry import (
     load_module_registration,
     runtime_owned_policy_schema_assets,
 )
+from agent_runtime.contracts.execution_module_definition import (
+    partition_module_operation_ids,
+)
+from agent_runtime.execution import execution_module_invocation
+from agent_runtime.registry import registry_module_authoring
 
 
 SKILL_ID = "test-design-authoring"
@@ -155,6 +163,29 @@ def _profile(*, model_id: str = "claude-opus-5"):
     )
 
 
+def _gateway_profile(*, tool_policy: tuple[str, ...] = ("repository_read",)):
+    return compile_execution_profile_release(
+        ExecutionProfileReleaseSpec(
+            execution_profile_id=f"profile_{MODULE_ID}_gateway_v1",
+            executor_adapter_id="claude_agent_sdk_gateway_executor",
+            executor_adapter_revision="v2",
+            transport_kind="claude_agent_sdk",
+            provider_id="anthropic",
+            model_id="claude-opus-5",
+            reasoning_profile="xhigh",
+            execution_mode="agent",
+            semantic_input_delivery_mode="gateway_read",
+            attempt_workspace_policy="none",
+            gateway_access_reasons=("authorized_package_external_exploration",),
+            output_constraint_mode="native_structured_output",
+            tool_policy=tool_policy,
+            network_policy="gateway_only",
+            timeout_seconds=900,
+            release_version="v1",
+        )
+    )
+
+
 def _source_hashes(project_root: Path) -> dict[str, str]:
     return {
         path.relative_to(project_root).as_posix(): hashlib.sha256(
@@ -184,6 +215,22 @@ def test_runtime_loads_one_exact_module_registration(tmp_path: Path) -> None:
     )
     assert source.owner_contract_ref.startswith("owner-contract-sha256:")
     assert not hasattr(source, "owner_contract_path")
+
+
+def test_authoring_and_execution_share_module_operation_classification() -> None:
+    assert (
+        registry_module_authoring.partition_module_operation_ids
+        is partition_module_operation_ids
+    )
+    assert (
+        execution_module_invocation.partition_module_operation_ids
+        is partition_module_operation_ids
+    )
+    assert not hasattr(registry_module_authoring, "TOOL_FREE_OPERATION_IDS")
+    assert not hasattr(
+        execution_module_invocation,
+        "_MODEL_INVOCATION_OPERATION_IDS",
+    )
 
 
 def test_owner_file_relocation_does_not_change_module_candidate_or_release(
@@ -413,7 +460,7 @@ def test_module_reviewer_rejects_tool_profile_mismatch(tmp_path: Path) -> None:
     )
     behavior, evaluation, retry = _policies()
 
-    with pytest.raises(ValueError, match="tool-requiring Reviewer"):
+    with pytest.raises(ModuleAuthoringError) as exc_info:
         reviewer.export(
             module_version="v1",
             behavior_policy=behavior,
@@ -421,6 +468,143 @@ def test_module_reviewer_rejects_tool_profile_mismatch(tmp_path: Path) -> None:
             retry_policy=retry,
             execution_profile=_profile(),
         )
+    assert exc_info.value.error_code == MODULE_EXECUTION_PROFILE_INCOMPATIBLE
+
+
+def test_module_reviewer_accepts_exact_gateway_tool_profile(tmp_path: Path) -> None:
+    reviewer = ModuleReviewer.from_registration(
+        _project(tmp_path),
+        skill_id=SKILL_ID,
+        module_id=MODULE_ID,
+    )
+    reviewer = ModuleReviewer(
+        source=replace(
+            reviewer.source,
+            declared_operation_ids=("model_execute", "repository_read"),
+        )
+    )
+    behavior, evaluation, retry = _policies()
+
+    exported = reviewer.export(
+        module_version="v1",
+        behavior_policy=behavior,
+        evaluation_policy=evaluation,
+        retry_policy=retry,
+        execution_profile=_gateway_profile(),
+    )
+
+    assert exported.execution_blocker_code is None
+    assert exported.execution_variant is not None
+    assert exported.execution_profile == _gateway_profile()
+
+
+def test_module_reviewer_rejects_profile_with_undeclared_tool(
+    tmp_path: Path,
+) -> None:
+    reviewer = ModuleReviewer.from_registration(
+        _project(tmp_path),
+        skill_id=SKILL_ID,
+        module_id=MODULE_ID,
+    )
+    reviewer = ModuleReviewer(
+        source=replace(
+            reviewer.source,
+            declared_operation_ids=("model_execute", "repository_read"),
+        )
+    )
+    behavior, evaluation, retry = _policies()
+
+    with pytest.raises(ModuleAuthoringError) as exc_info:
+        reviewer.export(
+            module_version="v1",
+            behavior_policy=behavior,
+            evaluation_policy=evaluation,
+            retry_policy=retry,
+            execution_profile=_gateway_profile(
+                tool_policy=("repository_read", "repository_search")
+            ),
+        )
+    assert exc_info.value.error_code == MODULE_EXECUTION_PROFILE_INCOMPATIBLE
+
+
+def test_module_reviewer_rejects_profile_transport_mismatch(
+    tmp_path: Path,
+) -> None:
+    reviewer = ModuleReviewer.from_registration(
+        _project(tmp_path),
+        skill_id=SKILL_ID,
+        module_id=MODULE_ID,
+    )
+    reviewer = ModuleReviewer(
+        source=replace(
+            reviewer.source,
+            compatible_transport_kinds=("codex_cli",),
+        )
+    )
+    behavior, evaluation, retry = _policies()
+
+    with pytest.raises(ModuleAuthoringError) as exc_info:
+        reviewer.export(
+            module_version="v1",
+            behavior_policy=behavior,
+            evaluation_policy=evaluation,
+            retry_policy=retry,
+            execution_profile=_profile(),
+        )
+    assert exc_info.value.error_code == MODULE_EXECUTION_PROFILE_INCOMPATIBLE
+
+
+def test_module_reviewer_rejects_invalid_model_operation_declaration(
+    tmp_path: Path,
+) -> None:
+    reviewer = ModuleReviewer.from_registration(
+        _project(tmp_path),
+        skill_id=SKILL_ID,
+        module_id=MODULE_ID,
+    )
+    reviewer = ModuleReviewer(
+        source=replace(
+            reviewer.source,
+            declared_operation_ids=("repository_read",),
+        )
+    )
+    behavior, evaluation, retry = _policies()
+
+    with pytest.raises(ModuleAuthoringError) as exc_info:
+        reviewer.export(
+            module_version="v1",
+            behavior_policy=behavior,
+            evaluation_policy=evaluation,
+            retry_policy=retry,
+            execution_profile=_gateway_profile(),
+        )
+    assert exc_info.value.error_code == MODULE_OPERATION_DECLARATION_INVALID
+
+
+def test_module_export_origin_bundle_excludes_profile_and_variant(
+    tmp_path: Path,
+) -> None:
+    reviewer = ModuleReviewer.from_registration(
+        _project(tmp_path),
+        skill_id=SKILL_ID,
+        module_id=MODULE_ID,
+    )
+    behavior, evaluation, retry = _policies()
+    exported = reviewer.export(
+        module_version="v1",
+        behavior_policy=behavior,
+        evaluation_policy=evaluation,
+        retry_policy=retry,
+        execution_profile=_profile(),
+    )
+
+    origin = exported.origin_bundle
+    assert origin.modules == (exported.module_release,)
+    assert origin.behavior_policies == (behavior,)
+    assert origin.evaluation_policies == (evaluation,)
+    assert origin.retry_policies == (retry,)
+    assert origin.execution_profiles == ()
+    assert origin.execution_variant_policies == ()
 
 
 def test_project_resolves_registered_facts_and_writes_nothing(tmp_path: Path) -> None:

@@ -207,9 +207,9 @@ def _complete_registry_case() -> _CompleteRegistryCase:
                 "execution-binding:registry_catalog_workflow@v1"
             ),
             execution_binding_document={
-                "variant_policy_ref": (
-                    "execution-variant-policy:registry_catalog_workflow@v1"
-                )
+                "schema_version": "workflow_execution_binding_v1",
+                "workflow_id": "registry_catalog_workflow",
+                "variant_policy_family": "execution_variant_policy",
             },
         )
     )

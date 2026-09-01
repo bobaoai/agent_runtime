@@ -485,6 +485,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "registry",
+        "workflow",
+        "authoring",
+        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+    ),
+    _source(
+        "registry",
         "graph",
         "projection",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",

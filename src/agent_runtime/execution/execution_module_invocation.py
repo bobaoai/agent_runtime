@@ -28,12 +28,14 @@ from ..contracts.execution_authorization_definition import (
     ProtectedOperationIntent,
 )
 from ..contracts.execution_module_definition import (
+    MODEL_INVOCATION_OPERATION_IDS,
     ModuleExecutionLedger,
     ModuleExecutionRequest,
     ModuleOutputBinding,
     ModuleRunResult,
     ModuleVariantRequest,
     WorkflowModuleExecutionRequest,
+    partition_module_operation_ids,
 )
 from ..contracts.invocation_adapter_definition import (
     AgentExecutionAdapterDescriptor,
@@ -68,9 +70,6 @@ from ..ledger.ledger_workflow_module_recording import (
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .execution_authorization_coordination import ExecutionAuthorizationController
 from .execution_authorization_resolution import ProductOperationAuthorizationClient
-
-
-_MODEL_INVOCATION_OPERATION_IDS = frozenset({"invoke_model", "model_execute"})
 
 
 def _canonical_sha256(payload: Mapping[str, Any] | list[Any]) -> str:
@@ -531,7 +530,7 @@ def _run_module(
     model_operation_ids = tuple(
         operation_id
         for operation_id in module.declared_operation_ids
-        if operation_id in _MODEL_INVOCATION_OPERATION_IDS
+        if operation_id in MODEL_INVOCATION_OPERATION_IDS
     )
     candidate_purpose = request.purpose in {
         ModuleExecutionPurpose.TEST,
@@ -872,7 +871,7 @@ def _execute_attempt(
                 operation_id=next(
                     operation_id
                     for operation_id in module.declared_operation_ids
-                    if operation_id in _MODEL_INVOCATION_OPERATION_IDS
+                    if operation_id in MODEL_INVOCATION_OPERATION_IDS
                 ),
                 authorization_intent_ref=evidence.intent.intent_ref,
                 authorization_intent_sha256=evidence.intent.intent_sha256,
@@ -1144,7 +1143,7 @@ def _authorize_model_attempt(
     operation_id = next(
         operation_id
         for operation_id in module.declared_operation_ids
-        if operation_id in _MODEL_INVOCATION_OPERATION_IDS
+        if operation_id in MODEL_INVOCATION_OPERATION_IDS
     )
     intent = authority.controller.commit_protected_operation_intent(
         binding_ref=binding.binding_ref,
@@ -1570,8 +1569,8 @@ def _assert_admitted_test_evaluation_profile(
     hybrid cannot become executable by accident.
     """
 
-    non_model_operations = frozenset(module.declared_operation_ids).difference(
-        _MODEL_INVOCATION_OPERATION_IDS
+    _, non_model_operations = partition_module_operation_ids(
+        module.declared_operation_ids
     )
     if (
         profile.execution_mode == "tool_free"

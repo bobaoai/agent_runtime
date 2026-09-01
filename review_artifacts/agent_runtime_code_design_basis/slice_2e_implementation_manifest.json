@@ -1,0 +1,81 @@
+{
+  "manifest_schema_version": "agent_runtime_slice_implementation_v1",
+  "slice_id": "slice_2e_workflow_authoring_and_profile_compatibility",
+  "candidate_revision": 3,
+  "status": "review_candidate",
+  "implementation_baseline_commit": "cd2c496",
+  "approved_code_design_basis": {
+    "path": "review_artifacts/agent_runtime_code_design_basis/slice_2e_workflow_authoring_code_design_basis.json",
+    "sha256": "764b22ccb5ef3cf48d1269d4c45ce3be948c269687e92a06b91377137dac712a",
+    "approval_ref": "user-decision:agent-runtime-workflow-class-and-multi-runtime-registration@2026-09-01"
+  },
+  "independent_code_design_review": {
+    "reviewed_revision": 3,
+    "reviewed_json_sha256": "bfaad47374740cb777202d4727015a4338eb462eeac72998c698e7662b442a9f",
+    "reviewed_markdown_sha256": "c19119934443ac58aadb1f85bd3c5b7490b3e957777e75725dd5702b94e3185e",
+    "verdict": "passed",
+    "approval_transition": "Only status and approved_decision_ref changed after the passed review."
+  },
+  "implemented_result": [
+    "One shared Runtime Module operation classification is consumed by Registry authoring and Execution admission.",
+    "ModuleReviewer accepts exact admitted tool-free or tool-enabled capability closures without a Reviewer-specific rule.",
+    "ModuleExport exposes a target-independent fixed origin bundle and keeps optional Profile and Variant records separate.",
+    "Workflow is a public graph-backed authoring class over the existing WorkflowReleaseCandidate and compiler.",
+    "WorkflowExport merges exact graph Module closures, de-duplicates identical releases, and excludes target-local Profile and Variant records.",
+    "Workflow execution-binding content has one exact target-independent shape.",
+    "The same WorkflowExport registers into multiple independent Runtime registries with independent Profile, Variant and active-pointer state."
+  ],
+  "explicit_non_scope": [
+    "No Trading Platform source or plugin migration.",
+    "No provider Adapter implementation or invocation.",
+    "No Runtime client network transport.",
+    "No cross-Runtime execution coordination.",
+    "No PostgreSQL schema or persistence change.",
+    "No compatibility shim."
+  ],
+  "path_manifest": [
+    {"state": "A", "path": "review_artifacts/agent_runtime_code_design_basis/slice_2e_workflow_authoring_code_design_basis.json", "sha256": "764b22ccb5ef3cf48d1269d4c45ce3be948c269687e92a06b91377137dac712a", "owner": "code_design_basis"},
+    {"state": "A", "path": "review_artifacts/agent_runtime_code_design_basis/slice_2e_workflow_authoring_code_design_basis.md", "sha256": "c19119934443ac58aadb1f85bd3c5b7490b3e957777e75725dd5702b94e3185e", "owner": "code_design_basis"},
+    {"state": "M", "path": "src/agent_runtime/contracts/execution_module_definition.py", "sha256": "2a9d8c30279a09adcd9ce521d93eef8180b906db2298bdcdd02789b2668c477f", "owner": "runtime_module_operation_contract"},
+    {"state": "M", "path": "src/agent_runtime/execution/execution_module_invocation.py", "sha256": "e03d20ad4e0ff668151319136c89be01f07742bf633296217a9ff6c516d048de", "owner": "runtime_module_operation_contract_consumer"},
+    {"state": "M", "path": "src/agent_runtime/registry/registry_module_authoring.py", "sha256": "be1a08f1df0e24e43a12626ce186bc0b6c8c4ab36db4d39ab381550d655f7830", "owner": "runtime_module_authoring"},
+    {"state": "M", "path": "src/agent_runtime/registry/registry_release_compilation.py", "sha256": "57771cd1f89798ecd51e469cedf5875e8ea97e4248931ac0664e6b55fdc819ff", "owner": "runtime_workflow_authoring"},
+    {"state": "A", "path": "src/agent_runtime/registry/registry_workflow_authoring.py", "sha256": "4e8674b560f3eeb49960d6488f31a1d7c17ffe747dc22e036e595e9b2cc813d6", "owner": "runtime_workflow_authoring"},
+    {"state": "M", "path": "src/agent_runtime/registry/__init__.py", "sha256": "a2a05017d24d67fbfce1a250ec5dc379034d4f20af8a637326b17330fd1f2e8a", "owner": "runtime_public_export"},
+    {"state": "M", "path": "src/agent_runtime/__init__.py", "sha256": "7f98e9ac80c9233a509d3a52340d6f19309117191281d7eb2bac776ba8813f8f", "owner": "runtime_public_export"},
+    {"state": "M", "path": "src/agent_runtime/conformance/conformance_architecture_manifest.py", "sha256": "bdb1b91228433f8bc942c41ffacb3a3a327df9d05f66b7188fd01ecefb83f808", "owner": "runtime_conformance"},
+    {"state": "M", "path": "src/agent_runtime/registry/registry_architecture_registration.py", "sha256": "5d161e60bfedb6cc706c35e42da758fa14824b18d9228d02284090479814f878", "owner": "runtime_conformance"},
+    {"state": "M", "path": "tests/test_agent_runtime_module_authoring.py", "sha256": "0fd208f994ad49719edb43216fe8c5d7ed24a4f75e477e61ec4569ab466b8bd3", "owner": "runtime_module_authoring_tests"},
+    {"state": "M", "path": "tests/test_agent_runtime_workflow_release_compilation.py", "sha256": "41a36256b90bfab194ec56c55f216c76700daea3bf4a9e7ba1ae67941c7e2e66", "owner": "runtime_workflow_authoring_tests"},
+    {"state": "A", "path": "tests/test_agent_runtime_workflow_authoring.py", "sha256": "f89711b7a0b91527b55c1bc15bc080bbe3a4b005168bc8037e52fac921979324", "owner": "runtime_workflow_authoring_tests"},
+    {"state": "M", "path": "tests/test_agent_runtime_registry_release_catalog.py", "sha256": "e7d5994ca7196eaa41f5bff1e28adb749e557805b54775157bac0a9e89ba9772", "owner": "runtime_workflow_authoring_tests"}
+  ],
+  "test_evidence": [
+    {
+      "command": "python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_module_authoring.py tests/test_agent_runtime_workflow_release_compilation.py tests/test_agent_runtime_workflow_authoring.py tests/test_agent_runtime_registry_release_catalog.py tests/test_agent_runtime_conformance.py",
+      "result": "75 passed"
+    },
+    {
+      "command": "python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_*.py tests/test_registry_schema_migration_planning_tool.py tests/digestion_case",
+      "result": "516 passed, 27 skipped"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "prior_finding_resolutions": [
+    {
+      "finding_id": "ECR-2E-001",
+      "disposition": "closed",
+      "resolution": "Added one deterministic test proving Registry authoring and Execution admission import the same contract-owned partition_module_operation_ids function and retain no predecessor private constants."
+    }
+  ],
+  "rollback_boundary": "Revert only the frozen Slice 2E candidate commit. No Registry schema, persisted release, active pointer or host source requires migration or compensation.",
+  "commit_exclusions": [
+    "all pre-existing Governance deployment changes",
+    "review_artifacts/agent_runtime_review_input_delivery/",
+    "review_artifacts/runtime_module_owned_schema_code_design.md",
+    "review_artifacts/systematic_rebuild_e8366e7/"
+  ]
+}

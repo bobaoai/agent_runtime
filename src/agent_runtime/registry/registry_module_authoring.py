@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
 
+from ..contracts.execution_module_definition import partition_module_operation_ids
 from ..contracts.registry_release_definition import (
     BehaviorPolicyRelease,
     EvaluationPolicyRelease,
@@ -27,12 +28,22 @@ from .registry_release_compilation import (
     ExecutionVariantProfileBindingCandidate,
     compile_agent_module_release,
     compile_execution_variant_policy_release,
+    runtime_owned_policy_schema_assets,
 )
-from .registry_release_registration import RuntimeReleaseRegistry
+from .registry_release_registration import RuntimeReleaseBundle, RuntimeReleaseRegistry
 
 
-TOOL_FREE_OPERATION_IDS = ("model_execute",)
 EXECUTION_PROFILE_UNAVAILABLE = "MODULE_EXECUTION_PROFILE_UNAVAILABLE"
+MODULE_OPERATION_DECLARATION_INVALID = "MODULE_OPERATION_DECLARATION_INVALID"
+MODULE_EXECUTION_PROFILE_INCOMPATIBLE = "MODULE_EXECUTION_PROFILE_INCOMPATIBLE"
+
+
+class ModuleAuthoringError(ValueError):
+    """Stable authoring failure returned before any Registry mutation."""
+
+    def __init__(self, error_code: str, message: str) -> None:
+        super().__init__(f"{error_code}: {message}")
+        self.error_code = error_code
 
 
 def _candidate(
@@ -80,6 +91,9 @@ class ModuleExport:
     source: ModuleRegistrationSource
     candidate: AgentModuleReleaseCandidate
     compiled: CompiledAgentModuleRelease
+    behavior_policy: BehaviorPolicyRelease
+    evaluation_policy: EvaluationPolicyRelease
+    retry_policy: RetryPolicyRelease
     execution_profile: ExecutionProfileRelease | None
     execution_variant_candidate: ExecutionVariantPolicyReleaseCandidate | None
     execution_variant: ExecutionVariantPolicyRelease | None
@@ -88,6 +102,32 @@ class ModuleExport:
     @property
     def module_release(self) -> ModuleRelease:
         return self.compiled.module
+
+    @property
+    def origin_bundle(self) -> RuntimeReleaseBundle:
+        """Return the fixed Module closure without Profile or Variant records."""
+
+        policy_refs = {
+            self.behavior_policy.policy_schema_ref,
+            self.evaluation_policy.policy_schema_ref,
+            self.retry_policy.policy_schema_ref,
+        }
+        policy_schema_assets = tuple(
+            asset
+            for asset in runtime_owned_policy_schema_assets()
+            if asset.release_ref in policy_refs
+        )
+        if {asset.release_ref for asset in policy_schema_assets} != policy_refs:
+            raise RuntimeError("Runtime-owned Module Policy schemas are incomplete")
+        return RuntimeReleaseBundle(
+            schema_assets=(*policy_schema_assets, *self.compiled.schema_assets),
+            prompt_components=self.compiled.prompt_components,
+            prompt_bundles=(self.compiled.prompt_bundle,),
+            behavior_policies=(self.behavior_policy,),
+            evaluation_policies=(self.evaluation_policy,),
+            retry_policies=(self.retry_policy,),
+            modules=(self.compiled.module,),
+        )
 
 
 class Module(ABC):
@@ -152,22 +192,28 @@ class ModuleReviewer(Module):
         source: ModuleRegistrationSource,
         execution_profile: ExecutionProfileRelease | None,
     ) -> str | None:
+        try:
+            _, non_model_operations = partition_module_operation_ids(
+                source.declared_operation_ids
+            )
+        except ValueError as exc:
+            raise ModuleAuthoringError(
+                MODULE_OPERATION_DECLARATION_INVALID,
+                str(exc),
+            ) from exc
         if execution_profile is None:
             return EXECUTION_PROFILE_UNAVAILABLE
-        if source.declared_operation_ids != TOOL_FREE_OPERATION_IDS:
-            raise ValueError(
-                "tool-requiring Reviewer cannot bind a tool-free Execution Profile"
-            )
-        if execution_profile.execution_mode != "tool_free":
-            raise ValueError("Reviewer requires execution_mode=tool_free")
-        if execution_profile.semantic_input_delivery_mode != "inline":
-            raise ValueError("Reviewer requires inline semantic input")
-        if execution_profile.tool_policy != ():
-            raise ValueError("tool-free Reviewer Profile cannot grant tools")
-        if execution_profile.network_policy != "denied":
-            raise ValueError("tool-free Reviewer network_policy must be denied")
+        execution_profile.validate()
         if execution_profile.transport_kind not in source.compatible_transport_kinds:
-            raise ValueError("Reviewer does not declare the Profile transport")
+            raise ModuleAuthoringError(
+                MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
+                "Execution Profile transport is absent from Module compatibility",
+            )
+        if frozenset(execution_profile.tool_policy) != non_model_operations:
+            raise ModuleAuthoringError(
+                MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
+                "Execution Profile tool policy differs from Module non-model operations",
+            )
         return None
 
     def export(
@@ -212,6 +258,9 @@ class ModuleReviewer(Module):
             source=self.source,
             candidate=candidate,
             compiled=compiled,
+            behavior_policy=behavior_policy,
+            evaluation_policy=evaluation_policy,
+            retry_policy=retry_policy,
             execution_profile=execution_profile,
             execution_variant_candidate=variant_candidate,
             execution_variant=variant,
@@ -343,8 +392,10 @@ class ModuleReviewer(Module):
 
 __all__ = [
     "EXECUTION_PROFILE_UNAVAILABLE",
+    "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
+    "MODULE_OPERATION_DECLARATION_INVALID",
     "Module",
+    "ModuleAuthoringError",
     "ModuleExport",
     "ModuleReviewer",
-    "TOOL_FREE_OPERATION_IDS",
 ]

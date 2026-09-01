@@ -1,0 +1,432 @@
+{
+  "basis_schema_version": "code_design_basis_v1",
+  "basis_id": "agent_runtime_slice_2e_workflow_authoring",
+  "basis_revision": 3,
+  "status": "approved",
+  "approved_decision_ref": "user-decision:agent-runtime-workflow-class-and-multi-runtime-registration@2026-09-01",
+  "system_change_work_package_ref": "user-approved-scope:agent-runtime/slice-2e-workflow-authoring@2026-09-01",
+  "system_change_work_package_sha256": "fcebd632e1ff8314f83221f6d2fa1576105b1d9f809d483057069f5a60955d06",
+  "requested_result": "Runtime 通用支持已准入的 tool-free 与 tool-enabled Execution Profile，并提供 Workflow graph authoring class；同一 immutable Workflow export 可以原样注册到多个独立 Runtime Registry。",
+  "owning_design_refs": [
+    "designDoc/agent_runtime_01_module_contract_and_assembly.md@sha256:abf6d82c0941e26ab590cf6f54a76244eb0191d9a9420e7b154d872af1c9c0b5",
+    "designDoc/agent_runtime_08_agent_execution_adapter_contract.md@sha256:e9eb813a77ff64d39811ab50993bfe03bfa10ba2bac054fec73fae616f336e76",
+    "review_artifacts/agent_runtime_code_design_basis/slice_2_registry_code_design_basis.json@sha256:19b205fe2c2fadd364b305bfcb3135ffa5252ed69856ebb84f7111d69badd2e9",
+    "git:the_agent_runtime@cd2c496"
+  ],
+  "architecture_disposition": "refactor",
+  "primary_flow": {
+    "diagram_type": "flowchart",
+    "diagram": "flowchart LR\n    S[Exact Module registration] -->|runtime_module_export| M[ModuleExport]\n    O[Runtime Module operation contract] -->|runtime_module_operation_classification| M\n    P[ExecutionProfileRelease] -->|runtime_profile_compatibility| M\n    M -->|runtime_workflow_author| W[Workflow graph]\n    W -->|runtime_workflow_export| B[Immutable origin bundle]\n    B -->|runtime_release_register| A[Runtime Registry A]\n    B -->|runtime_release_register| C[Runtime Registry B]\n    PA[Profile and Variant A] --> A\n    PB[Profile and Variant B] --> C",
+    "edges": [
+      {
+        "from": "exact_module_registration",
+        "to": "module_export",
+        "interface_id": "runtime_module_export",
+        "error_code": null
+      },
+      {
+        "from": "runtime_module_operation_contract",
+        "to": "module_export",
+        "interface_id": "runtime_module_operation_classification",
+        "error_code": null
+      },
+      {
+        "from": "execution_profile_release",
+        "to": "module_export",
+        "interface_id": "runtime_profile_compatibility",
+        "error_code": null
+      },
+      {
+        "from": "module_export",
+        "to": "workflow_graph",
+        "interface_id": "runtime_workflow_author",
+        "error_code": null
+      },
+      {
+        "from": "workflow_graph",
+        "to": "runtime_release_bundle",
+        "interface_id": "runtime_workflow_export",
+        "error_code": null
+      },
+      {
+        "from": "runtime_release_bundle",
+        "to": "runtime_registry",
+        "interface_id": "runtime_release_register",
+        "error_code": null
+      }
+    ]
+  },
+  "interface_contracts": [
+    {
+      "interface_id": "runtime_module_export",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_module_authoring",
+      "owner_module_id": "runtime_module_authoring",
+      "input": "ModuleRegistrationSource plus exact Behavior, Evaluation, Retry and optional Execution Profile releases",
+      "output": "ModuleExport containing one dependency-closed Module release bundle; when the optional Profile is absent, the export has no Profile or Variant and carries MODULE_EXECUTION_PROFILE_UNAVAILABLE; an incompatible supplied Profile produces no ModuleExport",
+      "effects": "none",
+      "error_codes": [
+        "MODULE_EXECUTION_PROFILE_UNAVAILABLE",
+        "MODULE_EXECUTION_PROFILE_INCOMPATIBLE"
+      ]
+    },
+    {
+      "interface_id": "runtime_module_operation_classification",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_module_operation_contract",
+      "owner_module_id": "runtime_module_operation_contract",
+      "input": "one immutable tuple of Module declared operation IDs",
+      "output": "exactly one model operation ID plus the exact non-model operation set",
+      "effects": "none",
+      "error_codes": [
+        "MODULE_OPERATION_DECLARATION_INVALID"
+      ]
+    },
+    {
+      "interface_id": "runtime_profile_compatibility",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_module_authoring",
+      "owner_module_id": "runtime_module_authoring",
+      "input": "Module declared operations and compatible transports plus one exact ExecutionProfileRelease",
+      "output": "validated profile binding eligible for ExecutionVariantPolicy compilation",
+      "effects": "none",
+      "error_codes": [
+        "MODULE_EXECUTION_PROFILE_INCOMPATIBLE"
+      ]
+    },
+    {
+      "interface_id": "runtime_workflow_author",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_workflow_authoring",
+      "owner_module_id": "runtime_workflow_authoring",
+      "input": "repository-independent WorkflowReleaseCandidate plus exact ModuleExport values referenced by graph nodes",
+      "output": "Workflow authoring object with exact graph and dependency closure",
+      "effects": "none",
+      "error_codes": [
+        "WORKFLOW_MODULE_CLOSURE_INVALID",
+        "WORKFLOW_EXECUTION_BINDING_INVALID"
+      ]
+    },
+    {
+      "interface_id": "runtime_workflow_export",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_workflow_authoring",
+      "owner_module_id": "runtime_workflow_authoring",
+      "input": "validated Workflow authoring object",
+      "output": "WorkflowExport containing one WorkflowRelease and a canonical dependency-closed origin RuntimeReleaseBundle; Execution Profile and Execution Variant Policy releases are intentionally excluded",
+      "effects": "none",
+      "error_codes": [
+        "WORKFLOW_MODULE_CLOSURE_INVALID",
+        "WORKFLOW_EXECUTION_BINDING_INVALID"
+      ]
+    },
+    {
+      "interface_id": "runtime_release_register",
+      "identity_mode": "referenced",
+      "semantic_owner_ref": "runtime_registry_release_catalog",
+      "owner_module_id": "runtime_registry_release_catalog",
+      "input": "one exact RuntimeReleaseBundle",
+      "output": "one immutable registration result per target Runtime Registry",
+      "effects": "atomic mutation of the selected Registry only",
+      "error_codes": [
+        "REGISTRY_DEPENDENCY_UNRESOLVED",
+        "REGISTRY_RELEASE_CONFLICT"
+      ]
+    }
+  ],
+  "error_contracts": [
+    {
+      "error_code": "MODULE_OPERATION_DECLARATION_INVALID",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_module_operation_contract",
+      "owner_module_id": "runtime_module_operation_contract",
+      "condition": "Module declared_operation_ids contain zero or more than one model invocation operation",
+      "meaning": "Runtime produces no ModuleExport and does not evaluate Profile compatibility",
+      "caller_action": "correct the Module operation declaration and retry authoring; ModuleAuthoringError exposes this exact error_code"
+    },
+    {
+      "error_code": "MODULE_EXECUTION_PROFILE_UNAVAILABLE",
+      "identity_mode": "referenced",
+      "semantic_owner_ref": "runtime_module_authoring",
+      "owner_module_id": "runtime_module_authoring",
+      "condition": "caller requests an executable Module export without an ExecutionProfileRelease",
+      "meaning": "Module release content can compile, but no executable Variant binding was produced",
+      "caller_action": "supply one exact registered profile or keep the export non-executable"
+    },
+    {
+      "error_code": "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_module_authoring",
+      "owner_module_id": "runtime_module_authoring",
+      "condition": "profile transport is incompatible, profile tools differ from Module non-model operations, or the profile grants undeclared tools",
+      "meaning": "Runtime produces neither ModuleExport nor Execution Variant binding for this supplied Module and Profile pair",
+      "caller_action": "select or compile a Profile whose exact capabilities match the Module declaration; ModuleAuthoringError exposes this exact error_code"
+    },
+    {
+      "error_code": "WORKFLOW_MODULE_CLOSURE_INVALID",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_workflow_authoring",
+      "owner_module_id": "runtime_workflow_authoring",
+      "condition": "a Module graph node lacks one exact matching ModuleExport ref and hash, supplied Module exports are outside the graph closure, or two supplied exports carry the same release ref with different bytes",
+      "meaning": "WorkflowExport and dependency-closed bundle were not produced",
+      "caller_action": "supply exactly the Module exports referenced by the graph and retry authoring"
+    },
+    {
+      "error_code": "WORKFLOW_EXECUTION_BINDING_INVALID",
+      "identity_mode": "declared",
+      "semantic_owner_ref": "runtime_workflow_authoring",
+      "owner_module_id": "runtime_workflow_authoring",
+      "condition": "execution_binding_ref is not derived from Workflow identity/version, or execution_binding_document differs from the exact target-independent workflow_execution_binding_v1 shape",
+      "meaning": "WorkflowExport and WorkflowRelease were not produced",
+      "caller_action": "supply the exact target-independent binding descriptor and retry authoring"
+    },
+    {
+      "error_code": "REGISTRY_DEPENDENCY_UNRESOLVED",
+      "identity_mode": "referenced",
+      "semantic_owner_ref": "runtime_registry_release_catalog",
+      "owner_module_id": "runtime_registry_release_catalog",
+      "condition": "the submitted bundle lacks an exact referenced release",
+      "meaning": "the target Registry remains unchanged",
+      "caller_action": "repair the exported dependency closure before replay"
+    },
+    {
+      "error_code": "REGISTRY_RELEASE_CONFLICT",
+      "identity_mode": "referenced",
+      "semantic_owner_ref": "runtime_registry_release_catalog",
+      "owner_module_id": "runtime_registry_release_catalog",
+      "condition": "the target Registry already contains the same release identity with different bytes",
+      "meaning": "the target Registry remains unchanged",
+      "caller_action": "use a new immutable release version or restore identical content"
+    }
+  ],
+  "logical_modules": [
+    {
+      "module_id": "runtime_module_operation_contract",
+      "responsibility": "Own the single code-level classification of model invocation operation IDs and derive the exact non-model operation set consumed by Registry authoring and Execution admission.",
+      "owned_resources": [
+        "model_invocation_operation_ids",
+        "module_operation_classification"
+      ],
+      "public_interfaces": [
+        "runtime_module_operation_classification"
+      ],
+      "allowed_dependencies": [
+        "runtime_contract_validation"
+      ],
+      "prohibited_dependencies": [
+        "runtime_module_authoring",
+        "execution_private_implementation",
+        "provider_adapter"
+      ],
+      "failure_and_recovery": [
+        "an invalid model-operation cardinality fails before Profile compatibility and produces no ModuleExport"
+      ],
+      "required_tests": [
+        "exactly_one_model_operation",
+        "shared_authoring_and_execution_classification"
+      ],
+      "future_capabilities": [],
+      "implementation_bindings": [
+        "src/agent_runtime/contracts/execution_module_definition.py",
+        "src/agent_runtime/execution/execution_module_invocation.py",
+        "tests/test_agent_runtime_module_authoring.py"
+      ],
+      "disposition": "refactor"
+    },
+    {
+      "module_id": "runtime_module_authoring",
+      "responsibility": "Compile one exact Module source and validate Module-to-Execution-Profile capability closure without role-specific tool rules.",
+      "owned_resources": [
+        "module_authoring_source",
+        "module_export",
+        "module_profile_compatibility",
+        "existing_registered_fact_projection"
+      ],
+      "public_interfaces": [
+        "Module.from_registration",
+        "Module.export",
+        "ModuleReviewer.from_registration",
+        "runtime_profile_compatibility"
+      ],
+      "allowed_dependencies": [
+        "runtime_module_operation_contract",
+        "runtime_release_candidates",
+        "runtime_release_compilers",
+        "runtime_release_bundle",
+        "runtime_registry_release_catalog_read"
+      ],
+      "prohibited_dependencies": [
+        "reviewer_role_specific_tool_policy",
+        "provider_invocation",
+        "host_repository_discovery",
+        "direct_registry_persistence_write"
+      ],
+      "failure_and_recovery": [
+        "profile mismatch produces no Variant binding and no Registry mutation"
+      ],
+      "required_tests": [
+        "tool_free_profile_compatibility",
+        "gateway_tool_profile_compatibility",
+        "transport_mismatch_refusal",
+        "undeclared_tool_refusal",
+        "missing_tool_refusal"
+      ],
+      "future_capabilities": [
+        "additional Module roles consume the same capability closure"
+      ],
+      "implementation_bindings": [
+        "src/agent_runtime/registry/registry_module_authoring.py",
+        "tests/test_agent_runtime_module_authoring.py"
+      ],
+      "disposition": "refactor"
+    },
+    {
+      "module_id": "runtime_workflow_authoring",
+      "responsibility": "Represent one Workflow as a graph over exact Module releases and export one immutable dependency-closed bundle that is independent of target Runtime identity.",
+      "owned_resources": [
+        "workflow_authoring_graph",
+        "workflow_export",
+        "workflow_bundle_assembly",
+        "workflow_execution_binding_v1"
+      ],
+      "public_interfaces": [
+        "Workflow.from_graph",
+        "Workflow.export"
+      ],
+      "allowed_dependencies": [
+        "WorkflowReleaseCandidate",
+        "ModuleExport",
+        "compile_workflow_release",
+        "RuntimeReleaseBundle",
+        "runtime_contract_validation"
+      ],
+      "prohibited_dependencies": [
+        "target_runtime_identity",
+        "runtime_client_network_transport",
+        "cross_runtime_execution_coordination",
+        "host_business_workflow_discovery"
+      ],
+      "failure_and_recovery": [
+        "invalid graph closure produces no bundle and no Registry mutation"
+      ],
+      "required_tests": [
+        "workflow_class_graph_closure",
+        "workflow_export_hash_stability",
+        "workflow_origin_bundle_membership",
+        "workflow_execution_binding_target_independence",
+        "same_export_two_runtime_registries",
+        "per_registry_active_pointer_independence",
+        "per_registry_profile_variant_independence",
+        "registration_replay"
+      ],
+      "future_capabilities": [
+        "hosts may distribute the same export through multiple Runtime clients without changing Workflow identity"
+      ],
+      "implementation_bindings": [
+        "src/agent_runtime/registry/registry_workflow_authoring.py",
+        "src/agent_runtime/registry/registry_release_compilation.py",
+        "src/agent_runtime/registry/__init__.py",
+        "src/agent_runtime/__init__.py",
+        "src/agent_runtime/conformance/conformance_architecture_manifest.py",
+        "tests/test_agent_runtime_workflow_authoring.py",
+        "tests/test_agent_runtime_workflow_release_compilation.py"
+      ],
+      "disposition": "refactor"
+    },
+    {
+      "module_id": "runtime_registry_release_catalog",
+      "responsibility": "Register the same exact release bundle independently into each selected Runtime Registry.",
+      "owned_resources": [
+        "immutable_release_catalog",
+        "module_workflow_active_pointer"
+      ],
+      "public_interfaces": [
+        "RuntimeReleaseRegistry.register_bundle",
+        "RuntimeReleaseRegistry.set_active_release"
+      ],
+      "allowed_dependencies": [
+        "RuntimeReleaseBundle"
+      ],
+      "prohibited_dependencies": [
+        "workflow_authoring_source",
+        "another_runtime_registry_state"
+      ],
+      "failure_and_recovery": [
+        "one Registry failure does not mutate another Registry"
+      ],
+      "required_tests": [],
+      "future_capabilities": [],
+      "implementation_bindings": [
+        "src/agent_runtime/registry/registry_release_registration.py"
+      ],
+      "disposition": "retain"
+    }
+  ],
+  "implementation_slices": [
+    {
+      "slice_id": "slice_2e_workflow_authoring_and_profile_compatibility",
+      "intended_result": "Runtime exports one graph-backed Workflow class, validates generic Module/Profile capability closure, and proves the same immutable Workflow bundle registers unchanged into multiple independent Runtime Registries.",
+      "included_surfaces": [
+        "runtime_module_operation_contract",
+        "runtime_module_authoring",
+        "runtime_profile_compatibility",
+        "runtime_workflow_authoring",
+        "runtime_workflow_export",
+        "runtime_multi_registry_registration_conformance"
+      ],
+      "excluded_surfaces": [
+        "trading_platform_plugin_migration",
+        "runtime_client_network_transport",
+        "cross_runtime_execution_coordination",
+        "provider_adapter_implementation",
+        "postgresql_schema_change"
+      ],
+      "deferred_integrations": [],
+      "required_tests": [
+        "shared_model_operation_classification",
+        "tool_free_profile_compatibility",
+        "gateway_tool_profile_compatibility",
+        "profile_capability_mismatch_refusal",
+        "workflow_graph_exact_module_closure",
+        "workflow_export_dependency_closure",
+        "workflow_execution_binding_target_independence",
+        "same_export_two_runtime_registries",
+        "per_registry_active_pointer_independence",
+        "per_registry_profile_variant_independence",
+        "registration_replay"
+      ],
+      "completion_gate": "focused Runtime authoring tests and the full Runtime regression suite pass without Trading Platform code changes, provider calls, network access, or PostgreSQL schema changes"
+    }
+  ],
+  "cross_module_seams": [
+    "seam_module_operation_contract_to_authoring_and_execution",
+    "seam_module_profile_capability_closure",
+    "seam_module_export_to_workflow_graph",
+    "seam_workflow_export_to_registry_registration"
+  ],
+  "migration_and_compatibility": [
+    "Remove the tool-free-only rule from ModuleReviewer and replace it with one Module/Profile capability-closure rule shared by every Module role.",
+    "Keep existing WorkflowReleaseCandidate and compile_workflow_release identities; Workflow is an authoring facade over those existing contracts, not a second Workflow record family.",
+    "ModuleExport is extended to retain the exact Behavior, Evaluation and Retry Policy releases plus fixed Schema/Prompt/Module closure needed to build a fresh Registry origin bundle; optional Execution Profile and Variant records remain separate from that fixed closure.",
+    "WorkflowReleaseCandidate.execution_binding_ref is derived only from workflow_id and workflow_version. Its execution_binding_document has exactly schema_version=workflow_execution_binding_v1, the matching workflow_id and variant_policy_family=execution_variant_policy, with no additional fields. Target Runtime, Execution Profile and exact Variant Policy identity therefore cannot enter WorkflowRelease identity.",
+    "WorkflowExport carries only the fixed origin closure: Schema, Prompt, Behavior, Evaluation, Retry, Module and Workflow releases. It excludes Execution Profile and Execution Variant Policy releases so each Runtime may register different execution bindings without changing Workflow identity.",
+    "Within the origin bundle, identical ref/hash records are included once even when several graph nodes reuse one Module; a duplicate ref with different hash fails in runtime_workflow_authoring before bundle construction.",
+    "Keep RuntimeReleaseRegistry registration unchanged; multi-Runtime distribution means replaying the same immutable origin export into independent Registry instances, then registering target-local Profile and Variant Policy releases, not adding a cross-Registry coordinator.",
+    "Trading Platform plugin migration remains a later host-owned change and receives no compatibility shim in Runtime."
+  ],
+  "rollback_boundary": "Before commit, restore only the Slice 2E authoring and test paths. After commit, revert the Slice 2E commit; Registry schema, persisted releases, active pointers and Trading Platform sources remain unchanged.",
+  "acceptance_criteria": [
+    "ModuleReviewer contains no Reviewer-specific tool-free restriction; every Module role uses the same Profile compatibility rule.",
+    "The Runtime Module contract owns one shared model-operation classification consumed by authoring and Execution; every Module declares exactly one model operation and derives one exact non-model operation set.",
+    "A Profile cannot grant an undeclared tool, omit a declared non-model operation, or use a transport absent from the Module release declaration. An incompatible supplied Profile produces no ModuleExport and no Variant binding; an absent optional Profile produces a non-executable ModuleExport with MODULE_EXECUTION_PROFILE_UNAVAILABLE.",
+    "Execution adapter admission remains owned by the existing Execution and Invocation path; authoring validates closure without admitting a provider adapter.",
+    "Workflow is a Runtime public class backed by one exact graph and exact ModuleExport values.",
+    "Workflow compilation rejects any execution binding ref or document that can carry target Runtime, Execution Profile or exact Execution Variant Policy identity; changing target-local Profile or Variant records leaves WorkflowRelease ref and hash unchanged.",
+    "WorkflowExport contains one canonical origin RuntimeReleaseBundle with no target Runtime identity, Execution Profile or Execution Variant Policy and no duplicate conflicting release identity.",
+    "The same WorkflowExport registers unchanged into at least two independent RuntimeReleaseRegistry instances.",
+    "Each target Registry keeps its own active pointer and may register a different Execution Profile and Execution Variant Policy for the same Workflow release; selecting or binding one Registry does not change another.",
+    "No Trading Platform source, provider adapter, network client, PostgreSQL schema or compatibility shim changes in this Slice.",
+    "Independent engineering review accepts the exact implementation candidate."
+  ],
+  "unresolved_decisions": []
+}

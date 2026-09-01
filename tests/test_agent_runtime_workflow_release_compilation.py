@@ -52,7 +52,9 @@ def _candidate() -> WorkflowReleaseCandidate:
             "execution-binding:synthetic_workflow@v1"
         ),
         execution_binding_document={
-            "variant_policy_ref": "execution-variant-policy:synthetic@v1"
+            "schema_version": "workflow_execution_binding_v1",
+            "workflow_id": "synthetic_workflow",
+            "variant_policy_family": "execution_variant_policy",
         },
     )
 
@@ -120,3 +122,34 @@ def test_control_node_cannot_smuggle_input_mapping_content() -> None:
 
     with pytest.raises(ValueError, match="control node"):
         compile_workflow_release(replace(candidate, nodes=(invalid_node,)))
+
+
+@pytest.mark.parametrize(
+    "extra_field",
+    ("target_runtime_id", "execution_profile_ref", "variant_policy_ref"),
+)
+def test_workflow_execution_binding_refuses_target_specific_identity(
+    extra_field: str,
+) -> None:
+    candidate = _candidate()
+
+    with pytest.raises(ValueError, match="WORKFLOW_EXECUTION_BINDING_INVALID"):
+        compile_workflow_release(
+            replace(
+                candidate,
+                execution_binding_document={
+                    **candidate.execution_binding_document,
+                    extra_field: "target-specific",
+                },
+            )
+        )
+
+
+def test_workflow_execution_binding_ref_derives_from_workflow_identity() -> None:
+    with pytest.raises(ValueError, match="WORKFLOW_EXECUTION_BINDING_INVALID"):
+        compile_workflow_release(
+            replace(
+                _candidate(),
+                execution_binding_ref="execution-binding:another-runtime@v1",
+            )
+        )

@@ -40,6 +40,9 @@ from ..foundation import (
 )
 
 
+WORKFLOW_EXECUTION_BINDING_INVALID = "WORKFLOW_EXECUTION_BINDING_INVALID"
+
+
 def sha256_text(value: str) -> str:
     """Return the lowercase SHA-256 of one exact UTF-8 string."""
 
@@ -268,6 +271,30 @@ def compile_workflow_release(
         raise ValueError("Workflow candidate edges must be a non-empty tuple")
     if type(candidate.parallel_groups) is not tuple:
         raise ValueError("Workflow parallel_groups must be an immutable tuple")
+    expected_execution_binding_ref = (
+        f"execution-binding:{candidate.workflow_id}@{candidate.workflow_version}"
+    )
+    if candidate.execution_binding_ref != expected_execution_binding_ref:
+        raise ValueError(
+            f"{WORKFLOW_EXECUTION_BINDING_INVALID}: execution_binding_ref "
+            "must derive from Workflow identity and version"
+        )
+    execution_binding_document, execution_binding_sha256 = (
+        _canonical_json_payload(
+            "execution_binding_document",
+            candidate.execution_binding_document,
+        )
+    )
+    expected_execution_binding_document = {
+        "schema_version": "workflow_execution_binding_v1",
+        "variant_policy_family": "execution_variant_policy",
+        "workflow_id": candidate.workflow_id,
+    }
+    if execution_binding_document != expected_execution_binding_document:
+        raise ValueError(
+            f"{WORKFLOW_EXECUTION_BINDING_INVALID}: execution_binding_document "
+            "must be the exact target-independent workflow_execution_binding_v1"
+        )
 
     nodes: list[WorkflowNodeBinding] = []
     mapping_hashes: dict[str, str] = {}
@@ -314,10 +341,6 @@ def compile_workflow_release(
     _, authorization_sha256 = _canonical_json_payload(
         "authorization_manifest_document",
         candidate.authorization_manifest_document,
-    )
-    _, execution_binding_sha256 = _canonical_json_payload(
-        "execution_binding_document",
-        candidate.execution_binding_document,
     )
     node_tuple = tuple(nodes)
     graph_payload = {
@@ -865,6 +888,7 @@ __all__ = [
     "RetryPolicyReleaseCandidate",
     "WorkflowNodeReleaseCandidate",
     "WorkflowReleaseCandidate",
+    "WORKFLOW_EXECUTION_BINDING_INVALID",
     "compile_agent_module_release",
     "compile_behavior_policy_release",
     "compile_evaluation_policy_release",

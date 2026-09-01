@@ -15,10 +15,18 @@ from .registry_module_loading import (
 )
 from .registry_module_authoring import (
     EXECUTION_PROFILE_UNAVAILABLE,
+    MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
+    MODULE_OPERATION_DECLARATION_INVALID,
     Module,
+    ModuleAuthoringError,
     ModuleExport,
     ModuleReviewer,
-    TOOL_FREE_OPERATION_IDS,
+)
+from .registry_workflow_authoring import (
+    WORKFLOW_MODULE_CLOSURE_INVALID,
+    Workflow,
+    WorkflowAuthoringError,
+    WorkflowExport,
 )
 from .registry_schema_migration import (
     RegistryActivePointerDisposition,
@@ -54,6 +62,7 @@ from .registry_release_compilation import (
     RetryPolicyReleaseCandidate,
     WorkflowNodeReleaseCandidate,
     WorkflowReleaseCandidate,
+    WORKFLOW_EXECUTION_BINDING_INVALID,
     compile_agent_module_release,
     compile_behavior_policy_release,
     compile_evaluation_policy_release,
@@ -93,6 +102,8 @@ __all__ = [
     "CompiledRegistryMigrationCandidateSet",
     "EvaluationPolicyReleaseCandidate",
     "EXECUTION_PROFILE_UNAVAILABLE",
+    "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
+    "MODULE_OPERATION_DECLARATION_INVALID",
     "ExecutionProfileReleaseSpec",
     "ExecutionVariantPolicyReleaseCandidate",
     "ExecutionVariantProfileBindingCandidate",
@@ -100,6 +111,7 @@ __all__ = [
     "MODULE_AUTHORING_ROOT",
     "MODULE_REGISTRATION_SCHEMA_VERSION",
     "Module",
+    "ModuleAuthoringError",
     "ModuleExport",
     "ModuleRegistrationSource",
     "ModuleReviewer",
@@ -131,7 +143,11 @@ __all__ = [
     "RuntimeSourceFileRegistration",
     "RuntimeSourceDirectoryRegistration",
     "RetryPolicyReleaseCandidate",
-    "TOOL_FREE_OPERATION_IDS",
+    "WORKFLOW_EXECUTION_BINDING_INVALID",
+    "WORKFLOW_MODULE_CLOSURE_INVALID",
+    "Workflow",
+    "WorkflowAuthoringError",
+    "WorkflowExport",
     "WorkflowNodeReleaseCandidate",
     "WorkflowReleaseCandidate",
     "WorkflowRuntimeRegistry",

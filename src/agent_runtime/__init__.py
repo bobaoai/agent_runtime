@@ -127,9 +127,21 @@ from .contracts.ledger_lineage_definition import ModuleUsageObservation
 from .registry.registry_release_retrieval import ModuleReleaseClient
 from .registry.registry_module_authoring import (
     EXECUTION_PROFILE_UNAVAILABLE,
+    MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
+    MODULE_OPERATION_DECLARATION_INVALID,
     Module,
+    ModuleAuthoringError,
     ModuleExport,
     ModuleReviewer,
+)
+from .registry.registry_workflow_authoring import (
+    WORKFLOW_MODULE_CLOSURE_INVALID,
+    Workflow,
+    WorkflowAuthoringError,
+    WorkflowExport,
+)
+from .registry.registry_release_compilation import (
+    WORKFLOW_EXECUTION_BINDING_INVALID,
 )
 from .contracts.execution_host_definition import (
     AgentRuntimeProductHostApi,
@@ -198,6 +210,8 @@ __all__ = [
     "ExecutionAuthorizationStatusEvidence",
     "ExecutionControlFenceStatus",
     "EXECUTION_PROFILE_UNAVAILABLE",
+    "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
+    "MODULE_OPERATION_DECLARATION_INVALID",
     "ExecutionSnapshotToken",
     "ExternalActionAuthorizationEvidence",
     "AuthorizedExternalEvent",
@@ -214,6 +228,7 @@ __all__ = [
     "InMemoryExternalEventIngress",
     "ModuleEntryPolicy",
     "Module",
+    "ModuleAuthoringError",
     "ModuleExport",
     "ModuleExecutionAuthority",
     "ModuleExecutionPurpose",
@@ -227,6 +242,11 @@ __all__ = [
     "ModuleRunResult",
     "ModuleUsageObservation",
     "ModuleVariantRequest",
+    "WORKFLOW_MODULE_CLOSURE_INVALID",
+    "WORKFLOW_EXECUTION_BINDING_INVALID",
+    "Workflow",
+    "WorkflowAuthoringError",
+    "WorkflowExport",
     "WorkflowModuleExecutionRequest",
     "OutputResolutionPolicy",
     "OutputSubmission",
