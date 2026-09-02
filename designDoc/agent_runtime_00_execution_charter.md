@@ -242,6 +242,7 @@ execution-invalid failure；Registry 不执行 run，也不把 pointer failure �
 | 08 Invocation | Invocation | prepare Context and invoke Execution Profile-selected code-owned provider/tool adapter binding | adapter binding unavailable / invocation failed / output invalid，Invocation owns |
 | 09 External Authority Integration | Execution boundary integration | validate and carry authorization context、protected-operation intent 与 data-access handoff | external denial retains Product Authorization or Data Governance/domain owner；Runtime owns only invalid ref、fence and late-result quarantine |
 | 10 Execution | Execution | resolve target by execution_purpose；start、advance、evaluate、select、resolve and terminate Workflow/Module execution | execution purpose/target invalid / terminal failure，Execution owns |
+| 11 Agent Capability Verification | T1-delegated cross-cutting conformance | consume owner-qualified peer capability evidence，verify complete inventory、canonical Example/runbook 与 required environment-gate closure | verification case failed / environment unavailable / coverage incomplete，Agent Capability Verification owns；peer capability failure retains its peer owner |
 
 每个 T2 只拥有表中一个 bounded capability。T2 之间只能通过公开 interface 和 stable facts 依赖，不能读取
 sibling private implementation。当前文件 identity、implementation binding 和 migration status 来自
@@ -261,12 +262,13 @@ Agent Runtime domain 在以下结果同时成立时完成最低产品闭包：
 4. crash、wait、retry、replay、cancellation 和 recovery 有可重复验证的正向与失败用例。
 5. Runtime package 不 import host product、domain Skill tree 或业务数据库实现。
 6. canonical Design bundle、public exports、schema 与 code-owned registrations 通过 deterministic parity gate。
+7. Agent capability inventory、canonical Example/runbook、owner-qualified peer results、local deterministic gates 与 release-required environment gates 形成 exact aggregate verification result；该结果不复制 peer conformance authority。
 
 Runtime-owned failure family 与 §9 一一对应：01 release invalid/conflict/active-pointer invalid；02 architecture conformance
 failed；03 event invalid/stale；04 ledger commit failed；05 release conformance failed；06 inspection query
 invalid/unavailable；07 durability unavailable/recovery conflict；08 adapter binding unavailable/invocation failed/output invalid；
 09 external-authority context invalid、invalidation fence 与 late-result quarantine；10 execution
-invalid/terminal failure。Product Authorization 的 denial 与 Data Governance/domain Gateway 的
+invalid/terminal failure；11 capability test failed/environment unavailable/coverage incomplete。Product Authorization 的 denial 与 Data Governance/domain Gateway 的
 data-access denial 是 peer decision；Runtime 09 只验证引用、执行 fence 并保留原 owner identity。
 具体 error code、retryability、caller action 与 rollback 由 §9 对应 T2 定义。T1 不把 peer denial 或一个
 T2 failure 重写成另一个 owner 的 failure。Host 对任一 Runtime public operation caller 的 denial 都在进入
@@ -283,3 +285,4 @@ Durability、Inspection 或其他 T2 failure。
 - [Timestamp Semantics](the_timestamp_semantic.md)
 - [Review Contract](the_review_contract.md)
 - [Software Delivery](the_software_delivery.md)
+- [Agent Capability Verification](agent_runtime_11_agent_capability_verification.md)
