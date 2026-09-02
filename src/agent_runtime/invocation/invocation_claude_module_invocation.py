@@ -64,7 +64,10 @@ from .invocation_result_assembly import (
     provider_adapter_descriptor,
     raise_terminal_failure,
 )
-from ..foundation.foundation_schema_traversal import transform_json_schema_nodes
+from .invocation_schema_projection import (
+    NativeOutputSchemaProjectionError,
+    claude_native_output_schema,
+)
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
     lease_attempt_workspace,
@@ -214,35 +217,6 @@ def _canonical_output(
     ).encode("utf-8")
 
 
-def _structured_output_format(
-    registered_output_schema: dict[str, object],
-) -> dict[str, Any]:
-    """Project the registered schema for provider structured output framing.
-
-    Provider structured output is only a framing aid. Runtime still validates
-    the committed object against the exact registered Module output schema.
-    """
-
-    unsupported_composition = {
-        "allOf",
-        "anyOf",
-        "oneOf",
-        "if",
-        "then",
-        "else",
-    }
-
-    provider_schema = transform_json_schema_nodes(
-        registered_output_schema,
-        lambda node: {
-            key: value
-            for key, value in node.items()
-            if key not in unsupported_composition
-        },
-    )
-    return {"type": "json_schema", "schema": provider_schema}
-
-
 def _is_quota_response(provider_response: str) -> bool:
     normalized = provider_response.lower()
     return any(
@@ -377,6 +351,32 @@ class _ClaudeAgentSdkExecutorBase:
         profile = prepared.profile
         registered_output_schema = prepared.registered_output_schema
         prompt = prepared.prompt
+
+        native_output_format = None
+        if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT:
+            try:
+                native_output_format = {
+                    "type": "json_schema",
+                    "schema": claude_native_output_schema(
+                        registered_output_schema
+                    ),
+                }
+            except NativeOutputSchemaProjectionError as exc:
+                raise_terminal_failure(
+                    artifact_host=self._artifact_host,
+                    request=request,
+                    profile=profile,
+                    failure_class="schema",
+                    failure_code="native_output_schema_projection_unsupported",
+                    message=str(exc),
+                    provider_response="",
+                    retry_disposition_id="retry_denied",
+                    trace={
+                        "stage": "native_output_schema_projection",
+                        "error": str(exc),
+                    },
+                    cause=exc,
+                )
 
         session = None
         definitions: tuple[ProviderToolDefinition, ...] = ()
@@ -546,9 +546,7 @@ class _ClaudeAgentSdkExecutorBase:
             strict_mcp_config=True,
             sandbox=_sandbox_options(),
             output_format=(
-                _structured_output_format(registered_output_schema)
-                if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT
-                else None
+                native_output_format
             ),
         )
 
@@ -795,7 +793,7 @@ class ClaudeAgentSdkInlineModuleExecutor(_ClaudeAgentSdkExecutorBase):
     """Execute one fully inline, tool-free Claude SDK Attempt."""
 
     executor_adapter_id = "claude_agent_sdk_inline_executor"
-    executor_adapter_revision = "v1"
+    executor_adapter_revision = "v2"
 
 
 class ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
@@ -806,7 +804,7 @@ class ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
     executor_adapter_id = (
         "claude_agent_sdk_inline_draft_workspace_executor"
     )
-    executor_adapter_revision = "v1"
+    executor_adapter_revision = "v2"
     expected_execution_mode = "agent"
     expected_attempt_workspace_policy = "own_draft_read_write"
     workspace_tools = _DRAFT_WORKSPACE_TOOLS
@@ -816,7 +814,7 @@ class ClaudeAgentSdkGatewayModuleExecutor(_ClaudeAgentSdkExecutorBase):
     """Execute an Agent Module with only its registered Gateway read tools."""
 
     executor_adapter_id = "claude_agent_sdk_gateway_executor"
-    executor_adapter_revision = "v2"
+    executor_adapter_revision = "v3"
     expected_execution_mode = "agent"
     expected_semantic_input_delivery_mode = "gateway_read"
     expected_network_policy = "gateway_only"

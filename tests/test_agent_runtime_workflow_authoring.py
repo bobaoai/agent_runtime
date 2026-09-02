@@ -86,7 +86,7 @@ def _profile(profile_id: str, model_id: str):
         ExecutionProfileReleaseSpec(
             execution_profile_id=profile_id,
             executor_adapter_id="claude_agent_sdk_inline_executor",
-            executor_adapter_revision="v1",
+            executor_adapter_revision="v2",
             transport_kind="claude_agent_sdk",
             provider_id="anthropic",
             model_id=model_id,

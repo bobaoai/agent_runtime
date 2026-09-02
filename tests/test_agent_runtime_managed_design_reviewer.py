@@ -359,7 +359,7 @@ def _compiled_reviewer():
         ExecutionProfileReleaseSpec(
             execution_profile_id="profile_design_contract_reviewer_opus_5_xhigh_v1",
             executor_adapter_id="claude_agent_sdk_inline_executor",
-            executor_adapter_revision="v1",
+            executor_adapter_revision="v2",
             transport_kind="claude_agent_sdk",
             provider_id="anthropic",
             model_id="claude-opus-5",
@@ -564,7 +564,7 @@ class _StaticDesignReviewerAdapter:
         return AgentExecutionAdapterDescriptor(
             adapter_contract_version="v1",
             adapter_id="claude_agent_sdk_inline_executor",
-            adapter_revision="v1",
+            adapter_revision="v2",
             provider_id="anthropic",
             transport_family="sdk",
             transport_kind="claude_agent_sdk",

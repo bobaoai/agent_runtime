@@ -145,7 +145,7 @@ def _profile(*, model_id: str = "claude-opus-5"):
         ExecutionProfileReleaseSpec(
             execution_profile_id=f"profile_{MODULE_ID}_opus_5_xhigh_v1",
             executor_adapter_id="claude_agent_sdk_inline_executor",
-            executor_adapter_revision="v1",
+            executor_adapter_revision="v2",
             transport_kind="claude_agent_sdk",
             provider_id="anthropic",
             model_id=model_id,
@@ -168,7 +168,7 @@ def _gateway_profile(*, tool_policy: tuple[str, ...] = ("repository_read",)):
         ExecutionProfileReleaseSpec(
             execution_profile_id=f"profile_{MODULE_ID}_gateway_v1",
             executor_adapter_id="claude_agent_sdk_gateway_executor",
-            executor_adapter_revision="v2",
+            executor_adapter_revision="v3",
             transport_kind="claude_agent_sdk",
             provider_id="anthropic",
             model_id="claude-opus-5",

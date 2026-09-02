@@ -92,6 +92,7 @@ from agent_runtime.invocation.invocation_prompt_assembly import (
     build_inline_provider_prompt,
 )
 from agent_runtime.invocation.invocation_schema_projection import (
+    claude_native_output_schema,
     codex_native_output_schema,
     task_plane_output_schema,
 )
@@ -146,7 +147,7 @@ def _compile_native_module(
     ),
     execution_profile_id: str = "native_profile",
     executor_adapter_id: str = "codex_cli_agent_executor",
-    executor_adapter_revision: str = "v2",
+    executor_adapter_revision: str = "v3",
     transport_kind: str = "codex_cli",
     provider_id: str = "openai",
     model_id: str = "native_model",
@@ -158,6 +159,7 @@ def _compile_native_module(
     gateway_access_reasons: tuple[str, ...] = (),
     tool_policy: tuple[str, ...] = (),
     network_policy: str = "denied",
+    output_schema_document: dict[str, object] = _OUTPUT_SCHEMA,
 ):
     del tmp_path
     behavior_policy = compile_behavior_policy_release(
@@ -200,7 +202,7 @@ def _compile_native_module(
             input_schema_ref="schema:native_input@v1",
             input_schema_document=json.dumps(input_schema),
             output_schema_ref="schema:native_output@v1",
-            output_schema_document=json.dumps(_OUTPUT_SCHEMA),
+            output_schema_document=json.dumps(output_schema_document),
             instruction_source_ref=(
                 "host-source:native-skill/native_module/prompt@candidate_v1"
             ),
@@ -1473,7 +1475,7 @@ def test_run_module_rejects_codex_agent_draft_workspace_before_provider(
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="codex_workspace_profile",
         executor_adapter_id="codex_cli_agent_workspace_executor",
-        executor_adapter_revision="v1",
+        executor_adapter_revision="v2",
         execution_mode="agent",
         attempt_workspace_policy="own_draft_read_write",
     )
@@ -1526,7 +1528,7 @@ def test_run_module_executes_claude_agent_draft_workspace_slice(
         executor_adapter_id=(
             "claude_agent_sdk_inline_draft_workspace_executor"
         ),
-        executor_adapter_revision="v1",
+        executor_adapter_revision="v2",
         transport_kind="claude_agent_sdk",
         provider_id="anthropic",
         model_id="claude-workspace-test",
@@ -2436,7 +2438,7 @@ def test_operation_free_module_cannot_use_a_provider_transport(
     registry, module, profile = _operation_free_release(
         transport_kind="codex_cli",
         executor_adapter_id="codex_cli_agent_executor",
-        executor_adapter_revision="v2",
+        executor_adapter_revision="v3",
         provider_id="openai",
     )
     artifact_host = InMemoryCellArtifactStore()
@@ -2531,7 +2533,7 @@ def _gateway_stub_compiled(tmp_path: Path):
         tmp_path,
         declared_operation_ids=("invoke_model", "read_source"),
         executor_adapter_id="claude_agent_sdk_gateway_executor",
-        executor_adapter_revision="v2",
+        executor_adapter_revision="v3",
         transport_kind="claude_agent_sdk",
         provider_id="anthropic",
         execution_mode="agent",
@@ -2619,7 +2621,7 @@ def _registered_gateway_stub(
         release_registry=registry,
         artifact_host=artifact_host,
         adapter_id="claude_agent_sdk_gateway_executor",
-        adapter_revision="v2",
+        adapter_revision="v3",
         provider_id="anthropic",
         transport_kind="claude_agent_sdk",
         transport_family="sdk",
@@ -3004,7 +3006,7 @@ def test_claude_gateway_executor_routes_tool_through_kernel_authorization(
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="claude_gateway_profile",
         executor_adapter_id="claude_agent_sdk_gateway_executor",
-        executor_adapter_revision="v2",
+        executor_adapter_revision="v3",
         transport_kind="claude_agent_sdk",
         provider_id="anthropic",
         model_id="claude-gateway-test",
@@ -3247,7 +3249,7 @@ def test_live_claude_evaluation_runs_through_run_module(tmp_path: Path) -> None:
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="native_claude_profile",
         executor_adapter_id="claude_agent_sdk_inline_executor",
-        executor_adapter_revision="v1",
+        executor_adapter_revision="v2",
         transport_kind="claude_agent_sdk",
         provider_id="anthropic",
         model_id=os.environ.get(
@@ -3302,7 +3304,7 @@ def test_live_claude_agent_workspace_runs_through_run_module(
         executor_adapter_id=(
             "claude_agent_sdk_inline_draft_workspace_executor"
         ),
-        executor_adapter_revision="v1",
+        executor_adapter_revision="v2",
         transport_kind="claude_agent_sdk",
         provider_id="anthropic",
         model_id=os.environ.get(
@@ -3390,7 +3392,7 @@ def test_live_claude_gateway_read_runs_through_run_module(
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="live_claude_gateway_profile",
         executor_adapter_id="claude_agent_sdk_gateway_executor",
-        executor_adapter_revision="v2",
+        executor_adapter_revision="v3",
         transport_kind="claude_agent_sdk",
         provider_id="anthropic",
         model_id=os.environ.get(
@@ -3517,6 +3519,137 @@ class _RecordingHost:
         raise PermissionError("dynamic operation authorization is not available")
 
 
+def _unsupported_positional_output_schema() -> dict[str, object]:
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "schema:native_output@v1",
+        "type": "object",
+        "properties": {
+            "values": {
+                "type": "array",
+                "prefixItems": [{"type": "string"}],
+                "items": False,
+            }
+        },
+        "required": ["values"],
+        "additionalProperties": False,
+    }
+
+
+def _direct_failure_detail(result, artifact_host) -> dict[str, object]:
+    assert result.failure is not None
+    assert result.failure.detail_ref is not None
+    assert result.failure.detail_sha256 is not None
+    return json.loads(
+        artifact_host.read_bytes(
+            result.failure.detail_ref,
+            result.failure.detail_sha256,
+        )
+    )
+
+
+def test_codex_projection_failure_prevents_process_invocation(
+    tmp_path: Path,
+) -> None:
+    compiled = _compile_native_module(
+        tmp_path,
+        output_schema_document=_unsupported_positional_output_schema(),
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="codex_projection_failure",
+    )
+    entered = False
+
+    def invoker(**_fields):
+        nonlocal entered
+        entered = True
+        raise AssertionError("Codex process must not be reached")
+
+    executor = CodexCliModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces",
+        invoker=invoker,
+        codex_bin="codex-test-stub",
+    )
+    result = executor.execute(
+        _direct_adapter_request(
+            compiled,
+            prompt_ref,
+            suffix="codex_projection_failure",
+        ),
+        _RecordingHost(),
+    )
+
+    assert entered is False
+    assert result.terminal_status == "failed"
+    assert result.failure is not None
+    assert result.failure.failure_class == "schema"
+    assert result.failure.retry_disposition_id == "retry_denied"
+    assert _direct_failure_detail(result, artifact_host)["failure_code"] == (
+        "native_output_schema_projection_unsupported"
+    )
+
+
+def test_claude_projection_failure_prevents_provider_invocation(
+    tmp_path: Path,
+) -> None:
+    claude_module = pytest.importorskip(
+        "agent_runtime.invocation.invocation_claude_module_invocation"
+    )
+    compiled = _compile_native_module(
+        tmp_path,
+        execution_profile_id="native_claude_projection_failure_profile",
+        executor_adapter_id="claude_agent_sdk_inline_executor",
+        executor_adapter_revision="v2",
+        transport_kind="claude_agent_sdk",
+        provider_id="anthropic",
+        output_schema_document=_unsupported_positional_output_schema(),
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="claude_projection_failure",
+    )
+    entered = False
+
+    async def fake_query(*_args, **_kwargs):
+        nonlocal entered
+        entered = True
+        if False:
+            yield None
+
+    executor = claude_module.ClaudeAgentSdkInlineModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces",
+        query_fn=fake_query,
+    )
+    result = executor.execute(
+        _direct_adapter_request(
+            compiled,
+            prompt_ref,
+            suffix="claude_projection_failure",
+        ),
+        _RecordingHost(),
+    )
+
+    assert entered is False
+    assert result.terminal_status == "failed"
+    assert result.failure is not None
+    assert result.failure.failure_class == "schema"
+    assert result.failure.retry_disposition_id == "retry_denied"
+    assert _direct_failure_detail(result, artifact_host)["failure_code"] == (
+        "native_output_schema_projection_unsupported"
+    )
+
+
 def test_claude_tool_free_executor_honors_configured_turn_budget(
     tmp_path: Path,
 ) -> None:
@@ -3528,7 +3661,7 @@ def test_claude_tool_free_executor_honors_configured_turn_budget(
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="native_claude_profile",
         executor_adapter_id="claude_agent_sdk_inline_executor",
-        executor_adapter_revision="v1",
+        executor_adapter_revision="v2",
         transport_kind="claude_agent_sdk",
         provider_id="anthropic",
         model_id="claude-opus-test",
@@ -3545,6 +3678,7 @@ def test_claude_tool_free_executor_honors_configured_turn_budget(
 
     async def fake_query(*, prompt, options):
         observed["max_turns"] = options.max_turns
+        observed["output_format"] = options.output_format
         async for _message in prompt:
             pass
         yield claude_module.ResultMessage(
@@ -3576,6 +3710,12 @@ def test_claude_tool_free_executor_honors_configured_turn_budget(
     )
 
     assert observed["max_turns"] == 3
+    assert observed["output_format"] == {
+        "type": "json_schema",
+        "schema": claude_native_output_schema(
+            task_plane_output_schema(_OUTPUT_SCHEMA)
+        ),
+    }
     assert result.terminal_status == "completed"
     assert json.loads(host.staged["result"]) == {"value": "completed"}
 
@@ -3595,7 +3735,7 @@ def test_claude_workspace_executor_gates_every_tool_with_pre_hook(
         executor_adapter_id=(
             "claude_agent_sdk_inline_draft_workspace_executor"
         ),
-        executor_adapter_revision="v1",
+        executor_adapter_revision="v2",
         transport_kind="claude_agent_sdk",
         provider_id="anthropic",
         model_id="claude-workspace-test",

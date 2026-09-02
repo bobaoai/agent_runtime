@@ -1592,7 +1592,7 @@ def _assert_admitted_test_evaluation_profile(
         and not non_model_operations
         and profile.executor_adapter_id
         == "claude_agent_sdk_inline_draft_workspace_executor"
-        and profile.executor_adapter_revision == "v1"
+        and profile.executor_adapter_revision == "v2"
         and profile.transport_kind == "claude_agent_sdk"
         and profile.provider_id == "anthropic"
     ):
@@ -1606,7 +1606,7 @@ def _assert_admitted_test_evaluation_profile(
         and bool(profile.gateway_access_reasons)
         and frozenset(profile.tool_policy) == non_model_operations
         and profile.executor_adapter_id == "claude_agent_sdk_gateway_executor"
-        and profile.executor_adapter_revision == "v2"
+        and profile.executor_adapter_revision == "v3"
         and profile.transport_kind == "claude_agent_sdk"
         and profile.provider_id == "anthropic"
     ):

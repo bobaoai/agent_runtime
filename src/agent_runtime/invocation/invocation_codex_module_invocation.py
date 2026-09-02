@@ -40,7 +40,10 @@ from .invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     normalize_codex_native_output,
 )
-from .invocation_schema_projection import codex_native_output_schema
+from .invocation_schema_projection import (
+    NativeOutputSchemaProjectionError,
+    codex_native_output_schema,
+)
 from .invocation_context_preparation import (
     InvocationExecutionExpectation,
     prepare_registered_invocation_context,
@@ -285,6 +288,29 @@ class _CodexCliExecutorBase:
         profile = prepared.profile
         registered_output_schema = prepared.registered_output_schema
 
+        projected_output_schema = None
+        if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT:
+            try:
+                projected_output_schema = codex_native_output_schema(
+                    registered_output_schema
+                )
+            except NativeOutputSchemaProjectionError as exc:
+                raise_terminal_failure(
+                    artifact_host=self._artifact_host,
+                    request=request,
+                    profile=profile,
+                    failure_class="schema",
+                    failure_code="native_output_schema_projection_unsupported",
+                    message=str(exc),
+                    provider_response="",
+                    retry_disposition_id="retry_denied",
+                    trace={
+                        "stage": "native_output_schema_projection",
+                        "error": str(exc),
+                    },
+                    cause=exc,
+                )
+
         try:
             workspace = prepare_attempt_workspace(
                 workspace_root=self._workspace_root,
@@ -386,9 +412,7 @@ class _CodexCliExecutorBase:
                     schema_path = schema_directory / "output_schema.json"
                     schema_path.write_text(
                         json.dumps(
-                            codex_native_output_schema(
-                                registered_output_schema
-                            ),
+                            projected_output_schema,
                             ensure_ascii=False,
                             sort_keys=True,
                             separators=(",", ":"),
@@ -542,14 +566,14 @@ class CodexCliModuleExecutor(_CodexCliExecutorBase):
     """Execute a tool-free JSON-output Module through Codex CLI."""
 
     executor_adapter_id = "codex_cli_agent_executor"
-    executor_adapter_revision = "v2"
+    executor_adapter_revision = "v3"
 
 
 class CodexCliAgentWorkspaceModuleExecutor(_CodexCliExecutorBase):
     """Execute one Agent Module with an isolated mutable draft workspace."""
 
     executor_adapter_id = "codex_cli_agent_workspace_executor"
-    executor_adapter_revision = "v1"
+    executor_adapter_revision = "v2"
     expected_execution_mode = "agent"
     expected_attempt_workspace_policy = "own_draft_read_write"
     expected_tool_policy = ()

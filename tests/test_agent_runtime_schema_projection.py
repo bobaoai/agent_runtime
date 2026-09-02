@@ -7,6 +7,7 @@ from agent_runtime.invocation.invocation_prompt_assembly import (
     normalize_codex_native_output,
 )
 from agent_runtime.invocation.invocation_schema_projection import (
+    claude_native_output_schema,
     codex_native_output_schema,
     task_plane_output_schema,
 )
@@ -168,14 +169,9 @@ def test_codex_projection_rejects_empty_any_of() -> None:
 
 
 def test_claude_projection_does_not_treat_property_maps_as_schema_nodes() -> None:
-    pytest.importorskip("claude_agent_sdk")
-    from agent_runtime.invocation.invocation_claude_module_invocation import (
-        _structured_output_format,
-    )
-
-    projected = _structured_output_format(
+    projected = claude_native_output_schema(
         task_plane_output_schema(_schema_with_keyword_named_properties())
-    )["schema"]
+    )
 
     assert list(projected["properties"]) == [
         "items",
