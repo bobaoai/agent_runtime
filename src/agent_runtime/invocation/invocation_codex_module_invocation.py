@@ -38,9 +38,9 @@ from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_tool_definition import ModuleArtifactHost
 from .invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
-    codex_native_output_schema,
     normalize_codex_native_output,
 )
+from .invocation_schema_projection import codex_native_output_schema
 from .invocation_context_preparation import (
     InvocationExecutionExpectation,
     prepare_registered_invocation_context,

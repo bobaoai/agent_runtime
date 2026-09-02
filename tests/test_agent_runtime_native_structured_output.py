@@ -90,9 +90,9 @@ from agent_runtime.invocation.invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     OUTPUT_SCHEMA_MARKER,
     build_inline_provider_prompt,
-    codex_native_output_schema,
 )
 from agent_runtime.invocation.invocation_schema_projection import (
+    codex_native_output_schema,
     task_plane_output_schema,
 )
 from agent_runtime.ledger.ledger_lineage_recording import (
