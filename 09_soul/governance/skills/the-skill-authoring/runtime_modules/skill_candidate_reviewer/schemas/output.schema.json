@@ -1,0 +1,462 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:skill_candidate_reviewer_output@v8",
+  "title": "Skill Candidate Reviewer Output",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "check_id": {
+      "enum": [
+        "identity_discovery_class_and_source",
+        "task_and_reader_gain",
+        "entry_exit_and_routing",
+        "inputs_authority_freshness_and_conflicts",
+        "outputs_completion_failure_and_handoff",
+        "boundaries_and_observable_violations",
+        "method_result_certainty_and_agent_freedom",
+        "design_and_revision_fidelity",
+        "prompt_boundary_hygiene",
+        "skill_agent_workflow_tool_separation",
+        "runtime_ready_prompt_closure_if_declared"
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "block",
+            "fix",
+            "note"
+          ]
+        },
+        "check_id": {
+          "$ref": "#/$defs/check_id"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accountable_owner_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_change": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "check_id",
+        "evidence",
+        "accountable_owner_ref",
+        "required_change"
+      ]
+    },
+    "check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/check_id"
+        },
+        "disposition": {
+          "enum": [
+            "passed",
+            "finding",
+            "not_applicable"
+          ]
+        },
+        "assessment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "check_id",
+        "disposition",
+        "assessment",
+        "finding_ids"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "finding"
+              }
+            },
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "finding_ids": {
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "else": {
+            "properties": {
+              "finding_ids": {
+                "maxItems": 0,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "skill_candidate_check_results": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "identity_discovery_class_and_source"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "task_and_reader_gain"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "entry_exit_and_routing"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "inputs_authority_freshness_and_conflicts"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "outputs_completion_failure_and_handoff"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "boundaries_and_observable_violations"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "method_result_certainty_and_agent_freedom"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "design_and_revision_fidelity"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "prompt_boundary_hygiene"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "skill_agent_workflow_tool_separation"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/check_result",
+          "properties": {
+            "check_id": {
+              "const": "runtime_ready_prompt_closure_if_declared"
+            },
+            "disposition": {
+              "enum": [
+                "passed",
+                "finding",
+                "not_applicable"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "items": false
+    }
+  },
+  "properties": {
+    "reviewed_subject_kind": {
+      "const": "skill_candidate"
+    },
+    "layer_disposition": {
+      "enum": [
+        "passed",
+        "non_pass",
+        "blocked"
+      ]
+    },
+    "prose_and_meaning_preservation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "check_results": {
+      "$ref": "#/$defs/skill_candidate_check_results"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "safe_next_step": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "reviewed_subject_kind",
+    "layer_disposition",
+    "prose_and_meaning_preservation",
+    "check_results",
+    "findings",
+    "safe_next_step"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "layer_disposition": {
+            "const": "passed"
+          }
+        },
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "check_results": {
+            "items": {
+              "properties": {
+                "disposition": {
+                  "enum": [
+                    "passed",
+                    "not_applicable"
+                  ]
+                },
+                "finding_ids": {
+                  "maxItems": 0,
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "findings": {
+            "items": {
+              "properties": {
+                "severity": {
+                  "const": "note"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layer_disposition": {
+            "const": "non_pass"
+          }
+        },
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "check_results": {
+            "contains": {
+              "properties": {
+                "disposition": {
+                  "const": "finding"
+                }
+              },
+              "type": "object"
+            },
+            "minContains": 1
+          },
+          "findings": {
+            "contains": {
+              "properties": {
+                "severity": {
+                  "enum": [
+                    "block",
+                    "fix"
+                  ]
+                }
+              },
+              "type": "object"
+            },
+            "minContains": 1
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layer_disposition": {
+            "const": "blocked"
+          }
+        },
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "check_results": {
+            "contains": {
+              "properties": {
+                "disposition": {
+                  "const": "finding"
+                }
+              },
+              "type": "object"
+            },
+            "minContains": 1
+          },
+          "findings": {
+            "contains": {
+              "properties": {
+                "severity": {
+                  "const": "block"
+                }
+              },
+              "type": "object"
+            },
+            "minContains": 1
+          }
+        },
+        "type": "object"
+      }
+    }
+  ]
+}

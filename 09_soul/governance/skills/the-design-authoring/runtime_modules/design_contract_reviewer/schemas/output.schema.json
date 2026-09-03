@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:design_contract_reviewer_output@v7",
+  "title": "Design Contract Reviewer Semantic Output",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+        "severity": {"enum": ["block", "fix", "note"]},
+        "finding_class": {
+          "enum": [
+            "intent_gap",
+            "layer_or_owner_defect",
+            "layer_content_misfit",
+            "peer_or_inheritance_conflict",
+            "boundary_ambiguity",
+            "code_truth_leakage",
+            "flow_or_interface_closure_gap",
+            "failure_or_completion_gap",
+            "implementability_gap",
+            "review_or_admission_conflict",
+            "prose_or_communication_defect"
+          ]
+        },
+        "affected_candidate_document_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+        "correction_target_document_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+        "quoted_evidence": {"type": "string", "minLength": 1},
+        "requirement": {"type": "string", "minLength": 1},
+        "impact": {"type": "string", "minLength": 1},
+        "accountable_owner_ref": {"type": "string", "minLength": 1},
+        "required_change": {"type": "string", "minLength": 1}
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "finding_class",
+        "affected_candidate_document_id",
+        "correction_target_document_id",
+        "quoted_evidence",
+        "requirement",
+        "impact",
+        "accountable_owner_ref",
+        "required_change"
+      ]
+    },
+    "check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "enum": [
+            "intent_and_reader_result",
+            "layer_owner_and_parent",
+            "layer_content_fit",
+            "peer_authority_and_inheritance",
+            "boundary_coherence",
+            "design_and_code_truth_separation",
+            "flow_interface_and_error_closure",
+            "failure_completion_and_rollback",
+            "implementability_without_redesign",
+            "review_approval_and_admission",
+            "prose_and_meaning_preservation"
+          ]
+        },
+        "disposition": {"enum": ["passed", "finding", "not_run"]},
+        "assessment": {"type": "string", "minLength": 1},
+        "finding_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"}
+        }
+      },
+      "required": ["check_id", "disposition", "assessment", "finding_ids"]
+    }
+  },
+  "properties": {
+    "verdict": {"enum": ["passed", "non_pass", "blocked"]},
+    "design_judgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intended_result": {"type": "string", "minLength": 1},
+        "reader_gain": {"type": "string", "minLength": 1},
+        "prose_and_meaning_preservation": {"type": "string", "minLength": 1},
+        "authority_structure": {"type": "string", "minLength": 1},
+        "layer_content_fit": {"type": "string", "minLength": 1},
+        "boundary_coherence": {"type": "string", "minLength": 1},
+        "inheritance_and_dependencies": {"type": "string", "minLength": 1},
+        "intent_code_separation": {"type": "string", "minLength": 1},
+        "flow_interface_error": {"type": "string", "minLength": 1},
+        "failure_completion_recovery": {"type": "string", "minLength": 1},
+        "implementability": {"type": "string", "minLength": 1}
+      },
+      "required": [
+        "intended_result",
+        "reader_gain",
+        "prose_and_meaning_preservation",
+        "authority_structure",
+        "layer_content_fit",
+        "boundary_coherence",
+        "inheritance_and_dependencies",
+        "intent_code_separation",
+        "flow_interface_error",
+        "failure_completion_recovery",
+        "implementability"
+      ]
+    },
+    "check_results": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/check_result"}
+    },
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "safe_next_step": {"type": "string", "minLength": 1}
+  },
+  "required": ["verdict", "design_judgment", "check_results", "findings", "safe_next_step"]
+}

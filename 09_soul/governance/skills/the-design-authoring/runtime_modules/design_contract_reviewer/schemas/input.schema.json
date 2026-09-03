@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:design_contract_reviewer_input@v6",
+  "title": "Design Contract Reviewer Semantic Input",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "candidate_document": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "document_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+        "layer": {"enum": ["Charter", "T0", "T1", "T2"]},
+        "title": {"type": "string", "minLength": 1},
+        "owner_ref": {"type": "string", "minLength": 1},
+        "parent_ref": {
+          "oneOf": [
+            {"type": "string", "minLength": 1},
+            {"type": "null"}
+          ]
+        },
+        "owned_object": {"type": "string", "minLength": 1},
+        "body": {"type": "string", "minLength": 1}
+      },
+      "required": ["document_id", "layer", "title", "owner_ref", "parent_ref", "owned_object", "body"]
+    },
+    "context_document": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "document_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+        "context_role": {
+          "enum": [
+            "charter",
+            "governing_contract",
+            "parent_contract",
+            "peer_contract",
+            "dependency_contract",
+            "code_projection",
+            "current_inspection",
+            "design_migration_inventory",
+            "prior_decision"
+          ]
+        },
+        "owner_ref": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "body": {"type": "string", "minLength": 1}
+      },
+      "required": ["document_id", "context_role", "owner_ref", "title", "body"]
+    },
+    "prior_finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+        "disposition": {"enum": ["open", "claimed_fixed", "accepted", "rejected"]},
+        "body": {"type": "string", "minLength": 1}
+      },
+      "required": ["finding_id", "disposition", "body"]
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "design_contract_reviewer_input_v6"},
+    "module_id": {"const": "design_contract_reviewer"},
+    "review_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reviewed_subject_kind": {"enum": ["charter_design", "t0_design", "t1_design", "t2_design"]},
+        "review_purpose": {
+          "enum": ["owner_design_decision", "peer_boundary_design_review", "contract_admission"]
+        },
+        "candidate_revision_class": {
+          "enum": ["new_document", "materially_revised_surface"]
+        },
+        "intended_result": {"type": "string", "minLength": 1},
+        "architecture_change_summary": {"type": "string", "minLength": 1}
+      },
+      "required": ["reviewed_subject_kind", "review_purpose", "candidate_revision_class", "intended_result", "architecture_change_summary"]
+    },
+    "candidate_documents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/candidate_document"}
+    },
+    "context_documents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/context_document"}
+    },
+    "required_check_ids": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "uniqueItems": true,
+      "prefixItems": [
+        {"const": "intent_and_reader_result"},
+        {"const": "layer_owner_and_parent"},
+        {"const": "layer_content_fit"},
+        {"const": "peer_authority_and_inheritance"},
+        {"const": "boundary_coherence"},
+        {"const": "design_and_code_truth_separation"},
+        {"const": "flow_interface_and_error_closure"},
+        {"const": "failure_completion_and_rollback"},
+        {"const": "implementability_without_redesign"},
+        {"const": "review_approval_and_admission"},
+        {"const": "prose_and_meaning_preservation"}
+      ],
+      "items": false
+    },
+    "prior_findings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/prior_finding"}
+    }
+  },
+  "required": [
+    "schema_version",
+    "module_id",
+    "review_request",
+    "candidate_documents",
+    "context_documents",
+    "required_check_ids",
+    "prior_findings"
+  ]
+}

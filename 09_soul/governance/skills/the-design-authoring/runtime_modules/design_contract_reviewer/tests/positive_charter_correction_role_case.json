@@ -1,0 +1,7 @@
+{
+  "case_id": "design_contract_reviewer_positive_charter_correction_role_v1",
+  "case_kind": "positive",
+  "module_id": "design_contract_reviewer",
+  "mutation": "correction_target_charter",
+  "expected_disposition": "semantic_validation_accepted"
+}

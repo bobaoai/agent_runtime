@@ -1,0 +1,22 @@
+{
+  "schema_version": "runtime_module_registration_v2",
+  "skill_id": "the-skill-authoring",
+  "module_id": "skill_candidate_reviewer",
+  "owner_contract_path": "designDoc/the_skill_management.md",
+  "input_schema_ref": "schema:skill_candidate_reviewer_input@v9",
+  "input_schema_path": "schemas/input.schema.json",
+  "output_schema_ref": "schema:skill_candidate_reviewer_output@v8",
+  "output_schema_path": "schemas/output.schema.json",
+  "declared_operation_ids": [
+    "model_execute"
+  ],
+  "compatible_transport_kinds": [
+    "claude_agent_sdk",
+    "codex_cli"
+  ],
+  "behavior_policy_ref": "behavior-policy:workflow_execution_isolated@v1",
+  "evaluation_policy_ref": "evaluation-policy:module_candidate@v1",
+  "retry_policy_ref": "retry-policy:bounded_candidate@v1",
+  "entry_policy": "standalone_allowed",
+  "output_resolution_policy": "evaluated_single"
+}

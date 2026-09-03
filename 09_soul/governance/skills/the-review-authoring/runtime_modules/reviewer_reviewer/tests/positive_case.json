@@ -1,0 +1,7 @@
+{
+  "case_id": "reviewer_reviewer_positive_v1",
+  "case_kind": "positive",
+  "module_id": "reviewer_reviewer",
+  "mutation": "none",
+  "expected_disposition": "passed"
+}

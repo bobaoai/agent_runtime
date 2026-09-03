@@ -1,0 +1,164 @@
+{
+  "$id": "hoveath://governance/skill-artifact-contract/v3",
+  "contract_version": "skill_artifact_contract_v3",
+  "artifact_contract_id": "skill_definition_artifact_contract",
+  "owner_t0_layer_id": "the_skill_management",
+  "artifact_kind": "skill_definition",
+  "frontmatter": {
+    "required_top_level_fields": [
+      "name",
+      "description",
+      "metadata"
+    ],
+    "required_metadata_fields": [
+      "skill_class"
+    ],
+    "primary_agent_development_fields": [
+      "primary_agent_entry_role",
+      "primary_agent_entry_subject",
+      "first_authority_ref"
+    ],
+    "skill_classes": [
+      "primary_agent_development",
+      "product_agentic",
+      "product_hybrid",
+      "projection_only"
+    ]
+  },
+  "required_sections": [
+    {
+      "index": 1,
+      "heading": "Task"
+    },
+    {
+      "index": 2,
+      "heading": "Reader Gain"
+    },
+    {
+      "index": 3,
+      "heading": "Entry and Exit"
+    },
+    {
+      "index": 4,
+      "heading": "Execution Contract",
+      "required_subsections": [
+        {
+          "index": "4.1",
+          "heading": "Inputs and Authority"
+        },
+        {
+          "index": "4.2",
+          "heading": "Output and Completion"
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "heading": "Boundaries"
+    },
+    {
+      "index": 6,
+      "heading": "Method"
+    }
+  ],
+  "conditional_sections": [
+    {
+      "resource_id": "soul:bestpractice_ai_facing_writing",
+      "index": 0,
+      "heading": "AI-facing Authoring Rules",
+      "placement": "before_required_sections"
+    }
+  ],
+  "author_self_check": {
+    "resource_id": "t0:skill_author_self_check",
+    "heading": "Author Self-Check",
+    "placement": "inside_method",
+    "checklist_resource_by_skill_id": {
+      "the-system-change": "t0:system_change_plan_review_checklist",
+      "the-design-authoring": "t0:design_contract_review_checklist",
+      "the-skill-authoring": "t0:skill_candidate_review_checklist",
+      "the-review-authoring": "t0:reviewer_prompt_review_checklist"
+    },
+    "instruction_lines": [
+      "调用外部 Reviewer 前，author 必须直接消费本 Skill 声明的、由 subject authority 拥有的 canonical checklist，不能手抄第二份 checklist。每次调用只形成临时结果表：",
+      "",
+      "| `check_id` | `exact evidence` | `local result` | `unresolved finding` |",
+      "| --- | --- | --- | --- |",
+      "",
+      "每个 required `check_id` 恰好出现一次，并绑定当前 exact candidate 的证据。历史 `prior_findings` 只作为需要在当前 candidate 上重新判断的 evidence，不能继承旧 verdict。任何 unresolved finding 都使 author 停止并留在本 Skill 内修订；只有本地 finding 全部关闭后，才冻结 exact candidate 并调用独立 Reviewer。",
+      "",
+      "Author Self-Check 只防止作者把自己已经看见的缺口交给 Reviewer。它不产生 `passed`、approval、admission 或任何可替代独立审核的结果，也不创建持久化 record、Registry 或跨系统 schema。"
+    ]
+  },
+  "reviewer_checklist": {
+    "resource_id": "t0:skill_candidate_review_checklist",
+    "intro_lines": [
+      "以下 11 项是完整 hard-gated checklist。Reviewer 按顺序逐项形成结果，完成全部检查后再给 verdict，并在",
+      "同一次调用中返回全部 actionable findings；不能命中首项后停止，也不能设置固定 finding 数量。一个根因",
+      "影响多项时保留逐项 assessment，但不复制 finding："
+    ],
+    "checks": [
+      {
+        "order": 1,
+        "check_id": "identity_discovery_class_and_source",
+        "required_result": "frontmatter 的 stable identity、discriminating description、unique owner、四类之一的 Skill class 与 canonical source 是否完整一致；并根据 Task、Reader Gain 与实际产出判断共同首章和 Author Self-Check 各自是否适用，以及 candidate 是否表达了正确责任。"
+      },
+      {
+        "order": 2,
+        "check_id": "task_and_reader_gain",
+        "required_result": "`Task` 是否说明准确任务；`Reader Gain` 是否说明目标 Agent 新增的可靠判断或动作，并与 Task、Output 和 authoring rationale 保持区分。"
+      },
+      {
+        "order": 3,
+        "check_id": "entry_exit_and_routing",
+        "required_result": "entry、exclusion、blocked exit 与 return owner 是否闭合；candidate 与完整 peer set 的责任边界是否清楚，而不是依赖名称、目录或附近 prompt。"
+      },
+      {
+        "order": 4,
+        "check_id": "inputs_authority_freshness_and_conflicts",
+        "required_result": "required inputs、first authority、owner、identity/freshness、缺失与冲突处理是否闭合，且 mutable state 没有被写成 static instruction。"
+      },
+      {
+        "order": 5,
+        "check_id": "outputs_completion_failure_and_handoff",
+        "required_result": "output、completion、failure、partial/blocked result 与 downstream handoff 是否让冷读 Agent 能判断完成或停止，并且没有留下未声明的责任决定。"
+      },
+      {
+        "order": 6,
+        "check_id": "boundaries_and_observable_violations",
+        "required_result": "与相邻 Skill、Tool、Workflow、prompt、Runtime、authorization、persistence、review 和 release 的边界是否准确；每条 critical prohibition 是否有 observable violation。"
+      },
+      {
+        "order": 7,
+        "check_id": "method_result_certainty_and_agent_freedom",
+        "required_result": "Method 是否固定结果与必要判断，而没有把 reasoning、prose composition 或 tool choice 写成自然语言脚本；known traps 是否仅保留真实高概率失败模式；适用的 Author Self-Check 是否消费正确的 canonical subject checklist、逐项留下 exact evidence 与 local result、遇到 unresolved finding 时停止，并明确不能替代独立 Reviewer。"
+      },
+      {
+        "order": 8,
+        "check_id": "design_and_revision_fidelity",
+        "required_result": "candidate 是否保留 owning Design meaning 与 reviewed change scope；与 peer set 的边界是否避免重复或责任缺口；是否从 current implementation 反推新的 product meaning。"
+      },
+      {
+        "order": 9,
+        "check_id": "prompt_boundary_hygiene",
+        "required_result": "static Skill/prompt instruction 与 dynamic task input、credential、authorization、execution record、release state 和 provider/model choice 是否分离。"
+      },
+      {
+        "order": 10,
+        "check_id": "skill_agent_workflow_tool_separation",
+        "required_result": "Tool、Skill、Workflow、prompt、Runtime Module 与 Agent objective 是否保持区分；Skill 没有取得 Runtime admission、canonical write 或 software release authority。"
+      },
+      {
+        "order": 11,
+        "check_id": "runtime_ready_prompt_closure_if_declared",
+        "required_result": "普通 declared prompt 是否独立闭合 Task、input/output、completion、failure、operation boundary、policy boundary 和 Skill handoff；Reviewer prompt source 是否与 containing Skill 的 Task 和 handoff 一致，且不重复审核其 prompt meaning；Skill Package 携带 Reviewer source 时，containing Skill 是否声明 exact `module_id`、独立 Runtime execution identity、必经 handoff 和 Module route 不可用时的真实 owner；没有 declared prompt 时返回 `not_applicable` 并引用 candidate 中不需要 managed execution 的 exact evidence，不能推断一个 prompt。"
+      }
+    ],
+    "outro_lines": [
+      "每个 `check_results` entry 包含非空 `assessment`，引用当前 candidate 中足以支持判断的 exact evidence。",
+      "前十项只返回 `passed` 或 `finding`；第 11 项只有在没有 declared prompt 时可以返回 `not_applicable`。",
+      "只有 `block` 或 `fix` finding 才让 check disposition 成为 `finding`；只有 note 的 check 仍为 `passed`，",
+      "`finding_ids` 为空。"
+    ]
+  }
+}

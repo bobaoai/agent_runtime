@@ -1,11 +1,11 @@
 ---
-title: Timestamp Semantic Contract
+title: 时间戳语义合同（Timestamp Semantic Contract）
 status: candidate
 layer: T0
 t0_layer_id: the_timestamp_semantic
 canonical_owner: designDoc/the_timestamp_semantic.md
 owned_system_object: time-bearing data semantics
-language: en
+language: zh-CN with exact English identifiers
 reader_persona:
   - Domain Architect
   - Schema Owner
@@ -13,16 +13,11 @@ reader_persona:
   - Distributed Systems Engineer
 ---
 
-# Timestamp Semantic Contract
+# 时间戳语义合同（Timestamp Semantic Contract）
 
-**Purpose**: Define stable product-wide timestamp roles, storage forms,
-clock-domain semantics, comparison law, daylight-saving-time handling, and
-distributed-clock safety without embedding object-class inventories,
-scheduler policy, market-specific helpers, or implementation history.
-
-**Required reader gain**: A reader can name a time field by what it means,
-choose a storage form without inventing precision, decide whether a comparison
-is legal, and understand when distributed clock evidence is required.
+本文只冻结适用于整个产品的 timestamp role、storage form、clock-domain semantics、comparison
+law、daylight-saving-time handling 与 distributed-clock safety。Object-class inventory、scheduler
+policy、market-specific helper 和 implementation history 不属于本 T0。
 
 ## 0. Intent Capsule
 
@@ -33,58 +28,128 @@ status: candidate
 canonical_owner: designDoc/the_timestamp_semantic.md
 owned_system_object: time-bearing data semantics
 scope:
-  - stable timestamp role vocabulary
-  - stable instant, calendar-day, and market-session storage forms
-  - persisted-record and mutable-record time invariants
-  - clock-domain ownership and comparison law
-  - IANA timezone and daylight-saving-time law
-  - distributed-clock profile, health evidence, and conservative validity law
-  - code-owned per-class time-role registration and generated projection boundary
+  - 稳定的 timestamp role vocabulary
+  - 稳定的 instant、calendar-day 与 market-session storage form
+  - persisted-record 与 mutable-record time invariant
+  - clock-domain ownership 与 comparison law
+  - IANA timezone 与 daylight-saving-time law
+  - distributed-clock profile、health evidence 与 conservative validity law
+  - 由代码持有的 per-class time-role registration 与 generated projection boundary
 non_goals:
-  - per-object-class role matrix rows in Design Doc prose
-  - System Change Case intake, scope assessment, Work Package coordination, Candidate Set assembly, or case closure
-  - artifact freshness thresholds or domain lifecycle policy
-  - scheduler timezone, cron expression, task cadence, or trading-session anchor policy
-  - exchange-calendar helper names or market-data refresh behavior
-  - legacy migration inventory, implementation history, or changelog
-  - non-time schema and domain semantics
+  - Design Doc prose 中的 per-object-class role matrix row
+  - SystemChangePlan 的编写、routing、dependency ordering 或 completion tracking
+  - artifact freshness threshold 或 domain lifecycle policy
+  - scheduler timezone、cron expression、task cadence 或 trading-session anchor policy
+  - exchange-calendar helper name 或 market-data refresh behavior
+  - legacy migration inventory、implementation history 或 changelog
+  - non-time schema 与 domain semantics
 inputs:
-  - designDoc/the_charter.md
-  - exact System Change Timestamp Work Package when time semantics belong to a governed mutation
+  - 要求新建或修改 time-bearing data semantics 的 exact reviewed SystemChangePlan step
 outputs:
-  - timestamp role and storage vocabulary
-  - comparison and clock-domain invariants
+  - timestamp role 与 storage vocabulary
+  - comparison 与 clock-domain invariant
   - per-class registration contract
 truth_surfaces:
   - designDoc/the_timestamp_semantic.md
   - logical:timestamp_semantic_registry
   - logical:timestamp_comparison_validator
-runtime_triggers: none; schema validators consume the code-owned registry
+runtime_triggers: none; schema validator 消费由代码持有的 registry
 downstream_consumers:
-  - every schema, API, event, Artifact, decision, and Runtime record with time-bearing fields
-  - domain freshness and scheduling contracts
-  - Product Authorization and Agent Runtime clock-fencing contracts
+  - 每一个具有 time-bearing field 的 schema、API、event、Artifact、decision 与 Runtime record
+  - domain freshness 与 scheduling contract
+  - Product Authorization 与 Agent Runtime clock-fencing contract
 open_decisions:
-  - release and compatibility model for exact persisted-class registrations
-  - service ownership and versioning of semantic-role and distributed-clock predicate registries
-  - public generated-inspection schema for class, predicate, and clock-profile coverage
-review_gate: design_doc_review and independent time-semantics conformance review
-runtime_surface_ledger: code-owned registrations and generated inspection are the only allowed owners of implementation and admission facts for roles, storage forms, exact classes, predicates, converters, calendars, and distributed-clock profiles; this contract carries no current coverage inventory
+  - exact persisted-class registration 的 release 与 compatibility model
+  - semantic-role 与 distributed-clock predicate registry 的 service ownership 与 versioning
+  - class、predicate 与 clock-profile coverage 的 public generated-inspection schema
+review_gate: Design Doc Management 所属 design_contract_reviewer 对 exact candidate 的独立 Design review；Timestamp Semantics owner 单独作出 owner decision
+runtime_surface_ledger: 由代码持有的 registration 与 generated inspection 是 role、storage form、exact class、predicate、converter、calendar 与 distributed-clock profile 的 implementation 和 admission fact 的唯一允许 owner；本合同不携带 current coverage inventory
 verification_hooks:
-  - role, storage, exact-class, predicate, converter, calendar, DST, and distributed-clock conformance
+  - role、storage、exact-class、predicate、converter、calendar、DST 与 distributed-clock conformance
 ```
 
-## 1. Two-axis Field Model
+## 1. Primary System Flow
 
-Every time-bearing field combines two independent dimensions:
+```mermaid
+flowchart LR
+    P["Exact reviewed SystemChangePlan step"] --> D["Timestamp Semantics Design candidate"]
+    D --> R["Role 与 storage meaning"]
+    D --> C["Clock-domain 与 comparison law"]
+    D --> Z["Timezone、DST 与 distributed-clock safety"]
+    R --> K["Code-owned registry / schema / validator"]
+    C --> K
+    Z --> K
+    K --> X["Generated current inspection"]
+    K --> U["Domain、Runtime、Authorization、Artifact 与 Data consumers"]
+    U -. "semantic mismatch" .-> O["返回真实 schema / code owner 修复"]
+```
+
+本图只表达本 T0 的语义决策如何进入 code-owned enforcement，再被下游消费。Timestamp Semantics
+不编写 `SystemChangePlan`，不维护 current class inventory，也不执行 domain workflow。
+
+| `interface_id` | Owner | 输入 | 输出 | 影响 | `error_code` |
+| --- | --- | --- | --- | --- | --- |
+| `none` | Timestamp Semantics | none | none | 本 T0 不提供 owner-local public operation；具体 validator interface 与 error code 由 code-owned projection 定义 | none |
+
+| `error_code` | Owner | 触发条件 | 含义 | 调用方动作 |
+| --- | --- | --- | --- | --- |
+| `none` | Timestamp Semantics | none | 本 T0 不定义 caller-visible operational failure | none |
+
+## 2. User Intent
+
+所有包含时间的 Design、schema、API、event、Artifact 与 Runtime record 必须用同一套语义表达“这个
+时间代表什么、精确到什么、由哪个 clock authority 产生、能否与另一个时间比较”。任何 caller
+都不能从字段名、UTC 表示或本地惯例自行发明时间含义。
+
+## 3. Reader Gain
+
+- Domain Architect 能按 time field 的实际含义选择 semantic role，而不是按对象名或现有字段猜测。
+- Schema Owner 能在不虚构 precision 的前提下选择 storage form，并知道哪些 class registration
+  属于 code-and-schema change。
+- Runtime Maintainer 能区分 authoritative commit time、provider observation、durable history time
+  与 local process time，避免用 wall clock 替代 causal order。
+- Distributed Systems Engineer 能判断 comparison 是否合法，以及 protected cross-clock decision
+  需要哪些 profile 与 health evidence。
+
+## 4. Owned System Object
+
+Timestamp Semantics 只拥有一个逻辑对象：`time-bearing data semantics`。它包含稳定 role、storage、
+clock-domain、comparison、calendar、DST 与 distributed-clock safety meaning。Exact class row、
+predicate registration、converter、current coverage 与 validator implementation 是这个对象的
+code-owned projection，不形成第二份人工维护的 T0 truth。
+
+## 5. Authority
+
+只有 Timestamp Semantics 可以定义：
+
+1. 稳定 timestamp role vocabulary 及其互斥边界；
+2. stable storage form 及 role/storage compatibility；
+3. authoritative store、Source、worker、provider、durable backend 与 monotonic clock 的 authority；
+4. same-role、cross-role、cross-calendar 与 cross-clock comparison law；
+5. IANA timezone、calendar、DST 与 typed conversion 的最低要求；
+6. protected distributed decision 所需的 profile、health evidence 与 conservative validity law；
+7. per-class exact registration 必须由 code 持有并生成 inspection 的 enforcement result。
+
+Timestamp Semantics 不选择 domain freshness threshold、scheduler cadence、market anchor、object lifecycle、
+Runtime retry policy、Product permission 或具体 implementation。下游 T1/T2 可以在本 T0 允许的范围内
+定义自己的 class、calendar、predicate、threshold 与 workflow，但不能改写本 T0 的 role、storage、
+clock 或 comparison meaning。
+
+## 6. 时间语义（Timestamp Semantics）
+
+本章保留既有 `Timestamp §1` 至 `Timestamp §8` 逻辑锚点，供当前 code comment、test 与 peer
+contract 继续解析；这些锚点不改变 T0 required heading 的层级。
+
+### Timestamp §1 · 双轴字段模型
+
+每个 time-bearing field 结合两个相互独立的维度：
 
 ```text
 semantic role + storage form
 ```
 
-The field name combines a semantic role token with a storage suffix. Roles
-ending in `_at` or `_date` drop that ending when the suffix already carries the
-same instant or date meaning. For example:
+字段名把 semantic role token 与 storage suffix 结合起来。当 suffix 已经携带同样的 instant
+或 date 含义时，以 `_at` 或 `_date` 结尾的 role 会移除该结尾。例如：
 
 ```text
 observed_at_utc
@@ -95,198 +160,170 @@ recorded_at_utc
 horizon_calendar_day_utc
 ```
 
-The containing object supplies object identity. Do not repeat the object name
-inside the time field. Bare or context-dependent names such as `date`,
-`timestamp`, `as_of`, `generated_at`, or `report_date` are not admitted in new
-contracts.
+包含该字段的对象提供 object identity。不要在 time field 内重复 object name。新合同以及对既有
+class 的新增或修改 registration，不准入 `date`、`timestamp`、`as_of`、`generated_at` 或
+`report_date` 等裸名或依赖上下文的名称。既有字段只有在当前 code-owned exact registration
+已经显式绑定其 role 与 storage form 时，才是已准入的 compatibility surface；caller 不得从裸名
+推断语义。该 exact row 在 Software Delivery 管理的 migration 中被取代或退役之前继续有效；没有
+exact registration 的既有字段仍然 fail closed。本 T0 不维护这些既有 row 的 inventory。
 
-A time value must never imply more precision than the source provides. When an
-external Source supplies only a date, the owning domain uses an admitted date
-storage or an explicitly documented conservative projection with precision and
-timezone metadata. It must not present that projection as the exact event
-instant.
+时间值绝不能暗示比来源更高的精度。当外部 Source 只提供一个 date 时，所属 domain 使用已
+准入的 date storage，或者使用明确记录 precision 与 timezone metadata 的保守投影。该投影
+不得被表述为精确 event instant。
 
-## 2. Stable Role Vocabulary
+### Timestamp §2 · 稳定的 Role Vocabulary
 
-The product recognizes nine roles representing eight concepts. Interval start
-and end are separate roles but one paired concept.
+产品识别九种 role，代表八个 concept。Interval start 与 end 是两个独立 role，但共同组成
+一个成对 concept。
 
-| Role | Meaning | Boundary |
+| Role | 含义 | Boundary |
 | --- | --- | --- |
-| `observed_at` | When an event occurred or material became observable in the external or domain world | Not when the local system stored it |
-| `period_start_at` | Inclusive start of a covered interval | Paired with `period_end_at` |
-| `period_end_at` | End of a covered interval under the owning interval policy | Paired with `period_start_at`; ordering is mandatory |
-| `effective_at` / `effective_date` | When a rule, policy, appointment, decision, or state begins to apply | Not when it was announced or recorded |
-| `expiry_at` / `expiry_date` | When an authority, rule, grant, request, or validity window ceases to apply | Not the time at which future work is scheduled |
-| `recorded_at` | When the authoritative store atomically committed this record | Assigned by that store, not by a caller, worker, or provider |
-| `updated_at` | When a mutable record or projection was last changed | Forbidden on immutable event or archive records |
-| `horizon_date` | The latest date through which the content or data is substantively current | Not publication or commit time |
-| `scheduled_for_at` | When the system intends to perform future work | Not expiry, deadline, or validity end |
+| `observed_at` | event 发生或 material 在外部世界或 domain 中变得可观察的时间 | 不是本地系统存储它的时间 |
+| `period_start_at` | 覆盖 interval 的 inclusive start | 与 `period_end_at` 配对 |
+| `period_end_at` | 按照所属 interval policy 确定的覆盖 interval end | 与 `period_start_at` 配对；必须满足 ordering |
+| `effective_at` / `effective_date` | rule、policy、appointment、decision 或 state 开始适用的时间 | 不是其 announcement 或 recording time |
+| `expiry_at` / `expiry_date` | authority、rule、grant、request 或 validity window 停止适用的时间 | 不是安排未来工作的时间 |
+| `recorded_at` | authoritative store 原子提交这条记录的时间 | 由该 store 分配，不由 caller、worker 或 provider 分配 |
+| `updated_at` | mutable record 或 projection 最后一次变化的时间 | immutable event 或 archive record 禁止使用 |
+| `horizon_date` | content 或 data 在实质上保持 current 的最晚日期 | 不是 publication 或 commit time |
+| `scheduled_for_at` | 系统计划执行未来工作的时间 | 不是 expiry、deadline 或 validity end |
 
-Every persisted record has `recorded_at_utc`. An embedded immutable value that
-is not independently persisted may rely on its containing record and must not
-copy that commit time as if it owned a second record identity.
+每个持久化 record 都有 `recorded_at_utc`。未独立持久化的 embedded immutable value 可以依赖
+其 containing record，并且不得复制该 commit time，仿佛它拥有第二个 record identity。
 
-Immutable facts append new records and do not use `updated_at`. Mutable
-projections may use `updated_at_utc`, but their source event chain remains the
-authority. `received`, `issued`, `requested`, `committed`, `projected`, and
-`built` describe actions, not additional timestamp roles. The owning record's
-`recorded_at_utc` represents its authoritative commit.
+Immutable fact 通过追加新 record 表达，不使用 `updated_at`。Mutable projection 可以使用
+`updated_at_utc`，但其 source event chain 继续作为 authority。`received`、`issued`、
+`requested`、`committed`、`projected` 与 `built` 描述 action，不构成额外 timestamp role。
+所属 record 的 `recorded_at_utc` 表示其 authoritative commit。
 
-## 3. Stable Storage Forms
+### Timestamp §3 · 稳定的 Storage Form
 
-| Storage suffix | Meaning | Required representation |
+| Storage suffix | 含义 | Required representation |
 | --- | --- | --- |
-| `_at_utc` | An instant on the UTC timeline | RFC 3339 / ISO 8601 value with UTC offset, canonically `Z` |
-| `_calendar_day_utc` | A UTC calendar-day slice, typically for a 24/7 domain | ISO date `YYYY-MM-DD` |
-| `_session_date_market` | A domain or asset-specific market-session date | ISO date plus sibling IANA `market_tz` and owning calendar policy |
+| `_at_utc` | UTC timeline 上的一个 instant | 带 UTC offset 的 RFC 3339 / ISO 8601 value，canonical form 为 `Z` |
+| `_calendar_day_utc` | UTC calendar-day slice，通常用于 24/7 domain | ISO date `YYYY-MM-DD` |
+| `_session_date_market` | 特定 domain 或 asset 的 market-session date | ISO date，加上 sibling IANA `market_tz` 与所属 calendar policy |
 
-Role and storage must be compatible:
+Role 与 storage 必须兼容：
 
-- `recorded_at`, `updated_at`, and `scheduled_for_at` use `_at_utc` only.
-- `period_start_at` and `period_end_at` use the same storage family and appear
-  together. Instant intervals use `_at_utc`; session intervals use one common
-  session-date form.
-- `effective` and `expiry` use `*_at_utc` when precision is an instant and a
-  calendar or session date form when precision is a date.
-- `horizon_date` uses a calendar or session date form, not a fabricated
-  instant.
-- `observed_at` normally uses `_at_utc`; date-precision observations use an
-  admitted date representation or an explicitly typed conservative projection.
+- `recorded_at`、`updated_at` 与 `scheduled_for_at` 只能使用 `_at_utc`。
+- `period_start_at` 与 `period_end_at` 使用同一个 storage family，并且同时出现。Instant
+  interval 使用 `_at_utc`；session interval 使用一种共同的 session-date form。
+- `effective` 与 `expiry` 在精度为 instant 时使用 `*_at_utc`，在精度为 date 时使用
+  calendar 或 session date form。
+- `horizon_date` 使用 calendar 或 session date form，不能使用虚构的 instant。
+- `observed_at` 通常使用 `_at_utc`；date-precision observation 使用已准入的 date
+  representation，或者显式类型化的 conservative projection。
 
-An instant and a date are not interchangeable. Midnight, end-of-day, market
-close, and session membership are domain conversions requiring an explicit
-calendar, timezone, precision policy, and typed converter.
+Instant 与 date 不可互换。Midnight、end-of-day、market close 与 session membership
+属于 domain conversion，必须具有显式 calendar、timezone、precision policy 与 typed converter。
 
-## 4. Code-owned Per-class Registration
+### Timestamp §4 · 由代码持有的 Per-class Registration
 
-The exact class-by-role matrix is owned by the Timekeeping Class Registry
-[Time-Registry]. Each registered class assigns every role one state:
+精确的 class-by-role matrix 由 Timekeeping Class Registry [Time-Registry] 持有。每个已注册
+class 为每种 role 指定一种 state：
 
-- `REQ`: one compatible field for the role is required;
-- `OPT`: a compatible field is allowed but not required; or
-- `FORBIDDEN`: the role must not occur on the class.
+- `REQ`：该 role 必须有一个 compatible field；
+- `OPT`：允许但不要求该 role 有 compatible field；或者
+- `FORBIDDEN`：该 class 上不能出现该 role。
 
-Unregistered persisted classes and unauthorized time fields fail validation.
-Nested records use exact typed class IDs. Registration lookup is exact. A
-wildcard class identifier is not a registration and must be rejected.
-Every concrete persisted class therefore requires its own exact registration.
-A future closed-family mechanism would require a typed member set, one owner,
-and explicit validator support; a string containing `*` never supplies that
-authority.
+未注册 persisted class 与未经授权的 time field 无法通过 validation。Nested record 使用精确的
+typed class ID。Registration lookup 必须精确。Wildcard class identifier 不构成 registration，
+必须被拒绝。因此，每个 concrete persisted class 都需要自己的 exact registration。未来如果
+引入 closed-family mechanism，必须有 typed member set、一个 owner 与显式 validator support；
+包含 `*` 的 string 绝不提供该 authority。
 
-An ordinary class registration or `REQ`/`OPT`/`FORBIDDEN` row change is a
-code-and-schema contract change. It requires domain-owner review, compatibility
-analysis, tests, and regenerated inspection, but it is not a Charter amendment
-and does not require editing this T0 document. A new semantic role, storage
-form, comparison meaning, or clock invariant requires T0 review. It requires a
-Charter amendment only if it changes a constitutional commitment.
+普通 class registration 或 `REQ`/`OPT`/`FORBIDDEN` row change 属于 production code-and-schema
+change。所属 domain owner 定义 row 的 domain meaning；Software Delivery 拥有其 Code Design、
+deterministic validation、独立 engineering review 与 release admission 路径。只要该 change 没有
+改变本 T0 的稳定 semantic role、storage form、comparison meaning 或 clock invariant，就不要求
+编辑本 T0。改变这些稳定含义时，先形成 Timestamp Semantics Design candidate 并通过 Design Doc
+Management 所属的 Design review；只有改变 constitutional commitment 时才需要 Charter amendment。
 
-The generated matrix projection is the human-readable current inventory. A
-copied table in a Design Doc, schema comment, Skill, or UI is not registration
-authority.
+生成的 matrix projection 是供人阅读的 current inventory。复制到 Design Doc、schema comment、
+Skill 或 UI 中的 table 不具有 registration authority。
 
-## 5. Clock Domains
+### Timestamp §5 · Clock Domain
 
-A clock domain identifies which authority produced a time claim and what error
-or ordering guarantees apply.
+Clock domain 标识哪个 authority 产生了一项 time claim，以及适用哪些 error 或 ordering guarantee。
 
-| Clock or chronology | Permitted authority |
+| Clock 或 chronology | Permitted authority |
 | --- | --- |
-| Authoritative store clock | Assigns that store's `recorded_at_utc` at atomic commit |
-| External Source clock | Supports `observed_at` with provenance and declared precision; never substitutes for local commit time |
-| Worker or process wall clock | May schedule or observe local work under an admitted profile; does not assign another store's authoritative commit time |
-| Provider timestamps | Observational execution evidence only unless a typed domain projection admits them |
-| Durable backend history time | Infrastructure chronology only; not automatically a domain event, Artifact freshness anchor, or Runtime ledger commit time |
-| Monotonic process clock | Measures local durations and timeouts; never persists as a cross-process business timestamp |
+| Authoritative store clock | 在 atomic commit 时分配该 store 的 `recorded_at_utc` |
+| External Source clock | 在具有 provenance 与 declared precision 时支持 `observed_at`；绝不能替代 local commit time |
+| Worker 或 process wall clock | 可以在 admitted profile 下调度或观察 local work；不能分配另一个 store 的 authoritative commit time |
+| Provider timestamps | 只能作为 observational execution evidence，除非 typed domain projection 对其作出准入 |
+| Durable backend history time | 只是 infrastructure chronology；不会自动成为 domain event、Artifact freshness anchor 或 Runtime ledger commit time |
+| Monotonic process clock | 测量 local duration 与 timeout；绝不作为 cross-process business timestamp 持久化 |
 
-UTC representation does not make two clocks identical. Two services may both
-emit UTC while carrying different uncertainty and health. Ordering across
-authoritative ledgers should use immutable causal references and monotonic
-versions or high-water marks where available; wall-clock time does not replace
-causal order.
+采用 UTC representation 并不使两个 clock 相同。两个 service 都可以发出 UTC，同时具有不同的
+uncertainty 与 health。跨 authoritative ledger 的 ordering 应在可用时使用 immutable causal
+reference 与 monotonic version 或 high-water mark；wall-clock time 不能替代 causal order。
 
-## 6. Comparison Law
+### Timestamp §6 · Comparison Law
 
-The default legal comparison has the same semantic role, compatible storage,
-declared calendar where applicable, and an admitted clock-domain relationship.
-Raw comparisons outside that case are forbidden.
+默认合法 comparison 具有相同 semantic role、compatible storage、适用时已声明 calendar，
+以及已准入的 clock-domain relationship。除此以外的 raw comparison 均被禁止。
 
-1. Instant comparison occurs on the UTC timeline.
-2. Calendar-day comparison requires the same calendar meaning.
-3. Session-date comparison requires the same market timezone and calendar
-   policy.
-4. Date-to-instant or session-to-instant comparison requires a named typed
-   conversion; no caller may invent midnight or close locally.
-5. Cross-role comparison requires a registered predicate with one fixed
-   business meaning and typed operands.
-6. Validity intervals are half-open unless their owning contract explicitly
-   registers another semantics: `effective <= t < expiry`.
-7. A semantic mismatch, missing converter, unknown calendar, or incompatible
-   clock profile raises a typed error and never degrades silently to a boolean,
-   `UNKNOWN`, or nearby fallback.
+1. Instant comparison 在 UTC timeline 上进行。
+2. Calendar-day comparison 要求相同 calendar meaning。
+3. Session-date comparison 要求相同 market timezone 与 calendar policy。
+4. Date-to-instant 或 session-to-instant comparison 要求一个命名的 typed conversion；caller
+   不得在本地自行设定 midnight 或 close。
+5. Cross-role comparison 要求一个具有固定 business meaning 与 typed operand 的已注册 predicate。
+6. Validity interval 默认为 half-open，除非其所属 contract 显式注册另一种 semantics：
+   `effective <= t < expiry`。
+7. Semantic mismatch、missing converter、unknown calendar 或 incompatible clock profile 会抛出
+   typed error，绝不能静默降级为 boolean、`UNKNOWN` 或附近的 fallback。
 
-### 6.7 Protected Predicates
+#### Timestamp §6.7 · Protected Predicates
 
-A protected cross-role or cross-clock decision uses one code-registered named predicate. Its registration binds operand roles, storage forms, calendars,
-clock domains, distributed-clock profile, health-evidence requirements,
-comparison meaning, and permitted operation purposes.
+受保护的 cross-role 或 cross-clock decision 使用一个在代码中注册且具名的 predicate。其
+registration 绑定 operand role、storage form、calendar、clock domain、distributed-clock profile、
+health-evidence requirement、comparison meaning 与 permitted operation purpose。
 
-This heading is the stable `Timestamp §6.7` contract anchor used by dependent
-authorization and Runtime contracts. Cross-clock predicates also apply the
-conservative validity-window law in §8.
+本 heading 是依赖它的 authorization 与 Runtime contract 使用的稳定 `Timestamp §6.7` contract
+anchor。Cross-clock predicate 还应用 `Timestamp §8` 的 conservative validity-window law。
 
-Exact predicate IDs and current coverage belong to the code-owned predicate
-registry and generated inspection. Callers consume a registered predicate
-rather than reproducing comparison logic in SQL, adapters, prompts, or local
-utilities. A storage-wrapper helper that validates only timestamp syntax cannot
-authorize a protected decision.
+精确 predicate ID 与 current coverage 属于由代码持有的 predicate registry 和 generated
+inspection。Caller 消费已注册 predicate，而不在 SQL、adapter、prompt 或 local utility 中复制
+comparison logic。只验证 timestamp syntax 的 storage-wrapper helper 不能授权 protected decision。
 
-## 7. Timezone and DST Law
+### Timestamp §7 · Timezone 与 DST Law
 
-Local civil time uses IANA timezone identifiers. Fixed offsets such as `-05:00`
-cannot stand in for a region whose offset changes with daylight saving time.
+Local civil time 使用 IANA timezone identifier。`-05:00` 等 fixed offset 不能代表会随 daylight
+saving time 改变 offset 的 region。
 
-- Persist instants in UTC and retain the IANA timezone or calendar identity
-  needed to interpret local wall-clock intent.
-- Resolve market-session dates through the owning exchange or domain calendar,
-  including holidays, early closes, and session boundaries.
-- Resolve a nonexistent spring-forward time or ambiguous fall-back time only
-  through an explicit registered policy. The result records the timezone and
-  disambiguation decision or rejects the input.
-- Measure physical-hour lookbacks using UTC instants or a monotonic duration,
-  not local wall-clock arithmetic.
-- Compute business days and sessions through the owning calendar, not by
-  adding or subtracting a fixed number of days.
-- Delegate scheduler timezone, task cadence, and market anchor choices to the
-  owning T1 scheduler or domain contract.
+- 持久化 UTC instant，并保留解释 local wall-clock intent 所需的 IANA timezone 或 calendar identity。
+- 通过所属 exchange 或 domain calendar 解析 market-session date，包括 holiday、early close 与
+  session boundary。
+- 只有显式注册的 policy 才能解析不存在的 spring-forward time 或有歧义的 fall-back time。
+  结果记录 timezone 与 disambiguation decision，或者拒绝 input。
+- 使用 UTC instant 或 monotonic duration 测量 physical-hour lookback，不能使用 local wall-clock arithmetic。
+- 通过所属 calendar 计算 business day 与 session，不能加减固定天数。
+- Scheduler timezone、task cadence 与 market anchor choice 委派给所属 T1 scheduler 或 domain contract。
 
-Parsers should rely on standard timezone and ISO 8601 implementations, then
-translate parser failures into typed semantic errors. Hand-written timezone
-allowlists, fixed-offset substitutions, or partial timestamp regexes are not
-equivalent validation.
+Parser 应依赖标准 timezone 与 ISO 8601 implementation，再把 parser failure 转换为 typed semantic
+error。手写 timezone allowlist、fixed-offset substitution 或 partial timestamp regex 不等同于 validation。
 
-## 8. Distributed Clock Safety
+### Timestamp §8 · Distributed Clock Safety
 
-When an authorization, grant, lease, execution fence, or other protected action
-compares instants committed by different clock domains, the operation pins one
-immutable `DistributedClockProfile`. The profile identifies:
+当 authorization、grant、lease、execution fence 或其他 protected action 比较由不同 clock domain
+提交的 instant 时，该 operation 固定使用一个 immutable `DistributedClockProfile`。Profile 标识：
 
-- the participating clock domains and admitted time sources;
-- maximum uncertainty for each domain;
-- conservative safety margin;
-- required clock-health evidence and freshness policy;
-- the predicates and operation purposes for which it is valid; and
-- fail-closed behavior.
+- 参与的 clock domain 与 admitted time source；
+- 每个 domain 的 maximum uncertainty；
+- conservative safety margin；
+- required clock-health evidence 与 freshness policy；
+- 它适用的 predicate 与 operation purpose；以及
+- fail-closed behavior。
 
-Each participating service supplies fresh, immutable `ClockHealthEvidence`
-with source, measured offset and uncertainty, health result, observation time,
-validity end, authoritative commit time, and profile identity. The protected
-record references the profile and evidence by exact IDs and hashes.
+每个参与 service 提供 fresh、immutable `ClockHealthEvidence`，其中包含 source、measured offset
+与 uncertainty、health result、observation time、validity end、authoritative commit time 与 profile
+identity。Protected record 通过 exact ID 与 hash 引用 profile 和 evidence。
 
-Unless a stronger online Product-owned protocol eliminates the cross-clock
-assertion, an authoritative commit is accepted only inside the conservative
-half-open window:
+凡 protected predicate 仍比较两个或更多 clock-domain instant，authoritative commit 只有在以下
+conservative half-open window 内才会被接受：
 
 ```text
 effective_at_utc + safety_margin
@@ -294,60 +331,61 @@ effective_at_utc + safety_margin
     < expiry_at_utc - safety_margin
 ```
 
-The deployment profile supplies measured numeric bounds. This T0 contract does
-not invent one universal skew constant. Missing, expired, unhealthy, regressed,
-mismatched, or unverifiable profile or health evidence fails closed.
+Deployment profile 提供 measured numeric bound。本 T0 contract 不虚构一个 universal skew
+constant。Profile 或 health evidence 只要 missing、expired、unhealthy、regressed、mismatched 或
+unverifiable，就 fail closed。
 
-Monotonic authority versions and event high-water marks establish causal
-ordering. They do not prove clock health or validity. Conversely, synchronized
-clocks do not prove causal order, current authorization, or single-writer
-fencing. Protected distributed decisions require every form of evidence named
-by their owning contract.
+Product Authorization owner 可以准入一个 product-owned online protocol，使某个 registered
+protected predicate 的 decision input 不再作任何 cross-clock instant assertion。只有该 predicate
+的 registration 明确记录这一点，并由 Product Authorization contract 定义其替代 evidence 与
+fail-closed result 时，该 operation 才不进入上述 window；caller、adapter 或 Module 不能自行声称
+例外。只要 operation 仍比较 cross-clock instant，本节的 profile、health evidence 与 conservative
+window 义务就全部保留。
 
-No protected cross-clock action may claim conformance from storage-wrapper
-helpers alone.
+Monotonic authority version 与 event high-water mark 建立 causal ordering。它们不能证明 clock
+health 或 validity。反过来，synchronized clock 也不能证明 causal order、current authorization
+或 single-writer fencing。Protected distributed decision 需要其所属 contract 指定的每一种 evidence。
 
-## 9. Cross-T0 Handoffs
+任何 protected cross-clock action 都不能只凭 storage-wrapper helper 声称 conformance。
 
-| Peer T0 | Boundary |
-| --- | --- |
-| System Change Governance | Supplies the exact Timestamp Work Package and current Case/Plan lineage; Timestamp and Clock Semantics alone decides time-field roles, storage forms, clock domains, calendar meaning, comparison law, and distributed-clock safety |
-| Product Authorization | Supplies protected authorization and grant predicates; Timestamp Semantics owns their issued, effective, expiry, revocation, recorded, and observed roles and cross-clock comparison law |
-| Agent Runtime | Supplies execution, lease, retry, and recovery record classes; Timestamp Semantics owns their time-role, clock-domain, ordering, and fencing requirements |
-| Artifact Graph | Supplies Artifact and dependency freshness consumers; Timestamp Semantics owns time-field and comparison meaning without selecting domain freshness thresholds |
-| Data Governance | Supplies retention, migration, backup, restore, and destruction consumers; Timestamp Semantics owns the time roles and comparisons those policies use |
-| Software Delivery | Supplies build, release, deployment, rollback, and retirement record classes; Timestamp Semantics owns their time-role and distributed-clock requirements |
-| Agency Platform | Hosts timestamp-governed services and records without owning time semantics |
+## 7. System-wide Invariants
 
-## 10. Conformance Invariants
+1. 每个 persisted record 都有 `recorded_at_utc`；未独立持久化的 embedded immutable value 依赖
+   containing record，不复制第二份 commit identity。
+2. Immutable fact 通过追加新 record 表达；`updated_at` 只属于 mutable record 或 projection。
+3. Role 与 storage 必须兼容；instant、calendar day 与 market session date 不可静默互换。
+4. 未注册 persisted class、wildcard registration 与 unauthorized time field 必须 fail closed。
+5. Authoritative store、Source、worker、provider、durable backend 与 monotonic clock 不能互相替代。
+6. Raw code 不能比较不同 role、calendar 或 clock domain；cross-boundary comparison 必须使用注册的
+   typed converter 或 protected predicate。
+7. UTC representation 不证明 clock identity、clock health 或 causal order。
+8. IANA timezone、calendar 与 DST disambiguation 不能被 fixed offset、本地 timezone 或固定天数替代。
+9. Distributed protected decision 缺少、过期、不健康、回退、不匹配或不可验证的 profile/evidence 时
+   必须 fail closed。
+10. 手工复制的 per-class matrix、predicate list 或 coverage table 永远不成为 current registration truth。
+11. 每个 material Timestamp Design candidate 绑定要求该变更的 exact reviewed `SystemChangePlan` step；
+    该 binding 不把 Timestamp authority 转移给 System Change Governance。
 
-Time semantics are non-conformant when:
+## 8. Peer Boundaries
 
-- a bare or object-prefixed time field has context-dependent meaning;
-- a caller, worker, provider, or durable backend assigns another store's
-  `recorded_at_utc`;
-- an immutable event or archive record uses `updated_at` instead of appending a
-  new record;
-- an instant is fabricated from a date without precision, timezone, calendar,
-  and conversion policy;
-- interval endpoints use different storage or clocks without an admitted
-  conversion;
-- raw code compares different roles, calendars, or clock domains;
-- a fixed offset, local machine timezone, or fixed-day arithmetic stands in for
-  IANA timezone and calendar behavior;
-- timestamps are used as a substitute for causal versions, or causal versions
-  as a substitute for clock validity;
-- an unregistered class writes time-bearing records; or
-- a manually copied per-class matrix is treated as current registration truth.
+| Peer T0 | Timestamp Semantics 提供 | Peer T0 继续拥有 |
+| --- | --- | --- |
+| Design Doc Management | 本 T0 的 owned object、authority 与 required design result | Design layer law、`design_contract_reviewer` 的 checklist 与 output meaning，以及 Design candidate 的 review requirement |
+| System Change Governance | 供 planning 判断 Timestamp Design 是否受影响的 scope boundary，并消费 exact reviewed `SystemChangePlan` step | change scope、affected surfaces、dependency order、owner、authoring method、reviewer 与 completion plan |
+| Product Authorization | protected authorization/grant 的 time role 与 cross-clock comparison law | permission、entitlement、allow/deny 与 authorization lifecycle |
+| Agent Runtime | execution、lease、retry 与 recovery record 的 time-role、clock-domain、ordering 与 fencing requirement | Module/Workflow execution、Attempt、retry、recovery 与 Runtime record ownership |
+| Data Governance | retention、migration、backup、restore 与 destruction policy 使用的 time role 和 comparison law | 数据政策、residency、retention duration、migration 与 destruction decision |
+| Software Delivery | code/schema/build/release/deployment/rollback/retirement record 的 time-role，以及 per-class registration 与 distributed-clock requirement | Code Design、deterministic validation、独立 engineering review、release、deployment、migration、rollback 与 retirement lifecycle |
+| Agency Platform | timestamp-governed service 与 record 的通用 time semantics | service hosting、composition 与 project-specific implementation |
 
-## References
+## 9. References
 
 - `[T0-Charter]` [Project Charter](the_charter.md)
+- `[T0-DDM]` [Design Doc Management](the_design_doc_management.md)
 - `[T0-Change]` [System Change Governance](the_system_change_governance.md)
-- `[T0-Artifact]` [Artifact Graph Contract](the_artifact_graph.md)
 - `[T0-Authz]` [Product Authorization and Entitlement Governance Contract](the_product_authorization.md)
 - `[T0-Runtime]` [Agent Runtime Contract](the_agent_runtime.md)
 - [Agency Platform](the_agency_platform.md)
 - [Data Governance](the_data_governance.md)
 - [Software Delivery](the_software_delivery.md)
-- `[Time-Registry]` project-local code-owned timestamp semantic registry
+- `[Time-Registry]` 项目本地且由代码持有的 timestamp semantic registry

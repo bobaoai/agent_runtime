@@ -1,0 +1,515 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:system_change_plan_reviewer_output@v10",
+  "title": "System Change Plan Review Result",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "semantic_check_id": {
+      "enum": [
+        "scope_and_unresolved_decisions",
+        "layer_classification",
+        "change_goal_and_reason",
+        "dependency_order",
+        "step_route_closure",
+        "frozen_upstream_prerequisite",
+        "reviewer_routing",
+        "no_execution_ownership"
+      ]
+    },
+    "finding_check_id": {
+      "enum": [
+        "scope_and_unresolved_decisions",
+        "layer_classification",
+        "change_goal_and_reason",
+        "dependency_order",
+        "step_route_closure",
+        "frozen_upstream_prerequisite",
+        "reviewer_routing",
+        "no_execution_ownership",
+        "prose_and_meaning_preservation"
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "block",
+            "fix",
+            "note"
+          ]
+        },
+        "check_id": {
+          "$ref": "#/$defs/finding_check_id"
+        },
+        "quoted_evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "impact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accountable_owner_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_change": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "check_id",
+        "quoted_evidence",
+        "impact",
+        "accountable_owner_ref",
+        "required_change"
+      ]
+    },
+    "semantic_check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/semantic_check_id"
+        },
+        "disposition": {
+          "enum": [
+            "passed",
+            "finding",
+            "not_run"
+          ]
+        },
+        "assessment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "check_id",
+        "disposition",
+        "assessment",
+        "finding_ids"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "finding"
+              }
+            },
+            "required": [
+              "disposition"
+            ],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "finding_ids": {
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "else": {
+            "properties": {
+              "finding_ids": {
+                "maxItems": 0,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "prose_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "enum": [
+            "passed",
+            "finding",
+            "not_run"
+          ]
+        },
+        "assessment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "disposition",
+        "assessment",
+        "finding_ids"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "finding"
+              }
+            },
+            "required": [
+              "disposition"
+            ],
+            "type": "object"
+          },
+          "then": {
+            "properties": {
+              "finding_ids": {
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "else": {
+            "properties": {
+              "finding_ids": {
+                "maxItems": 0,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "semantic_check_results": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/semantic_check_result",
+          "properties": {
+            "check_id": {
+              "const": "scope_and_unresolved_decisions"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/semantic_check_result",
+          "properties": {
+            "check_id": {
+              "const": "layer_classification"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/semantic_check_result",
+          "properties": {
+            "check_id": {
+              "const": "change_goal_and_reason"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/semantic_check_result",
+          "properties": {
+            "check_id": {
+              "const": "dependency_order"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/semantic_check_result",
+          "properties": {
+            "check_id": {
+              "const": "step_route_closure"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/semantic_check_result",
+          "properties": {
+            "check_id": {
+              "const": "frozen_upstream_prerequisite"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/semantic_check_result",
+          "properties": {
+            "check_id": {
+              "const": "reviewer_routing"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/semantic_check_result",
+          "properties": {
+            "check_id": {
+              "const": "no_execution_ownership"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "items": false
+    }
+  },
+  "properties": {
+    "layer_disposition": {
+      "enum": [
+        "passed",
+        "non_pass",
+        "blocked"
+      ]
+    },
+    "semantic_check_results": {
+      "$ref": "#/$defs/semantic_check_results"
+    },
+    "prose_result": {
+      "$ref": "#/$defs/prose_result"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "safe_next_step": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "layer_disposition",
+    "semantic_check_results",
+    "prose_result",
+    "findings",
+    "safe_next_step"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "layer_disposition": {
+                "const": "blocked"
+              }
+            },
+            "required": [
+              "layer_disposition"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "semantic_check_results": {
+                "contains": {
+                  "properties": {
+                    "disposition": {
+                      "const": "finding"
+                    }
+                  },
+                  "required": [
+                    "disposition"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "required": [
+              "semantic_check_results"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "prose_result": {
+            "properties": {
+              "disposition": {
+                "const": "not_run"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "else": {
+        "properties": {
+          "prose_result": {
+            "properties": {
+              "disposition": {
+                "enum": [
+                  "passed",
+                  "finding"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layer_disposition": {
+            "const": "passed"
+          }
+        },
+        "required": [
+          "layer_disposition"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "semantic_check_results": {
+            "items": {
+              "properties": {
+                "disposition": {
+                  "const": "passed"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "prose_result": {
+            "properties": {
+              "disposition": {
+                "const": "passed"
+              }
+            },
+            "type": "object"
+          },
+          "findings": {
+            "items": {
+              "properties": {
+                "severity": {
+                  "const": "note"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layer_disposition": {
+            "const": "non_pass"
+          }
+        },
+        "required": [
+          "layer_disposition"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "findings": {
+            "contains": {
+              "properties": {
+                "severity": {
+                  "enum": [
+                    "block",
+                    "fix"
+                  ]
+                }
+              },
+              "required": [
+                "severity"
+              ],
+              "type": "object"
+            },
+            "minContains": 1
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layer_disposition": {
+            "const": "blocked"
+          }
+        },
+        "required": [
+          "layer_disposition"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "semantic_check_results": {
+            "items": {
+              "properties": {
+                "disposition": {
+                  "const": "not_run"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "prose_result": {
+            "properties": {
+              "disposition": {
+                "const": "not_run"
+              }
+            },
+            "type": "object"
+          },
+          "findings": {
+            "maxItems": 0,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    }
+  ]
+}

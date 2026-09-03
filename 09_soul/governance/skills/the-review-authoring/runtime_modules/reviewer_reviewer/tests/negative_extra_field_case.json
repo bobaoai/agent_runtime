@@ -1,0 +1,7 @@
+{
+  "case_id": "reviewer_reviewer_negative_extra_field_v1",
+  "case_kind": "negative",
+  "module_id": "reviewer_reviewer",
+  "mutation": "add unexpected top-level output field",
+  "expected_disposition": "schema_rejected"
+}

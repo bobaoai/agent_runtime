@@ -4,27 +4,20 @@ status: candidate
 layer: T0
 t0_layer_id: the_system_change_governance
 canonical_owner: designDoc/the_system_change_governance.md
-owned_system_object: System Change Case
-language: en
+owned_system_object: SystemChangePlan
+language: zh-CN with exact English identifiers
 reader_persona:
   - Principal Manager
+  - Primary Agent
   - System Owner
-  - Change Owner
   - Independent Reviewer
 ---
 
-# System Change Governance
+# 系统变更治理（System Change Governance）
 
-**Purpose**: Govern one coherent change from authorized intake through scope,
-owner decisions, specialist work, independent assurance, subject-specific
-admission, and cross-owner closure without taking authority from any changed
-subject.
-
-**Required reader gain**: A reader can decide whether a request changes a
-governed system surface, identify every affected authority and implementation
-surface, send each part to its real owner, and determine whether the overall
-change is complete without treating coordination as design, review, or release
-authority.
+本 T0 只负责把一个系统修改请求变成完整、顺序正确、可以直接执行的
+`SystemChangePlan`。它不负责执行计划，也不接管下游 Design、Skill、Code、Runtime
+或 Release 的编写、审核、批准、准入和生命周期。
 
 ## 0. Intent Capsule
 
@@ -33,436 +26,301 @@ layer: T0
 t0_layer_id: the_system_change_governance
 status: candidate
 canonical_owner: designDoc/the_system_change_governance.md
-owned_system_object: System Change Case
+owned_system_object: SystemChangePlan
 scope:
-  - universal intake for every governed system mutation
-  - immutable change-scope assessment and cross-owner impact closure
-  - versioned System Change Plan and specialist Work Package coordination
-  - coherent candidate-set freeze, revision lineage, and case closure
-  - structure-change coordination and self-change bootstrap law
+  - 为一次受治理的系统变更完整盘点受影响面
+  - 解析层级、负责人、编写路径、审核门和依赖顺序
+  - 生成一份冻结的 SystemChangePlan；范围变化时重新生成一份完整计划
+  - 对已授权的 Skill retirement 或整体删除请求定义完整 deletion disposition、受影响面、依赖顺序和 surface owner routing
 non_goals:
-  - semantic task classification
-  - defining or approving the meaning of any changed Charter, T0, T1, T2, Skill, Runtime, Data, or software subject
-  - owning an Audit Profile, reviewer binding, finding, verdict, or subject admission
-  - authoring Design, Skill, Runtime registration, code, schema, migration, release, or deployment candidates
-  - selecting a provider, model, workflow engine, database, repository layout, or user interface
+  - 执行或监督下游工作
+  - 拥有候选产物、审核、批准、准入、发布、部署或回滚状态
+  - 拥有 SystemChangeCase、ScopeAssessment、WorkPackage、CandidateSet、ClosureRecord 或生命周期记录
+  - 定义受影响 Charter、T0、T1、T2、Skill、Module、代码、结构定义、Runtime 或 Release 对象的含义
+  - 选择模型提供方、模型、数据库、工作流引擎、仓库布局或用户界面
 inputs:
-  - authorized system-change request and immutable RoutingDecision
-  - current authority topology and registered subject identities
-  - owner-supplied decisions, candidates, assurance results, and admission results
+  - 对一个或多个受治理面的授权修改请求
+  - 由代码生成的当前文件、身份、负责人、层级和依赖事实
 outputs:
-  - immutable SystemChangeCase and SystemChangeScopeAssessment
-  - versioned SystemChangePlan and SystemChangeWorkPackage bindings
-  - coherent SystemChangeCandidateSet and SystemChangeClosureRecord
+  - 一份经过审核并交给 Primary Agent 的 SystemChangePlan
 truth_surfaces:
   - designDoc/the_system_change_governance.md
-  - logical:system_change_registry
+  - logical:system_change_plan_contract
 runtime_triggers:
-  - authorized request to create, update, promote, split, merge, replace, rename, retire, release, or deploy a governed system surface
+  - 修改受治理的 Design、Skill、Module 源文件、代码、结构定义、迁移、Runtime 注册、Release、部署、回滚或退役面的授权请求
 downstream_consumers:
-  - every affected Design, Skill, Runtime, Engineering, Data, Audit, and Software Delivery owner
-  - change inspection, release admission, and governance assurance workflows
+  - Primary Agent
+  - SystemChangePlan 指定的每个编写负责人和审核负责人
 open_decisions:
-  - admitted machine schemas and persistence binding for the target record model
-  - predecessor-record migration and final retirement evidence
-review_gate: accountable Charter approval for T0 topology and independent `system_change_governance_reviewer` review
-runtime_surface_ledger: generated from code-owned System Change records and external terminal evidence
+  - 代码拥有的 SystemChangePlan 结构定义和确定性构建器绑定
+review_gate: 本 T0 Design 由独立 design_contract_reviewer 审核；具体 SystemChangePlan 实例由 system_change_plan_reviewer 审核
+runtime_surface_ledger: 只读 SystemChangePlan inspection；本 T0 不拥有运行账本或执行进度
 verification_hooks:
-  - scope-to-impact-to-Work-Package closure
-  - candidate-set coherence and current-head lineage
-  - external review and admission reference resolution
-  - self-change predecessor and bootstrap closure
-  - specialist owner and entry-subject applicability rejection
+  - 受影响面闭包
+  - 精确负责人和受审对象类型路由
+  - 严格的上游到下游顺序
+  - system_change_plan_reviewer checklist 覆盖和 output schema / semantic validator 结果
+  - 生成元数据与冻结输入的一致性
 ```
 
-## 1. Authority
-
-System Change Governance owns the `SystemChangeCase`: the stable identity and
-cross-owner coordination record for one governed mutation. It decides neither
-what a changed subject should mean nor whether that subject may become active.
-
-A system change is any request that mutates a governed surface, including a
-Charter, T0, T1, T2, Design projection, Skill, prompt, Runtime Module or
-Workflow registration, code, schema, Registry, maintained configuration,
-migration, test gate, release, deployment, rollback, or retirement. Normal
-execution of an already admitted business Workflow remains with that Workflow.
-Changing its contract, implementation, registration, permission boundary, or
-release state opens a System Change Case.
-
-Every bounded fix and every cross-authority redesign enters the same intake.
-Materiality changes the required decisions, Work Packages, assurance, and
-admission. It never exempts a governed mutation from case capture.
-
-Correctness of the requested result has priority over completion of the
-coordination sequence. A complete Case record cannot make a wrongly scoped,
-wrongly owned, semantically incorrect, or operationally ineffective subject
-correct. When evidence invalidates the intended result, scope, owner, or
-acceptance criteria, the Case returns to the owning decision instead of
-preserving the previous process path for procedural continuity.
-
-## 2. Parent Authority and Peer T0 Boundaries
-
-The following objects and decisions remain separate:
-
-| Authority | Owned object or decision | Handoff to System Change Governance |
-| --- | --- | --- |
-| Project Charter (parent authority) | Product constitution and peer T0 topology | Supplies accountable decisions for constitutional and T0-topology changes |
-| Product Authorization | Principal, Entitlement, and Authorization Decision | Supplies request eligibility and authorization evidence for protected operations |
-| Task Routing | Requested-outcome classification and `RoutingDecision` | Routes a request that mutates a governed surface to `system_change_intake` |
-| Agency Platform | Enterprise product host and Workflow Control Plane | Owns host composition, Cell placement, product exposure, and Workflow Control Plane decisions required by a change |
-| Artifact Graph | Registered Workflow, Operation, Artifact, Design Contract, and dependency graph | Supplies registered identity and impact evidence without deciding change scope |
-| Timestamp and Clock Semantics | Time-bearing data semantics | Owns time-field, clock, calendar, ordering, and freshness meaning required by a change |
-| Design Doc Management | Design Intent, Design approval, and Design lifecycle | Authors and admits each required Design candidate through a Design Work Package |
-| Skill Management | Skill definition, classification, projection, and lifecycle | Authors and accepts each required Skill candidate through a Skill Work Package |
-| Agent Runtime | Provider-neutral Agent execution and Runtime release admission | Owns Runtime registration, conformance, execution, and Runtime admission decisions |
-| Data Governance | Managed Data Asset and physical Data Binding | Owns schema, writer, placement, migration, retention, and recovery decisions |
-| Contract Audit | Audit Profile, Audit Execution, findings, and `AuditResult` | Returns exact subject-bound assurance results without editing or admitting the subject |
-| Software Delivery | Software Change, Release, Deployment, and recovery | Owns as-built change, release, deployment, rollback, and retirement admission |
-
-System Change Governance stores references to those decisions and verifies
-their relation to the current Case. It does not copy their contents into a new
-authority or aggregate them into a substitute approval.
-
-## 3. Intake and Scope Assessment
-
-Task Routing performs one semantic decision. When the requested durable result
-is a mutation of a governed system surface, it selects
-`system_change_intake`. Design, Skill, Runtime, Engineering, Audit, and
-Delivery are specialist Work Packages or external requirements inside the
-resulting Case. Their names do not bypass intake.
-
-The first Case result is an immutable `SystemChangeScopeAssessment` that
-states:
-
-- the requested durable result;
-- primary changed subject kind, identity, layer, and current owner;
-- every affected subject, its owner, and its relation to the primary subject;
-- the operation: `create`, `update`, `promote`, `split`, `merge`, `replace`,
-  `rename`, `retire`, `release`, `deploy`, `rollback`, or `roll_forward`;
-- the change scope: within-object, cross-layer handoff, peer responsibility,
-  authority topology, or implementation-only;
-- materiality and its effect on required gates;
-- authority impacts and implementation impacts as separate sets;
-- parent authority, peer context when applicable, unresolved ambiguity, and
-  required accountable decisions; and
-- exact evidence references used to form the assessment.
-
-Scope Assessment does not classify the original user task again. It describes
-which governed objects the already-routed system change would mutate.
-Contradictory or unresolved owner, layer, operation, or peer context stops the
-Case before specialist authoring begins.
-
-Case-level materiality determines only which owners, Work Packages, external
-results, and terminal evidence the Plan must invoke. Each affected subject's
-owning authority remains the sole classifier of that subject's material-change
-or risk disposition. The Case may add an omitted required owner. It may require
-an external result or gate only when that requirement already follows from the
-subject owner's registered assurance or risk policy. It can never invent,
-downgrade, or waive the subject owner's classification or gate.
-
-## 4. Structure Changes
-
-A change that creates, promotes, splits, merges, replaces, renames, or retires
-a durable registered structure requires four separately owned inputs:
-
-1. `StructureChangeProposal`: the System Change Registry freezes one immutable
-   Contract Audit `AuditSubject` projection from the current Case head and
-   Scope Assessment, bound to the proposed structure fields,
-   `StructureKindProfileRef`, parent authority, and exact peer snapshot. It is
-   not a seventh System Change lifecycle record and has no independent
-   lifecycle or admission authority;
-2. `PeerRegistrySnapshotRef`: the owning Registry freezes the complete current
-   peer set under the applicable parent authority;
-3. `StructureReviewResultRef`: Contract Audit reviews that immutable subject
-   under the registered structure-change assurance profile using the fixed
-   `structure_change_reviewer` semantic method. The Module method owns the
-   closed review-check vocabulary; this T0 owns the required subject and
-   handoffs; and
-4. `ParentAuthorityDecisionRef`: the accountable parent authority selects
-   `create_new`, `promote_existing`, `split_existing`, `merge_existing`,
-   `specialize_existing`, `replace_existing`, `rename_existing`,
-   `retire_existing`, or `reject`.
-
-The System Change Registry stores only exact refs, hashes, and their use in the
-Case. It does not own a combined `PeerStructureDecision`, reproduce the peer
-Registry, relabel an `AuditResult`, or issue the accountable decision.
-The structure review is required by the Contract-Audit-owned registered
-assurance policy for structural operations; the Case does not invent the gate
-or reviewer.
-
-## 5. Plan and Specialist Work Packages
-
-After scope and required authority decisions are sufficient, the current Case
-head receives one versioned `SystemChangePlan`. The Plan maps every authority
-impact and implementation impact to exactly one registered specialist owner or
-external requirement.
-
-An affected subject or implementation surface creates a
-`SystemChangeWorkPackage` only for its real owner:
-
-- a peer T0 or domain semantic decision remains with that authority; when its
-  Design Intent changes, Design Doc Management receives the Design Work
-  Package while the peer owner retains the decision;
-- Design Intent enters Design Doc Management;
-- host composition, Cell placement, product exposure, or Workflow Control
-  Plane changes enter Agency Platform;
-- Principal, Entitlement, permission, delegation, grant, or revocation
-  changes enter Product Authorization;
-- Workflow, Operation, Artifact, Design Contract graph, or typed edge
-  registration changes enter Artifact Graph;
-- a Skill source, registration, projection, or lifecycle enters Skill
-  Management;
-- Runtime Module or Workflow registration enters Agent Runtime registration;
-- code, schema implementation, migration implementation, or tests enter the
-  Engineering Change path under Software Delivery;
-- Data Asset, writer, placement, or data migration decisions enter Data
-  Governance;
-- time-field, clock, calendar, ordering, or freshness semantics enter Timestamp
-  and Clock Semantics;
-- Audit Profile, reviewer binding, independence, finding, or verdict policy
-  changes enter Contract Audit; and
-- release, deployment, rollback, roll-forward, or retirement enters Software
-  Delivery.
-
-Each Work Package binds the Case and Plan head, specialist owner, input
-contract, expected candidate kind, completion contract, and returned candidate
-or terminal evidence. It does not copy the specialist artifact or recreate its
-lifecycle.
-
-The Plan selects a specialist owner from the changed subject kind, governed
-layer, requested operation, and accountable authority. A target name,
-directory, filename, nearby Skill, or current implementation component is not
-sufficient routing evidence. Before authoring, every specialist method must
-verify that the exact Work Package names its owner and declared entry-subject
-class. A mismatch stops that method without modifying the subject and returns
-an applicability rejection to Scope Assessment and Plan revision. The subject
-owner may map that rejection to its existing disposition vocabulary. The
-rejection does not authorize a fallback to a similarly named specialist.
-
-Independent Review is an external result requirement, not an authoring Work
-Package. The Plan records only the exact subject ref, assurance-policy ref, and
-required result kind. Audit Profile content, reviewer binding, findings, and
-verdict stay with their assurance owner.
-
-## 6. Candidate, Review, Admission, and Closure
-
-The current candidate-producing Work Packages join into one immutable
-`SystemChangeCandidateSet`. The set is coherent only when it contains every
-Work Package whose completion contract returns a reviewable candidate for the
-exact current Case and Plan heads. A caller cannot omit such a Work Package or
-add an unrelated candidate. Evidence-only Work Packages, including deployment,
-rollback, roll-forward, retirement, and other post-admission operations, enter
-the `SystemChangeClosureRecord` join when their terminal evidence exists; they
-are not fabricated as pre-review candidates.
-When the Plan has zero candidate-producing Work Packages, one empty
-`SystemChangeCandidateSet` is coherent and hash-bound to the exact Case and
-Plan. It creates no synthetic candidate or review requirement.
-
-Each frozen subject enters its registered assurance method. Findings return to
-the accountable specialist owner:
-
-- a candidate defect produces a new specialist candidate and hash;
-- a scope or owner defect produces a new Scope Assessment, Plan, Work Package
-  set, and Candidate Set; and
-- prior candidates and results remain immutable lineage rather than current
-  evidence.
-
-Each subject's own authority decides admission. Design Doc Management admits a
-Design Contract, Agent Runtime admits a Runtime release, Data Governance admits
-a Data or storage decision, and Software Delivery admits a software release or
-deployment. A review pass does not perform any of those decisions.
-
-The Case closes only when the exact current Case, Scope Assessment, Plan, Work
-Packages, Candidate Set, required assurance results, subject admissions,
-dependency obligations, and recovery obligations all resolve to allowed
-terminal states. `SystemChangeClosureRecord` proves that join. It activates
-nothing by itself.
-
-## 7. Record Model
-
-System Change Governance owns only these logical record families:
-
-| Record | Responsibility |
-| --- | --- |
-| `SystemChangeCase` | Stable change identity, state, current head, and predecessor lineage |
-| `SystemChangeScopeAssessment` | Immutable changed-subject, layer, owner, operation, peer-context, impact, and materiality assessment |
-| `SystemChangePlan` | Versioned authority-impact, implementation-impact, Work Package, external-result, and closure requirements |
-| `SystemChangeWorkPackage` | Reference-only coordination binding to one specialist owner and its candidate or terminal evidence |
-| `SystemChangeCandidateSet` | Exact coherent freeze of every current candidate-producing Work Package |
-| `SystemChangeClosureRecord` | Exact terminal join over external decisions, assurance, admission, dependency, and recovery evidence |
-
-The model has no separate stable `SystemChangeRoute`, `ChangeReviewPlan`, or
-combined `PeerStructureDecision`. `RoutingDecision`, `AuditResult`,
-`DesignApprovalDecision`, Skill and Runtime admission results,
-`ChangeSetManifest`, `ReleaseManifest`, `DeploymentRecord`, `RollbackRecord`,
-and Artifact Graph releases remain externally owned records referenced by the
-Case.
-
-## 8. Lifecycle
+## 1. Primary System Flow
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Captured
-    Captured --> Scoped: valid scope assessment
-    Scoped --> AwaitingAuthorityDecision: accountable decision required
-    Scoped --> Planned: no new authority decision required
-    AwaitingAuthorityDecision --> Planned: exact decision accepted
-    AwaitingAuthorityDecision --> Rejected: accountable owner rejects
-    Planned --> InProgress: Plan closure passes
-    Planned --> Rejected: accountable owner rejects
-    Planned --> Withdrawn: requester withdraws before candidate freeze
-    InProgress --> CandidateFrozen: coherent candidate set
-    InProgress --> Withdrawn: requester withdraws before candidate freeze
-    InProgress --> Scoped: discovered impact invalidates scope
-    CandidateFrozen --> UnderReview: review requests accepted
-    CandidateFrozen --> AwaitingCompletion: empty candidate set and prerequisite admissions resolved
-    CandidateFrozen --> InProgress: author retracts before accepted review result
-    UnderReview --> InProgress: finding requires candidate revision
-    UnderReview --> Scoped: finding invalidates scope or owner
-    UnderReview --> AwaitingAdmission: every required review passes
-    AwaitingAdmission --> Closed: admissions close and no evidence-only Work Package remains
-    AwaitingAdmission --> AwaitingCompletion: admissions close and terminal operational evidence remains
-    AwaitingAdmission --> InProgress: admission requires candidate revision
-    AwaitingAdmission --> Scoped: admission invalidates scope or owner
-    AwaitingCompletion --> Closed: every evidence-only Work Package reaches an allowed terminal state
-    AwaitingCompletion --> InProgress: operational result requires candidate revision
-    AwaitingCompletion --> Scoped: operational result invalidates scope or owner
-    Captured --> Withdrawn: requester withdraws
-    Scoped --> Withdrawn: requester withdraws
-    AwaitingAuthorityDecision --> Withdrawn: requester withdraws
-    Captured --> Aborted: accountable cancellation
-    Scoped --> Aborted: accountable cancellation
-    AwaitingAuthorityDecision --> Aborted: accountable cancellation
-    Planned --> Aborted: accountable cancellation
-    InProgress --> Aborted: accountable cancellation
-    CandidateFrozen --> Aborted: accountable cancellation
-    UnderReview --> Aborted: accountable cancellation
-    AwaitingAdmission --> Aborted: accountable cancellation
-    AwaitingCompletion --> Aborted: accountable cancellation
-    Captured --> Blocked: bounded pre-scope external blocker
-    Scoped --> Blocked: bounded external blocker
-    AwaitingAuthorityDecision --> Blocked: bounded external blocker
-    Planned --> Blocked: bounded external blocker
-    InProgress --> Blocked: bounded external blocker
-    CandidateFrozen --> Blocked: bounded external blocker
-    UnderReview --> Blocked: bounded external blocker
-    AwaitingAdmission --> Blocked: bounded external blocker
-    AwaitingCompletion --> Blocked: bounded external blocker
-    Blocked --> Captured: resume recorded prior state
-    Blocked --> Scoped: blocker invalidated scope, owner, or candidate identity
-    Blocked --> AwaitingAuthorityDecision: resume recorded prior state
-    Blocked --> Planned: resume recorded prior state
-    Blocked --> InProgress: resume recorded prior state
-    Blocked --> CandidateFrozen: resume recorded prior state
-    Blocked --> UnderReview: resume recorded prior state
-    Blocked --> AwaitingAdmission: resume recorded prior state
-    Blocked --> AwaitingCompletion: resume recorded prior state
-    Blocked --> Withdrawn: requester withdraws before candidate freeze
-    Blocked --> Aborted: accountable cancellation
+flowchart TD
+    R["Task Routing"] -->|system_change_intake| A["Primary Agent"]
+    A --> S["进入 the-system-change Skill<br/>直接编写 SystemChangePlan 内容"]
+    S --> C["确定性构建与校验<br/>解析当前文件 · 身份 · 负责人 · 依赖<br/>生成哈希 · 权威时间"]
+    C -->|system_change_plan_prepare| P["冻结的 SystemChangePlan<br/>文件 · 原因 · 负责人 · 顺序 · 编写方法 · 审核门"]
+    P --> Q["独立 system_change_plan_reviewer<br/>使用本 T0 checklist 与 Review Contract 通用规则"]
+    Q --> V{"System Change-owned schema<br/>和 semantic validator"}
+    V -->|passed| H["已审核的 SystemChangePlan"]
+    H -->|system_change_plan_handoff| E["Primary Agent 按计划逐层执行"]
+    V -->|non_pass| F["向 Primary Agent 返回具体 findings"]
+    F --> A
+    V -->|blocked| B["返回缺失输入或不可用依赖"]
+    B --> A
 ```
 
-`Blocked` always names a bounded reason and recovery condition. `Rejected` is
-an accountable decision, while `non_pass` is an assurance result. Returning to
-`Scoped` creates a new Scope Assessment and Plan head. When the blocker changed
-no scope, owner, current head, candidate hash, review result, or admission
-subject, the Blocked record carries one exact `resume_state` and resolution
-returns to that recorded prior state. Withdrawal and accountable cancellation
-preserve all existing lineage.
+`the-system-change` 是 Primary Agent 使用的编写 Skill，不注册为 Runtime Module。它负责判断
+受影响层级、拆分修改内容、排列依赖顺序，并直接生成 `SystemChangePlan` 的语义正文。版本、哈希、
+权威时间和 Registry 引用由确定性代码生成；通过校验后，正文与生成元数据一起冻结为精确受审对象。
 
-`AwaitingCompletion` is the post-admission state for deployment, rollback,
-roll-forward, retirement, and other evidence-only Work Packages. It does not
-reopen admission merely because terminal operational evidence is still
-pending.
+本 T0 要求使用固定的 `system_change_plan_reviewer`，并只消费绑定精确冻结计划、通过本 T0
+拥有的 output schema 和 semantic validator 的 Reviewer output。`passed` 把精确冻结的计划交给 Primary Agent；
+`non_pass` 携带可执行的 findings，由 Primary Agent 重新进入同一 Skill 修订完整计划；`blocked`
+表示缺少审核所需输入或依赖不可用，由 Primary Agent 补齐后重新进入，而不是把它伪装成计划内容错误。
 
-## 9. Self-Change and Bootstrap
+`system_change_plan_reviewer` 的目标特定判断标准由本 Design Intent 第 7 节完整定义；其
+prompt、schema、fixtures 和 registration source 保存在 `the-system-change` Skill Package。
+Review Contract 只拥有通用审核阶段、exact-subject boundary 和 universal instruction source；Skill
+Management 管理 Skill definition、candidate 与 Skill review；Skill retirement 或整体删除由本 T0 形成
+完整 disposition 与 owner routing；按 Review Contract registered binding
+执行的代码把通用规则机械注入 Reviewer Module source；Agent Runtime 只执行已注册 Module。
+本 T0 拥有 `system_change_plan_reviewer` 的目标特定 checklist、output schema、semantic validator 和
+Reviewer output 的完成语义，但不定义 Skill 编译、Runtime 注册或执行过程。
 
-System Change Governance changes itself under its previous admitted release.
-Its candidate Design, Registry, validator, reviewer, or software cannot approve
-or admit itself.
+| `interface_id` | 所有者 | 输入 | 成功输出 | 产生的影响 | 错误码 |
+| --- | --- | --- | --- | --- | --- |
+| `system_change_plan_prepare` | System Change Governance | Task Routing 产出的 `system_change_intake`；由代码生成的当前文件、受审对象类型、负责人、层级和依赖事实；Primary Agent 通过 `the-system-change` 生成的计划正文 | 一份通过确定性校验、包含生成元数据且冻结的 `SystemChangePlan` | 编写 Skill 只生成语义正文；确定性代码只生成元数据并冻结受审对象；两者都不创建下游候选产物，也不执行任何受治理的修改 | `SYSTEM_CHANGE_PLAN_SCOPE_INCOMPLETE`、`SYSTEM_CHANGE_PLAN_OWNER_INVALID`、`SYSTEM_CHANGE_PLAN_ORDER_INVALID` |
+| `system_change_plan_handoff` | System Change Governance | 精确冻结的 `SystemChangePlan`，以及绑定该计划、覆盖本 T0 完整 checklist、通过本 T0 output schema 和 semantic validator 且 disposition 为 `passed` 的 `system_change_plan_reviewer` output | 把已审核的 `SystemChangePlan` 交给 Primary Agent | 只授权 Primary Agent 使用该计划；不创建下游候选产物、批准、准入或持续监督义务 | `SYSTEM_CHANGE_PLAN_REVIEW_UNAVAILABLE`、`SYSTEM_CHANGE_PLAN_REVIEW_NOT_PASSED` |
 
-When no admitted predecessor exists, one explicit bootstrap may freeze the
-minimum candidate closure, use the already established Charter, Design Doc
-Management, Contract Audit, and Software Delivery authorities, obtain
-independent advisory review and accountable approval, and record its limits.
-The bootstrap Case's `SystemChangeClosureRecord` records the limits, review and
-approval evidence, required successor cross-review, and permanent disablement
-condition. The first admitted successor cross-reviews every bootstrap surface.
-Its closure permanently disables the bootstrap path; no additional bootstrap
-record family is created.
+| `error_code` | 所有者 | 触发条件 | 含义 | 调用方动作 |
+| --- | --- | --- | --- | --- |
+| `SYSTEM_CHANGE_PLAN_SCOPE_INCOMPLETE` | System Change Governance | 某个受影响文件或受治理面既未进入纳入清单，也未进入排除清单 | Primary Agent 无法确定完整更新范围 | 重建完整清单并冻结一份新的 `SystemChangePlan` |
+| `SYSTEM_CHANGE_PLAN_OWNER_INVALID` | System Change Governance | 某一步缺少最终问责负责人、使用了不适用的编写方法，或把产出的受审对象类型路由给错误审核器 | 计划会把工作交给错误的权责主体 | 在审核前修正负责人和路由证据 |
+| `SYSTEM_CHANGE_PLAN_ORDER_INVALID` | System Change Governance | 下游步骤能够在所需上游结果冻结并获准之前启动 | 计划会让下游基于不稳定的依赖工作 | 重排计划，并为每一步指定所需的精确前序结果 |
+| `SYSTEM_CHANGE_PLAN_REVIEW_UNAVAILABLE` | System Change Governance | Registered Reviewer route、Runtime execution 或 output validation 不可用，因而不存在绑定该 exact `SystemChangePlan` 且通过本 T0 schema 和 semantic validator 的 Reviewer output；绑定其他计划的 output 也不满足本接口 | 当前无法形成对该计划的有效审核判断 | 按缺失或失配依赖携带的 owner-qualified failure 返回真实 peer owner；禁止用相近审核器或另一份计划的 output 替代 |
+| `SYSTEM_CHANGE_PLAN_REVIEW_NOT_PASSED` | System Change Governance | 已存在绑定该 exact `SystemChangePlan`、通过本 T0 schema 和 semantic validator 的 Reviewer output，但 disposition 为 `non_pass` 或 `blocked` | 当前不存在可以交给 Primary Agent 的已审核计划 | `non_pass` 时按 findings 修订完整计划；`blocked` 时把 exact blocker 返回其真实 owner；之后只对新的 exact candidate 或恢复后的依赖重新审核 |
 
-## 10. Required Machine Contract
+上图只定义 `SystemChangePlan` 从编写到审核再到 Primary Agent 执行的主流程。Reviewer Module 的
+注册、执行、Attempt 和执行证据遵守 Agent Runtime 合同；Runtime 可以机械执行 registered output-schema
+enforcement，但不拥有 schema 或 verdict meaning。本 T0 定义目标特定 checklist、完整 output schema、
+semantic validator 和 handoff 完成语义，并据此判断 Runtime 返回的 output 能否支持
+`system_change_plan_handoff`。
 
-The target implementation provides:
+## 2. User Intent
 
-- one code-owned Registry for the six System Change record families;
-- exact current-head and predecessor validation;
-- exact Case, Plan, and Work Package validation before any specialist branch
-  entry, exposed as a bounded guard that Task Routing may invoke without
-  owning the decision;
-- scope, impact, Work Package, Candidate Set, and closure-set parity checks;
-- typed resolution of every external decision, assurance, admission,
-  dependency, and recovery reference;
-- deterministic protection against undeclared governed mutations before
-  candidate freeze, commit, registration, or release. System Change Governance
-  owns the required Case/Plan/Work-Package condition. Each enforcing host owns
-  its registered gate and accepts that condition through its own contract; the
-  System Change T0 cannot unilaterally install a guard in another authority;
-- append-only revision and terminal evidence; and
-- generated inspection of current Cases, Plans, Work Packages, blockers,
-  findings, admissions, and unresolved closure obligations.
+系统修改经常同时触及 Design、Skill、Code、Runtime 和 Release。System Change
+Governance 先判断本次请求具体改变哪些层，再把每个受影响文件或受治理面拆进
+对应层级的计划步骤。分类决定编写路径和候选产物类型；依赖关系决定执行顺序；受审对象
+类型决定所需的审核类型。
 
-Implementation paths, schemas, persistence technology, commands, current
-records, and release status belong to code and persistent state. Generated
-inspection is disposable and cannot change a Case or any external decision.
+Primary Agent 需要一份完整更新计划，而不是从文件名、当前工作树、对话历史或附近
+Skill 猜测影响面、层级和顺序。
 
-### 10.1 Fixed independent review method
+覆盖面大小只改变每一层包含多少对象，不改变层级顺序。`SystemChangePlan` 必须按上游语义到下游
+实现排列：
 
-The portable semantic reviewer Module identities are:
+```text
+需要时先完成结构决策
+  → Design Intent
+  → Skill 和 Module 源文件
+  → Code Design 和实现
+  → Runtime 注册和准入
+  → Release、投影和部署
+```
 
-- `system_change_governance_reviewer` for one frozen System Change Governance
-  Design candidate; and
-- `structure_change_reviewer` for one immutable `StructureChangeProposal`
-  plus its admitted complete peer snapshot.
+一个层级不需要修改时，`SystemChangePlan` 引用该层已冻结且仍有效的前置结果。它不制造空的候选
+产物，也不允许下游静默绕过上游验证。
 
-Contract Audit packages and executes both reviewers; System Change Governance
-owns their semantic methods. A missing or mismatched subject-to-reviewer
-binding is a routing gap and cannot be replaced by a nearby Design, Skill, or
-Engineering reviewer.
+## 3. Reader Gain
 
-## 11. Invariants
+读完本 Design Intent 和一份符合它的 `SystemChangePlan` 后，Primary Agent 能直接判断：
 
-1. Every governed mutation enters one System Change Case.
-2. Every Case has one current immutable Scope Assessment and one current Plan
-   before specialist work begins.
-3. Authority impacts and implementation impacts remain separate.
-4. Every affected surface maps to exactly one specialist owner or external
-   requirement.
-5. Structure changes use separately owned peer snapshot, independent review,
-   and parent-authority decision records.
-6. System Change Governance coordinates but never authors, reviews, approves,
-   admits, releases, or deploys an affected subject.
-7. Candidate Set membership equals the complete current
-   candidate-producing Work Package set; evidence-only Work Packages close in
-   the Closure Record join.
-8. Every material revision creates a new hash and preserves predecessor
-   lineage.
-9. Case closure verifies terminal evidence and activates nothing.
-10. Candidate governance cannot validate or admit itself.
-11. Specialist entry is valid only for the exact Work Package owner and
-    entry-subject class; rejection returns to Scope Assessment rather than
-    continuing by target-name similarity.
+- 哪些文件或受治理面要改，以及为什么要改；
+- 每个修改属于 Design、Skill、Code、Runtime 还是 Release；
+- 必须按什么顺序处理；
+- 每一步归哪个最终问责负责人；
+- 使用哪个编写方法；
+- 产出什么候选产物或确定性结果；以及
+- 由哪一种独立审核或确定性审核门判断该步完成。
 
-## References
+Primary Agent 无需重新扫描仓库、回读对话或推断相邻 Skill，就能从第一步开始执行。
+Principal Manager 和 System Owner 能判断计划是否完整覆盖授权结果、真实 owner 和依赖顺序；
+Independent Reviewer 能判断计划是否达到第 4、6 和 7 节定义的审查结果。
+
+## 4. Owned System Object
+
+System Change Governance 只拥有 `SystemChangePlan`。
+
+`system_change_plan_reviewer` 的目标特定 checklist、output schema、semantic validator 和完成语义，
+都是判断一份 `SystemChangePlan` 是否达到本 T0 要求的治理规则，不是第二个 owned object。Reviewer
+output 是对 exact plan 的独立判断；它不成为跨 subject 的共享审核结果对象，也不转移计划、批准、
+Runtime 或发布权。
+
+一份 `SystemChangePlan` 表达五类语义：
+
+1. `requested_result`：Primary Agent 最终必须交付的有限范围结果；
+2. `affected_surfaces`：纳入或明确排除的文件与受治理面，以及各自的受审对象类型、
+   层级、负责人和所需修改；
+3. `ordered_steps`：每一步的输入依赖、编写方法、候选产物类型、审核门和完成条件；
+4. `excluded_surfaces`：容易被误纳入、但不属于本次结果的邻近面；
+5. `unresolved_decisions`：使计划暂时无法执行的真实负责人决策。
+
+`plan_id`、文件哈希、Registry 引用和权威时间由代码生成。模型只判断语义，不手抄元数据。
+
+Skill retirement 或整体删除不是一个缺少 authoring method 的通用 deletion step。`SystemChangePlan` 先把
+它分解为 Design reference、Skill source、Runtime registration、host projection、routing/code 等受影响
+surface；每个 surface step 使用其真实 owner 已登记的 authoring 或 implementation method、既有 output
+type、review gate 与 completion condition。继续存在的 Skill definition 才进入 `the-skill-authoring`；实际
+删除步骤不调用该 method，也不发明 deletion-specific method 或 candidate type。
+
+范围是 `affected_surfaces` 的闭包；路由是 `ordered_steps` 的顺序。它们都是 `SystemChangePlan` 内部
+内容，不是独立的逻辑记录。执行中发现漏项、负责人错误或依赖变化时，Primary Agent
+重新请求并冻结一份完整的新 `SystemChangePlan`。本 T0 不维护前序关系、进度或状态转换。
+
+## 5. Authority
+
+本 T0 可以决定：
+
+- 一个修改请求需要覆盖哪些受治理面；
+- 每个受影响面属于 Design、Skill、Code、Runtime 或 Release 哪一层；
+- 每个受影响面的层级、语义所有者和编写路径；
+- 各层必须按什么依赖顺序处理；
+- 每一步产出什么受审对象类型，并要求哪一种独立审核或确定性审核门；
+- 哪些邻近面明确不属于本次结果。
+
+本 T0 同时可以定义 `system_change_plan_reviewer` 对 `SystemChangePlan` 必须判断的目标特定 checklist、
+Reviewer output 的逻辑 schema、semantic validator 和达到 handoff 所需的完成语义。这些决定只解释
+什么样的独立判断足以支持 `SystemChangePlan` handoff；Reviewer 自己形成判断，Agent Runtime 执行
+Module，Skill Management 管理 Skill artifact，Primary Agent 消费通过审核的计划。
+
+受影响面的所有者决定对应内容应该写什么。结构、产品、Reviewer 独立判断、Design/Skill/Runtime
+准入和发布决定分别留在各自的权责主体；本 T0 只定义计划审核必须判断什么以及什么结果足以完成
+`SystemChangePlan` handoff。结构改变由 `SystemChangePlan` 路由给适用的上级权责主体；本 T0 不定义
+结构决策对象或结构审查方法。
+
+System Change Governance 的工作在 `SystemChangePlan` 通过独立审查并交给 Primary Agent 后结束。
+Primary Agent 按计划执行。只有计划本身失效时，工作才重新进入本 T0。
+
+## 6. T1 委派与机器执法
+
+项目 T1 合同和代码负责实现具体的 `SystemChangePlan` 构建器、Registry 读取器、文件系统
+清单、结构定义、校验和可选的只读检查视图。它们可以选择存储和用户界面技术，但不能
+改变本 T0 只拥有一个对象的边界。
+
+机器合同必须：
+
+- 从代码拥有的 Registries 和声明路径解析候选文件与逻辑面；
+- 生成标识符、版本、引用、哈希值和权威时间戳；
+- 校验纳入范围和排除范围的完整性；
+- 校验每个步骤只有一个所有者，并且编写路径和审核路径合法；
+- 校验严格的依赖顺序；
+- 校验 `system_change_plan_reviewer` output 绑定 exact plan、覆盖第 7 节全部检查项，并通过本 T0
+  注册的完整 output schema 和 semantic validator；
+- 生成一份不可变的 `SystemChangePlan` 正文，供审核和 Primary Agent 使用；
+- 提供始终可以从该计划重新生成的只读投影。
+
+机器合同不创建 `SystemChangeCase` 状态机、`WorkPackage` 数据库、`CandidateSet`、`ClosureRecord`、
+执行监督器或批准汇总器。
+
+## 7. 审核与完成
+
+固定的 `system_change_plan_reviewer` 只审核一份冻结的
+`SystemChangePlan`。其 Reader Gain 是明确的：审核后，Primary Agent 可以直接执行更新，
+无需重新梳理受影响文件、负责人、顺序、编写路径或审核门。
+
+<!-- system-change-plan-review-checklist:start -->
+目标特定 checklist 按以下顺序且完整包含八项：
+
+1. 每个受影响文件或受治理面都已纳入或被明确排除，且不存在会让计划暂时无法执行的
+   `unresolved_decisions`；
+2. 每个受影响面都被正确归入 Design、Skill、Code、Runtime 或 Release；
+3. 每项修改的目标结果和原因清楚；
+4. 步骤严格遵守从上游到下游的依赖顺序；
+5. 每个步骤都有一个最终问责负责人、一个编写方法、一个产出对象类型、一个审核门和一个完成条件；
+6. 未修改的上游层以冻结前置结果形式引用，而不是制造空候选产物；
+7. Reviewer 路由由产出对象类型决定，不能由文件名、所属 T0 名称、模型、provider 或附近 Skill 决定；
+8. 计划在规划和路由处结束，不包含执行状态、生命周期、`CandidateSet`、闭包、批准或准入汇总。
+<!-- system-change-plan-review-checklist:end -->
+
+Output schema 必须逐项记录以上八项 semantic checklist 的判断，并由本 T0 的 semantic validator 校验
+checklist 覆盖、exact-plan binding、disposition 与 findings 一致性。只有八项 semantic 判断全部通过后，
+才对同一 exact plan bytes 执行 Review Contract instruction 注入的 prose and communication check；output
+schema 也必须记录该项结果。Semantic 未通过时 prose 结果只能是 `not_run`；semantic 或 prose 任一存在
+`block` / `fix` 时 disposition 不能是 `passed`。只有八项 semantic 判断和 prose 判断均通过时，
+`system_change_plan_handoff` 才能消费 disposition `passed`。Prose check 不能改变上述八项的含义或替代其中
+任一项。
+
+定义本 T0 的 Design Doc 本身属于 `t0_design` 对象，由
+`design_contract_reviewer` 审核。修改所属 T0 不会改变 Design 审核器。
+
+只有 `system_change_plan_reviewer` 的已注册执行结果绑定精确冻结的 `SystemChangePlan`、覆盖本 T0
+完整 checklist，并通过本 T0 拥有的完整 output schema 和 semantic validator 且 disposition 为 `passed` 时，
+该计划才算完成。
+`non_pass` 和 `blocked` 均不产生 Primary Agent 交接。`passed` 只授权 Primary Agent
+使用该计划；它不批准任何下游候选产物，也不产生持续的 System Change Governance 监督义务。
+
+## 8. System-wide Invariants
+
+1. 每个受治理的系统变更在下游编写开始前先获得一份完整
+   `SystemChangePlan`。
+2. `SystemChangePlan` 覆盖每个受影响面，或明确记录其排除理由。
+3. 每个步骤只有一个最终问责负责人、一个编写方法、一个产出对象类型、一个审核门和
+   一个完成条件。
+4. `SystemChangePlan` 只使用已注册的 `system_change_plan_reviewer`。文件名、模型、模型提供方和
+   附近 Skill 均不参与 Reviewer Module 选择。
+5. Design、Skill、Code、Runtime 和 Release 严格按依赖顺序推进。下游发现上游错误时，
+   把问题返回上游所有者。依赖错误结果的下游候选产物由其自身所有者
+   处理，本 T0 不维护其状态。
+6. `SystemChangePlan` 只保存意图和路由。候选产物、审核结果、批准、准入、执行、发布和部署记录
+   留在各自所有者。
+7. Primary Agent 消费 `SystemChangePlan`；人类页面只投影该计划，不形成第二份人工维护的计划。
+8. 结果正确性优先于按旧计划完成流程。新证据改变范围或顺序时，重新生成并审核完整的
+   `SystemChangePlan`。
+
+## 9. Peer Boundaries
+
+Project Charter 是本 T0 的 constitutional parent，不是 same-level peer。计划会改变产品宪制或
+所需 T0 authority class 时，Charter 提供 constitutional decision；它继续拥有产品宪章和人类决策权，
+不维护当前 T0 inventory。
+
+| 对等权责主体 | 向 `SystemChangePlan` 提供的内容 | 继续独立拥有的内容 |
+| --- | --- | --- |
+| Agency Platform | 受影响面所需的宿主组合事实或 Workflow Control Plane 变更事实 | 企业产品宿主、执行宿主绑定和 Workflow Control Plane 决策 |
+| Product Authorization | 计划动作执行前所需的资格决定或受保护操作决定 | Principal、Entitlement 和 Authorization Decision |
+| Task Routing | 已被分类为受治理系统变更的授权请求 | 语义任务主线选择 |
+| 各 authority 的 code-owned Registry | 当前 T0 topology、对象身份、owner、layer 与生成文件事实；项目 Workflow、Operation、Artifact dependency 来自其项目所属 authority | 各 Registry 的 object meaning、current record 与 relation meaning |
+| Design Doc Management | 适用的 Design 编写方法和 Design 审核边界 | Design Intent、批准和生命周期 |
+| Skill Management | 适用的 Skill 编写方法和 Skill 审核边界 | Skill definition、candidate 与 Skill review；Skill retirement/整体删除 disposition 和 owner routing 由本 T0 拥有，各 surface owner 执行实际删除 |
+| Review Contract | 供 Reviewer Module 机械消费的通用审核阶段、exact-subject boundary 和 universal instruction | 不拥有 `SystemChangePlan`、目标特定 checklist、Reviewer output 或 handoff decision |
+| Agent Runtime | 已注册 `system_change_plan_reviewer` 的 Module execution result | Module execution、ExecutionProfile、Attempt 和 Ledger 证据 |
+| Data Governance | 计划步骤所需的数据、写入器、放置、迁移和保留决策 | Managed Data Asset 和物理 Data Binding |
+| Timestamp and Clock Semantics | 时间字段和顺序要求 | 时间数据语义 |
+| Software Delivery | Code Design、实现、工程审核、发布和恢复方法 | 软件变更、发布、部署和回滚准入 |
+| Primary Agent | 逐步执行已审核的 `SystemChangePlan`，并在计划失效时请求一份新计划 | 任务执行判断和当前工作上下文 |
+
+`SystemChangePlan` 引用类型明确的对等输入和所需输出。它不复制对等主体的内部工作流、错误表、数据库
+状态或批准记录。
+
+## 10. References
 
 - [Project Charter](the_charter.md)
-- [Agency Platform](the_agency_platform.md)
-- [Product Authorization](the_product_authorization.md)
 - [Task Routing](the_task_routing.md)
-- [Artifact Graph](the_artifact_graph.md)
 - [Design Doc Management](the_design_doc_management.md)
 - [Skill Management](the_skill_management.md)
+- [Review Contract](the_review_contract.md)
 - [Agent Runtime](the_agent_runtime.md)
 - [Data Governance](the_data_governance.md)
 - [Timestamp and Clock Semantics](the_timestamp_semantic.md)
-- [Contract Audit](the_contract_audit.md)
 - [Software Delivery](the_software_delivery.md)

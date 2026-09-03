@@ -1,14 +1,11 @@
 {
   "schema_version": "runtime_module_registration_v2",
-  "skill_package_id": "engineering_change_review",
   "skill_id": "engineering-change-review",
-  "export_id": "engineering_change_reviewer",
   "module_id": "engineering_change_reviewer",
-  "skill_package_owner_contract_path": "designDoc/the_software_delivery.md",
-  "module_owner_contract_path": "designDoc/the_contract_audit.md",
-  "input_schema_ref": "schema:engineering_change_reviewer_input@v1",
+  "owner_contract_path": "designDoc/the_software_delivery.md",
+  "input_schema_ref": "schema:engineering_change_reviewer_input@v4",
   "input_schema_path": "schemas/input.schema.json",
-  "output_schema_ref": "schema:engineering_change_reviewer_output@v2",
+  "output_schema_ref": "schema:engineering_change_reviewer_output@v4",
   "output_schema_path": "schemas/output.schema.json",
   "declared_operation_ids": [
     "model_execute",
@@ -20,9 +17,9 @@
     "claude_agent_sdk",
     "codex_cli"
   ],
-  "context_policy_ref": "context-policy:repository_review_isolated@v1",
+  "behavior_policy_ref": "behavior-policy:workflow_execution_isolated@v1",
   "evaluation_policy_ref": "evaluation-policy:module_candidate@v1",
   "retry_policy_ref": "retry-policy:bounded_candidate@v1",
-  "entry_policy": "workflow_bound",
+  "entry_policy": "standalone_allowed",
   "output_resolution_policy": "evaluated_single"
 }

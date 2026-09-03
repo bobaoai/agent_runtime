@@ -1,0 +1,7 @@
+{
+  "case_id": "design_contract_reviewer_negative_evidentiary_correction_role_v1",
+  "case_kind": "negative",
+  "module_id": "design_contract_reviewer",
+  "mutation": "correction_target_current_inspection",
+  "expected_disposition": "semantic_validation_rejected"
+}

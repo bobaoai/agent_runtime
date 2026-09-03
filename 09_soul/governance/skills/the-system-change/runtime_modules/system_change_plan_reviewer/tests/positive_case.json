@@ -1,0 +1,7 @@
+{
+  "case_id": "system_change_plan_reviewer_positive_v1",
+  "case_kind": "positive",
+  "module_id": "system_change_plan_reviewer",
+  "mutation": "none",
+  "expected_disposition": "schema_valid_and_reviewable"
+}

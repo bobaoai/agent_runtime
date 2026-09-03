@@ -1,0 +1,7 @@
+{
+  "case_id": "design_contract_reviewer_negative_missing_prior_decision_v1",
+  "case_kind": "negative",
+  "module_id": "design_contract_reviewer",
+  "mutation": "missing_prior_decision_context",
+  "expected_disposition": "input_projection_rejected"
+}

@@ -26,8 +26,10 @@ REQUIRED_STARTUP_PATHS = (
 REQUIRED_GOVERNANCE_SKILLS = (
     "engineering-change-review",
     "engineering-code-design",
-    "the-contract-audit",
-    "the-skill-management",
+    "the-design-authoring",
+    "the-review-authoring",
+    "the-skill-authoring",
+    "the-system-change",
     "the-task-routing",
 )
 
@@ -71,4 +73,3 @@ def test_portable_core_does_not_embed_a_project_adapter() -> None:
         / "core"
         / "PROJECT_ADAPTER_trading_platform.md"
     ).exists()
-

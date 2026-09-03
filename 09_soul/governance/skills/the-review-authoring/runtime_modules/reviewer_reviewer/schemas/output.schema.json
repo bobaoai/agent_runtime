@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:reviewer_reviewer_output@v1",
+  "title": "Reviewer Reviewer Semantic Output",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{1,191}$"
+        },
+        "severity": {
+          "enum": [
+            "block",
+            "fix",
+            "note"
+          ]
+        },
+        "finding_class": {
+          "enum": [
+            "task_or_reader_gain_gap",
+            "input_decision_or_output_gap",
+            "boundary_or_failure_routing_gap",
+            "instruction_ownership_or_duplication",
+            "cold_start_or_schema_fixture_conflict",
+            "prose_or_meaning_risk"
+          ]
+        },
+        "quoted_evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "impact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accountable_owner_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_change": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "finding_class",
+        "quoted_evidence",
+        "requirement",
+        "impact",
+        "accountable_owner_ref",
+        "required_change"
+      ]
+    },
+    "check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "enum": [
+            "purpose_subject_and_reader_gain",
+            "inputs_decision_and_output",
+            "boundaries_and_failure_routing",
+            "instruction_ownership_and_nonduplication",
+            "cold_start_executability_and_schema_fixture_consistency"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "passed",
+            "finding",
+            "not_run"
+          ]
+        },
+        "assessment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]{1,191}$"
+          }
+        }
+      },
+      "required": [
+        "check_id",
+        "disposition",
+        "assessment",
+        "finding_ids"
+      ]
+    },
+    "blocked_check_result": {
+      "type": "object",
+      "properties": {
+        "disposition": {
+          "const": "not_run"
+        },
+        "finding_ids": {
+          "maxItems": 0,
+          "type": "array"
+        }
+      },
+      "required": [
+        "disposition",
+        "finding_ids"
+      ]
+    }
+  },
+  "properties": {
+    "verdict": {
+      "enum": [
+        "passed",
+        "non_pass",
+        "blocked"
+      ]
+    },
+    "reviewer_prompt_judgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intended_result": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_and_reader_gain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_decision_output": {
+          "type": "string",
+          "minLength": 1
+        },
+        "boundaries_and_failure_routing": {
+          "type": "string",
+          "minLength": 1
+        },
+        "instruction_ownership": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cold_start_executability": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prose_and_meaning_preservation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "intended_result",
+        "task_and_reader_gain",
+        "input_decision_output",
+        "boundaries_and_failure_routing",
+        "instruction_ownership",
+        "cold_start_executability",
+        "prose_and_meaning_preservation"
+      ]
+    },
+    "check_results": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/check_result"
+            },
+            {
+              "properties": {
+                "check_id": {
+                  "const": "purpose_subject_and_reader_gain"
+                }
+              },
+              "required": [
+                "check_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/check_result"
+            },
+            {
+              "properties": {
+                "check_id": {
+                  "const": "inputs_decision_and_output"
+                }
+              },
+              "required": [
+                "check_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/check_result"
+            },
+            {
+              "properties": {
+                "check_id": {
+                  "const": "boundaries_and_failure_routing"
+                }
+              },
+              "required": [
+                "check_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/check_result"
+            },
+            {
+              "properties": {
+                "check_id": {
+                  "const": "instruction_ownership_and_nonduplication"
+                }
+              },
+              "required": [
+                "check_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/check_result"
+            },
+            {
+              "properties": {
+                "check_id": {
+                  "const": "cold_start_executability_and_schema_fixture_consistency"
+                }
+              },
+              "required": [
+                "check_id"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "safe_next_step": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "blocked"
+          }
+        },
+        "required": [
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "check_results": {
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/blocked_check_result"
+              },
+              {
+                "$ref": "#/$defs/blocked_check_result"
+              },
+              {
+                "$ref": "#/$defs/blocked_check_result"
+              },
+              {
+                "$ref": "#/$defs/blocked_check_result"
+              },
+              {
+                "$ref": "#/$defs/blocked_check_result"
+              }
+            ]
+          },
+          "findings": {
+            "maxItems": 0,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    }
+  ],
+  "required": [
+    "verdict",
+    "reviewer_prompt_judgment",
+    "check_results",
+    "findings",
+    "safe_next_step"
+  ]
+}

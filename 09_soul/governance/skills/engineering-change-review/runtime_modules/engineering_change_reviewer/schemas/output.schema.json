@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "schema:engineering_change_reviewer_output@v2",
+  "$id": "schema:engineering_change_reviewer_output@v4",
   "title": "Engineering Change Reviewer Output",
   "type": "object",
   "additionalProperties": false,
@@ -32,16 +32,17 @@
   },
   "properties": {
     "engineering_layer_disposition": {"enum": ["passed", "non_pass", "blocked"]},
-    "software_delivery_readiness": {"enum": ["ready_to_commit", "accepted", "changes_required", "not_reproducible"]},
+    "software_delivery_readiness": {"enum": ["accepted", "changes_required", "not_reproducible"]},
+    "prose_and_meaning_preservation": {"type": "string", "minLength": 1},
     "subject_closure": {"type": "string", "minLength": 1},
     "gate_results": {"type": "array", "items": {"$ref": "#/$defs/gate_result"}},
     "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
     "safe_next_step": {"type": "string", "minLength": 1}
   },
-  "required": ["engineering_layer_disposition", "software_delivery_readiness", "subject_closure", "gate_results", "findings", "safe_next_step"],
+  "required": ["engineering_layer_disposition", "software_delivery_readiness", "prose_and_meaning_preservation", "subject_closure", "gate_results", "findings", "safe_next_step"],
   "allOf": [
     {
-      "if": {"type": "object", "properties": {"software_delivery_readiness": {"enum": ["ready_to_commit", "accepted"]}}},
+      "if": {"type": "object", "properties": {"software_delivery_readiness": {"const": "accepted"}}},
       "then": {"type": "object", "properties": {"engineering_layer_disposition": {"const": "passed"}}}
     },
     {

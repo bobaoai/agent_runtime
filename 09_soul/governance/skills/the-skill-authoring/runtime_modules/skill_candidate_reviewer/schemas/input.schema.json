@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:skill_candidate_reviewer_input@v9",
+  "title": "Skill Candidate Reviewer Input",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "document_id": {"type": "string", "minLength": 1},
+        "document_kind": {"enum": ["design_contract", "skill", "module_registration", "module_prompt", "schema", "validation_case", "projection", "registration_inspection"]},
+        "body": {"type": "string", "minLength": 1}
+      },
+      "required": ["document_id", "document_kind", "body"]
+    },
+    "skill_candidate_required_check_ids": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "uniqueItems": true,
+      "prefixItems": [
+        {"const": "identity_discovery_class_and_source"},
+        {"const": "task_and_reader_gain"},
+        {"const": "entry_exit_and_routing"},
+        {"const": "inputs_authority_freshness_and_conflicts"},
+        {"const": "outputs_completion_failure_and_handoff"},
+        {"const": "boundaries_and_observable_violations"},
+        {"const": "method_result_certainty_and_agent_freedom"},
+        {"const": "design_and_revision_fidelity"},
+        {"const": "prompt_boundary_hygiene"},
+        {"const": "skill_agent_workflow_tool_separation"},
+        {"const": "runtime_ready_prompt_closure_if_declared"}
+      ],
+      "items": false
+    },
+    "runtime_ready_prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt_id": {"type": "string", "minLength": 1},
+        "prompt_body": {"type": "string", "minLength": 1}
+      },
+      "required": ["prompt_id", "prompt_body"]
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "skill_candidate_reviewer_input_v9"},
+    "module_id": {"const": "skill_candidate_reviewer"},
+    "skill_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skill_id": {"type": "string", "minLength": 1},
+        "candidate_revision": {"type": "integer", "minimum": 1},
+        "candidate_body": {"type": "string", "minLength": 1},
+        "runtime_ready_prompts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/runtime_ready_prompt"}
+        }
+      },
+      "required": ["skill_id", "candidate_revision", "candidate_body", "runtime_ready_prompts"]
+    },
+    "owning_design_closure": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/document"}},
+    "source_and_projection_closure": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/document"}},
+    "required_check_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 11,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "identity_discovery_class_and_source",
+          "task_and_reader_gain",
+          "entry_exit_and_routing",
+          "inputs_authority_freshness_and_conflicts",
+          "outputs_completion_failure_and_handoff",
+          "boundaries_and_observable_violations",
+          "method_result_certainty_and_agent_freedom",
+          "design_and_revision_fidelity",
+          "prompt_boundary_hygiene",
+          "skill_agent_workflow_tool_separation",
+          "runtime_ready_prompt_closure_if_declared"
+        ]
+      }
+    },
+    "prior_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {"type": "string", "minLength": 1},
+          "disposition": {"enum": ["open", "claimed_fixed", "accepted", "rejected"]},
+          "body": {"type": "string", "minLength": 1}
+        },
+        "required": ["finding_id", "disposition", "body"]
+      }
+    }
+  },
+  "required": ["schema_version", "module_id", "skill_candidate", "owning_design_closure", "source_and_projection_closure", "required_check_ids", "prior_findings"],
+  "allOf": [
+    {
+      "properties": {
+        "required_check_ids": {"$ref": "#/$defs/skill_candidate_required_check_ids"}
+      }
+    }
+  ]
+}

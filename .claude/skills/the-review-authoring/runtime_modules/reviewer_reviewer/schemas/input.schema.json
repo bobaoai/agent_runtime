@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema:reviewer_reviewer_input@v1",
+  "title": "Reviewer Reviewer Semantic Input",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "frozen_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifact_ref": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "body": {"type": "string", "minLength": 1}
+      },
+      "required": ["artifact_ref", "sha256", "body"]
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fixture_ref": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "case_kind": {"enum": ["positive", "negative", "schema_drift"]},
+        "body": {"type": "string", "minLength": 1}
+      },
+      "required": ["fixture_ref", "sha256", "case_kind", "body"]
+    },
+    "prior_finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,191}$"},
+        "disposition": {"enum": ["open", "claimed_fixed", "accepted", "rejected"]},
+        "body": {"type": "string", "minLength": 1}
+      },
+      "required": ["finding_id", "disposition", "body"]
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "reviewer_reviewer_input_v1"},
+    "module_id": {"const": "reviewer_reviewer"},
+    "review_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target_reviewer_module_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,191}$"},
+        "reviewed_subject_kind": {"const": "reviewer_prompt_source"},
+        "target_design_authority_ref": {"type": "string", "minLength": 1},
+        "intended_result": {"type": "string", "minLength": 1}
+      },
+      "required": [
+        "target_reviewer_module_id",
+        "reviewed_subject_kind",
+        "target_design_authority_ref",
+        "intended_result"
+      ]
+    },
+    "prompt_candidate": {"$ref": "#/$defs/frozen_artifact"},
+    "target_design_contract": {"$ref": "#/$defs/frozen_artifact"},
+    "target_reviewer_input_schema": {"$ref": "#/$defs/frozen_artifact"},
+    "target_reviewer_output_schema": {"$ref": "#/$defs/frozen_artifact"},
+    "fixtures": {
+      "type": "array",
+      "minItems": 3,
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {"case_kind": {"const": "positive"}},
+            "required": ["case_kind"]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {"case_kind": {"const": "negative"}},
+            "required": ["case_kind"]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {"case_kind": {"const": "schema_drift"}},
+            "required": ["case_kind"]
+          },
+          "minContains": 1
+        }
+      ],
+      "items": {"$ref": "#/$defs/fixture"}
+    },
+    "deterministic_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {"const": "passed"},
+        "subject_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "universal_resource_id": {"const": "t0:review_contract_universal_review_style"},
+        "universal_resource_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "checklist_resource_id": {"type": "string", "minLength": 1},
+        "checklist_resource_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "required": [
+        "disposition",
+        "subject_sha256",
+        "universal_resource_id",
+        "universal_resource_sha256",
+        "checklist_resource_id",
+        "checklist_resource_sha256"
+      ]
+    },
+    "required_check_ids": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "prefixItems": [
+        {"const": "purpose_subject_and_reader_gain"},
+        {"const": "inputs_decision_and_output"},
+        {"const": "boundaries_and_failure_routing"},
+        {"const": "instruction_ownership_and_nonduplication"},
+        {"const": "cold_start_executability_and_schema_fixture_consistency"}
+      ],
+      "items": false
+    },
+    "prior_findings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/prior_finding"}
+    }
+  },
+  "required": [
+    "schema_version",
+    "module_id",
+    "review_request",
+    "prompt_candidate",
+    "target_design_contract",
+    "target_reviewer_input_schema",
+    "target_reviewer_output_schema",
+    "fixtures",
+    "deterministic_evidence",
+    "required_check_ids",
+    "prior_findings"
+  ]
+}

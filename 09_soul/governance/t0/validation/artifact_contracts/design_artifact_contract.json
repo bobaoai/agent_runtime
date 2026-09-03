@@ -1,0 +1,193 @@
+{
+  "$id": "hoveath://governance/design-artifact-contract/v2",
+  "contract_version": "design_artifact_contract_v2",
+  "artifact_contract_id": "design_document_artifact_contract",
+  "owner_t0_layer_id": "the_design_doc_management",
+  "artifact_kind": "design_document",
+  "layers": {
+    "charter": {
+      "layer_value": "Charter",
+      "protected_headings": [
+        "Intent Capsule",
+        "Constitutional Authority Map",
+        "User Intent",
+        "Reader Gain",
+        "Product Identity and Scope",
+        "Human Authority",
+        "Constitutional Invariants",
+        "Design and Code Boundary",
+        "Amendment Authority",
+        "T0 Topology Reference",
+        "References"
+      ],
+      "extension_slot": {
+        "after": "Human Authority",
+        "before": "Constitutional Invariants"
+      }
+    },
+    "t0": {
+      "layer_value": "T0",
+      "protected_headings": [
+        "Intent Capsule",
+        "Primary System Flow",
+        "User Intent",
+        "Reader Gain",
+        "Owned System Object",
+        "Authority",
+        "System-wide Invariants",
+        "Peer Boundaries",
+        "References"
+      ],
+      "extension_slot": {
+        "after": "Authority",
+        "before": "System-wide Invariants"
+      }
+    },
+    "t1": {
+      "layer_value": "T1",
+      "protected_headings": [
+        "Intent Capsule",
+        "Primary System Flow",
+        "User Intent",
+        "Reader Gain",
+        "Domain Outcome and Owned Objects",
+        "Architecture and Lifecycle",
+        "Public Boundaries and Quality Rules",
+        "T2 Partition and Dependencies",
+        "Completion and Failure",
+        "References"
+      ],
+      "extension_slot": {
+        "after": "Domain Outcome and Owned Objects",
+        "before": "Architecture and Lifecycle"
+      }
+    },
+    "t2": {
+      "layer_value": "T2",
+      "protected_headings": [
+        "Intent Capsule",
+        "Primary System Flow",
+        "User Intent",
+        "Reader Gain",
+        "Capability and Operation",
+        "Public Interface and Effects",
+        "Completion, Failure, and Recovery",
+        "Dependencies and Verification",
+        "References"
+      ],
+      "extension_slot": {
+        "after": "Capability and Operation",
+        "before": "Public Interface and Effects"
+      }
+    }
+  },
+  "optional_sections": [
+    {
+      "heading": "审查与完成",
+      "placement": "extension_slot_last",
+      "required_subsections": [
+        "确定性检查",
+        "语义审查",
+        "表达审查",
+        "完成条件"
+      ]
+    }
+  ],
+  "reviewer_checklist": {
+    "resource_id": "t0:design_contract_review_checklist",
+    "intro_lines": [
+      "前十项是 semantic stage；第十一项只在 semantic stage 全部通过后执行。输入",
+      "`required_check_ids` 必须与下表顺序和集合完全一致。"
+    ],
+    "columns": [
+      "顺序",
+      "`check_id`",
+      "必须确定的结果",
+      "`finding_class`"
+    ],
+    "checks": [
+      {
+        "order": 1,
+        "check_id": "intent_and_reader_result",
+        "required_result": "`intended_result`、`User Intent`、`Reader Gain` 和 material Design choice 清楚一致；Reader Gain 说明 reader 与新增能力",
+        "finding_class": "intent_gap",
+        "stage": "semantic"
+      },
+      {
+        "order": 2,
+        "check_id": "layer_owner_and_parent",
+        "required_result": "layer、identity、owner、parent、same-level peer、dependency 和 structural disposition 一致；完整 peer set 不重复、不遗漏、不侵入 authority",
+        "finding_class": "layer_or_owner_defect",
+        "stage": "semantic"
+      },
+      {
+        "order": 3,
+        "check_id": "layer_content_fit",
+        "required_result": "owned object 唯一；authority、inheritance、delegation 和 layer scaffold 正确；只包含本层相关内容；T2 只闭合 capability 所需的最小适用 machine-contract/code-truth 集合，不为形式完整发明不适用的 surface",
+        "finding_class": "layer_content_misfit",
+        "stage": "semantic"
+      },
+      {
+        "order": 4,
+        "check_id": "peer_authority_and_inheritance",
+        "required_result": "inherited constraints、peer handoff、dependency direction 和结构变更 coverage 闭合；不复制 peer internal contract",
+        "finding_class": "peer_or_inheritance_conflict",
+        "stage": "semantic"
+      },
+      {
+        "order": 5,
+        "check_id": "boundary_coherence",
+        "required_result": "semantic owner、author、operator、Reviewer、persistence owner、implementation binding 与 approval authority 可区分",
+        "finding_class": "boundary_ambiguity",
+        "stage": "semantic"
+      },
+      {
+        "order": 6,
+        "check_id": "design_and_code_truth_separation",
+        "required_result": "Design Intent、required code-truth result、immutable Code Projection 与 mutable Current Inspection 分离；T2 的 applicable binding 不遗漏，也不把所有可能 machine surface 变成必填项",
+        "finding_class": "code_truth_leakage",
+        "stage": "semantic"
+      },
+      {
+        "order": 7,
+        "check_id": "flow_interface_and_error_closure",
+        "required_result": "适用的 layer Flowmap、owner-local interface/error、图、表和正文互相解析；parent 不复制 child row",
+        "finding_class": "flow_or_interface_closure_gap",
+        "stage": "semantic"
+      },
+      {
+        "order": 8,
+        "check_id": "failure_completion_and_rollback",
+        "required_result": "invariant、public handoff、failure、completion、recovery、rollback、materiality 和 lifecycle obligation 属于正确 layer",
+        "finding_class": "failure_or_completion_gap",
+        "stage": "semantic"
+      },
+      {
+        "order": 9,
+        "check_id": "implementability_without_redesign",
+        "required_result": "下一层无需补一个未声明的 authority、product behavior、boundary、payload、failure、peer decision 或 applicable stable machine-contract identity；不适用的 machine surface 无需占位实现",
+        "finding_class": "implementability_gap",
+        "stage": "semantic"
+      },
+      {
+        "order": 10,
+        "check_id": "review_approval_and_admission",
+        "required_result": "independent review、owner decision、Design admission、implementation completion 与 release 是不同决定",
+        "finding_class": "review_or_admission_conflict",
+        "stage": "semantic"
+      },
+      {
+        "order": 11,
+        "check_id": "prose_and_meaning_preservation",
+        "required_result": "Semantic 全过后，同一 bytes 可被冷读并准确复述，不改变 governing meaning",
+        "finding_class": "prose_or_communication_defect",
+        "stage": "prose"
+      }
+    ],
+    "outro_lines": [
+      "对结构变更，第 2 项确定 identity、owner、parent 与 complete peer-set disposition；第 4 项确定",
+      "inherited law、peer handoff 和 predecessor/successor coverage。同一根因影响同一 finding_class 时不重复 finding；跨不同 finding_class 时分别生成 finding，并指向同一个待恢复结果。",
+      "只有 `block` 或 `fix` finding ID 可以进入 disposition=`finding` 的 check；`passed` 与 `not_run` check 的 `finding_ids` 必须为空，`note` 只保留在顶层 findings。"
+    ]
+  }
+}

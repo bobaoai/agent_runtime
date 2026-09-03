@@ -357,13 +357,13 @@ agent 的关键边界是否足够明确？
 | 抽象名称先于操作支点 | 开头连续定义对象和缩写，读者要读到后文才知道它们解决什么问题 | 先建立任务、对象或差异；正式定义必须先出现时立即给通俗角色和操作影响 |
 | 概念一次引入过多 | 一段同时出现多个互相依赖的新名词，任何一句都无法独立执行 | 按依赖关系拆开；每个概念先完成用途或影响闭环再引入下一个 |
 | 润色造成 contract 漂移 | 句子更顺，但 authority、兼容性、停止条件或不确定性被改写 | 对照 governing source 做受保护语义检查；冲突返回 owner，不替 authority 决定 |
-| Process leak / 对话归因 / workflow 时间窗 deictic | 在稳定 artifact（SKILL / design doc / rule / axiom）正文里出现「PM 在 X 提出 / 上一轮讨论 / 本轮 / 这次 / 当前 dogfood / 在 Plan A 启动前 / 我们刚才决定 / 按 Rule N 我们决定」之类语言；读者无法独立于本次对话理解这段话 | 归因 → 直接陈述设计取舍本身；时间窗 → 换成版本号 / 节序号 / 日期；rule / axiom 引用作贯穿性 framing convention（如 SKILL 顶部统一的 `Reader gain (Rule 36)` 序章 + 紧跟 reader-gain 描述）允许；只禁止 ad-hoc「按 Rule N 背书 / 按 Rule N 我们决定」；process 语言只放 changelog / handoff notes / `designDoc/temp/` / git commit message |
+| Process leak / 对话归因 / workflow 时间窗 deictic | 在稳定 artifact（SKILL / design doc / rule / axiom）正文里出现「PM 在 X 提出 / 上一轮讨论 / 本轮 / 这次 / 当前 dogfood / 在 Plan A 启动前 / 我们刚才决定 / 按 Rule N 我们决定」之类语言；读者无法独立于本次对话理解这段话 | 归因 → 直接陈述设计取舍本身；时间窗 → 换成版本号 / 节序号 / 日期；rule / axiom 引用作贯穿性 framing convention（如 SKILL 顶部统一的 `Reader gain (Rule 36)` 序章 + 紧跟 reader-gain 描述）允许；只禁止 ad-hoc「按 Rule N 背书 / 按 Rule N 我们决定」；process 语言只放 changelog、handoff notes、temporary review artifact 或 git commit message |
 
 ---
 
 ## 与现有 skill 的关系
 
-写新 skill 前，先读 `09_soul/skills/INDEX.md`，确认没有重复。
+写新 skill 前，先检查当前 host 已安装的 Skill 清单，确认没有重复。
 
 如果已有类似 skill，优先考虑：
 

@@ -73,6 +73,37 @@ Fresh-install order is fixed: the project adapter supplies the Charter, the T0
 release applies and validates `designDoc/the_*.md`, then the Skill release
 applies and validates host projections whose `first_authority_ref` now resolves.
 
+### Governance 部署与首次系统修改
+
+Portable Governance 的部署与项目第一次正式发起 governed system change 是两个阶段：
+
+```text
+部署 Portable Governance
+  → 提供 project-specific Charter
+  → 投影并校验 Portable T0
+  → 投影并校验 Governance Skills
+  → 部署完成
+
+项目之后正式发起 governed system change
+  → 项目的 code-owned Task Routing Registry 解析请求
+  → system_change_intake
+  → the-system-change 生成 SystemChangePlan
+  → system_change_plan_reviewer 审核 exact frozen plan
+```
+
+部署流程不调用 Task Routing 或 `the-system-change`，因此项目尚未建立 Task Routing Registry
+不构成 Portable Governance 部署缺陷，也不阻止 T0 与 Skills 完成部署。只有项目之后正式使用
+Task Routing 时，才要求项目自己的 admitted Registry release。Registry 缺失、无效或无法验证时，
+`the-task-routing` 返回 `routing_registry_unavailable`；该缺口属于目标项目的 Task Routing T1/T2
+及其代码绑定，不属于 Portable T0。
+
+因此，每个目标项目在正式使用 Task Routing 或发起 governed system change 之前，都必须建立、
+验证并准入自己的 code-owned Task Routing Registry release。这是部署完成后的项目能力前置条件，
+不是 Portable Governance 的部署步骤或部署通过条件。
+
+Registry 建成前，项目可以形成探索性分析或本地 basis，但不得把它表述为已经路由、已经审核或
+可以执行的正式 `SystemChangePlan`。修复该项目缺口也不得原位修改已经冻结的 Portable T0 release。
+
 Universal leakage guards reject user paths, temporary Design paths,
 implementation source and test paths, and virtual-environment paths. Each
 project adapter may add product or repository identities through
@@ -104,7 +135,7 @@ The portable governance method release contains:
 | `the-system-change` | authoring | Author and advance one System Change Case without taking subject authority |
 | `the-design-authoring` | authoring | Author one Charter, T0, T1, or T2 Design Intent candidate for independent review |
 | `the-skill-authoring` | authoring | Author one exact Skill candidate after validating the Skill Work Package |
-| `the-contract-audit` | review | Review one immutable contract subject |
+| `the-review-authoring` | authoring | Author one complete Reviewer prompt source for its owning Design authority and independent execution |
 | `engineering-code-design` | authoring | Freeze a reviewable Code Design Basis before implementation |
 | `engineering-change-review` | review | Judge one frozen as-built engineering candidate |
 
@@ -112,9 +143,9 @@ The portable governance method release contains:
 `support-session-handoff` remains a session-support capability. Software
 release, deployment, rollback, roll-forward, retirement admission, and their
 terminal evidence remain a project-supplied Software Delivery capability.
-Prose and Communication Review remains a project-supplied, profile-bound
-reviewer capability when an Audit Profile marks that layer required; otherwise
-the profile records `not_required` explicitly.
+Written-subject Reviewer Modules perform prose and communication review only
+after semantic review passes; their registered output records `passed` or
+`not_run` without introducing a separate Review authority.
 These capabilities are not silently promoted into this governance method
 release merely because the current project routes to them. A consuming project
 must bind and verify them before a System Change Case that requires those
@@ -129,33 +160,36 @@ The default Work Package method map is:
 | Skill | `the-skill-authoring`, then its registered independent reviewer |
 | Engineering implementation | `engineering-code-design` followed by the implementation owner |
 | Independent Engineering Review | `engineering-change-review` and its registered Runtime Module |
-| Independent Structure Change Review | `structure_change_reviewer` under the `the-contract-audit` Skill Package |
+| Structural Design change | `the-design-authoring`, then `design_contract_reviewer` with the accountable parent and complete peer context |
 | Governance Release install or upgrade | project adapter operator action: run T0 apply, then Skill apply, then inspect and remove only the exact reported retired roots; no portable authoring Skill |
 | Agency Platform, Product Authorization, Artifact Graph, Data, Timestamp, or Audit policy | `the-design-authoring`; add Engineering methods only when code, schema, migration, or tests change |
 | Runtime registration | project-supplied Agent Runtime registration capability |
 | Release, deployment, rollback, roll-forward, or retirement | project-supplied Software Delivery capability |
 
 The complete `09_soul` distribution is installed before the Governance
-Release. Governance Skills may require stable Soul-layer Axiom and
-best-practice resources such as A14, A21, `bestpractice_skill_writing`, and
-`bestpractice_doc_self_review` without copying them into a Skill Package.
-Primary Agents resolve those stable IDs through the installed Soul index; the
-Governance Skill manifest does not duplicate or re-release Soul resources as
-task-plane package files. User-facing authoring and review also consume the
-installed Soul `COMMUNICATION` resource; project-specific communication detail
-belongs in the project adapter rather than a second governance contract.
+Release. Governance Skills may depend on stable Soul resources such as A14,
+A21, `COMMUNICATION`, and `bestpractice_skill_writing`. When a Skill or Reviewer
+must carry selected model-facing instructions by value, the Skill manifest
+declares one read-only `instruction_resources` selector and the consuming
+`package_files[]` row names it through `embedded_resource_ids`. The release
+compiler replaces only the declared marker body and checks byte-exact parity;
+it does not create another authority source. Project-specific communication
+detail belongs in the project adapter rather than a second governance
+contract.
 
 ## Module boundary
 
 ```text
 09_soul/governance/
   governance_t0_manifest.json       portable T0 source/target/hash declarations
-  governance_t0_release.py          stdlib-only check and projection module
   governance_skill_manifest.json    portable governance Skill declarations
-  governance_skill_release.py       stdlib-only host projection and drift check
   t0/                               portable T0 Design Intent sources
+    validation/
+      t0_release.py                 stdlib-only T0 check and projection module
+      skill_release.py              stdlib-only Skill projection and drift check
+      artifact_contracts/           T0-owned Design and Skill artifact validators
+      tests/                        portable T0 validation tests
   skills/                            portable Primary Agent governance methods
-  tests/                            module-local deterministic tests
 
 <project>/
   designDoc/the_charter.md          project-specific Charter
@@ -166,7 +200,7 @@ belongs in the project adapter rather than a second governance contract.
   <project code>                    local Registry, Code Projection and enforcement
 ```
 
-`governance_t0_release.py` owns only the portable T0 release mechanics:
+`t0/validation/t0_release.py` owns only the portable T0 release mechanics:
 
 1. parse and validate the portable manifest;
 2. reject missing, hash-drifted, absolute, escaping, or duplicate paths;
@@ -182,9 +216,10 @@ select T0 meaning, or announce a release. The consuming project's adapter owns
 those local actions and must supply a project-specific Charter before treating
 the released files as a complete local T0 system.
 
-`governance_skill_release.py` validates Skill identity, role, subject, T0
-dependency closure, every declared package-file hash, host target, and exact
-projection bytes. `SKILL.md` projects to both Primary Agent hosts. A portable
+`t0/validation/skill_release.py` validates Skill identity, role, subject, T0
+dependency closure, instruction-resource selectors and hashes, every declared
+package-file hash, embedded marker closure, host target, and exact projection
+bytes. `SKILL.md` projects to both Primary Agent hosts. A portable
 governance Runtime Module may additionally release its fixed prompt, semantic
 schemas, and provider-neutral Module registration under the canonical Claude
 Skill Package surface; those files remain part of the same portable package,
@@ -199,6 +234,39 @@ Package and receives the registered `skill_candidate_reviewer` judgment before
 its hash enters the binding manifest; an approved bootstrap review records its
 limitation and successor cross-review obligation.
 
+`governance_bindings/governance_release_policy.json` uses
+`governance_release_policy_v3`. Every project policy supplies three arrays:
+`forbidden_source_fragments`, `retired_t0_targets`, and
+`project_specific_t0_targets`. The last array explicitly registers project-owned
+`designDoc/the_*.md` surfaces that remain discoverable without becoming portable
+T0 projections. Existing installations add the field with an empty array when
+they have no project-specific target.
+
+Shared-instruction projection follows one fixed flow:
+
+```text
+canonical source
+  → selector + selected-byte hash validation
+  → pure package-file composition (no write)
+  → Skill authoring/review/acceptance outside the compiler
+  → accepted full-file hash + embedded parity validation
+  → check report or declared host-projection apply
+```
+
+`--check` reports `governance_skill_embedded_block_drift` for an accepted
+consumer whose embedded bytes differ from its canonical selection, and reports
+`governance_skill_projection_drift` when a host projection differs from the
+validated projection payload. `--apply` fails before writing any projection if
+embedded parity is not already satisfied. It writes only declared host
+projections; it never rewrites portable Skill sources or the manifest.
+
+Selector or selected-hash failures return
+`GOVERNANCE_SKILL_INSTRUCTION_RESOURCE_INVALID`. Invalid or overlapping target
+markers, undeclared resources, dependency-closure violations, and apply-time
+embedded drift return `GOVERNANCE_SKILL_EMBEDDED_RESOURCE_INVALID`. Existing
+source-closure and atomic projection-write failures retain their existing
+stable error codes.
+
 The release module does not register product Skills, admit Runtime releases,
 choose a provider, or copy project-local business instructions into Hoveath.
 Workflow topology, authorization, Execution Profiles, release versions, Code
@@ -207,10 +275,14 @@ Projections, and data-store admission remain consuming-project bindings.
 In a Module registration, `skill_package_owner_contract_path` names the
 contract that owns the Skill entry and subject lifecycle;
 `module_owner_contract_path` names the contract that owns the Module's
-semantic method. They may differ. Contract Audit can package a Design or Skill
-reviewer whose method remains owned by Design Doc Management or Skill
-Management, while a Software-Delivery-facing Engineering Skill can export a
-Contract-Audit-owned reviewer method.
+semantic method. They may differ. Each Reviewer Module lives in the Skill
+Package that belongs to its target Design authority: Design review under
+`the-design-authoring`, Skill review under `the-skill-authoring`, System Change
+Plan review under `the-system-change`, and Engineering review under
+`engineering-change-review`. Review Contract's own prompt reviewer lives under
+`the-review-authoring` as `reviewer_reviewer`. Review Contract supplies only the byte-exact
+universal Reviewer rules and Reviewer-prompt authoring contract; it does not
+take ownership of those subject-specific review methods.
 
 A Governance Release is mechanically clean only when both release modules
 report clean. Their manifests remain separate because law and operating method

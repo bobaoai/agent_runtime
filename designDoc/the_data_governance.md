@@ -1,11 +1,11 @@
 ---
-title: Data Governance
+title: 数据治理（Data Governance）
 status: candidate
 layer: T0
 t0_layer_id: the_data_governance
 canonical_owner: designDoc/the_data_governance.md
 owned_system_object: managed Data Asset and physical Data Binding
-language: en
+language: zh-CN with exact English identifiers
 reader_persona:
   - Product Architect
   - Data Architect
@@ -13,16 +13,12 @@ reader_persona:
   - Platform Engineer
 ---
 
-# Data Governance
+# 数据治理（Data Governance）
 
-**Purpose**: Define system-wide law for managed data authority, physical
-binding, isolation, residency, lifecycle, recovery, and migration.
-
-**Required reader gain**: A reader can identify the System of Record for a
-record family, distinguish semantic ownership from physical custody, and know
-which policy and evidence must accompany storage, migration, backup, restore,
-export, and deletion. The reader can also distinguish a shared database-access
-mechanism from the domain service that owns schema, SQL, and canonical writes.
+本文只冻结 portable Data Governance 的顶层语义：一个受管理的数据对象由谁负责、哪个物理位置是
+System of Record、谁可以写，以及所有数据库消费者如何经过同一条受控数据库访问边界。具体 schema、
+SQL、driver、connection pool、transaction、retry、credential provider、migration command 和部署配置
+属于项目 T1/T2 与代码，不在本 T0 展开。
 
 ## 0. Intent Capsule
 
@@ -33,306 +29,211 @@ status: candidate
 canonical_owner: designDoc/the_data_governance.md
 owned_system_object: managed Data Asset and physical Data Binding
 scope:
-  - managed Data Asset identity
-  - System-of-Record and single-writer binding
-  - tenant, Cell, classification, residency, licence, and export constraints
-  - boundary between the shared DataAccessAdapter and the domain-owned Data Access Gateway
-  - retention, legal hold, purge, backup, restore, migration, and retirement law
-  - code-owned registration and generated inspection
+  - managed Data Asset 的语义 owner、System of Record 与 canonical writer boundary
+  - physical Data Binding 及其 isolation、classification、residency 与 lifecycle constraints
+  - portable database-access mechanism boundary
+  - shared DataAccessAdapter 与 domain-owned Data Access Gateway 的职责分界
+  - code-owned registration 与 generated inspection obligation
 non_goals:
-  - domain record meaning, schema meaning, or business acceptance
-  - concrete database product, driver, pool, credential backend, or deployment binding
-  - System Change Case intake, scope assessment, Work Package coordination, Candidate Set assembly, or case closure
-  - Principal, Entitlement, or authorization decisions
-  - time-field meaning
-  - workflow execution, evaluation, or provider behavior
-  - software release or Independent Review verdicts
+  - domain record meaning、schema、SQL、query semantics、result mapping 或 writer rule
+  - user_key permission assignment 或 Product Authorization decision
+  - database credential 的签发、保管、轮换或具体 provider
+  - Runtime、Module、provider 或 tool execution behavior
+  - concrete database、driver、pool、transaction、retry、buffer 或 deployment implementation
+  - SystemChangePlan、software release 或 review verdict
 inputs:
-  - domain-owned record-family contract
-  - exact System Change Data Work Package when the Data candidate belongs to a governed mutation
-  - Product Authorization data-access boundary
-  - Timestamp Semantic requirements
-  - code-owned storage and policy registrations
+  - domain-owned Data Asset intent
+  - physical binding 与 data-handling constraint candidate
+  - Product Authorization database allow result
+  - project data-access composition 提供的 database credential 与 binding
 outputs:
-  - DataAssetRegistration law
-  - StorageBinding law
-  - DataPolicyBinding law
-  - DataMigrationRegistration law
-  - DataAccessAdapter law
-  - DataAccessBinding law
-  - generated Data Governance inspection
+  - admitted Data Asset 与 physical Data Binding meaning
+  - System of Record、canonical writer 与 data-handling constraints
+  - portable DataAccessAdapter boundary
+  - code-generated current registration 与 inspection
 truth_surfaces:
   - designDoc/the_data_governance.md
-  - logical:data_governance_contract_registry
+  - code-owned Data Governance registry and inspection
 runtime_triggers:
-  - managed Data Asset or Storage Binding change
-  - migration, backup, restore, export, purge, or retirement request
+  - managed Data Asset 或 physical binding change
+  - database access composition change
+  - retention、backup、restore、migration、export 或 retirement change
 downstream_consumers:
-  - every T1 data owner and physical data service
-  - Product Authorization, Agent Runtime, Contract Audit, and Software Delivery
+  - domain data owners
+  - database-access implementations
+  - Product Authorization
+  - Agent Runtime
+  - Software Delivery
 open_decisions:
-  - normalized target schema replacing predecessor assurance-specific records
-  - complete registration coverage for managed data families
-review_gate: design_doc_review and registered data-governance conformance
-runtime_surface_ledger: generated from code-owned Data Asset, Storage Binding, DataAccessAdapter, DataAccessBinding, policy, migration, and lifecycle registrations
+  - none at T0
+review_gate: material Design change 进入 DDM-owned design_contract_reviewer 与 accountable owner decision
+runtime_surface_ledger: 实现后从 code-owned Data Governance registrations 生成
 verification_hooks:
-  - System-of-Record uniqueness and single-writer closure
-  - tenant, Cell, residency, retention, migration, backup, restore, and purge policy tests
-  - Adapter release, consumer binding, credential-reference, scope, retry, and audit-boundary tests
+  - System of Record uniqueness 与 canonical writer checks
+  - physical binding 与 data-handling constraint checks
+  - database-access boundary 与 credential non-disclosure checks
 ```
 
-## 1. Authority
-
-Data Governance answers:
-
-> Which physical system is authoritative for this managed record family, and
-> under which data-handling constraints?
-
-The owning product or domain T1 defines record meaning, schema meaning,
-business transitions, and the intended canonical write. Data Governance binds
-that record family to one physical authority, one writer boundary, and one set
-of handling policies.
+## 1. Primary System Flow
 
 ```mermaid
 flowchart LR
-    DOMAIN["Domain T1<br/>record meaning and intended writer"] --> REG["Data Governance<br/>DataAssetRegistration"]
-    POLICY["Data policy registrations"] --> REG
-    REG --> BIND["StorageBinding<br/>one System of Record"]
-    AUTHZ["Product Authorization"] --> SERVICE["Owning data service"]
-    BIND --> SERVICE
-    SERVICE --> DB[("Registered relational authority")]
-    SERVICE -.-> OBJ["Object store<br/>immutable payload bytes"]
+    DOMAIN["Domain owner<br/>data meaning + intended writer"] --> REG["data_asset_binding_admission"]
+    REG -->|admitted| BINDING["Managed Data Asset<br/>+ physical Data Binding"]
+    REG -->|DATA_BINDING_INVALID| REJECTED["Binding rejected"]
+
+    CLIENT["Client<br/>user_key"] --> AUTHZ["Product Authorization"]
+    AUTHZ -->|database_id + operation allowed| GATEWAY["Domain-owned<br/>Data Access Gateway"]
+    AUTHZ -->|DATABASE_ACCESS_DENIED| DENIED["Request denied"]
+
+    CONSUMER["Database consumer<br/>including Runtime"] -->|domain operation| GATEWAY
+    HOST["Project data-access T1"] -->|database credential + binding| CONSUMER
+    CONSUMER -. "Runtime only carries; never parses" .-> ADAPTER["Shared DataAccessAdapter"]
+    GATEWAY -->|domain-owned SQL / command| ADAPTER
+    BINDING --> ADAPTER
+    ADAPTER -->|database_access| DATABASE[("Target database")]
+    ADAPTER -->|DATABASE_BINDING_UNAVAILABLE| FAILED["Database access failed"]
 ```
 
-Physical custody does not transfer semantic ownership. A database, replica,
-backup, object store, search index, workflow history, cache, or exported file
-does not become a second semantic authority because it stores readable bytes.
+| `interface_id` | Owner | 输入 | 输出 | Effect | `error_code` |
+| --- | --- | --- | --- | --- | --- |
+| `data_asset_binding_admission` | Data Governance | Domain-owned Data Asset intent、intended writer、physical binding 与 applicable constraints | Admitted binding meaning 或 rejection | 只建立 Data Governance-owned authority 与 handling boundary；不创建 domain schema 或 writer | `DATA_BINDING_INVALID` |
+| `database_access` | Data Governance | Admitted physical binding、Product Authorization allow result、domain-owned command，以及 project 提供的 database credential | Database operation result 或明确失败 | 只执行受控数据库访问；不解释 `user_key`、domain meaning 或 SQL meaning | `DATABASE_BINDING_UNAVAILABLE` |
 
-## 2. Target Data Authority
+| `error_code` | Owner | 触发条件 | 含义 | Caller action |
+| --- | --- | --- | --- | --- |
+| `DATA_BINDING_INVALID` | Data Governance | Candidate 无法唯一确定 semantic owner、System of Record、canonical writer 或适用约束 | Data Asset 没有形成可用的 physical authority | 修正 binding candidate；不得以未准入位置承载 canonical write |
+| `DATABASE_BINDING_UNAVAILABLE` | Data Governance | Exact physical binding 或 database credential 不可用，或两者不对应同一受控目标 | 本次数据库访问不能安全建立 | 停止访问并返回 project data-access T1 owner；不得绕过 Adapter 自建连接 |
 
-The enterprise target has three deliberate authority classes:
+`DATABASE_ACCESS_DENIED` 是 Product Authorization 的正常 deny result，不属于 Data Governance error。
 
-1. Git is authoritative for code, Design Docs, schemas, migrations, tests, and
-   infrastructure definitions.
-2. The registered relational System of Record is authoritative for managed metadata, domain state, identity,
-   policy assignments, lineage, decisions, access evidence, and lifecycle
-   records.
-3. An admitted object store may hold large immutable payload bytes while
-   the relational System of Record retains authoritative identity, ownership, hash, policy,
-   lifecycle, and locator records.
+## 2. User Intent
 
-Secret values belong to an admitted secret or key-management service. Managed
-stores retain only the permitted secret identity, scope, lifecycle, and opaque
-locator.
+不同 domain 可以共享同一套数据库访问机制，但不能因此共享 schema、SQL、writer authority 或数据所有权。
+每个受管理的数据对象必须有唯一可识别的 semantic owner、System of Record 和 canonical writer；每个数据库
+访问请求必须经过 Product Authorization、domain boundary 和受控 DataAccessAdapter，而不是由 Runtime、
+Module 或其他消费者自行解析 credential、选择数据库或直连内部表。
 
-New managed product data must not introduce a file-authoritative business
-state lane. Existing file-authoritative lanes require explicit migration
-registration until retired.
+## 3. Reader Gain
 
-## 3. Required Machine Contracts
+- Product Architect 能判断一个数据对象的语义 owner、物理 authority 和 canonical writer 是否清楚。
+- Data Architect 能区分共享的 `DataAccessAdapter` 机制与 domain-owned schema、SQL 和 writer rule。
+- Domain Service Owner 能明确自己必须提供的 Data Access Gateway，以及自己不能外包给 Adapter 的职责。
+- Platform Engineer 能确认 Runtime 与其他消费者只携带 project 注入的 database credential 与 binding，
+  不解析、不签发、不刷新；同时能区分 T0 语义与代码或 T1/T2 持有的 exact implementation。
 
-| Machine contract | Responsibility |
-| --- | --- |
-| `DataAssetRegistration` | Identifies one managed record family, semantic owner, intended writer, System-of-Record binding, policy bindings, consumers, and lifecycle state |
-| `StorageBinding` | Identifies one physical role such as System of Record, immutable payload, replica, projection, cache, backup, or migration source |
-| `DataPolicyBinding` | Binds one exact tenant/Cell, classification, residency, retention, legal-hold, licence, export, or backup policy to an asset |
-| `DataMigrationRegistration` | Defines current and target authority, legal forward and rollback transitions, reconciliation requirements, and retirement condition |
-| `DataLifecycleEvidence` | Records backup, restore, migration, reconciliation, export, purge, legal-hold, or retirement evidence without becoming a release decision |
-| `DataAccessAdapter` | Defines the shared mechanism interface for connection acquisition, transaction mechanics, workload-credential resolution, trusted tenant and Cell context injection, retry classification, and operation audit. It owns no domain schema, SQL, migration, query meaning, result mapping, writer rule, or authorization decision |
-| `DataAccessBinding` | Binds one consumer to one exact DataAccessAdapter release, StorageBinding target, opaque workload-credential reference, server-resolved tenant and Cell scope, permitted operation class, and registered audit Data Asset. It is a data-boundary registration and never grants Product access |
+## 4. Owned System Object
 
-Code owns exact IDs, schemas, bindings, policy versions, migration states,
-implementation references, current coverage, and test results. Generated
-inspection is the human-readable current inventory.
+Data Governance 只拥有 `managed Data Asset and physical Data Binding`：一个受管理的数据对象由哪个
+semantic owner 负责，哪个物理位置是 System of Record，哪个边界可以提交 canonical write，以及该 binding
+受哪些 system-wide data-handling constraints 约束。
 
-## 4. Core Data Laws
+`DataAccessAdapter` 是 physical Data Binding 的 portable database-access mechanism boundary，不是第二个
+数据 authority。Exact record、field、registry schema、adapter implementation、current connection 与 migration
+状态属于代码或下层 Design。
 
-### 4.1 Sole authority and writer
+## 5. Authority
 
-- Each record family and scope has exactly one registered System of Record.
-- Each canonical mutation enters through the registered writer boundary.
-- Replicas, projections, caches, indexes, backups, workflow state, and exports
-  cannot accept independent canonical writes.
-- Cross-domain access uses an authorized service contract rather than direct
-  internal-table or cross-domain filesystem access.
+Data Governance 可以定义：
 
-### 4.2 Tenant, Cell, authorization, and shared access mechanism
+1. managed Data Asset、System of Record 与 physical Data Binding 的稳定含义；
+2. canonical writer、replica、projection、cache、backup 与 migration target 的 authority 关系；
+3. isolation、classification、residency、retention、backup、restore、export、migration 与 retirement 的
+   system-wide constraints；
+4. shared `DataAccessAdapter` 与 domain-owned Data Access Gateway 的职责边界；以及
+5. database credential 在访问链中必须保持受控、不可向 Client 暴露、不可被非数据库消费者解释的边界。
 
-- Tenant and Cell identity are resolved by trusted services, never accepted
-  from caller input as authority.
-- Data isolation and Product Authorization are independent gates; both pass
-  before access.
-- A Dedicated Cell has independent credentials, key scope, Artifact namespace,
-  backup scope, worker identity, and audit boundary. A pooled Cell must prove
-  equivalent isolation.
-- Agent Runtime, the admitted deterministic integration, providers, and tools receive bounded service or data
-  handles rather than unrestricted database, filesystem, or object-store
-  credentials.
-- Database-backed domain services enforce authorized Agent operations through
-  the shared Data Access Gateway contract. The Gateway combines Runtime Module
-  authority with Product Authorization and creates no independent permission
-  policy.
+Data Governance 不拥有：
 
-`DataAccessAdapter` and Data Access Gateway are different contracts. The
-Adapter supplies reusable database-access mechanics. A Data Access Gateway is
-the domain-owned enforcement surface that translates an authorized logical
-operation into domain SQL or a domain command under the Product Authorization
-enforcement law. Sharing one Adapter release or implementation never shares
-domain SQL, schema ownership, data ownership, or canonical-writer authority.
+- domain 数据含义、schema、SQL、query、result mapping 或 business acceptance；
+- `user_key` 的生成、验证、permission assignment 或 allow/deny meaning；
+- database credential 的 secret value、provider、custody lifecycle 或具体 resolution implementation；
+- Runtime execution、Module capability、provider/tool invocation 或 workflow meaning；以及
+- code build、release、deployment 或 rollback decision。
 
-The project host composition root, through its Code Projection, selects one
-admitted Adapter implementation and injects it only through exact
-`DataAccessBinding` registrations. Agency Platform may fulfill that host role
-when installed; a standalone subsystem host may fulfill the same seam without
-Agency Platform. Every consumer therefore receives its own target, credential
-reference, tenant and Cell scope, operation class, and audit destination. The
-Adapter cannot select a domain query, widen the authorized resource scope, or
-become a cross-domain all-powerful Gateway.
+## 6. Data Authority and Database Access Boundary
 
-Workload credential resolution is a hook into the admitted secret or
-key-management custody service. The Adapter obtains one scope-bound credential
-for the exact binding; it does not issue, mint, own lifecycle for, persist,
-expose, or cache that credential beyond the bounded connection lease.
+### 6.1 Data authority
 
-Retry classification is evidence, not execution authority. The Adapter reports
-`retryable`, `non_retryable`, or `fenced`; the consuming writer's registered
-recovery policy decides whether another transaction is legal. Transparent
-Adapter re-execution of a non-idempotent operation or an operation with an
-unknown commit outcome is forbidden.
+每个 record family 与 scope 只有一个 registered System of Record 和一个 canonical writer boundary。Replica、
+projection、cache、index、backup、workflow history 与 export 可以保存 bytes，但不能因此取得 semantic ownership
+或接受独立 canonical write。
 
-Adapter operation audit is a registered Data Asset owned by the consuming
-service and written inside that consumer's tenant and Cell audit boundary. Its
-Timestamp-registered record class may carry identities, references, timing,
-failure classification, and outcome class, but no domain content or secret. It
-never substitutes for a Product Authorization decision record, a domain writer
-record, or Runtime execution lineage.
+Version-controlled source authority 持有 code、Design、schema definition、migration 与 test。Registered database
+持有 managed runtime state。Object store 可以保存大型 immutable payload，但其 identity、owner、hash、policy、
+lifecycle 与 locator 仍由 registered System of Record 持有。具体产品与物理拓扑由项目 T1/T2 决定。
 
-The owning domain retains its schema contract, migrations, SQL and typed
-result mapping, query semantics, and writer rules. Runtime-owned record stores
-retain the same responsibilities for Runtime records. Models and Agent
-processes receive neither raw database credentials nor an unrestricted
-Adapter; an admitted Module may use only the exact domain-scoped operation
-surface supplied through its execution binding.
+### 6.2 Shared Adapter and domain Gateway
 
-### 4.3 Classification and derivatives
+`DataAccessAdapter` 只提供可复用的数据库访问机制。它可以在项目实现中负责 connection acquisition、
+transaction mechanics、tenant context、retry classification 和 access audit，但这些 exact 能力、字段与算法
+属于 T1/T2 和代码。
 
-The stable classification order is:
+Domain-owned Data Access Gateway 负责把已经允许的 domain operation 转成 domain SQL 或 command，并保留
+schema、query semantics、result mapping 和 writer rule。共享同一个 Adapter 不会共享这些 domain authority。
 
-```text
-public < internal < confidential < restricted
-```
+### 6.3 Database credential and user_key
 
-Derived data inherits the strictest applicable tenant, Cell, classification,
-licence, residency, retention, and export restrictions from its complete input
-closure unless a registered declassification or projection policy proves a
-narrower result.
+`user_key` 只用于 Product Authorization 判断 `database_id + operation`。它不是 database credential，也不能
+兑换、返回或暴露 database credential。
 
-An export is a governed derivative. It records source identity, recipient
-scope, redaction policy, expiry, retention, and deletion behavior. Export does
-not transfer System-of-Record authority.
+Database credential 只存在于数据库访问链。Project data-access T1 是 credential 取得、注入与
+`DATABASE_BINDING_UNAVAILABLE` 处置的下层 implementation owner；具体 secret provider 与 resolution 由该
+T1/T2 和代码决定。Runtime 或其他消费者只携带被注入的 database credential 与 exact binding 到受控
+Adapter，不读取其内容，不签发、不刷新、不扩权，也不把它用于非数据库 provider/tool 调用。
 
-### 4.4 Retention, backup, and recovery
+### 6.4 Lifecycle and migration
 
-- Legal hold suspends purge for its exact scope without rewriting the retention
-  policy.
-- Purge covers registered canonical content, payloads, replicas, projections,
-  caches, indexes, exports, and backup-expiry obligations.
-- A synchronization mirror is not a backup.
-- Backup conformance requires independent failure protection and recurring
-  restore evidence.
-- Restore reconciles the same logical authority and cannot create a second
-  active writer or reintroduce data beyond its retention boundary.
+Retention、legal hold、backup、restore、export、migration、rollback 与 retirement 必须遵守 admitted physical
+binding 和 applicable data-handling constraints。T0 只定义这些结果不得产生第二个 System of Record、第二个
+writer 或 silent fallback；exact state machine、deadline、job、evidence schema 与 recovery procedure 下沉至
+T1/T2 和代码。
 
-### 4.5 Migration and rollback
+### 6.5 Design and code boundary
 
-- Greenfield managed data starts on the target authority and does not traverse
-  a predecessor migration state machine.
-- Existing predecessors move only through registered adjacent transitions.
-- Forward and rollback transitions are separately registered.
-- Cutover requires writer fencing, consumer switch, reconciliation, and an
-  explicit rollback window.
-- Silent fallback to a predecessor reader or writer is forbidden.
-- Retirement requires negative read/write evidence and final reconciliation.
+本 T0 持有 stable intent、authority、invariant 与 peer handoff。Code 持有 exact Registry、ID、schema、current
+binding、policy version、migration state、implementation ref、coverage 与 generated inspection。当前代码与本
+目标语义之间的差异是显式 implementation debt，不通过在 T0 复制现行字段解决。
 
-## 5. Cross-T0 Handoffs
+Material Data Governance Design candidate 由 DDM 定义的 `design_contract_reviewer` 审核 exact frozen subject；
+Review Contract 只注入通用审核规则。Accountable Data Governance owner 决定是否接受 Design。Adapter、schema、
+migration 与 database implementation 另行进入 Software Delivery。
 
-| Peer T0 | Boundary |
-| --- | --- |
-| System Change Governance | Supplies the exact Data Work Package and current Case/Plan lineage; Data Governance alone decides Data Asset, writer, placement, migration, retention, and recovery meaning |
-| Artifact Graph | Owns the project Workflow, Operation, Artifact, and Design Contract index plus Artifact dependency and freshness relations; Data Governance owns physical record and payload bindings |
-| Product Authorization | Decides who may perform an exact data operation; Data Governance supplies the resource, tenant, Cell, classification, residency, and lifecycle boundary enforced by the data service |
-| Timestamp and Clock Semantics | Owns time-field roles and comparisons used by retention, expiry, migration, backup, and evidence records |
-| Agency Platform | When it is the project host composition root, implements the registered DataAccessBinding injection seam and hosts Cell Data and Product Control services without becoming the semantic owner of their records |
-| Agent Runtime | Consumes an injected DataAccessAdapter or domain-scoped data service and preserves isolation; Runtime history is not a domain System of Record, and Runtime does not resolve database credentials or select a driver or pool |
-| Design Doc Management | Governs the intent contracts referenced by data registrations |
-| Contract Audit | Audits immutable data registrations or evidence packages when a registered profile requires it |
-| Software Delivery | Admits storage code, schemas, migrations, deployment, rollback, and retirement; Data Governance supplies the data-safety constraints |
+## 7. System-wide Invariants
 
-Contract Audit may issue an Independent Review verdict and Software Delivery
-may issue a release decision. Data Governance does not create a separate
-generic verifier or production-release authority.
+1. 每个 managed Data Asset 和 scope 只有一个 semantic owner、一个 System of Record 和一个 canonical writer。
+2. Physical custody、replica、projection、cache、backup 或 export 不转移 semantic ownership。
+3. Canonical write 只能经过 registered writer boundary；不得通过内部表、跨 domain 文件或旁路连接写入。
+4. Product Authorization allow、Data Governance binding、domain rule 与 database enforcement 是独立条件；任何
+   一方 deny 都不得执行 database operation。
+5. `user_key` 不是 database credential，Client 永远不接收 DSN、password、token 或 service credential。
+6. Database credential 只用于数据库访问；非数据库 provider/tool 不得进入这一 credential 模型。
+7. Runtime 与其他消费者只携带注入的 database credential 与 binding，不解析、不签发、不刷新或扩大 scope。
+8. `DataAccessAdapter` 不拥有 domain schema、SQL、query meaning、result mapping、writer rule 或 permission policy。
+9. 共享 Adapter implementation 不代表共享 credential、database target、tenant scope 或 writer authority。
+10. Migration、restore、rollback 或 fallback 不得产生第二个 active writer 或未经声明的 authority switch。
+11. Current registration、implementation 和 coverage 只能由 code-owned truth 与 generated inspection 声明。
 
-## 6. Code-as-Truth Boundary
+## 8. Peer Boundaries
 
-This T0 contains no manually maintained asset, table, writer, storage,
-migration, test, or admission inventory.
+| Peer authority | Data Governance handoff | Peer 保留的职责 |
+| --- | --- | --- |
+| Product Authorization | 消费 `database_id + operation` allow/deny result；提供受控 database resource boundary | `user_key` permission assignment、visibility 与 allow/deny meaning；不解析或暴露 database credential |
+| Agent Runtime | 提供 exact database binding boundary；Runtime 可携带 project 注入的 database credential 与 binding | Module/Workflow execution；不解析 credential、不选择 database、不持有 domain SQL |
+| Domain T1 | 接收 admitted Data Asset 与 physical binding constraints | Record meaning、schema、SQL、query semantics、result mapping、migration content 与 canonical writer rule |
+| System Change Governance | 消费 exact reviewed `SystemChangePlan` step | 修改范围、顺序、owner 与 route；不决定 data meaning |
+| Timestamp and Clock Semantics | 消费 time-field 与 clock comparison semantics | Timestamp role、clock、expiry 与 comparison meaning |
+| Design Doc Management | 交付 exact Data Governance Design candidate | Design structure、lifecycle 与 `design_contract_reviewer` contract |
+| Review Contract | 由 Data Governance Reviewer source 消费通用审核规则 | Universal Reviewer instruction；不拥有 Data Governance checklist 或 verdict |
+| Software Delivery | 提供 data safety、binding 与 writer constraints | Code Design、implementation、test、release、deployment、rollback 与 retirement |
 
-- The project-local Data Governance contract and registries own the current
-  Data Asset, StorageBinding, DataAccessAdapter, and DataAccessBinding records
-  and coverage.
-- A project-local Platform service inventory may reference the exact
-  DataAccessBinding and concrete implementation release that it hosts; it does
-  not copy the binding fields or become their authority. Domain registries
-  continue to own their schemas, migrations, operations, and writers.
-- Generated Contract Reference and Current Status pages project code-owned
-  definitions and registrations.
-- Missing coverage remains explicitly missing or pending implementation.
-
-Assurance-specific types and responsibility nodes never define a second Data
-Governance authority. The target record families remain `pending
-implementation`; current coverage and migration state come only from the
-code-owned Registry and generated inspection.
-
-## 7. Invariants
-
-Data Governance is non-conformant when:
-
-- one record family or scope has multiple active Systems of Record or writers;
-- a file, replica, cache, backup, index, workflow history, or object store is
-  treated as an independent domain authority;
-- storage is treated as permission or semantic acceptance;
-- a shared DataAccessAdapter contains domain SQL, schema, migration, query
-  semantics, writer rules, or an independent authorization policy;
-- a consumer receives database access without one exact DataAccessBinding, or
-  a Platform inventory duplicates or overrides that binding;
-- sharing an Adapter implementation is treated as permission to share a
-  credential, tenant scope, Cell scope, or canonical writer;
-- Adapter retry classification is treated as permission to re-execute a
-  non-idempotent or unknown-outcome operation;
-- Adapter operation audit crosses a tenant or Cell boundary, has no registered
-  owning Data Asset, contains domain content or secrets, or substitutes for an
-  authorization, domain, or Runtime record;
-- Runtime or a domain service bypasses the registered Adapter binding to
-  construct an unrestricted database connection;
-- Product Authorization, Contract Audit, Software Delivery, or a domain owner
-  is absorbed into Data Governance;
-- a caller-supplied tenant or Cell identity selects the data boundary;
-- derived or exported data silently weakens upstream restrictions;
-- a migration skips registered transitions or silently falls back;
-- restore, failover, or rollback creates a second writer;
-- data is purged without closing registered derivatives and backup obligations;
-  or
-- prose or a generated view is used to override code-owned current bindings.
-
-## References
+## 9. References
 
 - [Project Charter](the_charter.md)
-- [System Change Governance](the_system_change_governance.md)
-- [Agency Platform](the_agency_platform.md)
-- [Agent Runtime](the_agent_runtime.md)
 - [Product Authorization](the_product_authorization.md)
-- [Artifact Graph](the_artifact_graph.md)
+- [Agent Runtime](the_agent_runtime.md)
+- [System Change Governance](the_system_change_governance.md)
 - [Timestamp and Clock Semantics](the_timestamp_semantic.md)
 - [Design Doc Management](the_design_doc_management.md)
-- [Contract Audit](the_contract_audit.md)
+- [Review Contract](the_review_contract.md)
 - [Software Delivery](the_software_delivery.md)

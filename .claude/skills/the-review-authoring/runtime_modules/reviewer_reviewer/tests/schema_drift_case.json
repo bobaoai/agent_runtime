@@ -1,0 +1,7 @@
+{
+  "case_id": "reviewer_reviewer_schema_drift_v1",
+  "case_kind": "schema_drift",
+  "module_id": "reviewer_reviewer",
+  "mutation": "change registered output schema identity",
+  "expected_disposition": "schema_rejected"
+}
