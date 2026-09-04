@@ -291,6 +291,29 @@ def test_runtime_test_operation_intent_rejects_payload_hash_mutation() -> None:
         replace(intent, operation_payload_sha256="3" * 64).validate()
 
 
+def test_legacy_adapter_request_hash_is_preserved_with_null_test_binding(
+    tmp_path: Path,
+) -> None:
+    compiled = _compile_native_module(tmp_path)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(
+        artifact_host,
+        compiled,
+        suffix="legacy_golden",
+    )
+    request = _direct_adapter_request(
+        compiled,
+        prompt_ref,
+        suffix="legacy_golden",
+    )
+
+    assert request.test_execution_binding_ref is None
+    assert request.test_execution_binding_sha256 is None
+    assert request.request_sha256 == (
+        "c463dc81b699dabd7c5e945ce474fee42e91d662aca0b357476ad5c4a8e7eb91"
+    )
+
+
 def _register_compiled_for_evaluation(compiled) -> RuntimeReleaseRegistry:
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(

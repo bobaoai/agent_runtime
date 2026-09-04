@@ -111,10 +111,12 @@ def run_registered_inline_module_evaluation(
 ) -> RegisteredModuleEvaluation:
     """Run one registered inline Module/Profile pair through Runtime authority.
 
-    The host supplies the Product authorization adapter through
-    ``authority_factory``. Runtime owns staging, Prompt assembly, invocation,
-    ledgering, and result projection; the helper never manufactures a Product
-    entitlement or bypasses the execution authorization fence.
+    The host supplies exactly one boundary factory: ``authority_factory`` for
+    the external Product-authority path, or ``test_resource_factory`` for an
+    explicit Runtime-hosted Test/Evaluation resource boundary. Runtime owns
+    staging, Prompt assembly, invocation, ledgering, and result projection;
+    the helper never manufactures Product authority or infers a test boundary
+    from missing external evidence.
     """
 
     module = release_registry.get_module(
