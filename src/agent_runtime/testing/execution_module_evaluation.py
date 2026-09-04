@@ -21,6 +21,7 @@ from ..execution.execution_content_staging import InMemoryCellArtifactStore
 from ..execution.execution_module_invocation import (
     AgentExecutionAdapterRegistry,
     ModuleExecutionAuthority,
+    RuntimeTestExecutionAuthority,
     run_module,
 )
 from ..invocation.invocation_prompt_assembly import build_inline_provider_prompt
@@ -35,6 +36,10 @@ AdapterFactory = Callable[
 AuthorityFactory = Callable[
     [ModuleExecutionRequest, RuntimeReleaseRegistry],
     ModuleExecutionAuthority,
+]
+TestResourceFactory = Callable[
+    [ModuleExecutionRequest, RuntimeReleaseRegistry, InMemoryCellArtifactStore],
+    RuntimeTestExecutionAuthority,
 ]
 
 
@@ -99,7 +104,8 @@ def run_registered_inline_module_evaluation(
     projected_input: tuple[ModuleInputBinding, bytes],
     evaluation_key: str,
     adapter_factory: AdapterFactory,
-    authority_factory: AuthorityFactory,
+    authority_factory: AuthorityFactory | None = None,
+    test_resource_factory: TestResourceFactory | None = None,
     artifact_store: InMemoryCellArtifactStore | None = None,
     clock: Callable[[], str] | None = None,
 ) -> RegisteredModuleEvaluation:
@@ -119,10 +125,17 @@ def run_registered_inline_module_evaluation(
         execution_profile_ref,
         execution_profile_sha256,
     )
-    if profile.semantic_input_delivery_mode != "inline":
-        raise ValueError("registered evaluation runner accepts inline delivery only")
-    if profile.network_policy != "denied":
-        raise ValueError("registered inline evaluation must remain network denied")
+    if authority_factory is not None and test_resource_factory is not None:
+        raise ValueError(
+            "authority_factory and test_resource_factory are mutually exclusive"
+        )
+    if authority_factory is None and test_resource_factory is None:
+        raise ValueError("registered evaluation requires one execution boundary factory")
+    if test_resource_factory is None:
+        if profile.semantic_input_delivery_mode != "inline":
+            raise ValueError("external evaluation runner accepts inline delivery only")
+        if profile.network_policy != "denied":
+            raise ValueError("external inline evaluation must remain network denied")
     binding, input_content = projected_input
     binding.validate()
     if _sha256(input_content) != binding.input_sha256:
@@ -203,15 +216,26 @@ def run_registered_inline_module_evaluation(
         ),
         idempotency_key=_stable_id("module_idempotency", evaluation_key),
     )
-    adapters = AgentExecutionAdapterRegistry()
-    adapters.register(adapter_factory(release_registry, store))
-    invocation_arguments = {
+    invocation_arguments: dict[str, object] = {
         "release_registry": release_registry,
-        "adapters": adapters,
         "artifact_host": store,
         "ledger": InMemoryModuleExecutionLedger(),
-        "authority": authority_factory(request, release_registry),
     }
+    if authority_factory is not None:
+        invocation_arguments["authority"] = authority_factory(
+            request,
+            release_registry,
+        )
+    else:
+        assert test_resource_factory is not None
+        invocation_arguments["test_authority"] = test_resource_factory(
+            request,
+            release_registry,
+            store,
+        )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter_factory(release_registry, store))
+    invocation_arguments["adapters"] = adapters
     if clock is not None:
         invocation_arguments["clock"] = clock
     result = run_module(request, **invocation_arguments)
@@ -255,5 +279,6 @@ __all__ = [
     "AdapterFactory",
     "AuthorityFactory",
     "RegisteredModuleEvaluation",
+    "TestResourceFactory",
     "run_registered_inline_module_evaluation",
 ]

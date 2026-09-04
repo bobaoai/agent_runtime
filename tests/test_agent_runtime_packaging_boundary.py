@@ -200,6 +200,8 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         for member in members
     )
     assert "agent_runtime/README.md" in members
+    assert "agent_runtime/docs/agent_runtime_capabilities.md" in members
+    assert "agent_runtime/docs/agent_runtime_capability_runbook.md" in members
     assert (
         "agent_runtime/inspection/inspection_snapshot_definition.schema.json"
         in members

@@ -15,6 +15,8 @@ from ..contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionRequest,
     AuthorizedOperationReceipt,
     ProviderOperationIntent,
+    RuntimeTestOperationIntent,
+    RuntimeTestOperationReceipt,
 )
 from ..contracts.ledger_lineage_definition import ModuleToolCallObservation
 from ..foundation.foundation_contract_validation import validate_id
@@ -112,14 +114,14 @@ class ModuleProviderToolSession(Protocol):
         self,
         tool_name: str,
         payload: Mapping[str, Any],
-    ) -> ProviderOperationIntent:
+    ) -> ProviderOperationIntent | RuntimeTestOperationIntent:
         """Build the exact Runtime authorization request for one tool call."""
 
     def invoke(
         self,
         tool_name: str,
         payload: Mapping[str, Any],
-        authorization: AuthorizedOperationReceipt,
+        authorization: AuthorizedOperationReceipt | RuntimeTestOperationReceipt,
     ) -> Mapping[str, Any]:
         """Execute only after receiving the Runtime authorization receipt."""
 

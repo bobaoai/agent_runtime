@@ -1,0 +1,42 @@
+{
+  "active_pointer": null,
+  "database_binding": {
+    "credential_source": "host_environment",
+    "database_name": "agent_runtime_test",
+    "schema": "agent_runtime_review_bbe77ca",
+    "schema_state": "ready"
+  },
+  "execution_profile": {
+    "attempt_workspace_policy": "none",
+    "execution_mode": "agent",
+    "execution_profile_id": "engineering_change_reviewer_claude_gateway",
+    "executor_adapter_id": "claude_agent_sdk_gateway_executor",
+    "executor_adapter_revision": "v3",
+    "gateway_access_reasons": [
+      "authorized_package_external_exploration"
+    ],
+    "model_id": "claude-opus-5",
+    "network_policy": "gateway_only",
+    "output_constraint_mode": "native_structured_output",
+    "provider_id": "anthropic",
+    "reasoning_profile": "xhigh",
+    "release_ref": "execution-profile:engineering_change_reviewer_claude_gateway@v1",
+    "release_sha256": "ba4ebdb61c0c9ca0a477a7f387688761ffbe95ee64efe62d5401156768c69edc",
+    "release_version": "v1",
+    "semantic_input_delivery_mode": "gateway_read",
+    "timeout_seconds": 900,
+    "tool_policy": [
+      "repository_read",
+      "repository_search",
+      "sandbox_command_execute"
+    ],
+    "transport_kind": "claude_agent_sdk"
+  },
+  "module_release": {
+    "release_ref": "runtime-module:engineering_change_reviewer@v4",
+    "release_sha256": "6524f5f8f637da1adbe0786c410ffb92dc700c672b5bbf5b5fa367507484645c"
+  },
+  "registered_from_commit": "bbe77ca28241b43af5b3e7caf21301e88ee0137b",
+  "schema_version": "engineering_reviewer_local_registration_v1",
+  "variant_policy": null
+}

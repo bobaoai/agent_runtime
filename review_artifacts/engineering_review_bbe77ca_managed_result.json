@@ -1,0 +1,94 @@
+{
+  "attempt_id": "module_attempt_b8af1d9f2a9a1354046cdd02",
+  "execution_profile_ref": "execution-profile:engineering_change_reviewer_claude_gateway@v1",
+  "execution_profile_sha256": "ba4ebdb61c0c9ca0a477a7f387688761ffbe95ee64efe62d5401156768c69edc",
+  "failure_class": null,
+  "failure_detail": null,
+  "full_runtime_record_retention": "temporary operator evidence; semantic input is reproducible from exact commit and refs below",
+  "input_closure_sha256": "acfb11a56eedd92e556417fa979cb7c787ad212dd057de5d31e6744ba872a9e9",
+  "module_release_ref": "runtime-module:engineering_change_reviewer@v4",
+  "module_release_sha256": "6524f5f8f637da1adbe0786c410ffb92dc700c672b5bbf5b5fa367507484645c",
+  "module_run_id": "module_run_e258de1cbda3070ea713002d",
+  "output": {
+    "engineering_layer_disposition": "non_pass",
+    "findings": [
+      {
+        "accountable_owner_ref": "Execution owner for plan step 8 under approved basis review_artifacts/runtime_self_test_execution_code_design.md (sha256 f562700d97c6432dc97840a99a6c238633e15534a88ada5a18e3b027627d1ed7, owner decision d84a74ec…b1388) and Invocation owner for plan step 8a under review_artifacts/runtime_self_test_invocation_code_design.md (sha256 38d8297fb88a5cb7c193eb1d0be4d1d2af9bd362921b98ec89a2dca6946981a9, owner decision 16cd3810…046).",
+        "evidence": "The kernel still makes a Product Authorization client mandatory for any provider execution: execution_module_invocation.py:635 refuses a non-`in_process` transport unless the Module declares a model operation, and :560 then raises PermissionError(\"a Module that declares a model operation requires a module execution authority\") when `authority` is None; the required `ModuleExecutionAuthority` (declared at :141) carries `authorization_client: ProductOperationAuthorizationClient`, and its docstring at :411-421 states the same rule. src/agent_runtime/testing/execution_module_evaluation.py:102 keeps `authority_factory` a required keyword input, consumed at :213, with the docstring at :106-111 stating \"The host supplies the Product authorization adapter through ``authority_factory``\". The only evidence path for provider execution builds a synthetic allow-all decision: tests/test_agent_runtime_native_structured_output.py declares `_ProductAuthorityDouble` with `self.operation_effect = GatewayDecisionEffect.ALLOW` and a fabricated ProductAuthorizationContextStatus, `_evaluation_authority` assembles it into `ModuleExecutionAuthority(` at :440, and the live provider runs consume it at :3218-3230. A repository search for `self_test` under src/ returns only capability-inventory strings, so none of the approved self-test boundary symbols (RuntimeTestExecutionBinding, entry_kind runtime_self_test, the keyword-only `self_test` parameter, the paired test_execution_binding_ref/sha256 Adapter-request fields) exists in the final state.",
+        "finding_id": "EC-001",
+        "impact": "Supplied acceptance criterion 4 is false for the exact commit, and it is the plan's central requested result (\"Run ordinary Runtime-owned tests and evaluations without a host product's production authorization service, entitlement, execution grant or fabricated allow-all authorization evidence\"). The step-12 row I am reviewing takes \"frozen candidates from steps 8, 8a\" as its prerequisite; those candidates are absent from this commit, so step 12's completion condition (approved bases and tests binding the same exact commit) cannot be established for the Execution and Invocation lanes. The supplied review_artifacts/runtime_t2_11_minimal_implementation_status.md itself records this remainder: \"The broader Runtime plan still has separate work for the production-independent Execution/Invocation self-test seam\".",
+        "path": "src/agent_runtime/execution/execution_module_invocation.py",
+        "required_change": "Make criterion 4's declared result determinable on one exact reviewed commit: ordinary Test/Evaluation provider execution through the kernel entry and the inline evaluation helper, together with the tests that evidence it, must be observable without a Product Authorization client or an allow-all decision, as the approved Execution and Invocation bases require. If instead this commit is not intended to carry that result, the supplied-criterion owner must state which exact commit does, so criterion 4 stops being asserted of these bytes.",
+        "severity": "fix"
+      },
+      {
+        "accountable_owner_ref": "Software Delivery owner for step 12 of review_artifacts/runtime_self_test_and_reviewer_system_change_plan.md (sha256 cf0305be…b576), as the owner of the plan rule that returns an unexpected ownership or surface change to plan review.",
+        "evidence": "`partition_module_operation_ids` is defined at registry_release_definition.py:48 and exported in its `__all__` at :1670. At the parent it was defined at src/agent_runtime/contracts/execution_module_definition.py:38 and exported at :467, and both entries are gone from that module in the commit. The consumers were rewired accordingly: src/agent_runtime/registry/registry_module_authoring.py imports it from ..contracts.registry_release_definition at :18 (parent: from ..contracts.execution_module_definition at :10), src/agent_runtime/execution/execution_module_invocation.py:40 imports it from the registry contract, and tests/test_agent_runtime_module_authoring.py:222-227 was updated to assert the new shared identity. No document in the supplied code_design_basis closure assigns this ownership move: the approved Verification basis (review_artifacts/runtime_self_test_verification_code_design.md, sha256 a7a6c767…) instead lists \"new forbidden Runtime dependency: src/agent_runtime/registry/registry_module_authoring.py [registry] -> agent_runtime.contracts.execution_module_definition [execution]\" as an expected error left to its pre-existing-lane owner, and review_artifacts/runtime_self_test_execution_status.md:220-222 states \"The Registry dependency is caused by `partition_module_operation_ids` … Resolving its ownership may need a successor plan step\".",
+        "finding_id": "EC-002",
+        "impact": "Supplied acceptance criterion 6 (\"Every changed implementation, Design projection, public document and test belongs to the supplied basis closure with no unrelated lane\") is false: a contract-owned public helper changed owning module, and two contract modules changed their exported surface, under no approved CodeDesignBasis. The governing plan forbids exactly this: \"Exact files and symbols within the named code-owned seams are assigned by the approved CodeDesignBasis before implementation. An unexpected ownership or surface change returns to plan review; it is not permission for an adjacent fix.\" Consequently this part of the commit has no basis-bound owner, no declared completion gate and no reviewable rollback boundary, even though its behaviour is preserved and the architecture gates now pass.",
+        "path": "src/agent_runtime/contracts/registry_release_definition.py",
+        "required_change": "Restore criterion 6's closure for these bytes: the contract-helper ownership change must have a declared owner and approved basis inside the supplied plan closure, or be returned to plan review as an unassigned ownership change, so that every changed implementation path in the exact commit maps to one supplied basis.",
+        "severity": "fix"
+      },
+      {
+        "accountable_owner_ref": "Standalone Release conformance owner (package projection and archive lane, plan steps 7/10 of review_artifacts/runtime_self_test_and_reviewer_system_change_plan.md).",
+        "evidence": "pyproject.toml:42 declares package-data \"agent_runtime\" = [\"README.md\", \"design_contract/*.md\", \"design_contract/*.json\", \"docs/*.md\"], and the byte-parity gate at tests/test_agent_runtime_capability_verification.py:337-361 regenerates both repository and src/agent_runtime copies of the two capability documents. The wheel-membership assertions in tests/test_agent_runtime_packaging_boundary.py:175-208 check \"agent_runtime/README.md\", the inspection schema, \"agent_runtime/design_contract/manifest.json\" and every canonical Design document, but no \"agent_runtime/docs/\" member.",
+        "finding_id": "EC-003",
+        "impact": "Criterion 2's byte-identical leg has an executed subject-bound gate; its \"packaged\" leg currently rests on the package-data declaration alone, so a later packaging change could drop the two shipped capability documents from the wheel without any declared gate failing. Non-blocking for this subject: the declaration is present and the built-wheel test already constrains every member to the agent_runtime/ namespace.",
+        "path": "tests/test_agent_runtime_packaging_boundary.py",
+        "required_change": "Make the \"packaged\" leg of criterion 2 observable in an executed subject-bound result rather than in configuration alone, at the same evidence strength already used for README.md and the design_contract documents.",
+        "severity": "note"
+      },
+      {
+        "accountable_owner_ref": "Software Delivery owner as owner of the step-12 declared verification set and of sandbox-command-plan:runtime-bbe77ca@v1 (sha256 a9e2ff77…7b27d).",
+        "evidence": "src/agent_runtime/registry/registry_module_authoring.py and tests/test_agent_runtime_module_authoring.py are changed subject paths, and the reviewer Module's load/compile evidence lives in tests/test_governance_reviewer_module_registration.py:52-83, which calls ModuleReviewer.from_registration for engineering_change_reviewer and asserts its four declared operation ids and both schema documents. None of those three files is bound to a command in the frozen plan sandbox-command-plan:runtime-bbe77ca@v1 (diff_check, runtime_milestone_focused, execution_invocation_regression). The executed criterion-5 evidence is the static closure at tests/test_agent_runtime_capability_verification.py:364-390, which asserts registration schema_version, module_id, schema refs and declared operation ids only.",
+        "finding_id": "EC-004",
+        "impact": "Criterion 5's \"compile\" leg was judged from repository reads (the 09_soul reviewer module bytes and src/agent_runtime/registry/registry_module_loading.py are unchanged relative to the parent, and the only authoring-module change is the import source of a behaviour-identical helper) rather than from an executed subject-bound gate. The criterion is judged satisfied, but the delivery evidence set is narrower than the criterion states. Non-blocking.",
+        "path": "tests/test_agent_runtime_module_authoring.py",
+        "required_change": "Bind the reviewer Module load/compile result of criterion 5 to an executed result on this exact subject, or record which prior subject-bound result already carries that leg.",
+        "severity": "note"
+      }
+    ],
+    "gate_results": [
+      {
+        "command_id": "diff_check",
+        "disposition": "passed",
+        "observation": "exit_code 0 with empty stdout and stderr, matching the expected result; git diff --check over a4d61d75..bbe77ca2 reports no whitespace or conflict-marker defect in the committed diff."
+      },
+      {
+        "command_id": "runtime_milestone_focused",
+        "disposition": "passed",
+        "observation": "exit_code 0, \"75 passed in 3.91s\", matching the expected \"75 passed\". This binds the capability-verification, packaging-boundary, naming-contract and both architecture gates to the exact subject, including the 42-row inventory, nine-case closure, repository/wheel document parity and the engineering_change_reviewer static registration closure."
+      },
+      {
+        "command_id": "execution_invocation_regression",
+        "disposition": "passed",
+        "observation": "exit_code 0, \"143 passed, 4 deselected in 1.35s\", matching the expected \"143 passed, 4 deselected\". The four deselected cases are the live-provider tests (-k not live_); their exclusion is why criterion 4 was judged from the as-built kernel, helper and authority-double sources rather than from live transport output."
+      }
+    ],
+    "prose_and_meaning_preservation": "Not performed. The review contract admits the prose and communication check only after the subject-specific semantic review passes on the same candidate bytes; semantic review returned non_pass (EC-001, EC-002), so no prose or meaning-preservation judgement was formed over README.md, src/agent_runtime/README.md, docs/agent_runtime_capabilities.md, docs/agent_runtime_capability_runbook.md, the designDoc/design_contract projections or the review_artifacts documents. Those files were read only as semantic evidence; no wording, number, attribution, authority, uncertainty, causality, compatibility or stop-condition claim in them was altered or endorsed by this review, and no source-code style was treated as prose.",
+    "safe_next_step": "Return this exact commit to the Software Delivery owner as changes_required with two routed items: send EC-001 to the step-8 Execution owner and step-8a Invocation owner under their approved bases so criterion 4's result exists on an exact commit, and send EC-002 to the plan owner as an unassigned contract-helper ownership change requiring plan review. Do not treat the three passing gates, the passing architecture conformance or the accepted archive and document projections as acceptance of this commit, and do not infer any release or deployment admission from this verdict; resubmit one exact commit with its parent, approved bases and commit-bound evidence for a new Engineering Review after both items are closed.",
+    "software_delivery_readiness": "changes_required",
+    "subject_closure": "Frozen subject bbe77ca28241b43af5b3e7caf21301e88ee0137b over unique parent a4d61d751c0082094cae0d12b015a48a2564c01e (subject_sha256 c8adba57…4537) was consumed as admitted by the host; changed paths, path states, content hashes and diff were not re-derived in natural language. Verified against the six supplied acceptance criteria and the step-12 closure of review_artifacts/runtime_self_test_and_reviewer_system_change_plan.md (sha256 795a2b0c…7666).\n\nSatisfied: (1) one code-owned definition — src/agent_runtime/testing/conformance_agent_capability_verification.py enforces exactly 42 unique inventory rows (required_agent_capability_inventory raises otherwise) and returns nine canonical cases, with docs and runbook rendered from the same tuples; tests/test_agent_runtime_capability_verification.py:280-336 executes that closure in the passing focused gate. (2) doc parity — docs/agent_runtime_capabilities.md and src/agent_runtime/docs/agent_runtime_capabilities.md share content hash 5add1d66…, the runbook pair shares 2e3ebe45…, README.md and src/agent_runtime/README.md share cff2f024…, and tests/test_agent_runtime_capability_verification.py:337-361 plus tests/test_agent_runtime_packaging_boundary.py:148-151 regenerate/compare those bytes; pyproject.toml ships \"docs/*.md\" and \"README.md\" as package data (see note EC-003 on the packaging leg). (3) T2 10 archive — designDoc/agent_runtime_10_… (deleted) and designDoc/archive/agent_runtime_10_… (added) carry the identical content hash 9faf8078…, the package copy under src/agent_runtime/design_contract/ is deleted, src/agent_runtime/design_contract/manifest.json no longer lists it and now lists T2 11 at cf6ad622… matching the shipped file, tools/build_agent_runtime_design_contract_bundle.py:42 registers T2 11, and no src/ path references the archived filename. (5) reviewer v4 closure — 09_soul/.../engineering_change_reviewer/module_registration.json is unchanged by this commit, keeps schema refs schema:engineering_change_reviewer_input@v4/output@v4, the four declared operations and both compatible_transport_kinds (claude_agent_sdk, codex_cli); tests/test_agent_runtime_capability_verification.py:364-390 asserts that closure in the passing gate (compile-leg evidence caveat recorded as EC-004).\n\nNot satisfied: (4) ordinary Test/Evaluation provider execution still requires a Product Authorization client and its only evidence path uses an allow-all double (EC-001); no self-test boundary symbol from the approved Execution/Invocation bases exists anywhere under src/. (6) the commit carries a contract-module ownership move that no supplied basis assigns (EC-002).\n\nEvidence sufficiency: all three frozen commands executed and matched their expected results, so this is a determinable non_pass rather than a reproducibility failure. The registered inputs and repository reads were sufficient to judge every criterion; two narrower gate-coverage observations are recorded as notes, not as implementation defects."
+  },
+  "period_end_at_utc": "2026-09-04T04:18:42.375582Z",
+  "period_start_at_utc": "2026-09-04T04:08:17.822206Z",
+  "prompt_byte_size": 220256,
+  "prompt_envelope_ref": "cell-artifact:cell_artifact_fafad35ba42564092b965a0c",
+  "prompt_envelope_sha256": "f9a9c9c22040be17d73728b19a9417955b06ba74ea21eb852d6f659dc269946e",
+  "prompt_sha256": "f9a9c9c22040be17d73728b19a9417955b06ba74ea21eb852d6f659dc269946e",
+  "request_id": "module_request_f61af5a14afbacbb09dc1223",
+  "review_input_ref": "/private/tmp/runtime-reviewer-v4.dqMYrU/evidence/engineering_review_bbe77ca_input_r2.json",
+  "review_input_sha256": "5dfddc297fe1446f2c80716eb34148106555e55483f71c89ed4d200d4276bc34",
+  "schema_version": "registered_module_evaluation_v1",
+  "semantic_validation": {
+    "status": "passed"
+  },
+  "status": "completed",
+  "usage": {
+    "cache_creation_tokens": 119094,
+    "cache_read_tokens": 5009709,
+    "input_tokens": 5128871,
+    "output_tokens": 46189
+  }
+}

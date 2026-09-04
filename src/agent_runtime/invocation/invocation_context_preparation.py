@@ -6,7 +6,9 @@ from dataclasses import dataclass
 import hashlib
 
 from ..contracts.invocation_adapter_definition import (
+    AuthorizedAgentExecutionHost,
     AuthorizedAgentExecutionRequest,
+    RuntimeTestExecutionHost,
 )
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
@@ -48,6 +50,7 @@ class PreparedInvocationContext:
 def prepare_registered_invocation_context(
     *,
     request: AuthorizedAgentExecutionRequest,
+    execution_host: AuthorizedAgentExecutionHost,
     release_registry: RuntimeReleaseRegistry,
     artifact_host: ModuleArtifactHost,
     expectation: InvocationExecutionExpectation,
@@ -69,13 +72,19 @@ def prepare_registered_invocation_context(
     profile.validate()
     if module.module_kind is not ModuleKind.AGENT:
         raise ValueError("Agent Executor accepts only Agent Modules")
-    if not request.has_operation_evidence:
-        # A provider adapter is a model invocation by construction; it must
-        # refuse every request without committed operation authorization
-        # evidence regardless of how the Module declared its operations.
+    has_external_boundary = request.has_operation_evidence
+    has_test_boundary = request.has_test_execution_binding
+    if has_external_boundary == has_test_boundary:
         raise PermissionError(
-            "model invocation requires committed operation authorization evidence"
+            "model invocation requires exactly one external operation authorization "
+            "evidence group or Runtime test boundary"
         )
+    if has_test_boundary:
+        if not isinstance(execution_host, RuntimeTestExecutionHost):
+            raise PermissionError(
+                "Runtime test execution requires the trusted test-host protocol"
+            )
+        execution_host.validate_test_execution_boundary(request)
     if profile.executor_adapter_id != expectation.executor_adapter_id:
         raise ValueError("Execution Profile targets another Executor adapter")
     if profile.executor_adapter_revision != expectation.executor_adapter_revision:

@@ -189,3 +189,80 @@ def test_registered_module_evaluation_rejects_non_inline_profile() -> None:
             adapter_factory=lambda _registry, _store: object(),
             authority_factory=lambda _request, _registry: object(),
         )
+
+
+def test_registered_module_evaluation_binds_test_resources_before_adapter(
+    monkeypatch,
+) -> None:
+    registry = _ReleaseRegistry()
+    registry.profile.semantic_input_delivery_mode = "gateway_read"
+    registry.profile.network_policy = "gateway_only"
+    input_content = b'{}'
+    events: list[str] = []
+    captured: dict[str, object] = {}
+
+    def run_module(request, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            module_run=SimpleNamespace(module_run_id="module_run_test_resource"),
+            variants=(
+                SimpleNamespace(
+                    execution_profile_ref=registry.profile.release_ref,
+                    execution_profile_sha256=registry.profile.release_sha256,
+                    prompt_envelope_ref=request.variants[0].prompt_envelope_ref,
+                    prompt_envelope_sha256=request.variants[0].prompt_envelope_sha256,
+                ),
+            ),
+            attempts=(
+                SimpleNamespace(
+                    attempt_id="attempt_test_resource",
+                    status="failed",
+                    failure_class="expected_test_failure",
+                    failure_detail_ref=None,
+                    failure_detail_sha256=None,
+                    usage=_Usage(),
+                    period_start_at_utc="2026-08-11T00:00:00Z",
+                    period_end_at_utc="2026-08-11T00:00:01Z",
+                ),
+            ),
+            outputs=(),
+        )
+
+    def test_resource_factory(_request, _registry, _store):
+        events.append("resources")
+        return "runtime_test_authority"
+
+    def adapter_factory(_registry, _store):
+        assert events == ["resources"]
+        events.append("adapter")
+        return object()
+
+    monkeypatch.setattr(subject, "AgentExecutionAdapterRegistry", _AdapterRegistry)
+    monkeypatch.setattr(subject, "run_module", run_module)
+
+    result = subject.run_registered_inline_module_evaluation(
+        release_registry=registry,
+        module_release_ref=registry.module.release_ref,
+        module_release_sha256=registry.module.release_sha256,
+        execution_profile_ref=registry.profile.release_ref,
+        execution_profile_sha256=registry.profile.release_sha256,
+        projected_input=(
+            ModuleInputBinding(
+                logical_name="task_input",
+                input_ref="model-input:test_writer",
+                input_sha256=_sha256(input_content),
+                schema_ref="schema:test_writer_input@v1",
+                schema_sha256=HASH,
+                media_type="application/json",
+            ),
+            input_content,
+        ),
+        evaluation_key="test_resource_writer",
+        adapter_factory=adapter_factory,
+        test_resource_factory=test_resource_factory,
+    )
+
+    assert result.output is None
+    assert events == ["resources", "adapter"]
+    assert captured["test_authority"] == "runtime_test_authority"
+    assert "authority" not in captured

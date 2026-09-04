@@ -258,6 +258,7 @@ class _CodexCliExecutorBase:
 
         prepared = prepare_registered_invocation_context(
             request=request,
+            execution_host=host,
             release_registry=self._release_registry,
             artifact_host=self._artifact_host,
             expectation=InvocationExecutionExpectation(

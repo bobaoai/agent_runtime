@@ -368,6 +368,122 @@ class AuthorizedOperationReceipt:
 
 
 @dataclass(frozen=True)
+class RuntimeTestOperationIntent:
+    """Exact test-host operation intent with no Product authority fields."""
+
+    execution_scope_id: str
+    module_run_id: str
+    variant_id: str
+    attempt_id: str
+    capability_id: str
+    resource_id: str
+    action_id: str
+    operation_payload_sha256: str
+    test_execution_binding_ref: str
+    test_execution_binding_sha256: str
+    idempotency_key: str
+    intent_sha256: str
+
+    def _identity_payload(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload.pop("intent_sha256")
+        return payload
+
+    @classmethod
+    def build(cls, **fields: Any) -> "RuntimeTestOperationIntent":
+        provisional = cls(**fields, intent_sha256="0" * 64)
+        intent_sha256 = hashlib.sha256(
+            json.dumps(
+                provisional._identity_payload(),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        record = cls(**fields, intent_sha256=intent_sha256)
+        record.validate()
+        return record
+
+    def validate(self) -> None:
+        validate_exact_record_instance(
+            "Runtime test operation intent",
+            self,
+            expected_type=RuntimeTestOperationIntent,
+        )
+        for label, value in (
+            ("execution_scope_id", self.execution_scope_id),
+            ("module_run_id", self.module_run_id),
+            ("variant_id", self.variant_id),
+            ("attempt_id", self.attempt_id),
+            ("capability_id", self.capability_id),
+            ("resource_id", self.resource_id),
+            ("action_id", self.action_id),
+            ("idempotency_key", self.idempotency_key),
+        ):
+            validate_id(label, value)
+        validate_opaque_ref(
+            "test_execution_binding_ref",
+            self.test_execution_binding_ref,
+        )
+        for label, value in (
+            ("operation_payload_sha256", self.operation_payload_sha256),
+            ("test_execution_binding_sha256", self.test_execution_binding_sha256),
+            ("intent_sha256", self.intent_sha256),
+        ):
+            validate_sha256(label, value)
+        expected = hashlib.sha256(
+            json.dumps(
+                self._identity_payload(),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.intent_sha256 != expected:
+            raise ValueError("Runtime test operation intent hash mismatch")
+
+
+@dataclass(frozen=True)
+class RuntimeTestOperationReceipt:
+    """Test-host proof bound to one exact operation intent and payload."""
+
+    receipt_id: str
+    intent_sha256: str
+    test_execution_binding_ref: str
+    test_execution_binding_sha256: str
+    resource_id: str
+    action_id: str
+    operation_payload_sha256: str
+    idempotency_key: str
+    recorded_at_utc: str
+
+    def validate(self) -> None:
+        validate_exact_record_instance(
+            "Runtime test operation receipt",
+            self,
+            expected_type=RuntimeTestOperationReceipt,
+        )
+        for label, value in (
+            ("receipt_id", self.receipt_id),
+            ("resource_id", self.resource_id),
+            ("action_id", self.action_id),
+            ("idempotency_key", self.idempotency_key),
+        ):
+            validate_id(label, value)
+        validate_opaque_ref(
+            "test_execution_binding_ref",
+            self.test_execution_binding_ref,
+        )
+        for label, value in (
+            ("intent_sha256", self.intent_sha256),
+            ("test_execution_binding_sha256", self.test_execution_binding_sha256),
+            ("operation_payload_sha256", self.operation_payload_sha256),
+        ):
+            validate_sha256(label, value)
+        validate_utc_timestamp("recorded_at_utc", self.recorded_at_utc)
+
+
+@dataclass(frozen=True)
 class AgentExecutionFailure:
     """Bounded provider failure with Cell-local detail lineage."""
 
@@ -554,15 +670,14 @@ class AgentExecutionResult:
 
 @dataclass(frozen=True)
 class AuthorizedAgentExecutionRequest:
-    """Canonical AR09 request bound to Product decision and Runtime claim evidence.
+    """Canonical request bound to one external or Runtime self-test boundary.
 
-    Authorization evidence fields resolve to the Stack-A authority records of
+    External evidence fields resolve to the Stack-A authority records of
     ``agent_runtime_09``: the execution authorization context binding, the
     protected-operation intent, the Product operation decision, and the Gateway
     authorization observation binding decision to intent. Each evidence group
-    is present completely or not at all; empty evidence is admissible only for
-    the operation-free ``in_process`` Test/Evaluation conjunction defined in
-    ``agent_runtime_08``.
+    is present completely or not at all. A Runtime test binding is a separate,
+    mutually exclusive pair and carries no Product authority identity.
     """
 
     workflow_execution_id: str | None
@@ -583,6 +698,8 @@ class AuthorizedAgentExecutionRequest:
     prompt_envelope_sha256: str | None
     output_schema_ref: str
     output_schema_sha256: str
+    test_execution_binding_ref: str | None
+    test_execution_binding_sha256: str | None
     execution_authorization_binding_ref: str | None
     execution_authorization_binding_sha256: str | None
     protected_operation_intent_ref: str | None
@@ -603,6 +720,12 @@ class AuthorizedAgentExecutionRequest:
     def _identity_payload(self) -> dict[str, Any]:
         payload = asdict(self)
         payload.pop("request_sha256")
+        if (
+            self.test_execution_binding_ref is None
+            and self.test_execution_binding_sha256 is None
+        ):
+            payload.pop("test_execution_binding_ref")
+            payload.pop("test_execution_binding_sha256")
         payload["authorized_inputs"] = [asdict(item) for item in self.authorized_inputs]
         return payload
 
@@ -611,6 +734,8 @@ class AuthorizedAgentExecutionRequest:
         """Build a content-addressed canonical authorized request."""
 
         payload = dict(fields)
+        payload.setdefault("test_execution_binding_ref", None)
+        payload.setdefault("test_execution_binding_sha256", None)
         payload["authorized_inputs"] = tuple(payload["authorized_inputs"])
         provisional = cls(**payload, request_sha256="0" * 64)
         request_sha256 = hashlib.sha256(
@@ -755,6 +880,21 @@ class AuthorizedAgentExecutionRequest:
                 "operation decision evidence requires the execution "
                 "authorization binding"
             )
+        has_test_binding = _validate_ref_hash_group(
+            "Runtime test execution binding",
+            (
+                ("test_execution_binding_ref", self.test_execution_binding_ref),
+                (
+                    "test_execution_binding_sha256",
+                    self.test_execution_binding_sha256,
+                ),
+            ),
+            ref_labels=frozenset({"test_execution_binding_ref"}),
+        )
+        if has_test_binding and (has_binding or has_operation or has_grant):
+            raise ValueError(
+                "Runtime test and external authorization evidence are mutually exclusive"
+            )
 
         validate_exact_record_tuple(
             "authorized_inputs",
@@ -786,6 +926,12 @@ class AuthorizedAgentExecutionRequest:
         """Report whether the complete operation-decision evidence is bound."""
 
         return self.protected_operation_intent_ref is not None
+
+    @property
+    def has_test_execution_binding(self) -> bool:
+        """Report whether an exact Runtime-hosted self-test boundary is bound."""
+
+        return self.test_execution_binding_ref is not None
 
     @property
     def execution_scope_id(self) -> str:
@@ -832,6 +978,27 @@ class AuthorizedAgentExecutionHost(Protocol):
 
 
 @runtime_checkable
+class RuntimeTestExecutionHost(AuthorizedAgentExecutionHost, Protocol):
+    """Trusted Runtime test host for a request-bound self-test boundary."""
+
+    def validate_test_execution_boundary(
+        self,
+        request: AuthorizedAgentExecutionRequest,
+    ) -> None:
+        """Validate the exact self-test binding before provider entry."""
+
+        ...
+
+    def authorize_test_operation(
+        self,
+        request: RuntimeTestOperationIntent,
+    ) -> RuntimeTestOperationReceipt:
+        """Authorize one exact test-resource operation without Product authority."""
+
+        ...
+
+
+@runtime_checkable
 class AuthorizedAgentExecutionAdapter(Protocol):
     """Canonical provider adapter consuming exact Product/Runtime bindings."""
 
@@ -863,6 +1030,9 @@ __all__ = [
     "AgentExecutionResult",
     "AuthorizedExecutionInput",
     "ProviderOperationIntent",
+    "RuntimeTestExecutionHost",
+    "RuntimeTestOperationIntent",
+    "RuntimeTestOperationReceipt",
     "isolated_execution_scope_id",
     "OutputSubmission",
 ]

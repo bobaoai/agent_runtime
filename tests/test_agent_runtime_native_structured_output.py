@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from contextlib import contextmanager
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -36,6 +37,8 @@ from agent_runtime.contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionRequest,
     OutputSubmission,
     ProviderOperationIntent,
+    RuntimeTestOperationIntent,
+    RuntimeTestOperationReceipt,
 )
 from agent_runtime.contracts.ledger_lineage_definition import (
     ModuleOutputResolutionRecord,
@@ -66,6 +69,7 @@ from agent_runtime.execution.execution_content_staging import InMemoryCellArtifa
 from agent_runtime.execution.execution_module_invocation import (
     AgentExecutionAdapterRegistry,
     ModuleExecutionAuthority,
+    RuntimeTestExecutionAuthority,
     _run_module,
     isolated_execution_scope_id,
     run_module,
@@ -252,6 +256,39 @@ def _compile_native_module(
 
 _TEST_TIME = "2026-08-09T12:00:00Z"
 _RUN_PROVIDER_INTEGRATION = os.environ.get("RUN_PROVIDER_INTEGRATION") == "1"
+
+
+def test_runtime_test_operation_intent_rejects_payload_hash_mutation() -> None:
+    intent = RuntimeTestOperationIntent.build(
+        execution_scope_id="scope_test_operation",
+        module_run_id="module_run_test_operation",
+        variant_id="variant_test_operation",
+        attempt_id="attempt_test_operation",
+        capability_id="repository_read",
+        resource_id="subject_repository",
+        action_id="repository_read",
+        operation_payload_sha256="1" * 64,
+        test_execution_binding_ref="runtime-test-binding:test-operation",
+        test_execution_binding_sha256="2" * 64,
+        idempotency_key="test_operation_001",
+    )
+
+    assert set(intent.__dataclass_fields__) == {
+        "execution_scope_id",
+        "module_run_id",
+        "variant_id",
+        "attempt_id",
+        "capability_id",
+        "resource_id",
+        "action_id",
+        "operation_payload_sha256",
+        "test_execution_binding_ref",
+        "test_execution_binding_sha256",
+        "idempotency_key",
+        "intent_sha256",
+    }
+    with pytest.raises(ValueError, match="intent hash mismatch"):
+        replace(intent, operation_payload_sha256="3" * 64).validate()
 
 
 def _register_compiled_for_evaluation(compiled) -> RuntimeReleaseRegistry:
@@ -3191,6 +3228,223 @@ def test_claude_gateway_executor_routes_tool_through_kernel_authorization(
         assert run.attempts[0].tool_calls[0].tool_name == "read_source"
 
 
+def test_runtime_self_test_gateway_runs_without_product_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    claude_module = pytest.importorskip(
+        "agent_runtime.invocation.invocation_claude_module_invocation"
+    )
+    compiled = _compile_native_module(
+        tmp_path,
+        declared_operation_ids=("invoke_model", "read_source"),
+        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        execution_profile_id="runtime_self_test_gateway_profile",
+        executor_adapter_id="claude_agent_sdk_gateway_executor",
+        executor_adapter_revision="v3",
+        transport_kind="claude_agent_sdk",
+        provider_id="anthropic",
+        model_id="claude-self-test",
+        execution_mode="agent",
+        semantic_input_delivery_mode="gateway_read",
+        gateway_access_reasons=("authorized_package_external_exploration",),
+        tool_policy=("read_source",),
+        network_policy="gateway_only",
+    )
+    registry = _register_compiled_for_evaluation(compiled)
+    artifact_host = InMemoryCellArtifactStore()
+    events: list[str] = []
+
+    class FakeSdkTool:
+        def __init__(self, *, name, description, input_schema, handler):
+            self.name = name
+            self.description = description
+            self.input_schema = input_schema
+            self.handler = handler
+
+    monkeypatch.setattr(claude_module, "SdkMcpTool", FakeSdkTool)
+    monkeypatch.setattr(
+        claude_module,
+        "create_sdk_mcp_server",
+        lambda **fields: fields,
+    )
+
+    class ToolSession:
+        def __init__(self, request) -> None:
+            self.request = request
+            self._observations: list[ModuleToolCallObservation] = []
+
+        @property
+        def definitions(self):
+            return (
+                ProviderToolDefinition(
+                    tool_name="read_source",
+                    description="Read one Runtime test resource",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"source_id": {"type": "string"}},
+                        "required": ["source_id"],
+                        "additionalProperties": False,
+                    },
+                ),
+            )
+
+        def operation_intent(self, tool_name, payload):
+            payload_sha256 = hashlib.sha256(
+                json.dumps(
+                    payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            events.append("intent")
+            return RuntimeTestOperationIntent.build(
+                execution_scope_id=self.request.execution_scope_id,
+                module_run_id=self.request.module_run_id,
+                variant_id=self.request.variant_id,
+                attempt_id=self.request.attempt_id,
+                capability_id=tool_name,
+                resource_id=payload["source_id"],
+                action_id=tool_name,
+                operation_payload_sha256=payload_sha256,
+                test_execution_binding_ref=(
+                    self.request.test_execution_binding_ref
+                ),
+                test_execution_binding_sha256=(
+                    self.request.test_execution_binding_sha256
+                ),
+                idempotency_key=f"runtime_test_{self.request.attempt_id}",
+            )
+
+        def invoke(self, tool_name, payload, authorization):
+            assert type(authorization) is RuntimeTestOperationReceipt
+            authorization.validate()
+            assert authorization.operation_payload_sha256 == hashlib.sha256(
+                json.dumps(
+                    payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            events.append("resource")
+            request_artifact = artifact_host.put_bytes(
+                artifact_kind_id="test_tool_request",
+                schema_version="v1",
+                schema_ref="schema:test_tool_request@v1",
+                schema_sha256="7" * 64,
+                media_type="application/json",
+                content=json.dumps(payload, sort_keys=True).encode("utf-8"),
+                idempotency_key=f"test_request_{self.request.attempt_id}",
+            )
+            response = {"value": "runtime_self_test_resource"}
+            response_artifact = artifact_host.put_bytes(
+                artifact_kind_id="test_tool_response",
+                schema_version="v1",
+                schema_ref="schema:test_tool_response@v1",
+                schema_sha256="8" * 64,
+                media_type="application/json",
+                content=json.dumps(response, sort_keys=True).encode("utf-8"),
+                idempotency_key=f"test_response_{self.request.attempt_id}",
+            )
+            self._observations.append(
+                ModuleToolCallObservation(
+                    tool_call_id="runtime_test_tool_call",
+                    tool_name=tool_name,
+                    request_ref=request_artifact.artifact_ref,
+                    request_sha256=request_artifact.artifact_sha256,
+                    response_ref=response_artifact.artifact_ref,
+                    response_sha256=response_artifact.artifact_sha256,
+                )
+            )
+            return response
+
+        def validate_completion(self) -> None:
+            assert len(self._observations) == 1
+
+        @property
+        def observations(self):
+            return tuple(self._observations)
+
+    class ToolSessionFactory:
+        def open_session(self, request):
+            return ToolSession(request)
+
+    async def fake_query(*, prompt, options):
+        async for _message in prompt:
+            pass
+        tool = next(iter(options.mcp_servers.values()))["tools"][0]
+        tool_result = await tool.handler({"source_id": "source_001"})
+        assert json.loads(tool_result["content"][0]["text"]) == {
+            "value": "runtime_self_test_resource"
+        }
+        yield claude_module.ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=2,
+            session_id="session_runtime_self_test",
+            usage={"input_tokens": 5, "output_tokens": 3},
+            structured_output={"value": "runtime_self_test_complete"},
+        )
+
+    executor = claude_module.ClaudeAgentSdkGatewayModuleExecutor(
+        release_registry=registry,
+        artifact_host=artifact_host,
+        tool_session_factory=ToolSessionFactory(),
+        workspace_root=tmp_path / "workspaces",
+        query_fn=fake_query,
+    )
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="self_test")
+    request = _evaluation_request(compiled, prompt_ref, suffix="self_test")
+
+    def authorize_operation(intent):
+        return RuntimeTestOperationReceipt(
+            receipt_id=f"receipt_{intent.attempt_id}",
+            intent_sha256=intent.intent_sha256,
+            test_execution_binding_ref=intent.test_execution_binding_ref,
+            test_execution_binding_sha256=(
+                intent.test_execution_binding_sha256
+            ),
+            resource_id=intent.resource_id,
+            action_id=intent.action_id,
+            operation_payload_sha256=intent.operation_payload_sha256,
+            idempotency_key=intent.idempotency_key,
+            recorded_at_utc=_TEST_TIME,
+        )
+
+    test_authority = RuntimeTestExecutionAuthority.build(
+        request=request,
+        module=compiled.module,
+        profile=compiled.execution_profile,
+        resource_scope_ref="test-resource:runtime-self-test",
+        resource_scope_sha256="9" * 64,
+        allowed_operation_ids=compiled.module.declared_operation_ids,
+        authorize_operation_callback=authorize_operation,
+        revalidate_callback=lambda: None,
+        finalize_callback=lambda callback: callback(),
+    )
+    run = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        test_authority=test_authority,
+        clock=lambda: _TEST_TIME,
+    )
+
+    assert events == ["intent", "resource"]
+    assert _assert_completed_provider_run(run, artifact_host) == {
+        "value": "runtime_self_test_complete"
+    }
+    assert run.attempts[0].tool_calls[0].tool_name == "read_source"
+
+
 @pytest.mark.skipif(
     not _RUN_PROVIDER_INTEGRATION,
     reason="set RUN_PROVIDER_INTEGRATION=1 for live Provider smoke tests",
@@ -3981,6 +4235,27 @@ def test_direct_adapter_refuses_model_invocation_without_evidence(
 
     with pytest.raises(PermissionError, match="operation authorization evidence"):
         executor.execute(request, _RecordingHost())
+
+
+def test_adapter_request_rejects_mixed_external_and_runtime_test_evidence(
+    tmp_path: Path,
+) -> None:
+    compiled = _compile_native_module(tmp_path)
+    artifact_host = InMemoryCellArtifactStore()
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="mixed_boundary")
+    granted = _direct_adapter_request(compiled, prompt_ref, suffix="mixed_boundary")
+    fields = {
+        name: getattr(granted, name)
+        for name in granted.__dataclass_fields__
+        if name != "request_sha256"
+    }
+    fields.update(
+        test_execution_binding_ref="runtime-test-binding:mixed-boundary",
+        test_execution_binding_sha256="6" * 64,
+    )
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        AuthorizedAgentExecutionRequest.build(**fields)
 
 
 def test_adapters_no_longer_reference_the_removed_prompt_bundle_local() -> None:

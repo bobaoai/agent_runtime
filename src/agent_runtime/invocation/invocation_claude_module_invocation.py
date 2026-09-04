@@ -43,6 +43,8 @@ from ..contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionHost,
     AuthorizedAgentExecutionRequest,
     OutputSubmission,
+    RuntimeTestExecutionHost,
+    RuntimeTestOperationIntent,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_tool_definition import (
@@ -337,6 +339,7 @@ class _ClaudeAgentSdkExecutorBase:
     ) -> AgentExecutionResult:
         prepared = prepare_registered_invocation_context(
             request=request,
+            execution_host=host,
             release_registry=self._release_registry,
             artifact_host=self._artifact_host,
             expectation=InvocationExecutionExpectation(
@@ -419,7 +422,14 @@ class _ClaudeAgentSdkExecutorBase:
             ) -> dict[str, Any]:
                 assert session is not None
                 intent = session.operation_intent(tool_name, payload)
-                receipt = host.authorize_operation(intent)
+                if isinstance(intent, RuntimeTestOperationIntent):
+                    if not isinstance(host, RuntimeTestExecutionHost):
+                        raise PermissionError(
+                            "Runtime test operation requires the trusted test host"
+                        )
+                    receipt = host.authorize_test_operation(intent)
+                else:
+                    receipt = host.authorize_operation(intent)
                 return _json_tool_result(
                     session.invoke(tool_name, payload, receipt)
                 )

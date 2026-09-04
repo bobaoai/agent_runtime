@@ -16,7 +16,12 @@ import hashlib
 import json
 from typing import Any, Callable, Mapping
 
-from ..foundation.foundation_contract_validation import validate_id
+from ..foundation.foundation_contract_validation import (
+    validate_id,
+    validate_opaque_ref,
+    validate_sha256,
+    validate_string_tuple,
+)
 from ..contracts.execution_authorization_definition import (
     ExecutionAuthorizationContextBinding,
     ExecutionAuthorizationFence,
@@ -48,6 +53,8 @@ from ..contracts.invocation_adapter_definition import (
     AuthorizedOperationReceipt,
     OutputSubmission,
     ProviderOperationIntent,
+    RuntimeTestOperationIntent,
+    RuntimeTestOperationReceipt,
     isolated_execution_scope_id,
 )
 from ..contracts.registry_release_definition import (
@@ -168,6 +175,220 @@ class ModuleExecutionAuthority:
 
 
 @dataclass(frozen=True)
+class RuntimeTestExecutionAuthority:
+    """Exact trusted test-host boundary with no Product authorization fields."""
+
+    binding_ref: str
+    binding_sha256: str
+    request_id: str
+    request_sha256: str
+    execution_scope_id: str
+    module_release_ref: str
+    module_release_sha256: str
+    execution_profile_ref: str
+    execution_profile_sha256: str
+    input_closure_sha256: str
+    resource_scope_ref: str
+    resource_scope_sha256: str
+    allowed_operation_ids: tuple[str, ...]
+    authorize_operation_callback: Callable[
+        [RuntimeTestOperationIntent], RuntimeTestOperationReceipt
+    ]
+    revalidate_callback: Callable[[], None]
+    finalize_callback: Callable[[Callable[[], Any]], Any]
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        request: ModuleExecutionRequest,
+        module: ModuleRelease,
+        profile: ExecutionProfileRelease,
+        resource_scope_ref: str,
+        resource_scope_sha256: str,
+        allowed_operation_ids: tuple[str, ...],
+        authorize_operation_callback: Callable[
+            [RuntimeTestOperationIntent], RuntimeTestOperationReceipt
+        ],
+        revalidate_callback: Callable[[], None],
+        finalize_callback: Callable[[Callable[[], Any]], Any],
+    ) -> "RuntimeTestExecutionAuthority":
+        request.validate()
+        module.validate()
+        profile.validate()
+        payload = {
+            "request_id": request.request_id,
+            "request_sha256": request.request_sha256,
+            "execution_scope_id": isolated_execution_scope_id(
+                request.isolated_scope_ref,
+                request.isolated_scope_sha256,
+            ),
+            "module_release_ref": module.release_ref,
+            "module_release_sha256": module.release_sha256,
+            "execution_profile_ref": profile.release_ref,
+            "execution_profile_sha256": profile.release_sha256,
+            "input_closure_sha256": request.input_closure_sha256,
+            "resource_scope_ref": resource_scope_ref,
+            "resource_scope_sha256": resource_scope_sha256,
+            "allowed_operation_ids": list(allowed_operation_ids),
+        }
+        digest = _canonical_sha256(payload)
+        record = cls(
+            binding_ref=f"runtime-test-binding:{digest}",
+            binding_sha256=digest,
+            allowed_operation_ids=allowed_operation_ids,
+            authorize_operation_callback=authorize_operation_callback,
+            revalidate_callback=revalidate_callback,
+            finalize_callback=finalize_callback,
+            **{key: value for key, value in payload.items() if key != "allowed_operation_ids"},
+        )
+        record.validate()
+        return record
+
+    def _identity_payload(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "request_sha256": self.request_sha256,
+            "execution_scope_id": self.execution_scope_id,
+            "module_release_ref": self.module_release_ref,
+            "module_release_sha256": self.module_release_sha256,
+            "execution_profile_ref": self.execution_profile_ref,
+            "execution_profile_sha256": self.execution_profile_sha256,
+            "input_closure_sha256": self.input_closure_sha256,
+            "resource_scope_ref": self.resource_scope_ref,
+            "resource_scope_sha256": self.resource_scope_sha256,
+            "allowed_operation_ids": list(self.allowed_operation_ids),
+        }
+
+    def validate(self) -> None:
+        if type(self) is not RuntimeTestExecutionAuthority:
+            raise ValueError("test authority must be an exact RuntimeTestExecutionAuthority")
+        for label, value in (
+            ("binding_ref", self.binding_ref),
+            ("resource_scope_ref", self.resource_scope_ref),
+        ):
+            validate_opaque_ref(label, value)
+        for label, value in (
+            ("request_id", self.request_id),
+            ("execution_scope_id", self.execution_scope_id),
+        ):
+            validate_id(label, value)
+        for label, value in (
+            ("binding_sha256", self.binding_sha256),
+            ("request_sha256", self.request_sha256),
+            ("module_release_sha256", self.module_release_sha256),
+            ("execution_profile_sha256", self.execution_profile_sha256),
+            ("input_closure_sha256", self.input_closure_sha256),
+            ("resource_scope_sha256", self.resource_scope_sha256),
+        ):
+            validate_sha256(label, value)
+        validate_opaque_ref("module_release_ref", self.module_release_ref)
+        validate_opaque_ref("execution_profile_ref", self.execution_profile_ref)
+        validate_string_tuple(
+            "allowed_operation_ids",
+            self.allowed_operation_ids,
+            item_validator=validate_id,
+            require_non_empty=True,
+        )
+        if len(self.allowed_operation_ids) != len(set(self.allowed_operation_ids)):
+            raise ValueError("allowed_operation_ids must be unique")
+        for label, callback in (
+            ("authorize_operation_callback", self.authorize_operation_callback),
+            ("revalidate_callback", self.revalidate_callback),
+            ("finalize_callback", self.finalize_callback),
+        ):
+            if not callable(callback):
+                raise ValueError(f"{label} must be callable")
+        digest = _canonical_sha256(self._identity_payload())
+        if self.binding_sha256 != digest or self.binding_ref != f"runtime-test-binding:{digest}":
+            raise ValueError("Runtime test execution binding hash mismatch")
+
+    def validate_request(
+        self,
+        request: ModuleExecutionRequest,
+        module: ModuleRelease,
+        profile: ExecutionProfileRelease,
+    ) -> None:
+        self.validate()
+        if request.purpose not in {
+            ModuleExecutionPurpose.TEST,
+            ModuleExecutionPurpose.EVALUATION,
+        }:
+            raise PermissionError("Runtime test boundary accepts only Test/Evaluation")
+        exact = (
+            request.request_id == self.request_id,
+            request.request_sha256 == self.request_sha256,
+            isolated_execution_scope_id(
+                request.isolated_scope_ref,
+                request.isolated_scope_sha256,
+            ) == self.execution_scope_id,
+            module.release_ref == self.module_release_ref,
+            module.release_sha256 == self.module_release_sha256,
+            profile.release_ref == self.execution_profile_ref,
+            profile.release_sha256 == self.execution_profile_sha256,
+            request.input_closure_sha256 == self.input_closure_sha256,
+            set(self.allowed_operation_ids) == set(module.declared_operation_ids),
+        )
+        if not all(exact):
+            raise PermissionError("Runtime test execution authority closure mismatch")
+
+    def validate_canonical_request(
+        self,
+        request: AuthorizedAgentExecutionRequest,
+    ) -> None:
+        self.validate()
+        exact = (
+            request.execution_scope_id == self.execution_scope_id,
+            request.module_release_ref == self.module_release_ref,
+            request.module_release_sha256 == self.module_release_sha256,
+            request.execution_profile_ref == self.execution_profile_ref,
+            request.execution_profile_sha256 == self.execution_profile_sha256,
+            request.input_closure_sha256 == self.input_closure_sha256,
+            request.test_execution_binding_ref == self.binding_ref,
+            request.test_execution_binding_sha256 == self.binding_sha256,
+            not request.has_operation_evidence,
+        )
+        if not all(exact):
+            raise PermissionError("Runtime test canonical request closure mismatch")
+        self.revalidate_callback()
+
+    def authorize_test_operation(
+        self,
+        request: RuntimeTestOperationIntent,
+    ) -> RuntimeTestOperationReceipt:
+        request.validate()
+        exact = (
+            request.execution_scope_id == self.execution_scope_id,
+            request.test_execution_binding_ref == self.binding_ref,
+            request.test_execution_binding_sha256 == self.binding_sha256,
+            request.capability_id == request.action_id,
+            request.action_id in self.allowed_operation_ids,
+        )
+        if not all(exact):
+            raise PermissionError("Runtime test operation crossed its binding")
+        self.revalidate_callback()
+        receipt = self.authorize_operation_callback(request)
+        if type(receipt) is not RuntimeTestOperationReceipt:
+            raise TypeError("test host returned an invalid operation receipt")
+        receipt.validate()
+        if (
+            receipt.intent_sha256 != request.intent_sha256
+            or receipt.test_execution_binding_ref != self.binding_ref
+            or receipt.test_execution_binding_sha256 != self.binding_sha256
+            or receipt.resource_id != request.resource_id
+            or receipt.action_id != request.action_id
+            or receipt.operation_payload_sha256 != request.operation_payload_sha256
+            or receipt.idempotency_key != request.idempotency_key
+        ):
+            raise PermissionError("Runtime test operation receipt closure mismatch")
+        return receipt
+
+    def finalize(self, callback: Callable[[], Any]) -> Any:
+        self.revalidate_callback()
+        return self.finalize_callback(callback)
+
+
+@dataclass(frozen=True)
 class _AttemptAuthorizationEvidence:
     """Committed AR09 evidence resolved before one provider invocation."""
 
@@ -188,6 +409,7 @@ class _AttemptExecutionHost:
         profile: ExecutionProfileRelease,
         purpose: ModuleExecutionPurpose,
         authority: ModuleExecutionAuthority | None,
+        test_authority: RuntimeTestExecutionAuthority | None,
         workflow_ledger: WorkflowModuleLedgerRecorder | None,
         clock: Callable[[], str],
     ) -> None:
@@ -197,6 +419,7 @@ class _AttemptExecutionHost:
         self._profile = profile
         self._purpose = purpose
         self._authority = authority
+        self._test_authority = test_authority
         self._workflow_ledger = workflow_ledger
         self._clock = clock
         self._inputs_by_handle = {
@@ -244,6 +467,62 @@ class _AttemptExecutionHost:
         except Exception:
             self._dynamic_authorization_refused = True
             raise
+
+    def validate_test_execution_boundary(
+        self,
+        request: AuthorizedAgentExecutionRequest,
+    ) -> None:
+        if self._test_authority is None:
+            raise PermissionError("no Runtime test execution authority is bound")
+        self._test_authority.validate_canonical_request(request)
+
+    def authorize_test_operation(
+        self,
+        request: RuntimeTestOperationIntent,
+    ) -> RuntimeTestOperationReceipt:
+        try:
+            return self._authorize_test_operation(request)
+        except Exception:
+            self._dynamic_authorization_refused = True
+            raise
+
+    def _authorize_test_operation(
+        self,
+        request: RuntimeTestOperationIntent,
+    ) -> RuntimeTestOperationReceipt:
+        if self._test_authority is None:
+            raise PermissionError("test operation requires Runtime test authority")
+        request.validate()
+        if not (
+            self._profile.execution_mode == "agent"
+            and self._profile.semantic_input_delivery_mode == "gateway_read"
+            and self._profile.network_policy == "gateway_only"
+            and self._profile.tool_policy
+        ):
+            raise PermissionError("test operation is outside the Gateway profile")
+        exact_lineage = (
+            request.execution_scope_id == self._request.execution_scope_id,
+            request.module_run_id == self._request.module_run_id,
+            request.variant_id == self._request.variant_id,
+            request.attempt_id == self._request.attempt_id,
+            request.test_execution_binding_ref
+            == self._request.test_execution_binding_ref,
+            request.test_execution_binding_sha256
+            == self._request.test_execution_binding_sha256,
+        )
+        if not all(exact_lineage):
+            raise PermissionError("test operation crossed its authorized Attempt")
+        if (
+            request.capability_id != request.action_id
+            or request.capability_id not in self._profile.tool_policy
+            or request.action_id not in self._module.declared_operation_ids
+        ):
+            raise PermissionError(
+                "test operation is absent from the Profile and Module closure"
+            )
+        receipt = self._test_authority.authorize_test_operation(request)
+        self._authorized_operation_names.append(request.action_id)
+        return receipt
 
     def _authorize_operation(
         self,
@@ -406,18 +685,17 @@ def run_module(
     artifact_host: ModuleArtifactHost,
     ledger: ModuleExecutionLedger,
     authority: ModuleExecutionAuthority | None = None,
+    test_authority: RuntimeTestExecutionAuthority | None = None,
     clock: Callable[[], str] = _utc_now,
 ) -> ModuleRunResult:
     """Run one registered Module through the Test/Evaluation execution kernel.
 
     The kernel accepts only isolated ``test`` and ``evaluation`` purposes. A
-    Module that declares a model operation requires ``authority``; its AR09
-    binding, fence, protected-operation intent, and Product operation decision
-    are resolved and validated before any provider transport is entered, and
-    the committed fence is re-read inside the atomic finalization that makes
-    outputs authoritative. Empty authorization evidence is admissible only for
-    the operation-free ``in_process`` conjunction. Every other protected
-    operation and every production purpose fails before adapter resolution.
+    Module that declares a model operation requires exactly one external
+    ``authority`` or trusted ``test_authority``. External authority retains the
+    AR09 Product-decision path; Runtime-hosted self-test binds exact test
+    resources without constructing Product authorization evidence. Every
+    production purpose still fails before adapter resolution.
     """
 
     if type(request) is not ModuleExecutionRequest:
@@ -437,6 +715,7 @@ def run_module(
         artifact_host=artifact_host,
         ledger=ledger,
         authority=authority,
+        test_authority=test_authority,
         workflow_ledger=None,
         clock=clock,
     )
@@ -485,6 +764,7 @@ def run_workflow_module(
         artifact_host=artifact_host,
         ledger=ledger,
         authority=authority,
+        test_authority=None,
         workflow_ledger=workflow_ledger,
         clock=clock,
     )
@@ -500,6 +780,7 @@ def _run_module(
     authority: ModuleExecutionAuthority | None,
     workflow_ledger: WorkflowModuleLedgerRecorder | None,
     clock: Callable[[], str],
+    test_authority: RuntimeTestExecutionAuthority | None = None,
 ) -> ModuleRunResult:
     """Shared kernel after isolated or Workflow-bound request admission."""
 
@@ -556,17 +837,22 @@ def _run_module(
         raise ValueError(
             "the model-backed slice admits exactly one declared model operation"
         )
+    if authority is not None and test_authority is not None:
+        raise ValueError(
+            "external and Runtime test execution authorities are mutually exclusive"
+        )
     if module.declared_operation_ids:
-        if authority is None:
+        if authority is None and test_authority is None:
             raise PermissionError(
                 "a Module that declares a model operation requires a "
                 "module execution authority"
             )
-        authority.validate()
-        _assert_authority_binding_closure(authority.binding, request)
-    elif authority is not None:
+        if authority is not None:
+            authority.validate()
+            _assert_authority_binding_closure(authority.binding, request)
+    elif authority is not None or test_authority is not None:
         raise ValueError(
-            "a module execution authority was supplied for an operation-free "
+            "an execution authority was supplied for an operation-free "
             "Module; nothing would consume or enforce it"
         )
     if (
@@ -625,6 +911,10 @@ def _run_module(
                 module,
                 profile,
             )
+        if test_authority is not None:
+            if type(request) is not ModuleExecutionRequest:
+                raise ValueError("Runtime test authority accepts isolated Modules only")
+            test_authority.validate_request(request, module, profile)
         adapter = adapters.resolve(
             profile.executor_adapter_id,
             profile.executor_adapter_revision,
@@ -731,6 +1021,7 @@ def _run_module(
             attempt_start=attempt_start,
             artifact_host=artifact_host,
             authority=authority,
+            test_authority=test_authority,
             workflow_ledger=workflow_ledger,
             ledger=ledger,
             clock=clock,
@@ -784,6 +1075,7 @@ def _execute_attempt(
     attempt_start: ModuleAttemptStartedRecord,
     artifact_host: ModuleArtifactHost,
     authority: ModuleExecutionAuthority | None,
+    test_authority: RuntimeTestExecutionAuthority | None,
     workflow_ledger: WorkflowModuleLedgerRecorder | None,
     ledger: ModuleExecutionLedger,
     clock: Callable[[], str],
@@ -805,6 +1097,11 @@ def _execute_attempt(
         )
 
     evidence: _AttemptAuthorizationEvidence | None = None
+    if test_authority is not None:
+        if type(run_request) is not ModuleExecutionRequest:
+            raise ValueError("Runtime test authority accepts isolated Modules only")
+        test_authority.validate_request(run_request, module, profile)
+        test_authority.revalidate_callback()
     if authority is not None:
         try:
             evidence = _authorize_model_attempt(
@@ -899,6 +1196,7 @@ def _execute_attempt(
         attempt_start=attempt_start,
         evidence=evidence,
         authority=authority,
+        test_authority=test_authority,
     )
     host = _AttemptExecutionHost(
         request=canonical_request,
@@ -907,6 +1205,7 @@ def _execute_attempt(
         profile=profile,
         purpose=run_request.purpose,
         authority=authority,
+        test_authority=test_authority,
         workflow_ledger=workflow_ledger,
         clock=clock,
     )
@@ -1121,6 +1420,8 @@ def _execute_attempt(
             authority.binding.binding_ref,
             finalize,
         )
+    if test_authority is not None:
+        return test_authority.finalize(lambda: finalize(None))
     return finalize(None)
 
 
@@ -1213,6 +1514,7 @@ def _build_canonical_request(
     attempt_start: ModuleAttemptStartedRecord,
     evidence: _AttemptAuthorizationEvidence | None,
     authority: ModuleExecutionAuthority | None,
+    test_authority: RuntimeTestExecutionAuthority | None,
 ) -> AuthorizedAgentExecutionRequest:
     """Freeze one canonical adapter request from committed kernel facts."""
 
@@ -1262,6 +1564,12 @@ def _build_canonical_request(
         prompt_envelope_sha256=variant_request.prompt_envelope_sha256,
         output_schema_ref=module.output_schema_ref,
         output_schema_sha256=module.output_schema_sha256,
+        test_execution_binding_ref=(
+            test_authority.binding_ref if test_authority is not None else None
+        ),
+        test_execution_binding_sha256=(
+            test_authority.binding_sha256 if test_authority is not None else None
+        ),
         execution_authorization_binding_ref=(
             authority.binding.binding_ref if authority is not None else None
         ),
@@ -1660,6 +1968,7 @@ def _resolve_shadow_outputs(
 __all__ = [
     "AgentExecutionAdapterRegistry",
     "ModuleExecutionAuthority",
+    "RuntimeTestExecutionAuthority",
     "ModuleExecutionRequest",
     "ModuleRunResult",
     "ModuleVariantRequest",
