@@ -3720,10 +3720,21 @@ def test_claude_tool_free_executor_honors_configured_turn_budget(
     assert json.loads(host.staged["result"]) == {"value": "completed"}
 
 
-@pytest.mark.parametrize("escape_workspace", [False, True])
+@pytest.mark.parametrize(
+    ("workspace_path_mode", "expected_allowed"),
+    (
+        ("physical", True),
+        ("sandbox_root", True),
+        ("sandbox_repo", True),
+        ("sandbox_top_level", True),
+        ("escape", False),
+        ("system_path", False),
+    ),
+)
 def test_claude_workspace_executor_gates_every_tool_with_pre_hook(
     tmp_path: Path,
-    escape_workspace: bool,
+    workspace_path_mode: str,
+    expected_allowed: bool,
 ) -> None:
     claude_module = pytest.importorskip(
         "agent_runtime.invocation.invocation_claude_module_invocation"
@@ -3758,15 +3769,19 @@ def test_claude_workspace_executor_gates_every_tool_with_pre_hook(
         matcher = options.hooks["PreToolUse"][0]
         observed["matcher"] = matcher.matcher
         hook = matcher.hooks[0]
+        path_by_mode = {
+            "physical": Path(options.cwd) / "draft.txt",
+            "sandbox_root": Path("/root/draft.txt"),
+            "sandbox_repo": Path("/repo/draft.txt"),
+            "sandbox_top_level": Path("/draft.txt"),
+            "escape": tmp_path.parent / "escaped.txt",
+            "system_path": Path("/etc/passwd"),
+        }
         decision = await hook(
             {
                 "tool_name": "Read",
                 "tool_input": {
-                    "file_path": str(
-                        tmp_path.parent / "escaped.txt"
-                        if escape_workspace
-                        else Path(options.cwd) / "draft.txt"
-                    )
+                    "file_path": str(path_by_mode[workspace_path_mode])
                 },
             },
             None,
@@ -3802,7 +3817,7 @@ def test_claude_workspace_executor_gates_every_tool_with_pre_hook(
     assert observed["tools"] == ("Read", "Write", "Edit")
     assert observed["matcher"] == "Read|Write|Edit"
     hook_output = observed["decision"]["hookSpecificOutput"]
-    if escape_workspace:
+    if not expected_allowed:
         assert hook_output["permissionDecision"] == "deny"
         assert result.terminal_status == "failed"
         assert result.failure.failure_class == "policy_violation"

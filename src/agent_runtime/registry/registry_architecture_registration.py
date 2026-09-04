@@ -761,6 +761,19 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
 RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
     RuntimeSupportingSourceFileRegistration(
         source_path=(
+            "src/agent_runtime/testing/"
+            "conformance_agent_capability_verification.py"
+        ),
+        supporting_plane_id="conformance",
+        source_directory_id="testing",
+        subject="agent_capability",
+        nominalized_action="verification",
+        owner_contract_ref=(
+            "designDoc/agent_runtime_11_agent_capability_verification.md"
+        ),
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path=(
             "src/agent_runtime/foundation/foundation_contract_validation.py"
         ),
         supporting_plane_id="foundation",

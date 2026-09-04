@@ -39,14 +39,11 @@ CANONICAL_DOCUMENTS = (
     "designDoc/agent_runtime_07_temporal_durable_adapter_contract.md",
     "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     "designDoc/agent_runtime_09_authorization_integration_contract.md",
-    "designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md",
+    "designDoc/agent_runtime_11_agent_capability_verification.md",
 )
 ADJACENT_DOCUMENT_AUTHORITIES = {
     "designDoc/agent_runtime_02_product_target_topology.md": "agency_platform",
     "designDoc/agent_runtime_05_delivery_roadmap.md": "software_delivery",
-    "designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md": (
-        "agency_platform"
-    ),
 }
 EXTERNAL_AUTHORITY_LINK_TARGETS = frozenset(
     {

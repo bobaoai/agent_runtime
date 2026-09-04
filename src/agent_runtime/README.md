@@ -131,6 +131,11 @@ Product Authorization and governed Data Access remain external authorities.
 Runtime carries the admitted authorization context and calls those authorities
 when an execution requires a current decision or authorized product data.
 
+## Capability documentation
+
+- [Agent Runtime capabilities](docs/agent_runtime_capabilities.md)
+- [Agent Runtime capability runbook](docs/agent_runtime_capability_runbook.md)
+
 ### Durable parallel groups
 
 A Workflow Release may declare an `all_required` parallel group at one control

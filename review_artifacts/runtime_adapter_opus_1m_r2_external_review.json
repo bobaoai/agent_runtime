@@ -1,0 +1,76 @@
+{
+  "summary": "对 designDoc/agent_runtime_08_agent_execution_adapter_contract.md（SHA256 66a7d2…）执行独立外部 Design 内容审查。按 the_design_doc_management §9.2 的十一项 DDM checks 逐项判断：前十项 semantic checks 全部满足，随后对同一份 bytes 执行第十一项 prose check，亦满足。候选在 §5.2 明确把普通自测的前置证据改为「T2 09 验证的 exact self-test boundary + 可信测试宿主资源 + begin receipt + registered capability + 输入闭包」，并显式声明无需生产 authorization context、Product decision 或 grant；外部受保护路径保留调用前可验证的真实外部决定与 required grant refs，post-effect observation 不被当作同一次效果的前置输入。§4 line 130-131 与 §15 已不再把已废弃的 Agency Platform host-binding 文档作为当前依赖，且未声称移动或退役该外部合同。两条 prior findings 在当前 bytes 中均已关闭（§10.3 line 482-484 的 PA 归属、§12 line 531 与 §13 line 570/574-583 的 ADAPTER_POLICY_VIOLATION 交付形式）。未发现与已接受 T1（agent_runtime_00）与 T2 09 的实质矛盾，findings 为空；仅在 prose_review 中记录不改变 governing meaning 的排印/可读性观察。本结果是外部内容审查证据，不是 registered Design review、DDM admission 或实现授权。",
+  "subjects": [
+    {
+      "path": "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+      "assessment": "结构与层级合规：frontmatter/Intent Capsule 的 layer=T2、parent=designDoc/agent_runtime_00_execution_charter.md、canonical_owner 与文件名一致，owned_system_object「provider-neutral Attempt invocation」唯一对应 T1 §9 row 08 Invocation，与 T2 09（Runtime execution boundary binding）、T2 11（Agent Capability Verification Contract）不重叠；required section 顺序符合 T2 protected-heading 序列（Intent Capsule → Primary System Flow → User Intent → Reader Gain → Capability and Operation → §5–§11 capability-owned → Public Interface and Effects → Completion, Failure, and Recovery → Dependencies and Verification → References）。语义闭包完整：§5.1 固定 request 闭包（Workflow/Run/Variant/Attempt identity、exact release/Profile/Adapter revision/schema、committed begin receipt、完整 frozen input closure、Prompt Envelope 与 input_delivery_plan、request-bound handles），line 156-158 要求 begin receipt 解析到已提交 Attempt-start record 且临时测试 Ledger 也必须先产生真实 begin record；§5.2 三行 boundary 表与 line 175-180 明确 pre-call approval 与 post-effect observation 的时间方向，并把数据库权限限定为实际 database operation 的前提；§7.1-§7.2 保留 required_complete slot 完整交付、不静默截断、ordered cursor 分页（每页有界、跳页/重复/乱序拒绝、未读 terminal null 不能完成 Attempt）与 completion validator；§7.2 line 321-323 与 §7.3、§10.3 保持私有 draft workspace 与 frozen repository disposable checkout 的隔离；§6.1 line 228-235 把固定 provider transport 与 model-visible network capability 分离；§8 保留 receipt-before-callable、denial taint 与 host/Adapter 权限分工；§9.1/§9.2 保持 Context 兼容性与 sibling Variant 隔离且无静默 fallback（line 432-435 禁止 native 不可用时自动退回 prompt_only_json）；§5.3 与 §9.2 固定 canonical schema 与 usage 归一（未知量保持 null）；§11 line 517-521 与 §13 完整表达 fenced finalization、typed failure 与 repair/recovery。code truth 边界正确：§6.2 line 256、§7.3 line 334、§14 line 612-615 把 descriptor 字段、当前支持清单、物理路径与当前 SDK/CLI revision 状态交给 code-owned binding 与 Current Inspection。未发现实质语义缺陷，findings 为空。"
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "intent_and_reader_result",
+      "result": "satisfied",
+      "evidence": "§0 Intent Capsule 的 scope/non_goals/verification_hooks（line 26-70）、§2 User Intent（line 101-103）与 §3 Reader Gain（line 107-110）互相一致：intended result 是「同一份已注册能力既可被 Runtime 自测、也可由不同 provider 执行，且工具/workspace/网络/输出受精确 Profile 与资源绑定约束」。§3 四条 bullet 分别写明 Runtime Maintainer、Adapter Maintainer、Module Owner、Security Reviewer 及其读后新增的判断能力（闭包追踪、不兼容何时必须在调用 provider 前拒绝、三种输入交付能否完整承载、自测资源隔离与外部权限交接）。material Design choice（普通自测不再要求生产 authorization 证据）在 §5.1 line 138-139、§5.2 line 167 与 §14 line 621 一致落实，未与 §2 冲突。"
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "result": "satisfied",
+      "evidence": "frontmatter line 4-7 与 Intent Capsule line 21-25 的 layer=T2、canonical_owner 自指、parent=designDoc/agent_runtime_00_execution_charter.md 与文件名 agent_runtime_08_* 一致，符合 the_design_doc_management §6.1 的 T2 命名与单一 T1 root 约束，并对应 T1 §9 row 08「08 Invocation」的委派。owned_system_object「provider-neutral Attempt invocation」与同级 peer 不重复：T2 09 owns「Runtime execution boundary binding」、T2 11 owns「Agent Capability Verification Contract」；§4 line 118-126 的表把 domain prompt/Skill/release/boundary/外部效果/Attempt 事实分别交回 Module owner、Skill Management、Registry+Execution、T2 09、enforcing adapter、Execution/Durability/Ledger/Inspection，未侵入其 authority。"
+    },
+    {
+      "check_id": "layer_content_fit",
+      "result": "satisfied",
+      "evidence": "文档只表达一个 T1 内的有界 capability，并按 the_design_doc_management §6.1 的 T2 行只闭合「最小适用 machine-contract/code-truth 集合」：request/result 闭包（§5.1、§5.3）、descriptor 与解析规则（§6.2）、input_delivery_plan（§7.1 line 286-295）、ProviderOperationIntent/Receipt（§8）、Context request/result（§9.1）、output_constraint_mode（§9.2 line 417-420）、failure class 集合（§13 line 544-558）与 interface/error 表（§12、§13）。未发明不适用 surface，也未新建 permission authority：§5.1 line 138-139「Authorized 表示请求已经具备适用的 Runtime boundary，不表示每次调用都需要 Product Authorization」、§8 line 363「Host method 名称不改变 §5.2 的 boundary 区分」。可变支持清单与物理实现名已下沉：§6.2 line 256「字段和当前支持清单属于 code truth」、§7.3 line 334「具体路径由 code-owned workspace contract 提供」、§14 line 614-615「文档中的 capability family 不证明任何当前 SDK/CLI revision 已支持它」。"
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "result": "satisfied",
+      "evidence": "inherited constraint 与 peer handoff 闭合且未复制 peer internal contract：§5.2 line 175-180 把外部证据主体与记录交回 T2 09 解释，§12 line 530「boundary failure 保留 T2 09 owner」，§14 line 607 对 T2 09 只声明「invocation/operation observations，不解释 permission」，全文未复制 T2 09 的 RUNTIME_BOUNDARY_* error rows。Product Authorization 保持 the_product_authorization §4/§5 与 T1 §6 的数据库权限含义：§5.2 line 179-180、§8 line 374「PA 只在数据库权限所需处参与」、§10.3 line 484「PA 只在实际数据库权限检查中参与」、§8 line 388「Adapter 不直接调用 Product Authorization，不构造 grant」。与 T1 §8 quality rule 8 一致（§5.2 line 167「仍执行全部资源与输出约束」、§6.1 line 212「self-test 不表示跳过 profile conformance」）。已废弃 host-binding 文档的当前依赖已关闭：§4 line 130「Adapter 不解析 host Workflow Registry 或 WorkflowExecutionBinding」，§15 References 未列 agent_runtime_10，且未声称移动或退役该外部合同。"
+    },
+    {
+      "check_id": "boundary_coherence",
+      "result": "satisfied",
+      "evidence": "§4 line 118-126 的三列表把 semantic owner（Module/domain owner）、artifact owner（Skill Management）、release/resolution owner（Registry、Execution）、boundary owner（T2 09 与其可信宿主）、实现方（Invocation）、enforcing/data owner 与事实提交方（Execution、Durability、Ledger、Inspection）逐项区分；§8 line 386-389 与 §11 line 517-521 明确 Adapter 只返回 observation、staged bytes 只在 Execution 的 fenced finalization 中被验证与提交、Invocation「不自行重开 fence 或提交成功」；§0 line 64 review_gate 把独立 design_contract_reviewer review 与 accountable Invocation owner decision 分列；§11 line 504-505「模型不写这些记录；Adapter 也不创建 rate、charge、invoice 或 billing authority」进一步区分 operator/persistence/approval 角色。"
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "result": "satisfied",
+      "evidence": "Design Intent 与 required code-truth result 已分离且未把 mutable current truth 写入文档：§6.2 line 253-256 只固定 descriptor 必须唯一标识与必须声明的能力类别，并声明「字段和当前支持清单属于 code truth」；§7.3 line 332-334 只固定隔离角色、路径交给 code-owned workspace contract；§8 line 381-382「具体 resource reference namespace 由 code-owned binding 表达」；§14 line 612-615 要求 typed contracts/registries/validators/compiler/normalizer 绑定本 T2 的 immutable Code Projection，而 current supported combinations、依赖探测、admission 状态与失败证据由 Current Inspection 展示，DTO/SDK 迁移经 Code Design。§8 line 356-361 的 Protocol 块属于 the_design_doc_management §6.1 允许的 T2「interface/Protocol」最小适用集合，未固定当前 class/module layout 或版本。"
+    },
+    {
+      "check_id": "flow_interface_and_error_closure",
+      "result": "satisfied",
+      "evidence": "§1 mermaid 的九个具名 operation（prepare_registered_invocation_context、resolve_execution_adapter、probe_execution_adapter、prepare_provider_skill_package、execute_agent_attempt、read_authorized_input、authorize_operation、stage_output_bytes、normalize_provider_result）与 §12 line 527-535 的九行 interface 表一一对应，line 95「图中的具名 operation 在 §12 定义」显式解析；每行含 owner、input、successful output、effect 与 error_code。§12 出现的全部 error_code（ADAPTER_BINDING_UNAVAILABLE、ADAPTER_CAPABILITY_UNSUPPORTED、ADAPTER_REQUEST_INVALID、input_too_large、ADAPTER_POLICY_VIOLATION、ADAPTER_OUTPUT_INVALID、ADAPTER_CONFORMANCE_FAILED）在 §13 line 566-572 均有 owner/condition/meaning/caller action 行；§13 line 574-583 把执行期资源越界、callback denial 与 frozen subject drift 的交付形式唯一绑定到 execute_agent_attempt 的 typed failed result，并说明 read_authorized_input/authorize_operation 仍以自身 error_code 拒绝，与 §12 line 531/532/534 一致。§12 line 537-538 明确 peer 接口不在本表复制其内部 error 或 permission decision。"
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "result": "satisfied",
+      "evidence": "§13 line 542-558 固定 bounded failure class 集合与其携带的 retry disposition/scope/retry-after/私有 detail；line 560-562 约束分类正确性（quota/session-limit 不因 wrapper 误判为 transport）与共享 failure 的内容边界；line 574-583 固定 policy enforcement 与 conformance failure 的区分；line 585-594 固定 expected provider failure、登录失败归属 authentication/environment、admission/external authorization/fence rejection 保留真实 owner、非法 JSON completion 仍形成 failed Attempt；line 596-599 固定 repair 为同一 Run/Variant 的新 Attempt、不得更换 provider/Profile/PromptBundle/input closure/boundary，且已 committed provider effect 不得重复执行。回滚义务落在正确 layer：§8 line 388-389 与 §11 line 517-521 规定 staged bytes 只在 Execution 的 fenced finalization 被提交、失效时输出隔离并保留 usage 与有界诊断，Adapter 不自行提交权威状态。"
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "result": "satisfied",
+      "evidence": "下一层无需补未声明的 authority/behavior/boundary/payload/failure/peer decision：boundary kind 的来源与相容性已声明（§5.2 line 171-172）；request 闭包与 handle 语义已声明（§5.1 line 142-162）；Adapter 解析与零调用条件已声明（§6.2 line 266-270）；预算与 input_too_large 触发点已声明（§7.1 line 297-300）；分页与覆盖判定已声明（§7.2 line 317-319、line 327-328）；workspace identity marker 的匹配项已声明（§7.3 line 341-343）；ProviderOperationIntent 闭包与 receipt 前置顺序已声明（§8 line 367-384）；Context 四种模式与重建输入已声明（§9.1 line 395-403）；output constraint 两模式与 native projection/inverse normalization 规则已声明（§9.2 line 417-435）；usage 归一口径与 null 保留已声明（§5.3 line 197-199）。不适用的 machine surface 未被要求占位实现（§6.2 line 256、§14 line 613-615）。"
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "result": "satisfied",
+      "evidence": "§0 line 64 review_gate 把 independent design_contract_reviewer review 与 accountable Invocation owner decision 分列于 implementation 之前；§6.2 line 263-264「Host composition 显式加载 provider package；import/probe 成功不授予 execution authority」区分技术可用与执行授权；§9.2 line 413-415 区分 pre-admission conformance 与 production promotion；§14 line 638-642 区分 descriptor 声明、实测 enforcement 准入、real-provider smoke 与 production purpose 的独立 start/release gate，并要求 unsupported/unavailable/not_run/failed 如实保留；§12 line 533「仅 staging，不产生 authoritative output」与 §11 line 517-521 区分 provider completion、Attempt finalization 与结果资格。文档未声称任何 Design admission、registration 或 release 已发生。"
+    },
+    {
+      "check_id": "prose_and_meaning_preservation",
+      "result": "satisfied",
+      "evidence": "前十项 semantic checks 全部通过后，对同一份 exact bytes 执行本项。冷读者可从 §2、§4、§5.2、§6.1、§7、§8、§9、§11、§13 准确复述 governing meaning：自测与外部执行进入同一 invocation 边界、区别由 T2 09 的已验证 boundary 表达（line 96-97）；调用前证据与效果后观察不可互换（line 176-178）；不兼容时 provider invocation count 为零（line 268）；tainted Attempt 只能返回 typed failure（line 578）。数字、归因、authority、因果、不确定性与停止条件未被弱化。仅存不改变 governing meaning 的排印问题（见 prose_review），按 note 级观察处理，不构成 check disposition 失败。"
+    }
+  ],
+  "findings": [],
+  "scope_notes": [
+    "本次为独立外部内容审查证据，不是 registered design_contract_reviewer 执行、DDM 的 approved_design_handoff/lifecycle admission，也不是实现授权；候选保持 candidate 状态，owner decision 另行作出。",
+    "唯一审查 subject 是 designDoc/agent_runtime_08_agent_execution_adapter_contract.md（SHA256 66a7d20f…）。plan、handoff、T1 00、T2 09、T2 11、agent_runtime_10、各 T0 与 src/ 源码均按 background context 使用，未作为 candidate 审查，也未据其形成 finding。",
+    "两条 prior findings 已按当前 bytes 重新判断并确认关闭：line 482-484 已改为「普通 Runtime 自测使用 §5.2 的 self-test boundary…外部受保护执行的决定来自 T2 09 绑定的真实 external/resource owner…PA 只在实际数据库权限检查中参与」，不再预设 PA 拥有 provider_sandbox_execute 决定；§12 line 531 与 §13 line 570/574-583 已把 ADAPTER_POLICY_VIOLATION 的交付形式与 caller action 唯一绑定到 execute_agent_attempt 的 typed failed result。",
+    "§10.1 的 Claude SDK/PreToolUse 与 §10.2 的 CLI revision 条款按「intended conformance requirement」处理；未据此推断任何厂商当前版本事实，也未把 §14 line 614-615 之外的当前支持状态当作候选主张。",
+    "References 中 agent_runtime_05_delivery_roadmap.md、agent_runtime_07_temporal_durable_adapter_contract.md、the_agency_platform.md 等目标 bytes 未在材料中提供，其标题、当前状态与命名一致性无法核对；按「不可得证据不视为语义缺陷」处理，未形成 finding。",
+    "未判断实现可用性、当前 registration/binding、archive 实际移动、package inventory 或任何 Runtime 执行证据；这些均非本候选所主张的结果。"
+  ],
+  "prose_review": "表达层可冷读并准确复述，未发现改变事实、数字、归因、authority、因果、兼容性或停止条件的表述。§1 图注（line 95-97）先给出「本 capability 组装 Context、执行 provider transport 并归一化观察；Execution 拥有 Attempt 生命周期和最终结果」的分工，再由 §4 表逐项落到 owner，读者可据此不误读 Adapter 的权限范围；§5.2 表与其后的两段说明把「前置 receipt 只证明本次操作已获准进入」和「实际 effect 与 terminal grant disposition 在效果发生后成为观察」写成明确的时间方向，避免循环前提；§13 line 574-583 用一段连贯说明把 policy enforcement result 与 conformance failure 的区别、以及准备阶段/执行阶段拒绝的不同交付形式讲清，是本次修订中可读性提升最明显的部分。以下为不阻断 verdict 的 note 级观察，均不改变 governing meaning，是否处理由 candidate owner 决定：(1) line 326「若 domain completeness 要求仍超出可可靠处理的上下文」中「可可靠」多一字，语义可无歧义还原为「可靠」；(2) line 179 以「数据库权限」结尾、line 180 以「只属于实际 database operation」起始，断行处偏短，与全文行宽不一致，连读无歧义；(3)「PA」缩写在 line 374 首次使用，正文虽在 line 36/139/388 使用「Product Authorization」全称，但未在缩写首次出现处显式绑定，跨文档冷读者需回溯 §5.1；(4) line 128「formal-review implementation」与 line 459「Reviewer 实现」指同一对象，用词不统一；(5) §5.1 line 137 描述的 AuthorizedAgentExecutionAdapter.execute（消费 Request 与 Host）与 §12 line 531 的 execute_agent_attempt（输入为 prepared Context、exact Adapter 与 request-bound host）分处 provider-adapter 协议与 Invocation 逻辑 operation 两个粒度，二者在顺序与效果上一致（§1 图 C→X 已固定「准备先于 provider 进入」），若比照 T2 09 §9 在表前加一句「本表固定 logical interface identity，具体 DTO 由 code-owned contract 表达」的说明，可进一步降低冷读者的粒度误读；(6) Intent Capsule line 62 把 Software Delivery 列为 downstream consumer，而 §15 References 未列 the_software_delivery.md，属引用清单的可选补全。以上均不影响 §9.2 第十一项的通过判定。"
+}

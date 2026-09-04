@@ -1,0 +1,76 @@
+{
+  "summary": "本次为对单一 T2 候选 designDoc/agent_runtime_09_authorization_integration_contract.md 的独立外部 Design 内容审查（外部内容审查证据，非注册 Runtime 执行、非 DDM 正式准入、非实现授权）。候选把 capsule 的 layer/parent 更正为 T2 / agent_runtime_00_execution_charter.md，与已接受 T1 §9 row 09「External Authority Integration」委派一致；把 Runtime 自测资源边界与外部受保护效果分离，并明确 Portable Product Authorization 只承担 database permission，不再被指派 identity/execution 权限。外部路径所需的 required context validation、Module declaration 与外部决定的 exact conjunction、revocation fence、迟到结果隔离与不重复效果均被保留。先前 medium finding（grant 适用性来源未声明）在当前 bytes 上已由 §6 第 232–241 行、§0 第 44 行、§9 第 289 行、§10 第 311 行与 §11 第 333、357 行闭合。十项语义检查全部 satisfied，因此对同一份 exact bytes 执行第十一项表达检查，同样 satisfied。无 material 语义缺陷，findings 为空；两点非阻断的可选改进记入 scope_notes。",
+  "subjects": [
+    {
+      "path": "designDoc/agent_runtime_09_authorization_integration_contract.md",
+      "assessment": "候选在本层完整表达了一个有界 capability：Runtime execution boundary binding。它以 §5.1/§5.2 区分「可信 Runtime 测试入口提供的 Test/Evaluation 自测绑定」与「外部执行 context 绑定」，并明确「缺少 external context 本身不构成选择此路径的条件」（第 138 行），使 caller 仅声明 purpose 无法取得测试资源范围。§5.2 第 172–174 行完成了对前身的关键更正：Portable Product Authorization 只定义数据库 permission，execution-context validation 属于宿主明确绑定的外部能力，且该区别「不会删除外部路径所需的真实检查」。§6 保留 Module declared operation 与外部决定的同时满足（第 226 行），并把 grant 适用性的唯一来源固定为外部 owner 经可信 host adapter 提供的 owner-qualified 声明，缺失不得默认 not_required（第 232–236 行）。§5.3/§5.4/§9/§10 把校验、dispatch admission、fence 与结果提交约束在同一顺序，迟到 provider output 被隔离为 non-consumable evidence，已提交外部效果不重复执行。所有失败保留真实 owner（§1 第 99 行、§9 第 296–298 行、§10 第 314–316 行）。机器契约限于 logical interface identity 与最小输入结果，DTO/schema/hash codec/物理布局与当前 SDK 绑定分别交给 Code Projection 与 Current Inspection，未发明无关服务、硬编码存储布局或宿主产品身份策略。未发现相对前身的必要行为丢失。"
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "intent_and_reader_result",
+      "result": "satisfied",
+      "evidence": "§2 User Intent（第 103–105 行）明确 intended result：普通自测无需部署生产授权服务、无需伪造 allow-all 批准，外部受保护效果仍绑定真实外部决定，且「缺少外部授权不能被解释为自动进入自测」。§3 Reader Gain（第 109–112 行）逐一说明四类读者（Runtime Maintainer、Host Integrator、Data Access Owner、Security Reviewer）读后新增的具体判断能力，与 §0 scope/non_goals 及 §4–§6 的 material choice（自测/外部分离、PA 仅数据库权限、grant 适用性来源）一致，无相互矛盾表述。"
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "result": "satisfied",
+      "evidence": "front matter 第 4、6 行与 §0 capsule 第 21、24 行一致声明 layer: T2、parent: designDoc/agent_runtime_00_execution_charter.md、canonical_owner 为自身，符合 T1 §9 row 09 对「External Authority Integration / Execution boundary integration」的委派与 Charter §8 的 agent_runtime_<NN> T2 naming 绑定，纠正了前身的 T1/the_agent_runtime.md 标注。owned_system_object 唯一（Runtime execution boundary binding）。§4 表与 §11 依赖表把 Registry、Invocation、Execution、Durability、Ledger、Inspection、Agent Capability Verification 作为 owner-qualified peer 消费，未重复、遗漏或侵占其 authority；未声明新 domain 或新 peer 分区。"
+    },
+    {
+      "check_id": "layer_content_fit",
+      "result": "satisfied",
+      "evidence": "§4 只拥有一个 capability 并以责任表把 caller authentication、外部 context/policy、database permission、实际资源访问、调度与事实提交分别指回真实 owner；§0 non_goals 第 32–37 行排除 identity/Entitlement/policy 拥有权、credential 保管与 domain SQL。机器契约限于 §9 的 logical interface identity 与最小输入结果，第 283–284 行明确 DTO、版本、hash codec、schema、physical source layout 与 SDK binding 属 code-owned；§8 第 276 行声明「本 capability 不另建数据库」。未为形式完整发明不适用的 Registry/Schema/服务，也未写入宿主产品身份策略。"
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "result": "satisfied",
+      "evidence": "继承约束被逐项承接而非复制：Timestamp §6.7 registered predicate 与 §8 conservative window 在 §5.4 第 192–205 行按引用适用，并声明「本 T2 不定义固定 skew 数值」（第 200 行）、不自行声明 online-protocol 例外（第 215 行）；Data Governance/Runtime T0 的 credential 非托管在 §7 第 259–262 行以 opaque handle 原样携带表达；Product Authorization 的数据库 permission 语义在 §4 第 124 行与 §6 第 229 行保持 peer 归属。§5.2 第 169–170 行明确 Runtime 不需要 identity administration 或 policy query 接口，未复制 peer 的内部 interface、error 或 caller action。"
+    },
+    {
+      "check_id": "boundary_coherence",
+      "result": "satisfied",
+      "evidence": "§4 责任表与 §1 第 97–99 行把语义 owner（本 T2）、执行 provider 调用者（Invocation）、受保护效果执行者（enforcing resource adapter / Gateway）、事实提交者（Ledger）、测试资源提供者（Runtime 测试宿主）与批准者区分清楚；§6 第 226–228、239–240 行明确 adapter 独立取得当前决定并验证 grant，Runtime 只记录引用，「不能仅凭 Runtime 已记录一份声明就执行效果」。§0 第 65 行 review_gate 将独立 reviewer review 与 accountable owner decision 分列于 implementation 之前。"
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "result": "satisfied",
+      "evidence": "§9 第 283–284 行与 §11 第 337–341 行把 required code-truth result（typed contract、deterministic validator、单调 fence 与结果提交同序验证、predicate registration）与 immutable Code Projection、mutable Current Inspection（当前 SDK 名称、版本、物理路径、测试结果、迁移状态）分开表述，Design 未手工维护当前清单；§8 第 276–278 行把存储/transaction/retention 机制留给 Ledger 与测试宿主。applicable binding（predicate/profile/health evidence、intent/observation/fence 记录）已声明，未把所有可能 machine surface 变为必填项。"
+    },
+    {
+      "check_id": "flow_interface_and_error_closure",
+      "result": "satisfied",
+      "evidence": "§1 mermaid 的 bind_execution_boundary、revalidate_execution_boundary、commit_protected_operation_intent、record_gateway_observation、apply_execution_invalidation、finalize_under_current_fence、resolve_execution_boundary、resolve_protected_operation_intent 八个 operation 全部在 §9 表中解析出 owner、input、successful output、effect 与 error_code；§9 出现的四个 error_code 与 §10 表逐一对应且条件/含义/caller action 一致（含本次修订后的 §6 适用性声明条件）。peer 只以 owner-qualified 输入/输出出现（Invocation、enforcing adapter、Ledger），未复制其内部行。"
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "result": "satisfied",
+      "evidence": "§10 第 302–305 行给出完成条件（exact input、immutable identity、适用检查与所需 Ledger commit 同时成立）、idempotency 复述与冲突规则，并排除 timestamp 参与 identity；第 318–322 行固定 fence 关闭后不再 dispatch、迟到输出隔离为 non-consumable evidence、已提交外部效果由对应 owner 核对且不再执行，并把需要关闭的 provider context 与 pending work 交回 Invocation/Execution/Durability。回滚义务被正确留在效果 owner 一侧（§9 apply_execution_invalidation「不回滚已提交外部效果」）。自测资源失效保留资源失效原因，不伪造外部 revocation（第 321–322 行），与 T1 §10 的 09 failure family 一致。"
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "result": "satisfied",
+      "evidence": "先前 medium finding 指出的未声明来源已在当前 bytes 闭合：§6 第 232–241 行把 grant 适用性的唯一来源、绑定字段（owner、source ref/hash、operation、resource、enforcing adapter、required/not_required）、Runtime 的校验义务（来源可信、身份一致、写入 intent、缺失不得默认 not_required）与 required 时的 grant ref 校验全部固定；§0 第 44 行把该声明列为 capability input，§9 第 289 行写入 commit_protected_operation_intent 的输入与输出，§10 第 311 行把「声明缺失、来源无效、与 intent 不一致、required 而 grant ref 缺失」作为可判定条件，§11 第 357 行给出对应验证。其余受保护判断（predicate/profile/health evidence、fence 顺序、trusted entry kind）均有已声明输入与失败路径，下一层无需补一个未声明的 authority、payload、failure 或 peer decision。"
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "result": "satisfied",
+      "evidence": "§0 第 65 行把 independent design_contract_reviewer review 与 accountable Runtime external-authority owner decision 并列为 implementation 之前的不同结果；status 保持 candidate，未声称已获准入或已实现。§11 第 340–341 行明确 Code Design 决定既有 port/DTO 映射，且不因文档改名或改层级静默重写已注册 release、已有记录或 host API，兼容与迁移各有验证依据；§6/§8 保持测试证据不冒充生产授权证据、外部保存不改变模型能力，未把任一决定推出另一决定。"
+    },
+    {
+      "check_id": "prose_and_meaning_preservation",
+      "result": "satisfied",
+      "evidence": "十项语义检查全部通过后，对同一份 exact candidate bytes 执行表达检查。全文中文正文承载解释、English identifier 与 error_code 保持原样，冷读者可依 §2/§4/§5/§6 准确复述治理含义；§6 第 223–224 行显式说明 enforcing resource adapter 亦称 Gateway，消除了 record_gateway_observation 的命名歧义；数值阈值一律指向 admitted profile 而未在文中虚构，归因（PA/外部 owner/enforcing adapter/Ledger/测试宿主）、因果、停止条件与不确定性表述与语义章节一致。"
+    }
+  ],
+  "findings": [],
+  "scope_notes": [
+    "本结果是独立外部 Design 内容审查证据，不构成注册 Runtime Reviewer 输出、DDM 正式 admission、owner decision 或 implementation 授权；缺少正式注册审查链不被计为候选的语义缺陷。",
+    "审查主体仅为 designDoc/agent_runtime_09_authorization_integration_contract.md（plan step 2）。designDoc/agent_runtime_08_*、designDoc/agent_runtime_11_*、src/agent_runtime/** 与 review_artifacts/** 仅作为 predecessor/as-built/parent context 阅读，未作为审查对象；其现状（如 08 仍标 T1、run_module 仍要求 ModuleExecutionAuthority）不计入本候选 finding，属后续步骤范围。",
+    "先前 medium finding 已在当前 bytes 上重新判断并视为闭合（§6 第 232–241 行、§0 第 44 行、§9 第 289 行、§10 第 311 行、§11 第 333、357 行）；prior verdict 未被继承，仅作为 evidence 重新评估。",
+    "非阻断的可选改进（不影响本次 disposition）：§6 第 235 行「来源属于已绑定的可信 adapter」中的「已绑定」可在 §5.2 的 immutable closure 列举或 §9 bind_execution_boundary 输入中显式点名该信任锚点，以减少 Code Design 在「外部 context/catalog release ref」与「intent 内 enforcing adapter binding」之间的选择空间；当前表述已可依 §6 第 233–234 行的 owner/source ref/hash/身份一致性校验实现，故不构成缺陷。",
+    "非阻断的可选改进：§1 flow 未为 grant 适用性声明来源单独绘制入边（与 predicate/clock evidence 等输入同样只在 §6/§9 表达）；图、表、正文互不矛盾，属表达取舍而非 closure 缺口。",
+    "实现可用性、当前 binding、Code Projection 是否存在与迁移状态未被当作语义缺陷，因候选未声称这些结果；本审查亦未验证任何 hash、schema 或 registration 等机器可判定项，那些属确定性 gate 由 code validator 执行。"
+  ],
+  "prose_review": "表达审查在十项语义检查全部 satisfied 后，对同一份 exact candidate bytes 执行。整体可被冷读者准确复述：§2 用两段区分「自测路径」与「外部受保护路径」，并直接给出误读防线（缺少外部授权不等于自动进入自测）；§4 的责任表用「Concern / Accountable owner / 本 capability 的交接」三列，使读者不必推断谁拥有认证、外部 context、数据库 permission 与实际效果。术语一致性良好：fence 全篇只有 open/closed 两种控制含义并按 execution 单调关闭（第 182–183 行），修订把「fence version 也不证明 clock health」改为「fence 的提交顺序也不证明 clock health」（第 205 行），与两态 fence 的表述统一，未改变因果或证明关系；§6 第 223–224 行显式声明 enforcing resource adapter 亦称 Gateway，使 record_gateway_observation 的命名不再需要读者自行推断。新增的 grant 适用性段落（第 232–241 行）按「唯一来源 → 绑定字段 → Runtime 校验义务 → required/not_required 分支 → 变更与冲突处理 → 自测不适用」顺序推进，未提高或降低任何既有权限要求，也未把 adapter 的独立验证义务改写为 Runtime 的记录义务。数字与阈值方面，全文一贯把 skew、safety margin、freshness policy 指回 admitted DistributedClockProfile（第 200、203 行），不虚构常量；归因方面，external denial、database permission、Ledger 提交失败、provider 登录失败分别保留 enforcing owner、Product Authorization/Data Governance、Ledger owner 与 Invocation（第 230、229、296、151 行）。停止条件表述稳定：无法取得所需 adapter/status 时在受保护 transition 前停止（第 174 行），predicate/profile/health evidence 失败 fail closed 且不冒充外部 revocation（第 207–211、309 行）。可读性上的轻微负担来自 §9 表格行较长与 §5.4 段落密度较高，但均未产生歧义或改变 governing meaning，属可选润色而非表达缺陷。"
+}

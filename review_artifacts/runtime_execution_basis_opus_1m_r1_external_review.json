@@ -1,0 +1,128 @@
+{
+  "summary": "本次只审查所提交的 Execution CodeDesignBasis 候选，对照其所属 Software Delivery 合同、计划第 5 步、四份冻结的 Runtime Design 输入与现有代码。候选整体质量高：入口选择要求显式 self_test 绑定并与 authority 互斥，禁止以用途、缺失授权或模型可见标签推断测试路径；资源来源必须追溯到可信测试宿主的真实对象，仅比对标签不足以替换存储；fence 单调关闭、dispatch 与最终提交共用同一顺序边界，迟到结果保留真实用量并隔离；外部生产授权路径保持 fail-closed，run_workflow_module 不获得隐式自测模式；Invocation 侧字段、host callback 协议与 ProviderOperationIntent 变体都以精确交接要求传给第 5a 步，没有自行改写同侪所有权，也没有新增旁路评估器。发现两项缺陷。第一项属实质性：第 404 行声称新增字段缺省时不改变旧请求的规范身份，但现有 AuthorizedAgentExecutionRequest 的规范编码对 asdict 的全部字段（含 null）排序哈希，新增两个可选字段会改变每一个旧请求的 request_sha256，而哈希域表也没有为该边命名精确域和证明。第二项是第 106 行的主流程边方向与 revalidate_execution_boundary 的声明 owner 及 execution_boundary 的 allowed_dependencies 相互矛盾。资格声明部分没有失实：候选保持 status 为 proposed、approved_decision_ref 为 null，明确说明正式计划准备与已注册 Design 审查证据仍未成立，也没有把授权发起外部审查说成对本提案的批准。本结论只是对该提案的外部内容审查，不构成任何批准。",
+  "subject": {
+    "path": "review_artifacts/runtime_self_test_execution_code_design.md",
+    "sha256": "f5f607722677389048af7f46655e733e8477177ef70936d358222ebbbaf96638"
+  },
+  "requirements": [
+    {
+      "requirement": "the intended result is testable and all affected responsibilities have one clear owner;",
+      "result": "satisfied",
+      "evidence": "requested_result (lines 62-65) is bounded and observable, and acceptance_criteria (345-353) restate it as checkable conditions (no production context/status/client/decision/grant, entry selection not derivable from purpose, exact resource/closure identity from admission to finalization). Each affected responsibility has exactly one owner: execution_boundary (225-244), module_execution (245-263), inline_evaluation (264-281), plus retained peers invocation (282-292, implementation assigned to plan step 5a) and module_ledger (293-303)."
+    },
+    {
+      "requirement": "the primary flow is visible before implementation detail, every handoff edge resolves to one interface contract, every failure edge resolves to one error contract, and every interface defines exact input and successful output;",
+      "result": "satisfied",
+      "evidence": "The Mermaid primary flow (lines 8-22) precedes the record and the implementation-closure prose (357-456). All twelve edges (103-114) set exactly one of interface_id or error_code: the nine handoff edges resolve to the nine interface_contracts rows (116-187) and the three failure edges resolve to RUNTIME_BOUNDARY_INVALID, RUNTIME_BOUNDARY_FENCED and ADAPTER_CONFORMANCE_FAILED rows (189-223). Every interface row states an exact input and successful output, for example run_module (152-153) and finalize_under_current_fence (176-177). The direction problem on one edge is reported under the dependency-direction requirement rather than here, because that edge still resolves to a single interface row."
+    },
+    {
+      "requirement": "every interface and error identity is unique, declares its semantic owner, and is marked as declared here or referenced without redefinition;",
+      "result": "satisfied",
+      "evidence": "Each interface_id and error_code appears exactly once (116-187, 189-223) and carries identity_mode plus semantic_owner_ref. Only run_registered_inline_module_evaluation (117-119) and run_module (149-151) are declared here, which matches Execution ownership of both existing entries. Referenced rows keep their owners' meaning: finalize_under_current_fence errors (179) equal T2 09 section 9 line 294; RUNTIME_BOUNDARY_OBSERVATION_INVALID (203-209) matches T2 09 line 312; ADAPTER_CONFORMANCE_FAILED (217-223) matches T2 08 line 572. Listing peer boundary codes on execute_agent_attempt (163) references identities without changing owner, condition or caller action, consistent with T2 08 line 538."
+    },
+    {
+      "requirement": "every externally observable failure path resolves to one stable error code, owning module, trigger, meaning, and caller action;",
+      "result": "satisfied",
+      "evidence": "The five error_contracts rows (189-223) each name owner_module_id, condition, meaning and caller_action. Lines 48-50 close the remainder: other provider failures stay typed AgentExecutionResult failures per T2 08 section 13, storage exceptions retain the storage owner and are never relabelled as authorization denial, and the new boundary refusals gain a machine-readable ExecutionBoundaryError.error_code. Line 419-421 fixes the self-test resource failure to dependency_unavailable with the T2 09 reason code instead of a fabricated external denial, and keeps policy_violation for real policy breaches."
+    },
+    {
+      "requirement": "each logical module can be reviewed and tested independently;",
+      "result": "satisfied",
+      "evidence": "Every module row declares responsibility, owned_resources, public_interfaces, allowed and prohibited dependencies, failure_and_recovery, required_tests and implementation_bindings (225-303). Boundary tests (238) do not require the kernel, kernel tests (258) use fixed-content Adapter doubles, and helper tests (276) cover default use without a production authority factory, so each module's own contract is provable at its own seam."
+    },
+    {
+      "requirement": "every implementation Slice has an exact result, included and excluded surfaces, and a smallest sufficient test set that proves all in-scope behavior without pulling excluded infrastructure into the Slice;",
+      "result": "satisfied",
+      "evidence": "Three ordered slices (305-329) each state intended_result, included_surfaces, excluded_surfaces, required_tests and a completion_gate. Slice execution_test_boundary explicitly needs no provider or PostgreSQL (314); slice execution_test_kernel runs on fixed-content Adapter doubles that do not claim real provider support (322); the live provider seam is only in slice execution_test_joint_verification, which owns and explicitly proves the execution_invocation_seam (323-329), matching the Slice test rule in the owning Skill section 5.2. Every surface id resolves to a declared module, owned resource, public interface or the declared cross_module_seams entry (330)."
+    },
+    {
+      "requirement": "every excluded surface still required by the approved overall result appears in `deferred_integrations` with exactly one later owning `slice_id` and completion gate; a surface outside the approved overall result needs no deferred integration;",
+      "result": "satisfied",
+      "evidence": "Slice 1 excludes module_execution, inline_evaluation and execution_invocation_seam (308) and defers all three with one owner and one gate each (309-312); the named owners appear later in the ordered list and include the same surfaces (317, 325). Slice 2 excludes only execution_invocation_seam and defers it to slice 3 (318-320). Slice 3 has no exclusions and no deferrals (326-327). Surfaces outside this basis, such as the verification runner, package projection and the canonical Example, are assigned to plan steps 6/7/9/10/12 at lines 453-456 rather than to a deferred integration."
+    },
+    {
+      "requirement": "dependency direction, data access, external effects, failure, recovery, and rollback are explicit;",
+      "result": "finding",
+      "evidence": "Data access, effects, failure, recovery and rollback are explicit: allowed and prohibited dependency lists per module (231-232, 251-252, 270-271), effects fields per interface (122, 130, 146, 154, 162, 170, 178, 186), failure_and_recovery per module (233-237, 253-257, 272-275) and rollback_boundary (340-343). Dependency direction is not consistent: the primary-flow edge at line 106 asserts execution_boundary calls module_execution through revalidate_execution_boundary, while that interface's owner_module_id is execution_boundary (143) and execution_boundary's allowed_dependencies (231) exclude module_execution. See finding at line 106."
+    },
+    {
+      "requirement": "implementation paths are closed over the design but kept distinct from the logical module map;",
+      "result": "satisfied",
+      "evidence": "Each changed module names its concrete files in a separate implementation_bindings field (240-243, 260-262, 278-280), and the retained peers state that this basis changes no Invocation source (291) and no ledger schema (294, 302). The Exact implementation closure section (357-456) is separate from the logical module map and records the refactor disposition, DTO field sets, handoff and hash-domain detail without turning files into peer responsibilities."
+    },
+    {
+      "requirement": "the basis requires the future `ChangeSetManifest` to register every actual changed symbol, export, schema, migration, and test to one Slice. It also requires every generated or public projection to have one projector or conformance owner and deterministic regeneration gate, and requires already-present later-Slice code to remain explicitly unaccepted;",
+      "result": "satisfied",
+      "evidence": "Line 351 requires every changed production symbol, public export, contract field and test to belong to exactly one Slice in the future ChangeSetManifest; line 353 requires one conformance or projector owner and a deterministic gate for all required public and generated projections with no hand-edited generated Design file, reinforced by line 339 naming the plan step 7 package projection basis as the single conformance owner; line 352 requires that no later-Slice code or pre-existing dirty work counts as accepted evidence. Schema and migration are covered by the declared absence of any new schema (36, 294) and of any data migration (341-342)."
+    },
+    {
+      "requirement": "every load-bearing reference-and-hash edge names and tests its exact hash domain, every claimed field absence has a complete structural fence, and every behavioral guard used as evidence has a live positive control;",
+      "result": "finding",
+      "evidence": "The field-absence and positive-control clauses are met: the test binding DTO enumerates its exact field set (367-368) and its canonical codec covers that exact set (435), boundary_identity_and_hash covers exact field sets (438), and line 346 requires constructor and call tripwires to prove absence with live positive controls while external_path_regression uses the existing authority tests as real negative and positive controls (442-443). The hash-domain clause fails for one load-bearing edge: the hash-domain table (426-436) has no row for the canonical Adapter request identity, while line 403-404 asserts a legacy-identity property that the supplied codec contradicts. See finding at line 404."
+    },
+    {
+      "requirement": "future capability needs are named without speculative framework building;",
+      "result": "satisfied",
+      "evidence": "future_capabilities name needs only: test-host resource bindings from the later verification composition without another control-plane store (239), Invocation-owned registered repository-tool profiles through the same request-bound host (259), verification-owner cleanup and optional evidence delivery (277); the retained peers declare none (290, 301). No framework for those needs is designed here, and lines 453-456 keep the runner, export, cleanup, projection and archive results with their later plan steps."
+    },
+    {
+      "requirement": "every added behavior resolves to its existing accountable owner and canonical path, or to a declared responsibility boundary that justifies a separate abstraction;",
+      "result": "satisfied",
+      "evidence": "Lines 359-362 state an in-place refactor of the existing boundary, kernel and helper seams, with no responsibility, release unit, source directory or durable database added, split, merged or retired, and new DTOs distinguishing an accepted input kind rather than creating a second authority. The self-test variant is added inside the existing boundary responsibility (226-228), the kernel consumes the applicable boundary instead of inferring self-test from missing authority (247-248), and line 333 forbids a second evaluator, workflow scheduler or shadow finalizer. This resolves the kernel, helper and Invocation coupling on the existing path rather than beside it."
+    },
+    {
+      "requirement": "every split, merge, retirement, replacement, rename, new abstraction, or release-unit reassignment that changes durable structure resolves to the accountable parent authority's exact recorded structure decision carried by the Plan step;",
+      "result": "satisfied",
+      "evidence": "architecture_disposition is refactor (85) and every module disposition is refactor or retain (244, 263, 281, 292, 303); lines 359-362 state explicitly that no logical responsibility, release unit, physical source directory or durable database is added, split, merged or retired, and line 338 keeps immutable releases, persistent Registry records, production stores and active pointers untouched. No structure-changing disposition is proposed, so no parent structure decision is required from the Plan step."
+    },
+    {
+      "requirement": "every superseded path is removed in the selected Slice or has one approved later owner and gate, and every retained migration, audit, or external compatibility artifact names the obligation that requires it;",
+      "result": "satisfied",
+      "evidence": "migration_and_compatibility (332-339) keeps the existing external records unchanged, forbids a missing-authority fallback (334), keeps run_workflow_module unable to consume the new self_test parameter (335), and makes authority_factory optional while naming the obligation for the retained path as external-boundary compatibility (336, restated at 274). Public export change is bounded and assigned to the single conformance owner at plan step 7 with exported symbol tests and deterministic gates (339). No superseded path is left active without either removal or a named later owner and gate."
+    },
+    {
+      "requirement": "rejected alternatives remain in design evidence and do not leak into the final implementation merely to explain the authoring history;",
+      "result": "satisfied",
+      "evidence": "Rejected options appear only as design statements, for example the refusal of a compatibility allow-all factory (336), of a second evaluator or shadow finalizer (333), of a fabricated external authorization denial (419-421), and of storing a test hash in entitlement_snapshot_hash (411-412). No module id, interface id, resource id, test name or implementation binding (225-303, 240-243, 260-262, 278-280) preserves a rejected alternative to explain the authoring history."
+    },
+    {
+      "requirement": "there is no hidden fallback, parallel authority, or ad hoc bypass; and",
+      "result": "satisfied",
+      "evidence": "Line 42 forbids falling back between entry kinds; line 237 keeps the external client required for every existing external operation while making it optional only for explicit self-test operations; line 254 keeps production purposes rejected before Adapter resolution as today; line 334 forbids a missing-authority fallback and requires mutual exclusion; line 347 forbids selecting the test binding by purpose, missing authority, user payload or a model-visible label; line 388 fails closed on an unknown or mismatched binding and on a callback bound to another Attempt; line 381 refuses to authorize a substitute object from an opaque label alone."
+    },
+    {
+      "requirement": "an independent reviewer can compare the future `ChangeSetManifest` with this exact basis.",
+      "result": "satisfied",
+      "evidence": "The basis binds its plan step and four owning Design refs with hashes (66-84, all four Design hashes matching the supplied frozen inputs and the full plan hash at line 428 matching cf0305be...), fixes ordered slices with included and excluded surfaces and gates (305-329), names implementation bindings per module (240-243, 260-262, 278-280), and requires one Slice owner per changed symbol, export, contract field and test (351). The two findings are localized to line 404 and line 106 and do not remove that comparability."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "medium",
+      "path": "review_artifacts/runtime_self_test_execution_code_design.md",
+      "line": 404,
+      "quote": "absent new fields do not change a legacy request's canonical identity",
+      "requirement": "every load-bearing reference-and-hash edge names and tests its exact hash domain",
+      "impact": "The supplied code contradicts this compatibility claim. AuthorizedAgentExecutionRequest computes its identity from asdict(self) minus request_sha256 and hashes the whole mapping with sort_keys, including null-valued fields (src/agent_runtime/contracts/invocation_adapter_definition.py:603-626 and 773-782). Adding the paired test_execution_binding_ref and test_execution_binding_sha256 fields therefore changes request_sha256 for every request that leaves them null, and a previously serialized payload rehydrated into the new class would fail validate() with a hash mismatch. The hash-domain table at lines 426-436 also has no row for this canonical Adapter request identity, so neither the claim nor its negative control is testable as written. The step 5a implementer must then silently pick either an undeclared omit-when-null codec exception or an unannounced identity break.",
+      "required_change": "Close this edge in the basis: either add a hash-domain row that names the exact canonical identity domain of the augmented Adapter request, including how absent test-boundary fields are treated, with the positive and negative proof that legacy identity is preserved, or withdraw the legacy-identity claim and record the resulting identity change as an explicit compatibility obligation with its owning slice and test."
+    },
+    {
+      "severity": "medium",
+      "path": "review_artifacts/runtime_self_test_execution_code_design.md",
+      "line": 106,
+      "quote": "from: execution_boundary, to: module_execution, interface_id: revalidate_execution_boundary",
+      "requirement": "dependency direction, data access, external effects, failure, recovery, and rollback are explicit",
+      "impact": "Every other handoff edge points from the calling node to the module that owns the named interface (104, 105, 107, 108, 109, 110, 111), but this edge points from the owner to the caller. revalidate_execution_boundary declares owner_module_id execution_boundary (143), and execution_boundary's allowed_dependencies (231) do not include module_execution, so the normative flow asserts an undeclared execution_boundary to module_execution dependency. It also contradicts the kernel-initiated revalidation described at line 417 and implemented today at src/agent_runtime/execution/execution_module_invocation.py:1113-1117. An implementer or an independent reviewer comparing the future ChangeSetManifest cannot tell from the basis which module owns the revalidation call, which is an ownership decision this basis should not leave open.",
+      "required_change": "Make the revalidation edge agree with its interface owner and the module dependency map, so that the primary_flow edge, owner_module_id and allowed_dependencies state one caller and one owner for revalidate_execution_boundary."
+    }
+  ],
+  "scope_notes": [
+    "This is an independent external content review of one proposed CodeDesignBasis candidate. It is not exact-commit Engineering Review, registered Runtime execution, Design admission, implementation approval or release admission. Nothing was edited or approved, and the authorization to request external reviews was not treated as approval of this proposal.",
+    "Qualification check: no material misclaim found. The candidate keeps status proposed with approved_decision_ref null (60-61), states that no registered CodeDesignBasis schema or caller-action vocabulary exists in this repository and that this is a local proposal rather than registered Software Delivery validation (55-56), and records that formal plan preparation and registered plan or Design review evidence remain unestablished and that a separate Software Delivery basis decision must precede implementation (460-465). The Software Delivery contract itself lists the CodeDesignBasis caller-action vocabulary as an open decision (the_software_delivery.md line 61), so free-text caller actions with declared absence are correct here.",
+    "Absent implementation, an absent ChangeSetManifest and absent registry entries were not treated as defects. Work assigned to later steps was treated as valid handoff, not as a gap: invocation source symbols to step 5a (283, 291, 337, 404), verification runner and cleanup to steps 6 and 9, package projection and archive to steps 7 and 10, naming inventory to steps 7a and 9a, test binding registration to step 11, and the live gate plus exact-commit review to step 12 (453-456).",
+    "Hash verification limits: the four owning Design hashes (68, 72, 76, 80) and the full plan hash quoted at line 428 match the supplied frozen inputs. The step-row hash 5b8f9330... (84) could not be recomputed without tools; it is accepted as declared because line 428 names its extraction rule as the unique step-5 table row bytes including the terminal LF. The ref anchor #step-5-execution-code-design has no matching heading in the plan file, but the named row extraction rule keeps the subject resolvable, so this was not turned into a defect.",
+    "Edge line 111, execution_boundary to module_ledger through commit_attempt, was read as the fence-holding context for the kernel-owned finalization callback described at lines 35 and 178, not as a new boundary to ledger dependency; on that reading it keeps the to-equals-owner convention and no finding was filed. If the intended reading is a direct boundary call, execution_boundary's allowed_dependencies at line 231 would need module_ledger.",
+    "The seam payloads left to plan step 5a were assessed as exact handoff requirements rather than unresolved payloads or peer-owner changes: the paired canonical request fields are named (402-403), the request-bound read-only boundary callback and its cross-Attempt fail-closed rule are stated (405-407), and the ProviderOperationIntent test variant constraint is stated without renaming peer fields (411-412), with the whole execution_invocation_seam excluded from slices 1 and 2 and owned by slice 3 with its gate (308, 312, 318-320, 323-329)."
+  ],
+  "prose_review": "not_run"
+}

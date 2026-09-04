@@ -31,7 +31,7 @@ from agent_runtime.registry import (
     load_module_registration,
     runtime_owned_policy_schema_assets,
 )
-from agent_runtime.contracts.execution_module_definition import (
+from agent_runtime.contracts.registry_release_definition import (
     partition_module_operation_ids,
 )
 from agent_runtime.execution import execution_module_invocation

@@ -1,0 +1,76 @@
+{
+  "summary": "本次外部内容审查的唯一主题是 T1 domain root 候选 `designDoc/agent_runtime_00_execution_charter.md`（计划步骤 1）。候选在保持六项同层 responsibility 与既有 T2 分区不变的前提下，新增 §8.1 Runtime-hosted self-test 入口边界，并同步修订 Intent Capsule、§1 flow、§2/§3、§4、§6、§7 保留语义、§8 request classes 与质量规则 8、§9 的 08/09/11 委派行、§10 完成条件 8。十项 semantic check 全部满足：普通自测的隔离由“测试宿主显式提供资源 + 仅设 purpose 不获资源范围 + 效果发生前拒绝”构成，不依赖生产授权服务；本地与显式外部持久化的凭据归属（宿主取得、adapter 消费、Runtime core 不解析/不保管、模型进程不可取得）与事实保留（临时资源存续期、清理后不得声称可恢复、已有持久 Registry records 不受影响）表述清楚；exact release/input/Profile/declared operation/output 控制与外部生产入口边界均被显式保留。第十一项 prose check 在 semantic 全通过后执行，同样满足。无 material semantic defect，findings 为空。",
+  "subjects": [
+    {
+      "path": "designDoc/agent_runtime_00_execution_charter.md",
+      "assessment": "满足 T1 层义务且实现了本步骤声明的 intended result：把 Runtime-hosted self-test 的准入前提与外部生产请求的 acceptance 明确分开，同时不改动 §5 的六项 responsibility、依赖方向与 §9 的 T2 分区。变更面自洽：capsule 的 scope/inputs/runtime_triggers/verification_hooks 与 §1 节点 S、§8 class 4、§8.1、§9 行 08/09/11、§10 条目 8 相互解析；§7 新增的保留段与质量规则 5（Ledger 为 execution fact authority）、§8.1 的 Ledger 表述不冲突；§6 对 Product Authorization 仍只保留 database-permission 含义，§9 行 09 进一步把 database permission 明确归还 PA 或 Data Governance/domain owner，未向 PA 指派非数据库权限。T1 未越界定义 T2 payload、error code 或存储机制，也未新增授权服务。文中未声称任何 registered review、admission 或已完成实现，符合本步骤的 draft 定位。"
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "intent_and_reader_result",
+      "result": "satisfied",
+      "evidence": "候选 §0 scope 第 32 行「Runtime-hosted self-test independence and explicit test-resource boundaries」、§2 第 112 行「无需为普通自测部署业务产品的授权服务」与 §3 新增第 121–122 行读者收益（区分自测资源准入、外部生产访问与 provider 登录，并判断证据何时仅本地保留、何时可写入明确提供的外部存储）三者一致，且与 §8.1、§9 行 08/09/11 的实际内容对应。material Design choice（自测前提与生产入口分离、显式外部持久化）在正文可定位，Reader Gain 指名读者与新增判断能力，无 intent 缺口。"
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "result": "satisfied",
+      "evidence": "front matter 与 §0 capsule（第 4–7、22–26 行）声明 layer T1、canonical_owner 为自身、parent 为 `designDoc/the_agent_runtime.md`、owned_system_object 为 `Agent Runtime domain`，符合 Charter §8 的 `agent_runtime_00_*` T1 naming 与“每个 domain 恰好一个 00 root”。本次修订不新增、拆分或合并同层 responsibility：§5 六行未变，§9 仍为同一 11 个 T2 family，08/09/11 只是在既有 bounded capability 内补充自测相关委派，未互相侵占（行 11 明示「不接管 peer 的存储或执行语义」）。同域 T1 peer 集合为空（唯一 domain root），无遗漏或重复。"
+    },
+    {
+      "check_id": "layer_content_fit",
+      "result": "satisfied",
+      "evidence": "owned object 唯一（§4 第 130 行「本 T1 拥有一个 `Agent Runtime domain`」）。新增 §8.1 表达的是入口前提、资源边界、凭据归属与证据去向等稳定 domain 边界，具体 payload、error code、schema 与存储机制仍下沉：§4 第 146 行「具体 schema、field、storage 和 active pointer 属于 T2 machine contract 与 code truth」，§8 第 248–249 行把 public interface 与 caller-visible failure 逐项委派给 §9。§6 只列 inherited T0 约束，未复制 PA/DG 的内部合同，也未在 T1 内发明授权服务或 T2 代码布局。"
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "result": "satisfied",
+      "evidence": "§6 第 167–171 行保留 T0 约束：`user_key` 只随 database operation 原样进入 data-access adapter、不授权 Workflow/Module start 或 inspection；Runtime 不解析 credential 或接管 SQL；新增句「涉及外部受治理数据库时，仍由数据所属方提供适用的访问决定；测试用途不扩大其权限」与 the_product_authorization §4/§10 及 the_data_governance §7 一致。§9 行 09（第 289 行）「database permission retains Product Authorization or Data Governance/domain owner；Runtime owns only invalid ref、fence and late-result quarantine」与 §10 第 319–320 行一致，未把 peer denial 重写为 Runtime failure。§8.1 第 265–266 行的凭据归属与 the_agent_runtime §6.4、§7 第 6 条（Runtime 只携带、不解析/不签发/不刷新/不保管）方向一致，依赖方向（§5 第 160–162 行）未被自测路径改变。"
+    },
+    {
+      "check_id": "boundary_coherence",
+      "result": "satisfied",
+      "evidence": "各角色可区分：入口由请求所属 host integration、自测由测试宿主负责（§8 第 220 行），执行边界由 Execution/Invocation 强制（§9 行 08、§8.1 第 275 行），事实由 Ledger 保存、Inspection 只投影（§8 质量规则 5、§5 表），凭据由宿主取得并交给 storage/data-access adapter、Runtime core 不读取或保管（§8.1 第 265–266 行），验证证据由 Agent Capability Verification 汇总但不接管 peer 存储/执行语义（§9 行 11）。§8.1 第 273–275 行进一步把测试通过与业务接受、生产部署、subject-specific review approval 分开，approval authority 未与 operator/persistence owner 混同。"
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "result": "satisfied",
+      "evidence": "§9 第 294–295 行「当前文件 identity、implementation binding 和 migration status 来自 code-owned Design registration 与 generated inspection，不由本表维护」；§0 truth_surfaces（第 50–54 行）区分本 Design、code-owned Registry/adapter bindings、authoritative execution records 与 generated inspection；verification_hooks（第 70–75 行）只声明必须得到的结果，未写入当前实现清单、路径或测试数量。§8.1 只以逻辑资源类（临时 record store、artifact store）表达边界，未固定 schema、路径或 current binding。"
+    },
+    {
+      "check_id": "flow_interface_and_error_closure",
+      "result": "satisfied",
+      "evidence": "§1 图新增节点 S（第 87 行 Runtime-hosted Test/Evaluation 携带 exact release、input 与 test-resource bindings）与改写的 H（第 88 行「validated by T2 09 for the requested effect」），分别解析到 §8 class 4（第 213–215 行）、§8.1 与 §9 行 09；节点 C/T/Q/Y/X/K/O 与 §8 的七类 request 一一对应，R→E、E→I→P、E↔D、E→L、R→N、L→N 与 §5 第 160–162 行的依赖方向一致。本层无 owner-local public operation 与 caller-visible failure，并在 §8 第 248–249 行明确声明并整体委派给 §9；§10 第 315–321 行只做 family 级映射并声明「具体 error code、retryability、caller action 与 rollback 由 §9 对应 T2 定义」，未复制 child 的 interface/error row。"
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "result": "satisfied",
+      "evidence": "新增 §10 完成条件 8（第 312–313 行）把「资源越界、incompatible Profile/Adapter、provider 登录失败和外部保存失败」都要求有真实、可重现的失败证据，并与 §8.1 的归属一致：登录失败保留 Invocation/environment failure（第 260–261 行）、资源与能力限制由 08 执行（§9 行 08）、外部保存失败必须保留失败结果而非以本地结果冒充成功（第 269–270 行，落在 §9 行 04 ledger commit failed 的 fact-storage 归属，行 11 明示不接管 peer 存储）。§7 第 194–200 行把 recovery 限定在同一 execution lineage 且不扩大资源范围，并规定清理后不得声称可恢复/可检查，回退与保留义务留在正确层级。"
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "result": "satisfied",
+      "evidence": "后续 T2 无需自行补一个未声明的 authority 或 boundary：T2 09 得到「仅对需要外部决定的效果 validate and carry authorization context；普通自测不要求生产批准」与不变的 Runtime-owned failure 范围（§9 行 09）；T2 08 得到「在自测中同样执行声明的 capability 与资源限制，隔离 provider 登录和产品授权」（行 08）与 §8.1 第 258–261 行的必要条件清单；T2 11 得到自测独立性、临时资源策略与显式外部保存边界的验证职责及不接管 peer 语义的限制（行 11）。§3 第 124–126 行保留“能力必须唯一落入 §9 矩阵，否则返回 T1 owner”的规则，避免实现者自选相邻 T2。exact payload、error code 与存储机制按 T1 定位继续下沉，不构成 redesign 需求。"
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "result": "satisfied",
+      "evidence": "§0 review_gate（第 68 行）把独立 `design_contract_reviewer` review 与 accountable Runtime domain-owner decision 并列为 implementation 之前的两项不同结果；§8.1 第 273–275 行明确「不把测试通过解释成业务接受、生产部署或 subject-specific review approval」；§6 第 173–174 行把 delivery admission 留给 Software Delivery。候选正文未声称任何已完成的 registered review、Design admission 或实现完成，符合 draft 定位。"
+    },
+    {
+      "check_id": "prose_and_meaning_preservation",
+      "result": "satisfied",
+      "evidence": "前十项 semantic check 全部通过后，对同一份 candidate bytes 执行表达审查。中文正文为主体、English identifier 保持原样（符合 DDM §6.1）；§8.1 四段依「入口与拒绝→必要条件→资源与凭据→保留与清理及非扩张」推进，冷读者可复述治理含义；§9 表格新增文字未改变 owner、failure family 或依赖方向；§10 条目 8 与 §8.1 的失败表述互不矛盾，未改变归因、authority、因果或停止条件。"
+    }
+  ],
+  "findings": [],
+  "scope_notes": [
+    "唯一审查主题是 designDoc/agent_runtime_00_execution_charter.md（SHA256 243a821d…e5e9）。SystemChangePlan、handoff note、Charter、T0 及既有 T2/代码片段仅作为理解 subject 的 context，未被当作 candidate。",
+    "计划步骤 2/3/4 将修订的 T2 09、08、11 与相关代码属于后续步骤，本次按 as-built/predecessor context 处理；既有 09、08 文件 front matter 的 layer/parent 状态与 08 对 agent_runtime_10 的引用不在本主题内，也不作为本 T1 可被审查的前置条件。",
+    "旧 Agency Platform host-binding 副本的归档属于后续计划步骤；本候选未移动文件，也未准入替代合同，本次不对其作出判断。",
+    "§1 未提供写有 `none` 的 owner-local interface/error 表格，而是在 §8 第 248–249 行以正文声明本层无 owner-local public operation 并整体委派给 §9。表格形态属于 DDM §9.1 的确定性表达检查（DESIGN_REPRESENTATION_INCOMPLETE 路径），由 code validator 判定，不由本次 semantic review 代为执行；语义闭合本身成立。",
+    "本次为外部内容审查证据，不构成 registered `design_contract_reviewer` 执行、DDM 正式 admission 或 implementation authorization；未编辑、未批准任何文件。",
+    "候选未声明的实现细节（执行 kernel 现状、临时 PG schema、runner 组成）不在判断范围内，也未被推断为语义缺陷。"
+  ],
+  "prose_review": "表达审查在十项 semantic check 全部通过后，对同一份 exact candidate bytes 执行，结论为通过。全文以中文承载解释性正文、保留 English identifier 与 protected heading，术语在新旧段落间保持一致（如 self-test / 自测、测试宿主、test-resource binding、外部 Ledger binding）。§8.1 的四段结构（入口与效果前拒绝、必要条件、资源与凭据归属、保留清理与非扩张）便于冷读者按序复述；§9 表格与 §10 条目 8 对新增边界的表述未改变 owner、failure family、依赖方向或停止条件，也未引入新的数字、归因或兼容性主张。两处可读性观察（不构成 finding、不影响 check disposition）：第 198–199 行「临时存储在存续期间是该次执行的事实权威」与 §8 质量规则 5「Ledger 是 execution fact authority」使用了同一“事实权威”措辞，读者需结合 §8.1 第 275 行「Ledger 保存执行事实」才能确认临时存储是 Ledger 事实的存续位置而非第二个 authority；第 269–270 行「外部保存失败，必须保留失败结果」未在本层点名承接该失败的 T2 family，需由读者经 §9 行 11 的「不接管 peer 的存储」与行 04 的 fact-storage 归属推导。两者均可从当前 bytes 无歧义地解析出治理含义，属可选表达优化，不改变任何 governing meaning。"
+}

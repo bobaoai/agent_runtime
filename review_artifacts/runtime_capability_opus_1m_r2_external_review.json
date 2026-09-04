@@ -1,0 +1,76 @@
+{
+  "summary": "对 designDoc/agent_runtime_11_agent_capability_verification.md 这一份 T2 候选执行了十一项 DDM 检查的独立外部内容审查。十项语义检查全部通过，随后对同一份 bytes 执行第十一项表达检查，同样通过，未发现材料性语义缺陷，findings 为空。候选把 Runtime 自测独立性、临时测试资源与清理、可选外部证据目的地、registered Reviewer 的静态闭包用例与逐 transport 环境门、supported/unsupported 与 passed/failed/not_run 的分离、focused 与 complete 的区分、以及 exact subject/suite/case/peer 证据绑定都固定在本层，未发明实现清单或第二个 authority，peer 能力归属与 canonical Example intent 均保留。先前一条 medium finding（§8 缺少 host environment-availability inspection 的 owner-qualified ref/hash）在当前 bytes 已被修复，且预决者 diff 未显示任何必需行为丢失。缺少实现与正式 registration 属于资格限制而非缺陷，因为候选并未声称它们已存在。",
+  "subjects": [
+    {
+      "path": "designDoc/agent_runtime_11_agent_capability_verification.md",
+      "assessment": "候选完整、可实施，且与 T1（agent_runtime_00）§8.1、§9 row 11、§10 第 7/8 项，以及 08、09、05 的 owner-qualified 交接一致。§4.7 把测试资源身份、保留、清理与证据目的地固定为宿主显式 binding，明确「没有该 binding 时只写测试宿主的资源」「不得自动读取业务环境配置来寻找外部 sink」，并保护既有持久 Release Registry records 不进入清理（第 258 行），credential 由宿主交给 adapter、Runtime core 不解析（第 253 行）。§4.6 与 §4.8 把 registered Reviewer 的静态 owner case 与逐 declared transport 的环境门分开，并把合法 non_pass/blocked 认定为一次成功的 transport 验证、把 schema 不符或必需 validation 失败认定为 failed 而非 unsupported、把环境/credential 缺失认定为 not_run，三者互不改写。§7.1 与 §9.2/§9.3 把 case result 三态与 transport_capability 两态分置在不同轴上，禁止事后改写 expected_result，禁止以缩小 selected cases 把 focused pass 变成 complete pass，并规定 completed 仅表示 runner 结束。§8 单一 interface 的输入、输出与 §0 inputs、§1 Flow、§9.1 三个 error code 互相解析。§6 只固定 logical identity 与 Code Projection 要求，不写 path、test count 或当前状态。未发现 false green、循环前置、未声明的 owner 选择、不受控持久化或改写 peer 语义。"
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "intent_and_reader_result",
+      "result": "satisfied",
+      "evidence": "§2 User Intent（第 122-134 行）说明用固定测试判断 Agent 能力、区分本地确定性与环境依赖能力、普通自测无需生产授权，并说明一个 focused case 只证明该 case；§3 Reader Gain（第 138-147 行）逐条给出 reader 与新增判断能力，覆盖 frontmatter 全部 reader_persona（含 Runtime Operator、Example User），与 §0 scope 中 focused/complete、self-test 独立性、临时资源等 material choice 一致。"
+    },
+    {
+      "check_id": "layer_owner_and_parent",
+      "result": "satisfied",
+      "evidence": "frontmatter 与 §0 capsule（第 4-7、24-28 行）声明 layer T2、canonical_owner 为自身、parent 为 agent_runtime_00_execution_charter.md，文件名符合 agent_runtime_<NN>_* 且 NN != 00；对应 T1 §9 row 11 的 Agent Capability Verification 委派。§4.1-§4.6 的 Owning Design 列逐行归属 01/04/05/06/07/08/09/10，§4.4 另标注「03 owns event ingress」，peer set 无重复、无侵占。"
+    },
+    {
+      "check_id": "layer_content_fit",
+      "result": "satisfied",
+      "evidence": "owned_system_object 唯一为 Agent Capability Verification Contract；第 116-118 行明确本 Flow 只拥有 verification，peer 产品语义仍由各自 T2 owner 定义。§6.1 只绑定 logical identities 到 Code Projection，第 344-345 行显式把文件拆分、class 重命名、test 重组排除在本 T2 之外；§6.2 把当前 commit、test path、case inventory、pass/fail/skip count 留给 generated inspection。未为形式闭包发明不适用的 machine surface，也未创造第二个 review path（第 490-491 行）。"
+    },
+    {
+      "check_id": "peer_authority_and_inheritance",
+      "result": "satisfied",
+      "evidence": "第 223-228 行声明「本 T2 不要求 peer Design 额外生产本文发明的 conformance result」，case 失败时产品 failure 保留 Owning Design 的 error/owner，仅 harness 自身失败才用 AGENT_CAPABILITY_TEST_FAILED；第 243-246 行把 Public package 行固定为唯一消费既有 peer result（05 的 exact StandaloneReleaseConformanceResult）。继承 T1 约束：自测不需生产授权 client/Entitlement/allow-all（第 131-133 行）、既有持久 Registry records 不作清理对象（第 258 行）、credential 非 Runtime core 所有（第 253 行）。Software Delivery 只保留 required environment gate 与 suite admission 决定（第 385-386、483、490-491 行），未复制 peer 内部合同。"
+    },
+    {
+      "check_id": "boundary_coherence",
+      "result": "satisfied",
+      "evidence": "§4.8 第 279-283 行区分 Runtime verification 与 subject authority：subject-specific validator 由真实 owner 提供，Runtime 不重写 Reviewer meaning 或生成 verdict，且 Reviewer 的合法 non_pass 结论「不批准被审对象」。§9.1 三行分别固定 owner 与 caller action，storage/peer failure 保留原 owner；§0 review_gate 区分 design_contract_reviewer 与 executable test set 的 engineering_change_reviewer；第 493 行禁止 Example 变成第二个 Registry、Workflow record family 或业务数据 owner。"
+    },
+    {
+      "check_id": "design_and_code_truth_separation",
+      "result": "satisfied",
+      "evidence": "§6.1（第 330-345 行）要求 immutable Code Projection 承载 capability inventory、case registry、runner、runbook projection、generated inspection、peer result adapter set 与 admitted suite identity；§6.2（第 347-351 行）把当前 commit、test path、case inventory、计数、环境可用性与 observation timestamp 限定在 generated inspection。§8 第 412-414 行声明 AgentCapabilityVerificationResult 是 code-owned generated result、不由 Design Doc 手写当前 rows。全文无 exact path、版本号、测试数量或当前 binding。"
+    },
+    {
+      "check_id": "flow_interface_and_error_closure",
+      "result": "satisfied",
+      "evidence": "§1 Flow 的 HOST 节点（第 92 行）已包含 host environment-availability inspection 与测试资源/保留/目的地 bindings，与 §0 inputs 第 49 行、§8 input「owner-qualified host environment-availability inspection ref/hash」（第 408 行）、result 字段「host environment-availability inspection ref/hash」（第 411 行）及 §9.1 第 423 行 ENVIRONMENT_UNAVAILABLE 的条件「在 host availability inspection 中不可用」互相解析，先前 medium finding 已闭合。唯一 owner-local interface agent_capability_verification_run 在 Flow 边标签与 §8 表中一致；三个 error code 在 Flow（第 110-113 行）与 §9.1 表中一一对应，peer/storage failure 明确保留原 owner 而未被改写成本层错误。"
+    },
+    {
+      "check_id": "failure_completion_and_rollback",
+      "result": "satisfied",
+      "evidence": "§9.2 固定 candidate/running/completed 三个 invocation state 与 passed/failed/not_run 三态 capability result，禁止跨 capability 传播 pass，并声明「completed 仅表示 runner 已结束」（第 430-432 行）；效果仅限临时测试资源与 evidence，subject bytes 改变后旧结果只能作为 prior evidence（第 434-441 行）。§9.3 十一项完成条件区分 focused 与 full Runtime completion，覆盖 evidence source 解析、Example 正负用例、本地 deterministic 全 passed、required gate 全 passed、非 required gate 的照实记录、不写生产状态、05 peer result passed、subject/closure 绑定、required Reviewer transport 的 supported 证据，以及 cleanup 与外部证据交付成功。清理失败按 §4.7 第 267-268 行阻止要求该清理成功的 run 完成。"
+    },
+    {
+      "check_id": "implementability_without_redesign",
+      "result": "satisfied",
+      "evidence": "§7 表固定 AgentCapabilityTestCase 的十三个字段含义（含 evidence_source_kind 三值、environment_prerequisites 中「Gateway 不是独立 environment gate」、rerun_boundary 禁止跨 subject hash 继承 pass）；§7.1 固定 verification_scope 取值、三态写入规则与 transport_capability 的两值及其判定顺序；§8 固定输入闭包与最小 result 字段；§9.1 固定三个稳定 error code 与 caller action。条件性前置明确：05 result 与环境 binding 仅在 complete scope 或所选 case 需要时成为必需（第 379-384 行），suite admission 与 candidate verification 是两个独立决定（第 485-488 行），不构成循环前置。open_decisions 为空且未把未决选择留给实现者。"
+    },
+    {
+      "check_id": "review_approval_and_admission",
+      "result": "satisfied",
+      "evidence": "§0 review_gate（第 72 行）与 §10 第 485-491 行把 Design review、executable suite 的 Engineering Change Review/release admission、Runtime candidate 的 verification completion 明确分为不同决定，并声明本 T2 只提供 approved Design handoff、不创建第二条 review path；第 385-386 行声明 Software Delivery 的 gate decision 不是 Product Authorization 或生产执行许可；§4.6 第 221 行 package 失败保留 05 owner；§4.8 第 282-283 行声明 Reviewer 输出结论不批准被审对象。"
+    },
+    {
+      "check_id": "prose_and_meaning_preservation",
+      "result": "satisfied",
+      "evidence": "十项语义检查全部通过后，对同一份 exact bytes 执行表达审查：中文正文承载解释，受保护 heading、interface_id、error_code、字段名保持原样；§4.6、§4.7、§4.8、§7.1、§9.3 之间的数字、归属、authority、因果与停止条件互相一致，冷读者可准确复述 focused/complete、三态结果与 supported/unsupported 的分层含义。存在若干非阻断的措辞观察（见 prose_review），均不改变 governing meaning。"
+    }
+  ],
+  "findings": [],
+  "scope_notes": [
+    "审查对象只有 designDoc/agent_runtime_11_agent_capability_verification.md。T1（agent_runtime_00）、T2 08/09/05、旧 agent_runtime_10、各 T0 与 SystemChangePlan/handoff 仅作为判断上下文，未被当作 review subject，也未对其提出 finding。",
+    "src/agent_runtime/testing/agent_capability_verification.py、execution_module_invocation.py、execution_module_evaluation.py、invocation_context_preparation.py 按 handoff 声明为 as-built context。候选未声称 capability inventory 或 verification runner 已存在（§6.1 使用「需要一个 immutable Code Projection」，§10 列为下一步实现），因此缺少实现与正式 registration 是资格限制，不计为语义缺陷。",
+    "本次为独立外部内容审查：无工具、只使用所提供的冻结材料，未核验 SHA-256、未运行 DDM deterministic validator、未取得 registered design_contract_reviewer output，也未作任何编辑或批准。结论不构成 Runtime 执行证据、DDM 正式准入或实现授权。",
+    "先前一条 medium finding（§8 interface row 缺少 owner-qualified host environment-availability inspection ref/hash）在当前 bytes 已修复：见第 49、92、408、411 行与 §9.1 第 423 行的一致引用；revision diff 未显示任何必需行为在本次修订中丢失。",
+    "非阻断观察（不作为 finding）：§8 的 AgentCapabilityVerificationResult 最小字段列表未显式列出 §7.1 引入的 transport_capability。因该列表写明「至少包含」，且 §7.1 已固定该字段名称与取值域、§9.3 第 10 项已固定其完成语义，判为可选改进而非闭包缺口。",
+    "非阻断观察（不作为 finding）：§9.3 第 5 项允许不在 Software Delivery required set 中的 environment gate 即使 failed 也照实记录而不参与 aggregate completion。这是显式声明并把 required set 归属 Software Delivery 的 owner 选择，结果照实保留，不构成隐藏的 false green。"
+  ],
+  "prose_review": "第十一项表达检查在前十项语义检查全部通过后，对同一份 exact candidate bytes 执行，结论为通过：冷读者可以按本文复述治理含义，且数字、归属、authority、因果、不确定性、兼容性与停止条件均未被改变。文档结构符合 T2 protected heading 顺序，扩展章节 5-7 位于允许的 slot 内；中文说明与英文精确标识符的混用保持一致，未为受保护标识另造译名。以下三点属于可读性层面的非阻断观察，不要求修改，也不改变任何治理含义：其一，§4.6 第 237-238 行「`unsupported` 是 capability evidence，不等于 `passed`」把 transport_capability 轴与 case result 轴放在同一句对比，需要读到 §7.1 第 395-397 行「该 case 可以 passed 且 capability 为 unsupported」才能确认两轴分离，两处对 required-set completion 未满足的结论完全一致；其二，「Reviewer」一词同时用于 §5 canonical Example 中的并行节点 Reviewer A/B 与 §4.6/§4.8 中的 registered Reviewer transport，两者语境可区分（§5 第 295 行已声明 Example 不是业务 Workflow）；其三，§9.3 第 4 项使用的标识 `required_environment_gate_ids` 在 §0 inputs、§8 与 §7.1 中分别表述为 required-environment-gate decision 与 required set，指向同一 owner-qualified 输入。以上均未使读者对 focused/complete、三态结果、supported/unsupported 或完成条件产生错误复述。"
+}

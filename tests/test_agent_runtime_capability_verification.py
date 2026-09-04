@@ -2,15 +2,20 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+from pathlib import Path
 
 import pytest
 
-from agent_runtime.testing import (
+from agent_runtime.testing.conformance_agent_capability_verification import (
     AgentCapabilityCommand,
     AgentCapabilityEvidenceSourceKind,
     AgentCapabilityTestCase,
     render_agent_capability_runbook,
 )
+from agent_runtime.testing import conformance_agent_capability_verification as subject
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _case(
@@ -194,3 +199,358 @@ def test_runbook_projection_is_stable_across_input_order() -> None:
 def test_runbook_projection_rejects_duplicate_case_ids() -> None:
     with pytest.raises(ValueError, match="unique case_id"):
         render_agent_capability_runbook((_case(), _case()))
+
+
+def _focused_case() -> AgentCapabilityTestCase:
+    return replace(
+        _case(),
+        case_id="verify_explicit_module_loading",
+        capability_ids=("explicit_module_loading",),
+    )
+
+
+def _request(
+    *,
+    scope: subject.AgentCapabilityVerificationScope = (
+        subject.AgentCapabilityVerificationScope.FOCUSED
+    ),
+    selected_case_ids: tuple[str, ...] = ("verify_explicit_module_loading",),
+    standalone: bool = False,
+) -> subject.AgentCapabilityVerificationRequest:
+    return subject.AgentCapabilityVerificationRequest(
+        request_id="verify_runtime_candidate",
+        subject_ref="runtime-subject:commit-test",
+        subject_sha256="a" * 64,
+        suite_ref="verification-suite:runtime-v1",
+        suite_sha256="b" * 64,
+        dependency_closure_ref="verification-closure:runtime-v1",
+        dependency_closure_sha256="c" * 64,
+        scope=scope,
+        selected_case_ids=selected_case_ids,
+        standalone_conformance_ref=(
+            "standalone-conformance:runtime-v1" if standalone else None
+        ),
+        standalone_conformance_sha256=("d" * 64 if standalone else None),
+    )
+
+
+def _passed(case: AgentCapabilityTestCase) -> subject.AgentCapabilityCaseResult:
+    return subject.AgentCapabilityCaseResult(
+        case_id=case.case_id,
+        capability_ids=case.capability_ids,
+        state=subject.AgentCapabilityResultState.PASSED,
+        evidence_refs=(f"evidence:{case.case_id}",),
+    )
+
+
+def test_required_inventory_contains_exactly_42_unique_capabilities() -> None:
+    inventory = subject.required_agent_capability_inventory()
+
+    assert len(inventory) == 42
+    assert {entry.capability_id for entry in inventory} == {
+        "explicit_module_loading",
+        "path_free_release_identity",
+        "schema_closure",
+        "prompt_closure",
+        "policy_closure",
+        "profile_independence",
+        "generic_profile_compatibility",
+        "inline_semantic_input",
+        "structured_output",
+        "tool_free_execution",
+        "runtime_hosted_self_test",
+        "authorized_gateway_read",
+        "attempt_workspace",
+        "context_isolation",
+        "network_enforcement",
+        "provider_failure_normalization",
+        "module_run",
+        "multiple_variants",
+        "evaluation_and_selection",
+        "retry_budget",
+        "idempotent_replay",
+        "operation_boundary_enforcement",
+        "cancellation",
+        "graph_authoring",
+        "sequential_and_branch_routing",
+        "parallel_fan_out_and_join",
+        "revision_loop",
+        "wait_and_external_event",
+        "crash_recovery",
+        "portable_workflow_registration",
+        "per_registry_execution_binding",
+        "attempt_and_workflow_ledger",
+        "usage_truth",
+        "release_inspection",
+        "execution_inspection",
+        "persistent_registry",
+        "persistent_ledger",
+        "persistent_inspection",
+        "durable_backend",
+        "live_provider_adapter",
+        "registered_module_transport",
+        "public_package",
+    }
+    reviewer = next(
+        entry
+        for entry in inventory
+        if entry.capability_id == "registered_module_transport"
+    )
+    assert reviewer.evidence_source_kinds == (
+        AgentCapabilityEvidenceSourceKind.EXECUTABLE_OWNER_CASE,
+        AgentCapabilityEvidenceSourceKind.ENVIRONMENT_GATE,
+    )
+    package = next(
+        entry for entry in inventory if entry.capability_id == "public_package"
+    )
+    assert package.evidence_source_kinds == (
+        AgentCapabilityEvidenceSourceKind.REFERENCED_PEER_RESULT,
+    )
+
+
+def test_nine_canonical_cases_close_the_inventory_and_runbook() -> None:
+    inventory = subject.required_agent_capability_inventory()
+    cases = subject.required_agent_capability_cases()
+    cases_by_id = {case.case_id: case for case in cases}
+
+    assert len(cases) == 9
+    assert {
+        case_id for entry in inventory for case_id in entry.case_ids
+    } == set(cases_by_id)
+    for entry in inventory:
+        for case_id in entry.case_ids:
+            assert entry.capability_id in cases_by_id[case_id].capability_ids
+            assert (
+                cases_by_id[case_id].evidence_source_kind
+                in entry.evidence_source_kinds
+            )
+    for case in cases:
+        for argument in case.command.argv:
+            if argument.endswith(".py"):
+                assert (REPO_ROOT / argument).is_file()
+
+    runbook = json.loads(render_agent_capability_runbook(cases))
+    assert len(runbook["cases"]) == 9
+    assert [case["case_id"] for case in runbook["cases"]] == sorted(cases_by_id)
+
+
+def test_generated_public_capability_docs_match_code_owned_cases() -> None:
+    inventory = subject.required_agent_capability_inventory()
+    cases = subject.required_agent_capability_cases()
+
+    assert (
+        REPO_ROOT / "docs/agent_runtime_capabilities.md"
+    ).read_text(encoding="utf-8") == subject.render_agent_capability_catalog_markdown(
+        inventory,
+        cases,
+    )
+    assert (
+        REPO_ROOT / "docs/agent_runtime_capability_runbook.md"
+    ).read_text(encoding="utf-8") == subject.render_agent_capability_runbook_markdown(
+        cases
+    )
+    assert (
+        REPO_ROOT / "src/agent_runtime/docs/agent_runtime_capabilities.md"
+    ).read_text(encoding="utf-8") == subject.render_agent_capability_catalog_markdown(
+        inventory,
+        cases,
+    )
+    assert (
+        REPO_ROOT / "src/agent_runtime/docs/agent_runtime_capability_runbook.md"
+    ).read_text(encoding="utf-8") == subject.render_agent_capability_runbook_markdown(
+        cases
+    )
+
+
+def test_engineering_reviewer_static_capability_closure() -> None:
+    module_root = (
+        REPO_ROOT
+        / "09_soul/governance/skills/engineering-change-review/runtime_modules"
+        / "engineering_change_reviewer"
+    )
+    registration = json.loads(
+        (module_root / "module_registration.json").read_text(encoding="utf-8")
+    )
+    input_schema = json.loads(
+        (module_root / "schemas/input.schema.json").read_text(encoding="utf-8")
+    )
+    output_schema = json.loads(
+        (module_root / "schemas/output.schema.json").read_text(encoding="utf-8")
+    )
+
+    assert registration["schema_version"] == "runtime_module_registration_v2"
+    assert registration["module_id"] == "engineering_change_reviewer"
+    assert registration["input_schema_ref"] == input_schema["$id"]
+    assert registration["output_schema_ref"] == output_schema["$id"]
+    assert registration["declared_operation_ids"] == [
+        "model_execute",
+        "repository_read",
+        "repository_search",
+        "sandbox_command_execute",
+    ]
+
+
+def test_verification_request_rejects_partial_package_evidence() -> None:
+    request = replace(
+        _request(),
+        standalone_conformance_ref="standalone-conformance:runtime-v1",
+    )
+
+    with pytest.raises(ValueError, match="must be paired"):
+        request.validate()
+
+
+def test_focused_runner_passes_only_the_selected_scope() -> None:
+    result = subject.run_agent_capability_verification(
+        _request(),
+        cases=(_focused_case(),),
+        inventory=(
+            subject.AgentCapabilityInventoryEntry(
+                capability_id="explicit_module_loading",
+                owning_design_refs=(
+                    "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+                ),
+                evidence_source_kinds=(
+                    AgentCapabilityEvidenceSourceKind.EXECUTABLE_OWNER_CASE,
+                ),
+                case_ids=("verify_explicit_module_loading",),
+            ),
+        ),
+        execute_case=_passed,
+    )
+
+    assert result.scope_completed is True
+    assert result.full_runtime_completed is False
+    assert result.case_results[0].state is subject.AgentCapabilityResultState.PASSED
+
+
+@pytest.mark.parametrize(
+    ("state", "failure_code"),
+    (
+        (subject.AgentCapabilityResultState.FAILED, "ADAPTER_OUTPUT_INVALID"),
+        (
+            subject.AgentCapabilityResultState.NOT_RUN,
+            "AGENT_CAPABILITY_ENVIRONMENT_UNAVAILABLE",
+        ),
+    ),
+)
+def test_non_passing_case_never_propagates_completion(
+    state: subject.AgentCapabilityResultState,
+    failure_code: str,
+) -> None:
+    def execute(case: AgentCapabilityTestCase) -> subject.AgentCapabilityCaseResult:
+        evidence_refs = (
+            ("diagnostic:adapter-output",)
+            if state is subject.AgentCapabilityResultState.FAILED
+            else ()
+        )
+        return subject.AgentCapabilityCaseResult(
+            case_id=case.case_id,
+            capability_ids=case.capability_ids,
+            state=state,
+            evidence_refs=evidence_refs,
+            failure_code=failure_code,
+            failure_owner_ref=(
+                "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"
+            ),
+        )
+
+    result = subject.run_agent_capability_verification(
+        _request(),
+        cases=(_focused_case(),),
+        inventory=(
+            subject.AgentCapabilityInventoryEntry(
+                capability_id="explicit_module_loading",
+                owning_design_refs=(
+                    "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+                ),
+                evidence_source_kinds=(
+                    AgentCapabilityEvidenceSourceKind.EXECUTABLE_OWNER_CASE,
+                ),
+                case_ids=("verify_explicit_module_loading",),
+            ),
+        ),
+        execute_case=execute,
+    )
+
+    assert result.scope_completed is False
+    assert result.full_runtime_completed is False
+    assert result.case_results[0].failure_code == failure_code
+
+
+def test_complete_scope_requires_full_inventory_and_package_result() -> None:
+    with pytest.raises(
+        subject.AgentCapabilityVerificationError,
+        match="complete inventory required",
+    ) as raised:
+        subject.run_agent_capability_verification(
+            _request(
+                scope=subject.AgentCapabilityVerificationScope.COMPLETE,
+                standalone=True,
+            ),
+            cases=(_focused_case(),),
+            inventory=(
+                subject.AgentCapabilityInventoryEntry(
+                    capability_id="explicit_module_loading",
+                    owning_design_refs=(
+                        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+                    ),
+                    evidence_source_kinds=(
+                        AgentCapabilityEvidenceSourceKind.EXECUTABLE_OWNER_CASE,
+                    ),
+                    case_ids=("verify_explicit_module_loading",),
+                ),
+            ),
+            execute_case=_passed,
+        )
+    assert raised.value.error_code == subject.AGENT_CAPABILITY_COVERAGE_INCOMPLETE
+
+
+def test_runner_rejects_a_case_result_for_another_case() -> None:
+    def wrong_result(
+        case: AgentCapabilityTestCase,
+    ) -> subject.AgentCapabilityCaseResult:
+        return replace(_passed(case), case_id="verify_schema_closure")
+
+    with pytest.raises(
+        subject.AgentCapabilityVerificationError,
+        match="case result identity mismatch",
+    ) as raised:
+        subject.run_agent_capability_verification(
+            _request(),
+            cases=(_focused_case(),),
+            inventory=(
+                subject.AgentCapabilityInventoryEntry(
+                    capability_id="explicit_module_loading",
+                    owning_design_refs=(
+                        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+                    ),
+                    evidence_source_kinds=(
+                        AgentCapabilityEvidenceSourceKind.EXECUTABLE_OWNER_CASE,
+                    ),
+                    case_ids=("verify_explicit_module_loading",),
+                ),
+            ),
+            execute_case=wrong_result,
+        )
+    assert raised.value.error_code == subject.AGENT_CAPABILITY_TEST_FAILED
+
+
+def test_complete_case_execution_still_does_not_claim_full_runtime() -> None:
+    inventory = subject.required_agent_capability_inventory()
+    cases = subject.required_agent_capability_cases()
+    selected = tuple(case.case_id for case in cases)
+
+    result = subject.run_agent_capability_verification(
+        _request(
+            scope=subject.AgentCapabilityVerificationScope.COMPLETE,
+            selected_case_ids=selected,
+            standalone=True,
+        ),
+        cases=cases,
+        inventory=inventory,
+        execute_case=_passed,
+    )
+
+    assert result.scope_completed is True
+    assert result.full_runtime_completed is False

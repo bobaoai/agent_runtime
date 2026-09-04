@@ -40,7 +40,7 @@ packages = [
 "agent_runtime" = "src/agent_runtime"
 
 [tool.setuptools.package-data]
-"agent_runtime" = ["README.md", "design_contract/*.md", "design_contract/*.json"]
+"agent_runtime" = ["README.md", "design_contract/*.md", "design_contract/*.json", "docs/*.md"]
 "agent_runtime.inspection" = ["*.json"]
 
 [tool.pytest.ini_options]

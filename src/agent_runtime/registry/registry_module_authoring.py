@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
 
-from ..contracts.execution_module_definition import partition_module_operation_ids
 from ..contracts.registry_release_definition import (
     BehaviorPolicyRelease,
     EvaluationPolicyRelease,
@@ -16,6 +15,7 @@ from ..contracts.registry_release_definition import (
     ModuleRelease,
     PromptComponentKind,
     RetryPolicyRelease,
+    partition_module_operation_ids,
 )
 from .registry_module_loading import (
     ModuleRegistrationSource,

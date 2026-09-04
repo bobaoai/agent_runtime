@@ -42,6 +42,31 @@ NETWORK_POLICIES = frozenset({"denied", "gateway_only", "direct_sandboxed"})
 OUTPUT_CONSTRAINT_MODES = frozenset(
     {"prompt_only_json", "native_structured_output"}
 )
+MODEL_INVOCATION_OPERATION_IDS = frozenset({"invoke_model", "model_execute"})
+
+
+def partition_module_operation_ids(
+    operation_ids: tuple[str, ...],
+) -> tuple[str, frozenset[str]]:
+    """Return the sole model operation and exact non-model operation set."""
+
+    if type(operation_ids) is not tuple:
+        raise ValueError("Module declared_operation_ids must be an immutable tuple")
+    for operation_id in operation_ids:
+        validate_id("declared_operation_id", operation_id)
+    if len(operation_ids) != len(set(operation_ids)):
+        raise ValueError("Module declared_operation_ids must be unique")
+    model_operations = tuple(
+        operation_id
+        for operation_id in operation_ids
+        if operation_id in MODEL_INVOCATION_OPERATION_IDS
+    )
+    if len(model_operations) != 1:
+        raise ValueError("Module must declare exactly one model invocation operation")
+    return (
+        model_operations[0],
+        frozenset(operation_ids).difference(MODEL_INVOCATION_OPERATION_IDS),
+    )
 
 
 def _canonical_sha256(payload: Mapping[str, Any]) -> str:
@@ -1639,8 +1664,10 @@ __all__ = [
     "is_prompt_component_member_ref",
     "ExecutionProfileRelease",
     "ModuleEntryPolicy",
+    "MODEL_INVOCATION_OPERATION_IDS",
     "ModuleExecutionPurpose",
     "ModuleKind",
+    "partition_module_operation_ids",
     "NETWORK_POLICIES",
     "OUTPUT_CONSTRAINT_MODES",
     "SEMANTIC_INPUT_DELIVERY_MODES",

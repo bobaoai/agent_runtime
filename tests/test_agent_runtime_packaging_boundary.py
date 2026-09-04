@@ -740,7 +740,7 @@ def test_canonical_runtime_truth_surface_paths_exist() -> None:
         if not (REPO_ROOT / path).exists()
     ]
 
-    assert len(declared) == 28
+    assert len(declared) == 21
     assert missing == []
 
 

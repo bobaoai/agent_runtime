@@ -28,13 +28,15 @@ from ..contracts.execution_authorization_definition import (
     ProtectedOperationIntent,
 )
 from ..contracts.execution_module_definition import (
-    MODEL_INVOCATION_OPERATION_IDS,
     ModuleExecutionLedger,
     ModuleExecutionRequest,
     ModuleOutputBinding,
     ModuleRunResult,
     ModuleVariantRequest,
     WorkflowModuleExecutionRequest,
+)
+from ..contracts.registry_release_definition import (
+    MODEL_INVOCATION_OPERATION_IDS,
     partition_module_operation_ids,
 )
 from ..contracts.invocation_adapter_definition import (

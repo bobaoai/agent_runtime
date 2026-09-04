@@ -50,7 +50,7 @@ RUNTIME_DESIGN_DOCS = (
     "designDoc/agent_runtime_03_authorized_external_event_ingress.md",
     "designDoc/agent_runtime_07_temporal_durable_adapter_contract.md",
     "designDoc/agent_runtime_09_authorization_integration_contract.md",
-    "designDoc/agent_runtime_10_workflow_execution_binding_and_admission_contract.md",
+    "designDoc/agent_runtime_11_agent_capability_verification.md",
 )
 
 
@@ -137,8 +137,12 @@ def test_canonical_runtime_names_reject_non_snake_case(
 def test_runtime_design_docs_use_snake_case_canonical_inline_names() -> None:
     allowed_python_projection_names = {
         "`AuthorizationAdapter`",
+        "`AgentCapabilityTestCase`",
+        "`AgentCapabilityVerificationResult`",
         "`DataAccessAdapter`",
         "`PascalCase`",
+        "`StandaloneReleaseConformanceResult`",
+        "`Workflow`",
         "`Z1`",
         "`Z2`",
         "`Z3`",

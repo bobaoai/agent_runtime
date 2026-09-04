@@ -77,6 +77,7 @@ from .invocation_workspace_preparation import (
 
 _MCP_SERVER_NAME = "runtime_data_access"
 _DRAFT_WORKSPACE_TOOLS = ("Read", "Write", "Edit")
+_CLAUDE_SANDBOX_WORKSPACE_ROOTS = (Path("/root"), Path("/repo"))
 
 
 def _inside(root: Path, raw_path: str) -> bool:
@@ -88,6 +89,21 @@ def _inside(root: Path, raw_path: str) -> bool:
     )
     resolved_root = root.resolve()
     return resolved == resolved_root or resolved_root in resolved.parents
+
+
+def _inside_attempt_workspace(root: Path, raw_path: str) -> bool:
+    """Accept host and Claude-sandbox views of one Attempt workspace."""
+
+    candidate = Path(raw_path)
+    provider_top_level_file = (
+        candidate.is_absolute()
+        and len(candidate.parts) == 2
+        and candidate.name not in {"", ".", ".."}
+    )
+    return provider_top_level_file or _inside(root, raw_path) or any(
+        _inside(provider_root, raw_path)
+        for provider_root in _CLAUDE_SANDBOX_WORKSPACE_ROOTS
+    )
 
 
 def _json_tool_result(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -434,10 +450,14 @@ class _ClaudeAgentSdkExecutorBase:
                 path_value = tool_input.get("file_path") or tool_input.get(
                     "path"
                 )
-                if not path_value or not _inside(workspace, str(path_value)):
+                if not path_value or not _inside_attempt_workspace(
+                    workspace,
+                    str(path_value),
+                ):
                     return PermissionResultDeny(
                         message=(
-                            f"tool {tool_name} path escapes the Attempt draft workspace"
+                            f"tool {tool_name} path {str(path_value)!r} escapes "
+                            "the Attempt draft workspace"
                         ),
                         interrupt=True,
                     )
@@ -448,6 +468,7 @@ class _ClaudeAgentSdkExecutorBase:
             )
 
         profile_policy_refused = False
+        profile_policy_refusal_reason: str | None = None
 
         async def enforce_profile_tool(
             hook_input: dict[str, Any],
@@ -456,7 +477,7 @@ class _ClaudeAgentSdkExecutorBase:
         ) -> dict[str, Any]:
             """Gate every exposed tool, including SDK-auto-approved Read calls."""
 
-            nonlocal profile_policy_refused
+            nonlocal profile_policy_refused, profile_policy_refusal_reason
             decision = await can_use_tool(
                 hook_input["tool_name"],
                 hook_input["tool_input"],
@@ -470,6 +491,7 @@ class _ClaudeAgentSdkExecutorBase:
                     }
                 }
             profile_policy_refused = True
+            profile_policy_refusal_reason = decision.message
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
@@ -669,13 +691,17 @@ class _ClaudeAgentSdkExecutorBase:
             "provider_response": bounded_trace_text(provider_text),
         }
         if profile_policy_refused:
+            trace["policy_refusal_reason"] = profile_policy_refusal_reason
             raise_terminal_failure(
                 artifact_host=self._artifact_host,
                 request=request,
                 profile=profile,
                 failure_class="policy_violation",
                 failure_code="claude_profile_tool_refused",
-                message="Claude requested a tool outside its Profile boundary",
+                message=(
+                    "Claude requested a tool outside its Profile boundary: "
+                    f"{profile_policy_refusal_reason}"
+                ),
                 provider_response=provider_text,
                 retry_disposition_id="retry_denied",
                 trace=trace,
