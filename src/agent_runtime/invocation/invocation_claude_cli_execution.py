@@ -184,6 +184,8 @@ class ClaudeCliNativeToolsModuleExecutor:
                 "variant_id": request.variant_id, "module_release_sha256": prepared.module.release_sha256,
                 "execution_profile_sha256": profile.release_sha256,
                 "prompt_envelope_sha256": request.prompt_envelope_sha256,
+                "execution_authorization_binding_ref": request.execution_authorization_binding_ref,
+                "execution_authorization_binding_sha256": request.execution_authorization_binding_sha256,
             })
             with lease_attempt_workspace(attempt), tempfile.TemporaryDirectory(prefix="crt-", dir="/tmp") as temporary:
                 work = attempt / "work"
@@ -191,7 +193,8 @@ class ClaudeCliNativeToolsModuleExecutor:
                 scratch = work / "scratch"
                 for directory in (work, materials, scratch):
                     if directory.is_symlink():
-                        raise AttemptWorkspaceConflictError("CLI workspace directory is a symlink")
+                        policy_refusal = "CLI workspace directory is a symlink"
+                        raise AttemptWorkspaceConflictError(policy_refusal)
                     directory.mkdir(mode=0o700, exist_ok=True)
                 cli_temporary = Path(temporary).resolve()
                 material_hashes = {}
@@ -204,14 +207,16 @@ class ClaudeCliNativeToolsModuleExecutor:
                         raise ValueError("logical_name is not a safe material filename")
                     target = materials / item.logical_name
                     if target.is_symlink():
-                        raise AttemptWorkspaceConflictError("material file is a symlink")
+                        policy_refusal = "material file is a symlink"
+                        raise AttemptWorkspaceConflictError(policy_refusal)
                     stage = "authorized_input_read"
                     body = host.read_authorized_input(item.local_handle)
                     stage = "material_preparation"
                     if hashlib.sha256(body).hexdigest() != item.input_sha256:
                         raise ValueError("authorized input hash mismatch")
                     if target.exists() and target.read_bytes() != body:
-                        raise AttemptWorkspaceConflictError("existing material content differs")
+                        policy_refusal = "existing material content differs"
+                        raise AttemptWorkspaceConflictError(policy_refusal)
                     if not target.exists():
                         target.write_bytes(body)
                     material_hashes[str(target)] = item.input_sha256

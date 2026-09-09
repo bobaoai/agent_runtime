@@ -174,7 +174,7 @@ def test_postgres_existing_attempt_start_never_refreshes_budget(tmp_path, monkey
     assert query.load_trace(execution_id).records_of_type(WorkflowAttemptStartedRecord)[0] == original
 
 
-def _run_rejected_gateway(tmp_path, monkeypatch, rejection, *, store=None):
+def _run_rejected_gateway(tmp_path, monkeypatch, rejection, *, store=None, usage_patch=None):
     import test_agent_runtime_native_structured_output as native
     from agent_runtime.contracts.ledger_record_definition import LegacyModuleCapabilityGrant, ToolCallRecord
     options, binding, adapter = native._workflow_gateway_setup(tmp_path, record_store=store, content_store=store)
@@ -196,7 +196,7 @@ def _run_rejected_gateway(tmp_path, monkeypatch, rejection, *, store=None):
             "output_schema": {},
             "missing_observation": {"tool_observations": (), "tool_operation_ref_ids": ()},
             "unresolvable_trace": {"cell_local_trace_ref": "missing:trace"},
-            "invalid_usage": {"input_tokens": True},
+            "invalid_usage": usage_patch if usage_patch is not None else {"input_tokens": True},
             "duplicate_observation": {},
             "missing_first_observation": {},
             "invalid_tool_id": {"tool_observations": (replace(result.tool_observations[0], tool_call_id=[]),)},
@@ -209,7 +209,12 @@ def _run_rejected_gateway(tmp_path, monkeypatch, rejection, *, store=None):
     assert attempt.status == "failed" and not run.outputs
     uncertain_calls = rejection in {"missing_observation", "duplicate_observation", "missing_first_observation", "invalid_tool_id"}
     assert len(attempt.tool_calls) == (0 if uncertain_calls else 1)
-    assert attempt.usage.input_tokens == (None if rejection == "invalid_usage" else 3)
+    if usage_patch is None:
+        assert attempt.usage.input_tokens == (None if rejection == "invalid_usage" else 3)
+        assert attempt.usage.output_tokens == 2
+    else:
+        assert attempt.usage.as_dict() == {key: value if type(value) is int and value >= 0 else None
+                                          for key, value in usage_patch.items()}
     assert (attempt.provider_trace_ref is None) == (rejection == "unresolvable_trace")
     trace = binding.record_store.load_trace(run.module_run.workflow_execution_id)
     assert len(trace.records_of_type(LegacyModuleCapabilityGrant)) == (3 if rejection in {"duplicate_observation", "missing_first_observation"} else 2)
@@ -226,18 +231,28 @@ def test_kernel_rejection_preserves_verified_facts_and_finalizes(tmp_path, monke
     _run_rejected_gateway(tmp_path, monkeypatch, rejection)
 
 
-@pytest.mark.parametrize("rejection", ["identity", "missing_observation", "missing_first_observation"])
+@pytest.mark.parametrize("rejection", ["identity", "missing_observation", "missing_first_observation", "invalid_usage"])
 def test_postgres_rejected_gateway_closes_and_round_trips(tmp_path, monkeypatch, pg_stores, rejection):
+    from agent_runtime.contracts.ledger_record_definition import UsageEvent
     run, cell = _run_rejected_gateway(tmp_path, monkeypatch, rejection, store=pg_stores[1])
     query = pg_stores[2]()
     execution_id = run.module_run.workflow_execution_id
     terminal = query.load_trace(execution_id).records_of_type(WorkflowAttemptRecord)[0]
     assert terminal.status == "failed"
+    assert query.load_trace(execution_id).records_of_type(UsageEvent)[0].output_tokens == 2
     for prefix in ("provider_trace", "failure_detail"):
         ref, digest = getattr(terminal, prefix + "_ref"), getattr(terminal, prefix + "_sha256")
         body = query.load_content(execution_id, ref)
         assert body.content_sha256 == digest
         assert body.body == cell.read_bytes(ref, digest)
+
+
+@pytest.mark.parametrize("component", ["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"])
+@pytest.mark.parametrize("invalid", [True, -1, 1.5, "2"])
+def test_rejected_result_preserves_each_other_valid_usage_component(tmp_path, monkeypatch, component, invalid):
+    usage = {"input_tokens": 3, "output_tokens": 2, "cache_read_tokens": 0, "cache_creation_tokens": 1}
+    usage[component] = invalid
+    _run_rejected_gateway(tmp_path, monkeypatch, "invalid_usage", usage_patch=usage)
 
 
 @pytest.mark.parametrize("provider_error", [False, True])

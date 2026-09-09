@@ -26,6 +26,7 @@
     "designDoc/the_charter.md",
     "designDoc/the_agent_runtime.md",
     "tools/__init__.py",
+    "tools/build_agent_runtime_api_reference.py",
     "tools/build_agent_runtime_design_contract_bundle.py",
     "tools/public_repository_validation.py",
     "tests/test_public_repository_validation.py",

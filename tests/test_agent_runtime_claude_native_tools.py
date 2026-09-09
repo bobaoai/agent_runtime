@@ -97,6 +97,102 @@ def _run(env, tmp_path, event_factory):
     return run, cell
 
 
+@pytest.mark.parametrize("change", [None, "binding", "legacy_marker"])
+def test_attempt_workspace_binds_exact_authorization_boundary(tmp_path, monkeypatch, change):
+    captured = []
+    entered = []
+    execute = claude.ClaudeCliNativeToolsModuleExecutor._execute
+    def capture(adapter, request, host, prepared):
+        captured.append((adapter, request, host))
+        return execute(adapter, request, host, prepared)
+    def events(call):
+        entered.append(True)
+        yield _init()
+        yield _result()
+    monkeypatch.setattr(claude.ClaudeCliNativeToolsModuleExecutor, "_execute", capture)
+    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    assert run.attempts[0].status == "completed"
+    adapter, request, host = captured[0]
+    marker = tmp_path / "attempts" / request.attempt_id / ".agent_runtime_attempt.json"
+    identity = json.loads(marker.read_text())
+    assert identity.get("execution_authorization_binding_ref") == request.execution_authorization_binding_ref
+    assert identity.get("execution_authorization_binding_sha256") == request.execution_authorization_binding_sha256
+    scratch = marker.parent / "work/scratch/retained.txt"
+    scratch.write_text("existing private draft")
+    if change == "binding":
+        values = {item.name:getattr(request,item.name) for item in fields(request) if item.name != "request_sha256"}
+        values.update(execution_authorization_binding_ref="authorization-binding:different",
+                      execution_authorization_binding_sha256="f"*64)
+        request = type(request).build(**values)
+    elif change == "legacy_marker":
+        identity.pop("execution_authorization_binding_ref")
+        identity.pop("execution_authorization_binding_sha256")
+        marker.write_text(json.dumps(identity, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+    before = marker.read_bytes()
+    # Exercise the Adapter boundary with a valid request. The original host's
+    # terminal staging can reject the second result; this is not kernel replay.
+    try:
+        adapter.execute(request, host)
+    except ValueError:
+        pass
+    assert len(entered) == (2 if change is None else 1)
+    assert marker.read_bytes() == before
+    assert scratch.read_text() == "existing private draft"
+
+
+@pytest.mark.parametrize("target", ["work", "work/materials", "work/scratch", "material_file", "changed_material"])
+def test_preinvocation_workspace_policy_refusal_is_recorded(tmp_path, monkeypatch, target):
+    entered = []
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    protected = outside / "private.txt"
+    protected.write_text("untouched")
+    prepare = claude.prepare_attempt_workspace
+    def altered_workspace(**kwargs):
+        attempt = prepare(**kwargs)
+        if target in {"material_file", "changed_material"}:
+            materials = attempt / "work/materials"
+            materials.mkdir(parents=True)
+            path = materials / "source"
+            if target == "material_file":
+                path.symlink_to(protected)
+            else:
+                path.write_text("different old bytes")
+        else:
+            path = attempt / target
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to(outside, target_is_directory=True)
+        return attempt
+    monkeypatch.setattr(claude, "prepare_attempt_workspace", altered_workspace)
+    def events(call):
+        entered.append(True)
+        yield _init()
+        yield _result()
+    run, cell = _run(_environment(tmp_path, material=b"authorized bytes"), tmp_path, events)
+    attempt = run.attempts[0]
+    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert attempt.status == "failed" and not run.outputs
+    assert attempt.failure_class == "policy_violation"
+    assert detail["failure_code"] == "ADAPTER_POLICY_VIOLATION"
+    assert trace["policy_refusal_reason"]
+    assert entered == [] and protected.read_text() == "untouched"
+
+
+def test_workspace_dependency_failure_is_not_policy_violation(tmp_path, monkeypatch):
+    def unavailable(**kwargs):
+        raise OSError("workspace storage unavailable")
+    monkeypatch.setattr(claude, "prepare_attempt_workspace", unavailable)
+    def events(call):
+        pytest.fail("provider must not enter")
+        yield _result()
+    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    attempt = run.attempts[0]
+    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+    assert attempt.failure_class == "dependency_unavailable"
+    assert detail["failure_code"] == "ADAPTER_BINDING_UNAVAILABLE"
+
+
 @pytest.mark.parametrize("model,effort,tools", [
     ("claude-opus-5[1m]", "xhigh", ("read", "search", "shell")),
     ("claude-sonnet-4-6", "high", ("read",)),

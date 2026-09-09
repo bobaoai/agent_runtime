@@ -11,6 +11,7 @@ import pytest
 from tools.public_repository_validation import (
     load_public_repository_manifest,
     main,
+    public_path_is_allowed,
     reachable_repository_objects,
     tracked_repository_paths,
     validate_public_repository,
@@ -42,6 +43,12 @@ def _synthetic_private_manifest() -> tuple[dict[str, object], str, str]:
 
 def test_current_repository_matches_public_boundary() -> None:
     assert validate_public_repository(root=REPOSITORY_ROOT) == ()
+
+
+def test_api_documentation_builder_has_an_exact_public_path_only():
+    manifest = load_public_repository_manifest()
+    assert public_path_is_allowed("tools/build_agent_runtime_api_reference.py", manifest=manifest)
+    assert not public_path_is_allowed("tools/unapproved_private_tool.py", manifest=manifest)
 
 
 def test_synthetic_forbidden_segment_fails_public_boundary(tmp_path: Path) -> None:

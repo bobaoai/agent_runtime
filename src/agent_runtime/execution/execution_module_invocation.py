@@ -429,16 +429,13 @@ class _AttemptExecutionHost:
         Preserve a complete validated sequence or none; durable grants remain.
         """
         usage = _empty_usage()
-        try:
-            reported_usage = ModuleUsageObservation(
-                input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-                cache_read_tokens=result.cache_read_tokens,
-                cache_creation_tokens=result.cache_creation_tokens,
-            )
-            reported_usage.validate()
+        for name in usage.as_dict():
+            try:
+                reported_usage = replace(usage, **{name: getattr(result, name)})
+                reported_usage.validate()
+            except (TypeError, ValueError):
+                continue
             usage = reported_usage
-        except (TypeError, ValueError):
-            pass
 
         trace = None
         try:
