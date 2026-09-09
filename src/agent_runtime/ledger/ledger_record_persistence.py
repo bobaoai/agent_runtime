@@ -821,7 +821,8 @@ class InMemoryRuntimeExecutionRecordStore:
                         raise ValueError(f"terminal Attempt {field} differs from start")
                 if attempt.period_start_at_utc != start.recorded_at_utc:
                     raise ValueError("terminal Attempt period start differs from start record")
-                if _parse_utc(attempt.period_end_at_utc) > start.deadline_at():
+                if (attempt.status == "completed"
+                    and _parse_utc(attempt.period_end_at_utc) > start.deadline_at()):
                     raise ValueError("terminal Attempt ended after its execution deadline")
             if attempt.parent_attempt_id is not None:
                 parent = attempts.get(attempt.parent_attempt_id)
@@ -936,6 +937,7 @@ class InMemoryRuntimeExecutionRecordStore:
                 operation,
                 workflow_execution_id=workflow_execution_id,
                 frozen_entitlement_hash=frozen_entitlement_hash,
+                terminal_attempt=attempts.get(operation.attempt_id),
             )
             self._validate_operation_lineage(operation, module_runs, variants, attempts)
             grant_operations.setdefault(grant.grant_id, set()).add(
@@ -961,6 +963,7 @@ class InMemoryRuntimeExecutionRecordStore:
                 usage,
                 workflow_execution_id=workflow_execution_id,
                 frozen_entitlement_hash=frozen_entitlement_hash,
+                terminal_attempt=attempts.get(usage.attempt_id),
             )
             for field in (
                 "workflow_execution_id",
@@ -1189,6 +1192,7 @@ class InMemoryRuntimeExecutionRecordStore:
         *,
         workflow_execution_id: str,
         frozen_entitlement_hash: str | None,
+        terminal_attempt: WorkflowAttemptRecord | None = None,
     ) -> None:
         for field in (
             "workflow_execution_id",
@@ -1212,7 +1216,18 @@ class InMemoryRuntimeExecutionRecordStore:
         operation_time = _parse_utc(operation.recorded_at_utc)
         if operation_time < _parse_utc(grant.recorded_at_utc):
             raise PermissionError("operation precedes LegacyModuleCapabilityGrant")
-        if operation_time > grant.expires_at():
+        failure_bookkeeping = (
+            terminal_attempt is not None
+            and terminal_attempt.status in {"failed", "cancelled"}
+            and not terminal_attempt.execution_output_refs
+            and operation.recorded_at_utc == terminal_attempt.recorded_at_utc
+            and (not isinstance(operation, ModelCallRecord)
+                 or operation.status_id == terminal_attempt.status)
+        )
+        # Record the actual failure/usage after cleanup without extending a
+        # grant. Grant creation and before-operation checks remain unchanged;
+        # successful output commits still require an unexpired grant.
+        if operation_time > grant.expires_at() and not failure_bookkeeping:
             raise PermissionError("LegacyModuleCapabilityGrant expired before operation commit")
 
 

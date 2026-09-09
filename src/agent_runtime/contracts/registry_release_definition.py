@@ -18,6 +18,7 @@ from ..foundation.foundation_contract_validation import (
     validate_exact_record_tuple,
     validate_id,
     validate_int,
+    validate_model_id,
     validate_opaque_ref,
     validate_sha256,
     validate_snake_case_name,
@@ -808,7 +809,7 @@ class ExecutionProfileRelease:
         _validate_token("executor_adapter_revision", self.executor_adapter_revision)
         _validate_token("transport_kind", self.transport_kind)
         validate_snake_case_name("provider_id", self.provider_id)
-        validate_id("model_id", self.model_id)
+        validate_model_id("model_id", self.model_id)
         _validate_token("reasoning_profile", self.reasoning_profile)
         if self.execution_mode not in EXECUTION_MODES:
             raise ValueError("invalid Execution Profile execution_mode")
@@ -896,9 +897,15 @@ class ExecutionProfileRelease:
             raise ValueError(
                 "Gateway semantic input delivery requires gateway_only network"
             )
-        if not gateway_delivery and self.tool_policy:
+        native_workspace = (
+            self.execution_mode == "agent"
+            and self.semantic_input_delivery_mode == "inline"
+            and self.attempt_workspace_policy == "own_draft_read_write"
+            and self.network_policy == "denied"
+        )
+        if not gateway_delivery and self.tool_policy and not native_workspace:
             raise ValueError(
-                "registered Gateway tools require gateway_read or hybrid delivery"
+                "native tools require an explicit agent workspace profile"
             )
         if not gateway_delivery and self.gateway_access_reasons:
             raise ValueError(

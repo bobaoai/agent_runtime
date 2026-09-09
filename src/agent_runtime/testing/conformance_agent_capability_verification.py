@@ -577,6 +577,7 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
             ),
             test_paths=(
                 "tests/test_agent_runtime_native_structured_output.py",
+                "tests/test_agent_runtime_claude_native_tools.py",
                 "tests/test_agent_runtime_public_adapter_contracts.py",
                 "tests/test_agent_runtime_attempt_workspace.py",
             ),
@@ -585,11 +586,14 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
             example_test_refs=(
                 "tests/test_agent_runtime_native_structured_output.py::test_tool_free_profile_rejects_undeclared_gateway_surface_before_provider",
                 "tests/test_agent_runtime_native_structured_output.py::test_gateway_read_authorizes_each_resource_call_and_records_lineage",
+            "tests/test_agent_runtime_claude_native_tools.py::test_profile_drives_one_cli_command_builder",
+                "tests/test_agent_runtime_claude_native_tools.py::test_live_claude_native_tools_in_ab",
             ),
             input_description="fixture 提供无工具 Profile 或声明 Gateway 的 Profile，以及受控输入和工具响应。",
             expected_result=(
                 "无工具 Profile 拒绝未声明 Gateway，Provider 不进入；允许的 Gateway 调用经过逐次授权并记录实际调用。",
                 "structured output、workspace、隔离和错误路径由同组测试断言，真实模型结果只由 live 用例证明。",
+                "Claude 原生工具配置与实际参数见 agent_runtime_claude_native_tools.md；AB 正向、越界及注册 Reviewer/PG 用例在同一测试文件。",
             ),
         ),
         _capability_case(
@@ -603,6 +607,7 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
                 "tests/test_agent_runtime_execution_authorization.py",
                 "tests/test_agent_runtime_module_evaluation.py",
                 "tests/test_agent_runtime_registered_module_execution.py",
+                "tests/test_agent_runtime_terminal_evidence.py",
             ),
             environment_prerequisites=(
                 "普通用例使用内存 stores 和 Provider 测试替身。",
@@ -612,11 +617,13 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
             example_test_refs=(
                 "tests/test_agent_runtime_registered_module_execution.py::test_candidate_result_replay_preserves_policy_and_recorded_bytes",
                 "tests/test_agent_runtime_registered_module_execution.py::test_invalid_input_stops_before_authorization_or_provider",
+                "tests/test_agent_runtime_terminal_evidence.py::test_sequential_variants_use_their_own_attempt_start",
             ),
-            input_description='fixture 注册一节点 Workflow；run_registered_workflow_module 接收 {"value": "example"} 和同一个 key。',
+            input_description='fixture 注册一节点 Workflow；run_registered_workflow_module 接收 {"value": "example"} 和同一个 key。隔离 Module 的计时样例使用两个 Variant，每次预算 10 秒，耗时为 (6, 6) 或 (6, 11) 秒。',
             expected_result=(
                 '首次执行输出 {"value": "done"}；同 key 重放返回相同 execution 和输出，Provider 替身只调用一次。',
                 "evaluated_single 保持未决 candidate，没有伪造 Resolution；非法输入在授权或 Provider 调用前拒绝。",
+                "隔离入口的每个 Variant 独立计时：预算各 10 秒、依次各用 6 秒时都完成；真实超时仍失败。",
             ),
         ),
         _capability_case(
@@ -673,6 +680,7 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
                 "tests/test_agent_runtime_postgres_release_store.py",
                 "tests/test_agent_runtime_postgres_execution_ledger.py",
                 "tests/test_agent_runtime_registered_module_execution.py",
+                "tests/test_agent_runtime_terminal_evidence.py",
             ),
             environment_prerequisites=(
                 "调用者显式提供 AGENT_RUNTIME_TEST_DATABASE_URL；现有 fixtures 创建和清理独立临时 schema。",
@@ -682,11 +690,14 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
             example_test_refs=(
                 "tests/test_agent_runtime_registered_module_execution.py::test_postgres_fresh_read_and_replay_preserve_candidate_policy",
                 "tests/test_agent_runtime_registered_module_execution.py::test_postgres_concurrent_first_call_has_one_provider_entry",
+                "tests/test_agent_runtime_terminal_evidence.py::test_postgres_attempt_clock_excludes_run_preparation",
+                "tests/test_agent_runtime_terminal_evidence.py::test_postgres_existing_attempt_start_never_refreshes_budget",
             ),
             input_description="在临时 PG stores 执行一节点 Workflow，分别使用正常输出、Provider 失败和 schema 失败 fixture。",
             expected_result=(
                 "新建查询连接能读取相同执行记录和内容 hash；重放不重复调用 Provider，不伪造 candidate Resolution。",
                 "同 key 并发首次调用只有一个 Provider 入口；PG 是真实连接，Provider 仍是测试替身。",
+                "Attempt 起点不包含 Run 准备时间；已有开始记录不刷新预算，已完成结果重放不再次调用。",
             ),
         ),
         _capability_case(
@@ -899,6 +910,36 @@ def render_agent_capability_runbook_markdown(
         "每组的样例 selector 指向真实测试函数。先读该函数及它直接使用的 fixture，"
         "再运行对应命令；fixture 中的 Provider 替身和测试授权对象用于验证，不是生产宿主配置。"
         "这些是已有能力的具体样例，尚未实现的完整 agent_capability_example Workflow 不在其中。\n\n"
+        "### 1.1 Runtime 与宿主环境各准备什么\n\n"
+        "宿主是使用 Runtime 的项目，例如 Analyst Billie。宿主决定执行什么、使用哪个环境；"
+        "Runtime 提供执行、隔离、记录与读取能力。一次实际调用并不需要宿主另写一套执行器。\n\n"
+        "| 内容 | Runtime 提供 | 宿主提供 |\n"
+        "| --- | --- | --- |\n"
+        "| 模型与工具执行 | 公共调用入口、Provider Adapter、参数组装、进程与结果处理 | "
+        "Module/Profile 的选择、CLI 安装与登录、实际程序路径 |\n"
+        "| 文件与运行依赖 | 按授权范围准备 Attempt 工作区、落实读写和网络限制、清理本次临时资源 | "
+        "任务材料、可用工作区根、Python/Git 等只读依赖 |\n"
+        "| 注册与执行记录 | Registry/Ledger 的表结构、安装与迁移 API、写入与查询实现 | "
+        "PG 连接、独立 schema、数据访问授权；管理员按需调用安装/迁移 API |\n"
+        "| 审核内容 | 执行已注册 Module、校验输出结构、保存真实结果 | "
+        "所属 Skill Package 的 prompt/schema、审核任务及所属语义 validator |\n"
+        "| 测试与验收 | 固定 sample、测试入口与执行证据 | "
+        "本次实验目标、所选用例、环境配置与结果判断标准 |\n\n"
+        "宿主可以保存配置并组合这些公开 API，不应复制 Claude 启动、超时处理、"
+        "事件解析或 PG 记录代码。Runtime 的 PG 表结构与实现属于 Runtime；连接哪一个数据库、"
+        "选择哪些 schema 属于宿主。注册接口不自动建库或变更管理员权限。\n\n"
+        "环境缺件与 Runtime 缺陷分开处理：缺 CLI、登录、依赖目录或 PG 配置，补宿主环境；"
+        "公共入口不能执行相容 Profile、失败日志没有保存或已保存记录无法回读，修 Runtime。"
+        "测试授权替身只留在测试里，不能直接当作宿主正式授权实现。\n\n"
+        "Claude 工具与 AB 持久审核的具体准备表见 "
+        "[Claude sample 环境说明](agent_runtime_claude_native_tools.md#11-宿主需要准备的环境)。"
+        "Module/Workflow 注册步骤见 [Registration Runbook](agent_runtime_registration_runbook.md)。\n\n"
+        "### 1.2 自定义 ModuleExecutionLedger\n\n"
+        "公开注册执行入口使用 Runtime 内置 Ledger。直接调用 run_module 或 run_workflow_module 并提供"
+        "自定义 ModuleExecutionLedger 时，还需实现 record_attempt_start(started: ModuleAttemptStartedRecord)。"
+        "Kernel 先用 begin 登记 Run/Variant（attempt_starts 为空），再于各 Attempt 实际开始时记录"
+        "既有 StartRecord。缺少该接口会在新增执行记录前拒绝。相同 ID 的开始时间不可被刷新；"
+        "Workflow 路径沿用 PG 中原已保存的 Runtime 时间。\n\n"
         "## 2. 单例、分组与全仓批量运行\n\n"
         "单例和分组命令见第 4 节。全仓使用 pytest 自动收集，不需要手工维护另一个测试列表。"
         "可以先列出所有实际测试，再执行：\n\n"
@@ -964,7 +1005,9 @@ def render_agent_capability_runbook_markdown(
         "\n## 5. 更新用例与重新生成文档\n\n"
         "能力分组和样例导航在 conformance_agent_capability_verification.py 中维护。"
         "example_test_refs 指向真实测试函数；新增普通回归放入 tests 后由 pytest 自动收集，"
-        "涉及能力分组时再更新对应 case。不要手工同时编辑 docs 与随包投影。\n\n"
+        "涉及能力分组时再更新对应 case。不要手工同时编辑 docs 与随包投影。"
+        "Claude 环境说明维护在 src/agent_runtime/docs/agent_runtime_claude_native_tools.md，"
+        "docs 下的同名页由下面的命令复制。\n\n"
         "从源码根目录调用现有 renderer 更新两份文档：\n\n"
         "```python\nfrom pathlib import Path\n"
         "from agent_runtime.testing.conformance_agent_capability_verification import (\n"
@@ -975,6 +1018,9 @@ def render_agent_capability_runbook_markdown(
         '    "agent_runtime_capabilities.md": render_agent_capability_catalog_markdown(\n'
         "        required_agent_capability_inventory(), cases),\n"
         '    "agent_runtime_capability_runbook.md": render_agent_capability_runbook_markdown(cases),\n}\n'
+        'documents["agent_runtime_claude_native_tools.md"] = Path(\n'
+        '    "src/agent_runtime/docs/agent_runtime_claude_native_tools.md"\n'
+        ').read_text(encoding="utf-8")\n'
         'for directory in (Path("docs"), Path("src/agent_runtime/docs")):\n'
         "    for name, body in documents.items():\n"
         '        (directory / name).write_text(body, encoding="utf-8")\n```\n\n'

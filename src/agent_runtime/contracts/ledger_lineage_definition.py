@@ -250,6 +250,8 @@ class ModuleAttemptRecord:
     prompt_envelope_sha256: str | None = None
     failure_detail_ref: str | None = None
     failure_detail_sha256: str | None = None
+    provider_trace_ref: str | None = None
+    provider_trace_sha256: str | None = None
 
     def validate(self) -> None:
         """Validate terminal status, outputs, diagnostics, and observations."""
@@ -306,6 +308,8 @@ class ModuleAttemptRecord:
                 self.failure_detail_ref,
                 self.failure_detail_sha256,
             ),
+            ("provider_trace_ref", "provider_trace_sha256",
+             self.provider_trace_ref, self.provider_trace_sha256),
         ):
             if (ref_value is None) != (sha_value is None):
                 raise ValueError(f"{ref_label} and {sha_label} must be paired")
@@ -321,6 +325,9 @@ class ModuleAttemptRecord:
         payload["output_refs"] = list(self.output_refs)
         payload["usage"] = self.usage.as_dict()
         payload["tool_calls"] = [item.as_dict() for item in self.tool_calls]
+        if self.provider_trace_ref is None:
+            payload.pop("provider_trace_ref")
+            payload.pop("provider_trace_sha256")
         return payload
 
 

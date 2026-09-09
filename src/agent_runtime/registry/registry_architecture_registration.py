@@ -34,6 +34,7 @@ RUNTIME_REQUIRED_SUPPORTING_PLANE_IDS = (
 )
 RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS = (
     "claude_agent_sdk",
+    "claude_cli",
     "codex_cli",
     "html",
     "http",
@@ -290,6 +291,14 @@ RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
         technology_id="claude_agent_sdk",
         implementation_source_paths=(
             "src/agent_runtime/invocation/invocation_claude_module_invocation.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
+        implementation_binding_id="invocation_claude_cli",
+        logical_responsibility_id="invocation",
+        technology_id="claude_cli",
+        implementation_source_paths=(
+            "src/agent_runtime/invocation/invocation_claude_cli_execution.py",
         ),
     ),
     RuntimeImplementationBindingRegistration(
@@ -611,6 +620,15 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "invocation",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
         implementation_binding_id="invocation_codex_cli",
+    ),
+    _source(
+        "invocation", "claude_cli", "execution",
+        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+        implementation_binding_id="invocation_claude_cli",
+    ),
+    _source(
+        "invocation", "process", "execution",
+        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
     _source(
         "invocation",

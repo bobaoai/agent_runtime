@@ -96,6 +96,27 @@ class InMemoryModuleExecutionLedger:
                 self._attempt_starts[started.attempt_id] = started
             return None
 
+    def record_attempt_start(self, started: ModuleAttemptStartedRecord) -> None:
+        """Record one actual start under an already claimed Run and Variant."""
+
+        if type(started) is not ModuleAttemptStartedRecord:
+            raise ValueError("started must be a ModuleAttemptStartedRecord")
+        started.validate()
+        with self._lock:
+            existing = self._attempt_starts.get(started.attempt_id)
+            if existing is not None:
+                if existing != started:
+                    raise ValueError("Attempt start is immutable")
+                return
+            variant = self._variant_records.get(started.variant_id)
+            module_run = self._run_records.get(started.module_run_id)
+            if (variant is None or module_run is None
+                or variant.module_run_id != started.module_run_id):
+                raise ValueError("Attempt start requires its registered Run and Variant")
+            if module_run.request_id not in self._in_progress:
+                raise ValueError("cannot start an Attempt after its Run has finished")
+            self._attempt_starts[started.attempt_id] = started
+
     def commit_attempt(self, attempt: ModuleAttemptRecord) -> None:
         """Store one immutable terminal Attempt record idempotently."""
 

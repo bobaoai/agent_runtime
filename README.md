@@ -139,6 +139,11 @@ when an execution requires a current decision or authorized product data.
 
 - [Agent Runtime capabilities](docs/agent_runtime_capabilities.md)
 - [Agent Runtime capability runbook](docs/agent_runtime_capability_runbook.md)
+- [Registration runbook](docs/agent_runtime_registration_runbook.md)
+- [Claude CLI 工具、宿主环境与 PG sample](docs/agent_runtime_claude_native_tools.md)
+
+公开仓库不携带宿主的私有 Governance/Reviewer source。相关集成用例通过
+`AGENT_RUNTIME_REVIEWER_SOURCE_ROOT` 指向已经安装该包的宿主；未配置时明确跳过，不算审核已完成。
 
 ### Durable parallel groups
 

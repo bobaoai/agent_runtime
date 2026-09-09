@@ -365,6 +365,8 @@ class _ClaudeAgentSdkExecutorBase:
     ) -> AgentExecutionResult:
         module = prepared.module
         profile = prepared.profile
+        if self.workspace_tools and not profile.tool_policy:
+            raise PermissionError("draft tools require an explicit Execution Profile tool_policy")
         registered_output_schema = prepared.registered_output_schema
         prompt = prepared.prompt
 

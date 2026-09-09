@@ -351,7 +351,14 @@ class ModuleReviewer(Module):
                 MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
                 "Execution Profile transport is absent from Module compatibility",
             )
-        if frozenset(execution_profile.tool_policy) != non_model_operations:
+        native_workspace = (
+            execution_profile.execution_mode == "agent"
+            and execution_profile.semantic_input_delivery_mode == "inline"
+            and execution_profile.attempt_workspace_policy == "own_draft_read_write"
+            and not execution_profile.gateway_access_reasons
+            and not non_model_operations
+        )
+        if not native_workspace and frozenset(execution_profile.tool_policy) != non_model_operations:
             raise ModuleAuthoringError(
                 MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
                 "Execution Profile tool policy differs from Module non-model operations",

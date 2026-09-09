@@ -18,6 +18,7 @@ _USD_AMOUNT = re.compile(r"^(0|[1-9][0-9]*)\.[0-9]{3}$")
 
 
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{2,159}$")
+MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+\[\]-]{0,255}$")
 SNAKE_CASE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 OPAQUE_REF_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}:[^\s]{1,447}$")
@@ -71,6 +72,15 @@ def validate_snake_case_name(label: str, value: Any) -> None:
         value,
         pattern=SNAKE_CASE_NAME_PATTERN,
         requirement=f"snake_case name required, got {value!r}",
+    )
+
+
+def validate_model_id(label: str, value: Any) -> None:
+    """Preserve a provider's model selector, including native context aliases."""
+
+    validate_pattern_string(
+        label, value, pattern=MODEL_ID_PATTERN,
+        requirement="bounded provider model selector required",
     )
 
 
@@ -281,6 +291,7 @@ __all__ = [
     "validate_usd_amount",
     "format_usd_amount",
     "validate_id",
+    "validate_model_id",
     "validate_int",
     "validate_opaque_ref",
     "validate_pattern_string",

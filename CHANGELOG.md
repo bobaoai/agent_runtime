@@ -6,6 +6,23 @@ may require a clean development database before the first public release.
 
 ## Unreleased
 
+### Claude CLI execution and client API
+
+- Public `Module`, `ModuleReviewer` and `Workflow` authoring/export APIs, with
+  PostgreSQL registration, exact release selection and callable registered Modules.
+- Direct Claude CLI execution with Profile-selected model, effort and native
+  Read/Grep/Bash tools; isolated attempt materials and scratch, bounded process
+  output, real failure classification and complete provider trace capture.
+- Success, failure and timeout evidence is persisted by Runtime and readable
+  through the PostgreSQL query API. Optional evidence fields preserve historical
+  record payloads; recording a late failure does not extend execution permission.
+- Packaged registration, capability and Claude CLI host-setup runbooks, with
+  repeatable tests and separately enabled host/provider integration samples.
+
+The source-level authoring inventory API has been replaced by explicit Module
+and Workflow classes. Development stores must use the documented Registry
+schema preflight/migration API before registration; ordinary calls do not run DDL.
+
 ### Added
 
 - PostgreSQL authorities for immutable Runtime releases and the authoritative
@@ -17,8 +34,8 @@ may require a clean development database before the first public release.
 - Immutable `all_required` Workflow parallel groups with concurrent branch
   dispatch, branch-local retry recovery, one durable join transition,
   PostgreSQL registration, and Inspector projection.
-- A domain-neutral authoring inventory example that compiles deterministic and
-  Agent Modules plus one Workflow without a host Skill tree.
+- Domain-neutral Module/Workflow authoring examples in the capability runbook
+  and their executable tests, independent of host business code.
 - A code-owned public-repository manifest and validator that reject private
   governance deployment, host-domain fixtures, undeclared tracked paths, and
   forbidden content in the current tree and reachable Git history.

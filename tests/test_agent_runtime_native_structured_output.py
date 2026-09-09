@@ -828,7 +828,9 @@ def test_workflow_module_replays_after_resolution_commit_crash(
     assert len(usage) == 1
     assert usage[0].input_tokens == 3
     assert usage[0].output_tokens == 2
-    assert len(content_store.staged) == 1
+    assert len(content_store.staged) == 2  # output and provider trace
+    terminal_attempt = trace.records_of_type(WorkflowAttemptRecord)[0]
+    assert terminal_attempt.provider_trace_ref in content_store.staged
 
     replay = run_workflow_module(
         workflow_request,
@@ -1373,8 +1375,10 @@ def test_run_module_evaluation_executes_registered_codex_transport(
     assert captured["argv"][1] == "exec"
 
 
+@pytest.mark.parametrize("failure_path", ["nonzero_exit", "invalid_output"])
 def test_run_module_records_registered_codex_transport_failure(
     tmp_path: Path,
+    failure_path: str,
 ) -> None:
     compiled = _compile_native_module(
         tmp_path,
@@ -1385,9 +1389,11 @@ def test_run_module_records_registered_codex_transport_failure(
     prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="codex_failure")
 
     def invoker(**_fields) -> CodexCliInvocationResult:
+        private_event = json.dumps({"type": "item.completed", "item": {
+            "type": "reasoning", "text": "SYNTHETIC_PRIVATE_REASONING\u2028SYNTHETIC_PRIVATE_CONTINUATION"}}, ensure_ascii=False)
         return CodexCliInvocationResult(
-            returncode=9,
-            stdout=json.dumps(
+            returncode=9 if failure_path == "nonzero_exit" else 0,
+            stdout=private_event + "\n" + json.dumps(
                 {
                     "type": "turn.failed",
                     "usage": {"input_tokens": 5, "output_tokens": 0},
@@ -1419,10 +1425,17 @@ def test_run_module_records_registered_codex_transport_failure(
     )
 
     assert run.attempts[0].status == "failed"
-    assert run.attempts[0].failure_class == "provider"
+    assert run.attempts[0].failure_class == ("provider" if failure_path == "nonzero_exit" else "schema")
     assert run.attempts[0].failure_detail_ref is not None
     assert run.attempts[0].usage.input_tokens == 5
     assert run.resolution is None
+    attempt = run.attempts[0]
+    for ref, digest in ((attempt.failure_detail_ref, attempt.failure_detail_sha256),
+                        (attempt.provider_trace_ref, attempt.provider_trace_sha256)):
+        content = artifact_host.read_bytes(ref, digest)
+        assert b"SYNTHETIC_PRIVATE" not in content
+    trace = artifact_host.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256)
+    assert b"provider unavailable" in trace
 
 
 def test_tool_free_profile_rejects_undeclared_gateway_surface_before_provider(
@@ -1515,96 +1528,47 @@ def test_run_module_rejects_codex_agent_draft_workspace_before_provider(
     assert entered is False
 
 
-def test_run_module_executes_claude_agent_draft_workspace_slice(
-    tmp_path: Path,
-) -> None:
+def test_run_module_rejects_implicit_claude_draft_tools(tmp_path: Path) -> None:
     claude_module = pytest.importorskip(
         "agent_runtime.invocation.invocation_claude_module_invocation"
     )
     compiled = _compile_native_module(
-        tmp_path,
-        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        tmp_path, output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="claude_workspace_profile",
-        executor_adapter_id=(
-            "claude_agent_sdk_inline_draft_workspace_executor"
-        ),
-        executor_adapter_revision="v2",
-        transport_kind="claude_agent_sdk",
-        provider_id="anthropic",
-        model_id="claude-workspace-test",
-        execution_mode="agent",
-        attempt_workspace_policy="own_draft_read_write",
+        executor_adapter_id="claude_agent_sdk_inline_draft_workspace_executor",
+        executor_adapter_revision="v2", transport_kind="claude_agent_sdk",
+        provider_id="anthropic", model_id="claude-workspace-test",
+        execution_mode="agent", attempt_workspace_policy="own_draft_read_write",
     )
     registry = _register_compiled_for_evaluation(compiled)
     artifact_host = InMemoryCellArtifactStore()
-    prompt_ref = _evaluation_prompt(
-        artifact_host,
-        compiled,
-        suffix="claude_workspace",
-    )
-    observed: dict[str, object] = {}
+    prompt_ref = _evaluation_prompt(artifact_host, compiled, suffix="claude_workspace")
+    calls = []
 
-    async def fake_query(*, prompt, options):
-        async for _message in prompt:
-            pass
-        hook = options.hooks["PreToolUse"][0].hooks[0]
-        draft = Path(options.cwd) / "draft.txt"
-        decision = await hook(
-            {
-                "tool_name": "Write",
-                "tool_input": {
-                    "file_path": str(draft),
-                    "content": "workspace_slice",
-                },
-            },
-            None,
-            {},
-        )
-        observed["decision"] = decision
-        draft.write_text("workspace_slice", encoding="utf-8")
-        yield claude_module.ResultMessage(
-            subtype="success",
-            duration_ms=1,
-            duration_api_ms=1,
-            is_error=False,
-            num_turns=1,
-            session_id="session_workspace",
-            usage={"input_tokens": 13, "output_tokens": 5},
-            structured_output={"value": draft.read_text(encoding="utf-8")},
-        )
+    async def fake_query(**kwargs):
+        calls.append(kwargs)
+        if False:
+            yield None
 
     executor = claude_module.ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
-        release_registry=registry,
-        artifact_host=artifact_host,
-        workspace_root=tmp_path / "workspaces",
-        query_fn=fake_query,
+        release_registry=registry, artifact_host=artifact_host,
+        workspace_root=tmp_path / "workspaces", query_fn=fake_query,
     )
     adapters = AgentExecutionAdapterRegistry()
     adapters.register(executor)
-    request = _evaluation_request(
-        compiled,
-        prompt_ref,
-        suffix="claude_workspace",
-    )
-    authority, product = _evaluation_authority(registry, request)
-
-    run = run_module(
-        request,
-        release_registry=registry,
-        adapters=adapters,
-        artifact_host=artifact_host,
-        ledger=InMemoryModuleExecutionLedger(),
-        authority=authority,
-        clock=lambda: _TEST_TIME,
-    )
-
-    assert _assert_completed_provider_run(run, artifact_host) == {
-        "value": "workspace_slice"
-    }
-    assert observed["decision"]["hookSpecificOutput"][
-        "permissionDecision"
-    ] == "allow"
-    assert len(product.operation_queries) == 1
+    request = _evaluation_request(compiled, prompt_ref, suffix="claude_workspace")
+    authority, _ = _evaluation_authority(registry, request)
+    with pytest.raises(NotImplementedError, match="outside the admitted"):
+        run_module(request, release_registry=registry, adapters=adapters,
+                   artifact_host=artifact_host, ledger=InMemoryModuleExecutionLedger(),
+                   authority=authority, clock=lambda: _TEST_TIME)
+    with pytest.raises(PermissionError, match="explicit"):
+        executor.execute(
+            _direct_adapter_request(compiled, prompt_ref, suffix="claude_workspace"),
+            _RecordingHost(),
+        )
+    assert calls == []
+    compiled.execution_profile.validate()
 
 
 def test_run_module_provider_transport_still_rejects_production_purpose(
@@ -2551,6 +2515,8 @@ def _gateway_tool_callback(
     *,
     before_authorization=None,
     mismatched_lineage: bool = False,
+    resource_id: str = "resource_gateway_test",
+    tool_call_id: str = "gateway_call_001",
 ):
     def callback(request, host):
         if before_authorization is not None:
@@ -2565,12 +2531,12 @@ def _gateway_tool_callback(
             variant_id=request.variant_id,
             attempt_id=request.attempt_id,
             capability_id="read_source",
-            resource_id="resource_gateway_test",
+            resource_id=resource_id,
             action_id="read_source",
             entitlement_snapshot_hash=(
                 request.execution_authorization_binding_sha256
             ),
-            idempotency_key=f"gateway_read_{request.attempt_id}",
+            idempotency_key=f"gateway_read_{request.attempt_id}_{resource_id}",
             expires_after_seconds=30,
         )
         receipt = host.authorize_operation(intent)
@@ -2582,8 +2548,8 @@ def _gateway_tool_callback(
             schema_ref="schema:gateway_tool_request@v1",
             schema_sha256="7" * 64,
             media_type="application/json",
-            content=b'{"resource_id":"resource_gateway_test"}',
-            idempotency_key=f"gateway_request_{request.attempt_id}",
+            content=json.dumps({"resource_id": resource_id}).encode(),
+            idempotency_key=f"gateway_request_{request.attempt_id}_{resource_id}",
         )
         response_artifact = artifact_host.put_bytes(
             artifact_kind_id="gateway_tool_response",
@@ -2592,11 +2558,11 @@ def _gateway_tool_callback(
             schema_sha256="8" * 64,
             media_type="application/json",
             content=b'{"value":"authorized_resource"}',
-            idempotency_key=f"gateway_response_{request.attempt_id}",
+            idempotency_key=f"gateway_response_{request.attempt_id}_{resource_id}",
         )
         return (
             ModuleToolCallObservation(
-                tool_call_id="gateway_call_001",
+                tool_call_id=tool_call_id,
                 tool_name="read_source",
                 request_ref=request_artifact.artifact_ref,
                 request_sha256=request_artifact.artifact_sha256,
@@ -2682,9 +2648,7 @@ def test_gateway_read_authorizes_each_resource_call_and_records_lineage(
     assert run.resolution is not None
 
 
-def test_workflow_gateway_call_records_and_replays_exact_content_lineage(
-    tmp_path: Path,
-) -> None:
+def _workflow_gateway_setup(tmp_path: Path, *, record_store=None, content_store=None):
     artifact_host = InMemoryCellArtifactStore()
     resource_calls: list[object] = []
     (
@@ -2773,12 +2737,13 @@ def test_workflow_gateway_call_records_and_replays_exact_content_lineage(
         recorded_at_utc=_TEST_TIME,
         logical_name="input_package",
     )
-    record_store = InMemoryRuntimeExecutionRecordStore(
-        execution_output_integrity_check=lambda row: (
-            artifact_host.read_bytes(row.output_ref, row.output_sha256)
-            is not None
+    if record_store is None:
+        record_store = InMemoryRuntimeExecutionRecordStore(
+            execution_output_integrity_check=lambda row: (
+                artifact_host.read_bytes(row.output_ref, row.output_sha256)
+                is not None
+            )
         )
-    )
     record_store.commit(
         RuntimeRecordBatch(
             workflow_execution_id=workflow_request.workflow_execution_id,
@@ -2797,33 +2762,36 @@ def test_workflow_gateway_call_records_and_replays_exact_content_lineage(
         record_store=record_store,
         entitlement_snapshot_hash=execution.entitlement_snapshot_hash,
         claim_token_secret=b"workflow-gateway-test-secret-32-bytes",
+        content_store=content_store,
     )
-
-    run = run_workflow_module(
-        workflow_request,
+    return dict(
+        request=workflow_request,
         release_registry=registry,
         adapters=adapters,
         artifact_host=artifact_host,
+        authority=authority,
+    ), binding, adapter
+
+
+def test_workflow_gateway_call_records_and_replays_exact_content_lineage(tmp_path: Path) -> None:
+    options, binding, adapter = _workflow_gateway_setup(tmp_path)
+    run = run_workflow_module(
+        **options,
         ledger=InMemoryModuleExecutionLedger(),
         workflow_ledger=WorkflowModuleLedgerRecorder(binding),
-        authority=authority,
         clock=lambda: _TEST_TIME,
     )
     replay = run_workflow_module(
-        workflow_request,
-        release_registry=registry,
-        adapters=adapters,
-        artifact_host=artifact_host,
+        **options,
         ledger=InMemoryModuleExecutionLedger(),
         workflow_ledger=WorkflowModuleLedgerRecorder(binding),
-        authority=authority,
         clock=lambda: "2026-08-09T13:00:00Z",
     )
 
     assert adapter.calls == 1
     assert replay == run
-    calls = record_store.load_trace(
-        workflow_request.workflow_execution_id
+    calls = binding.record_store.load_trace(
+        options["request"].workflow_execution_id
     ).records_of_type(ToolCallRecord)
     assert len(calls) == 1
     assert calls[0].request_ref == run.attempts[0].tool_calls[0].request_ref
@@ -3287,93 +3255,6 @@ def test_live_claude_evaluation_runs_through_run_module(tmp_path: Path) -> None:
     _emit_live_provider_evidence(run, compiled)
 
 
-@pytest.mark.skipif(
-    not _RUN_PROVIDER_INTEGRATION,
-    reason="set RUN_PROVIDER_INTEGRATION=1 for live Provider smoke tests",
-)
-def test_live_claude_agent_workspace_runs_through_run_module(
-    tmp_path: Path,
-) -> None:
-    claude_module = pytest.importorskip(
-        "agent_runtime.invocation.invocation_claude_module_invocation"
-    )
-    compiled = _compile_native_module(
-        tmp_path,
-        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
-        execution_profile_id="live_claude_workspace_profile",
-        executor_adapter_id=(
-            "claude_agent_sdk_inline_draft_workspace_executor"
-        ),
-        executor_adapter_revision="v2",
-        transport_kind="claude_agent_sdk",
-        provider_id="anthropic",
-        model_id=os.environ.get(
-            "AGENT_RUNTIME_TEST_CLAUDE_MODEL",
-            "claude-fable-5",
-        ),
-        reasoning_profile="low",
-        timeout_seconds=300,
-        execution_mode="agent",
-        attempt_workspace_policy="own_draft_read_write",
-    )
-    registry = _register_compiled_for_evaluation(compiled)
-    artifact_host = InMemoryCellArtifactStore()
-    challenge = "workspace_challenge_9c51b7"
-
-    async def live_query(*, prompt, options):
-        (Path(options.cwd) / "workspace-challenge.txt").write_text(
-            challenge,
-            encoding="utf-8",
-        )
-        async for message in claude_module.query(prompt=prompt, options=options):
-            yield message
-
-    prompt_ref = _evaluation_prompt(
-        artifact_host,
-        compiled,
-        suffix="claude_workspace_live",
-        execution_specific_instructions=(
-            "MANDATORY TOOL EVIDENCE: use Read on ./workspace-challenge.txt. Its "
-            "contents are not in this prompt. Then use Write to copy those exact "
-            "contents to ./workspace-proof.txt, and use Read to verify the copy. "
-            "Return the required JSON object only afterward, with value set to "
-            "the exact challenge contents."
-        ),
-    )
-    executor = claude_module.ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
-        release_registry=registry,
-        artifact_host=artifact_host,
-        workspace_root=tmp_path / "workspaces",
-        query_fn=live_query,
-    )
-    adapters = AgentExecutionAdapterRegistry()
-    adapters.register(executor)
-    request = _evaluation_request(
-        compiled,
-        prompt_ref,
-        suffix="claude_workspace_live",
-    )
-    authority, _ = _evaluation_authority(registry, request)
-
-    run = run_module(
-        request,
-        release_registry=registry,
-        adapters=adapters,
-        artifact_host=artifact_host,
-        ledger=InMemoryModuleExecutionLedger(),
-        authority=authority,
-    )
-
-    output = _assert_completed_provider_run(run, artifact_host)
-    assert output["value"] == challenge
-    workspace_proofs = tuple(
-        (tmp_path / "workspaces").glob("*/workspace-proof.txt")
-    )
-    assert len(workspace_proofs) == 1
-    assert workspace_proofs[0].read_text(encoding="utf-8").strip() == (
-        challenge
-    )
-    _emit_live_provider_evidence(run, compiled)
 
 
 @pytest.mark.skipif(
@@ -3720,110 +3601,6 @@ def test_claude_tool_free_executor_honors_configured_turn_budget(
     assert json.loads(host.staged["result"]) == {"value": "completed"}
 
 
-@pytest.mark.parametrize(
-    ("workspace_path_mode", "expected_allowed"),
-    (
-        ("physical", True),
-        ("sandbox_root", True),
-        ("sandbox_repo", True),
-        ("sandbox_top_level", True),
-        ("escape", False),
-        ("system_path", False),
-    ),
-)
-def test_claude_workspace_executor_gates_every_tool_with_pre_hook(
-    tmp_path: Path,
-    workspace_path_mode: str,
-    expected_allowed: bool,
-) -> None:
-    claude_module = pytest.importorskip(
-        "agent_runtime.invocation.invocation_claude_module_invocation"
-    )
-    compiled = _compile_native_module(
-        tmp_path,
-        output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
-        execution_profile_id="claude_workspace_profile",
-        executor_adapter_id=(
-            "claude_agent_sdk_inline_draft_workspace_executor"
-        ),
-        executor_adapter_revision="v2",
-        transport_kind="claude_agent_sdk",
-        provider_id="anthropic",
-        model_id="claude-workspace-test",
-        execution_mode="agent",
-        attempt_workspace_policy="own_draft_read_write",
-    )
-    registry = _register_compiled_for_evaluation(compiled)
-    artifact_host = InMemoryCellArtifactStore()
-    prompt_ref = _evaluation_prompt(
-        artifact_host,
-        compiled,
-        suffix="claude_workspace_control",
-    )
-    observed: dict[str, object] = {}
-
-    async def fake_query(*, prompt, options):
-        observed["tools"] = tuple(options.tools)
-        async for _message in prompt:
-            pass
-        matcher = options.hooks["PreToolUse"][0]
-        observed["matcher"] = matcher.matcher
-        hook = matcher.hooks[0]
-        path_by_mode = {
-            "physical": Path(options.cwd) / "draft.txt",
-            "sandbox_root": Path("/root/draft.txt"),
-            "sandbox_repo": Path("/repo/draft.txt"),
-            "sandbox_top_level": Path("/draft.txt"),
-            "escape": tmp_path.parent / "escaped.txt",
-            "system_path": Path("/etc/passwd"),
-        }
-        decision = await hook(
-            {
-                "tool_name": "Read",
-                "tool_input": {
-                    "file_path": str(path_by_mode[workspace_path_mode])
-                },
-            },
-            None,
-            {},
-        )
-        observed["decision"] = decision
-        yield claude_module.ResultMessage(
-            subtype="success",
-            duration_ms=1,
-            duration_api_ms=1,
-            is_error=False,
-            num_turns=1,
-            session_id="session_workspace_control",
-            usage={"input_tokens": 3, "output_tokens": 2},
-            structured_output={"value": "completed"},
-        )
-
-    executor = claude_module.ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
-        release_registry=registry,
-        artifact_host=artifact_host,
-        workspace_root=tmp_path / "workspaces",
-        query_fn=fake_query,
-    )
-    result = executor.execute(
-        _direct_adapter_request(
-            compiled,
-            prompt_ref,
-            suffix="claude_workspace_control",
-        ),
-        _RecordingHost(),
-    )
-
-    assert observed["tools"] == ("Read", "Write", "Edit")
-    assert observed["matcher"] == "Read|Write|Edit"
-    hook_output = observed["decision"]["hookSpecificOutput"]
-    if not expected_allowed:
-        assert hook_output["permissionDecision"] == "deny"
-        assert result.terminal_status == "failed"
-        assert result.failure.failure_class == "policy_violation"
-    else:
-        assert hook_output["permissionDecision"] == "allow"
-        assert result.terminal_status == "completed"
 
 
 def test_codex_native_structured_output_executes_end_to_end(

@@ -10,13 +10,13 @@ adapter resolution.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Any, Callable, Mapping
 
-from ..foundation.foundation_contract_validation import validate_id
+from ..foundation.foundation_contract_validation import parse_utc_timestamp, validate_id, validate_opaque_ref, validate_sha256
 from ..contracts.execution_authorization_definition import (
     ExecutionAuthorizationContextEnvelope,
     ExecutionAuthorizationContextBinding,
@@ -62,7 +62,10 @@ from ..contracts.registry_release_definition import (
     WorkflowRelease,
 )
 from ..contracts.registry_workflow_definition import ResolvedArtifactRef
-from ..contracts.ledger_record_definition import CommitReceipt, ExecutionInputRef, WorkflowExecutionRecord
+from ..contracts.ledger_record_definition import (
+    CommitReceipt, ExecutionInputRef, WorkflowExecutionRecord, WorkflowAttemptStartedRecord,
+    WorkflowModuleRunRecord, WorkflowModuleExecutionVariantRecord,
+)
 from ..contracts.ledger_lineage_definition import (
     ModuleAttemptRecord,
     ModuleAttemptStartedRecord,
@@ -419,6 +422,57 @@ class _AttemptExecutionHost:
                 f"adapter reported an unstaged output slot: {output_slot_id}"
             ) from exc
 
+    def recoverable_result_evidence(self, result: AgentExecutionResult):
+        """Keep independently verified facts even when the result is rejected.
+
+        A partial tool sequence cannot identify which same-named call is missing.
+        Preserve a complete validated sequence or none; durable grants remain.
+        """
+        usage = _empty_usage()
+        try:
+            reported_usage = ModuleUsageObservation(
+                input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+                cache_read_tokens=result.cache_read_tokens,
+                cache_creation_tokens=result.cache_creation_tokens,
+            )
+            reported_usage.validate()
+            usage = reported_usage
+        except (TypeError, ValueError):
+            pass
+
+        trace = None
+        try:
+            validate_opaque_ref("provider_trace_ref", result.cell_local_trace_ref)
+            validate_sha256("provider_trace_sha256", result.cell_local_trace_sha256)
+            body = self._artifact_host.read_bytes(
+                result.cell_local_trace_ref, result.cell_local_trace_sha256)
+            if hashlib.sha256(body).hexdigest() == result.cell_local_trace_sha256:
+                trace = (result.cell_local_trace_ref, result.cell_local_trace_sha256)
+        except Exception:
+            pass
+
+        calls: list[ModuleToolCallObservation] = []
+        seen_call_ids: set[str] = set()
+        observations = result.tool_observations if type(result.tool_observations) is tuple else ()
+        if len(observations) != len(self._authorized_operation_names):
+            return usage, trace, ()
+        for item, name in zip(observations, self._authorized_operation_names):
+            try:
+                if type(item) is not ModuleToolCallObservation:
+                    raise ValueError("invalid tool observation type")
+                item.validate()
+                if item.tool_name != name or item.tool_call_id in seen_call_ids:
+                    raise ValueError("tool observation sequence is not complete and unique")
+                for ref, digest in ((item.request_ref, item.request_sha256),
+                                    (item.response_ref, item.response_sha256)):
+                    if hashlib.sha256(self._artifact_host.read_bytes(ref, digest)).hexdigest() != digest:
+                        raise ValueError("tool evidence content hash mismatch")
+            except Exception:
+                return usage, trace, ()
+            calls.append(item)
+            seen_call_ids.add(item.tool_call_id)
+        return usage, trace, tuple(calls)
+
 
 def run_registered_workflow_module(
     *,
@@ -494,17 +548,10 @@ def run_registered_workflow_module(
     profile = release_registry.get_execution_profile(
         selected["execution_profile_release_ref"], selected["execution_profile_release_sha256"]
     )
-    if (
-        len(module.declared_operation_ids) != 1
-        or module.declared_operation_ids[0] not in MODEL_INVOCATION_OPERATION_IDS
-        or profile.execution_mode != "tool_free"
-        or profile.semantic_input_delivery_mode != "inline"
-        or profile.attempt_workspace_policy != "none"
-        or profile.tool_policy or profile.gateway_access_reasons
-        or profile.network_policy != "denied"
-    ):
-        raise ValueError("entry requires an admitted tool-free inline model call")
-    _assert_admitted_test_evaluation_profile(module, profile)
+    try:
+        _assert_admitted_test_evaluation_profile(module, profile)
+    except NotImplementedError as exc:
+        raise ValueError(str(exc)) from exc
     adapter = adapters.resolve(profile.executor_adapter_id, profile.executor_adapter_revision)
     _assert_descriptor_covers_profile(adapter.descriptor, profile)
     for method in ("put_bytes", "artifact", "resolve_artifact_ref"):
@@ -759,6 +806,8 @@ def _run_module(
     existing = ledger.existing_result(request)
     if existing is not None:
         return existing
+    if not callable(getattr(ledger, "record_attempt_start", None)):
+        raise TypeError("ModuleExecutionLedger requires record_attempt_start")
 
     module = release_registry.get_module(
         request.module_release_ref,
@@ -834,6 +883,15 @@ def _run_module(
         if type(request) is WorkflowModuleExecutionRequest
         else _stable_id("module_run", request.request_id, request.request_sha256)
     )
+    prior_variants = {}
+    if workflow_ledger is not None:
+        trace = workflow_ledger.record_store.load_trace(request.workflow_execution_id)
+        prior_module = next((row for row in trace.records_of_type(WorkflowModuleRunRecord)
+                             if row.module_run_id == module_run_id), None)
+        if prior_module is not None:
+            started_at_utc = prior_module.recorded_at_utc
+        prior_variants = {row.variant_id: row for row in trace.records_of_type(WorkflowModuleExecutionVariantRecord)
+                          if row.module_run_id == module_run_id}
     module_run = ModuleRunRecord(
         module_run_id=module_run_id,
         request_id=request.request_id,
@@ -865,7 +923,7 @@ def _run_module(
     resolved_profiles: list[ExecutionProfileRelease] = []
     resolved_adapters: list[AuthorizedAgentExecutionAdapter] = []
     variant_records: list[ModuleExecutionVariantRecord] = []
-    attempt_starts: list[ModuleAttemptStartedRecord] = []
+    prepared_attempts: list[tuple[str, int]] = []
     for variant_request in request.variants:
         profile = release_registry.get_execution_profile(
             variant_request.execution_profile_ref,
@@ -926,24 +984,17 @@ def _run_module(
                 prompt_envelope_ref=variant_request.prompt_envelope_ref,
                 prompt_envelope_sha256=variant_request.prompt_envelope_sha256,
                 input_closure_sha256=request.input_closure_sha256,
-                recorded_at_utc=started_at_utc,
+                recorded_at_utc=(prior_variants[variant_id].recorded_at_utc
+                                 if variant_id in prior_variants else started_at_utc),
             )
         )
-        attempt_starts.append(
-            ModuleAttemptStartedRecord(
-                module_run_id=module_run_id,
-                variant_id=variant_id,
-                attempt_id=attempt_id,
-                attempt_ordinal=attempt_ordinal,
-                recorded_at_utc=started_at_utc,
-            )
-        )
+        prepared_attempts.append((attempt_id, attempt_ordinal))
 
     concurrent_result = ledger.begin(
         request,
         module_run,
         tuple(variant_records),
-        tuple(attempt_starts),
+        (),
     )
     if concurrent_result is not None:
         return concurrent_result
@@ -966,12 +1017,12 @@ def _run_module(
 
     attempts: list[ModuleAttemptRecord] = []
     outputs: list[ModuleOutputBinding] = []
-    for variant_request, profile, adapter, variant, attempt_start in zip(
+    for variant_request, profile, adapter, variant, (attempt_id, attempt_ordinal) in zip(
         request.variants,
         resolved_profiles,
         resolved_adapters,
         variant_records,
-        attempt_starts,
+        prepared_attempts,
         strict=True,
     ):
         attempt, attempt_outputs = _execute_attempt(
@@ -981,7 +1032,8 @@ def _run_module(
             adapter=adapter,
             variant_request=variant_request,
             variant=variant,
-            attempt_start=attempt_start,
+            attempt_id=attempt_id,
+            attempt_ordinal=attempt_ordinal,
             artifact_host=artifact_host,
             authority=authority,
             workflow_ledger=workflow_ledger,
@@ -1034,7 +1086,8 @@ def _execute_attempt(
     adapter: AuthorizedAgentExecutionAdapter,
     variant_request: ModuleVariantRequest,
     variant: ModuleExecutionVariantRecord,
-    attempt_start: ModuleAttemptStartedRecord,
+    attempt_id: str,
+    attempt_ordinal: int,
     artifact_host: ModuleArtifactHost,
     authority: ModuleExecutionAuthority | None,
     workflow_ledger: WorkflowModuleLedgerRecorder | None,
@@ -1044,6 +1097,10 @@ def _execute_attempt(
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Authorize, invoke, and atomically finalize one Attempt."""
 
+    attempt_start = ModuleAttemptStartedRecord(
+        module_run_id=variant.module_run_id, variant_id=variant.variant_id,
+        attempt_id=attempt_id, attempt_ordinal=attempt_ordinal, recorded_at_utc=clock(),
+    )
     if workflow_ledger is not None:
         if type(run_request) is not WorkflowModuleExecutionRequest:
             raise ValueError("Workflow ledger requires a Workflow Module request")
@@ -1056,6 +1113,13 @@ def _execute_attempt(
             recorded_at_utc=attempt_start.recorded_at_utc,
             parent_attempt_id=run_request.parent_attempt_id,
         )
+        starts = tuple(row for row in workflow_ledger.record_store.load_trace(
+            run_request.workflow_execution_id).records_of_type(WorkflowAttemptStartedRecord)
+            if row.attempt_id == attempt_start.attempt_id)
+        if len(starts) != 1:
+            raise RuntimeError("durable Attempt start is unavailable")
+        attempt_start = replace(attempt_start, recorded_at_utc=starts[0].recorded_at_utc)
+    ledger.record_attempt_start(attempt_start)
 
     evidence: _AttemptAuthorizationEvidence | None = None
     if authority is not None:
@@ -1165,6 +1229,7 @@ def _execute_attempt(
     )
 
     staged: tuple[tuple[OutputSubmission, bytes], ...] = ()
+    result = None
     try:
         result = adapter.execute(canonical_request, host)
         if type(result) is not AgentExecutionResult:
@@ -1193,38 +1258,21 @@ def _execute_attempt(
                     output_slot_id=submission.output_slot_id,
                     content=content,
                 )
-    except PermissionError as exc:
-        return _record_failed_attempt(
-            variant=variant,
-            attempt_start=attempt_start,
-            failure_class="authorization",
-            usage=_empty_usage(),
-            ended_at_utc=clock(),
-            payload={
-                "disposition": "dynamic_operation_authorization_refused",
-                "exception_type": type(exc).__name__,
-                "message": str(exc),
-            },
-            artifact_host=artifact_host,
-            ledger=ledger,
-            workflow_ledger=workflow_ledger,
-            workflow_request=(
-                run_request
-                if type(run_request) is WorkflowModuleExecutionRequest
-                else None
-            ),
-            module=module,
-            profile=profile,
-        )
     except Exception as exc:
+        reported_usage, verified_trace, verified_tool_calls = (
+            host.recoverable_result_evidence(result)
+            if type(result) is AgentExecutionResult else (_empty_usage(), None, ())
+        )
+        authorization_failure = isinstance(exc, PermissionError)
         return _record_failed_attempt(
             variant=variant,
             attempt_start=attempt_start,
-            failure_class="unknown",
-            usage=_empty_usage(),
+            failure_class="authorization" if authorization_failure else "unknown",
+            usage=reported_usage,
             ended_at_utc=clock(),
             payload={
-                "disposition": "adapter_conformance_failure",
+                "disposition": ("dynamic_operation_authorization_refused" if authorization_failure
+                                else "adapter_conformance_failure"),
                 "exception_type": type(exc).__name__,
                 "message": str(exc),
             },
@@ -1238,6 +1286,8 @@ def _execute_attempt(
             ),
             module=module,
             profile=profile,
+            tool_calls=verified_tool_calls,
+            provider_trace=verified_trace,
         )
 
     usage = ModuleUsageObservation(
@@ -1247,6 +1297,20 @@ def _execute_attempt(
         cache_creation_tokens=result.cache_creation_tokens,
     )
     ended_at_utc = clock()
+
+    if (result.terminal_status == "completed"
+        and parse_utc_timestamp("period_end_at_utc", ended_at_utc)
+        > parse_utc_timestamp("recorded_at_utc", attempt_start.recorded_at_utc)
+          + timedelta(seconds=profile.timeout_seconds)):
+        return _record_failed_attempt(
+            variant=variant, attempt_start=attempt_start, failure_class="timeout",
+            usage=usage, ended_at_utc=ended_at_utc,
+            payload={"failure_code": "provider_completed_after_deadline"},
+            artifact_host=artifact_host, ledger=ledger, workflow_ledger=workflow_ledger,
+            workflow_request=run_request if type(run_request) is WorkflowModuleExecutionRequest else None,
+            module=module, profile=profile, tool_calls=result.tool_observations,
+            provider_trace=(result.cell_local_trace_ref, result.cell_local_trace_sha256),
+        )
 
     if result.terminal_status != "completed":
         assert result.failure is not None
@@ -1268,6 +1332,7 @@ def _execute_attempt(
                 else None
             ),
             tool_calls=result.tool_observations,
+            provider_trace=(result.cell_local_trace_ref, result.cell_local_trace_sha256),
         )
         ledger.commit_attempt(attempt)
         if workflow_ledger is not None:
@@ -1336,6 +1401,7 @@ def _execute_attempt(
                 module=module,
                 profile=profile,
                 tool_calls=result.tool_observations,
+                provider_trace=(result.cell_local_trace_ref, result.cell_local_trace_sha256),
             )
         completed = ModuleAttemptRecord(
             module_run_id=variant.module_run_id,
@@ -1351,6 +1417,8 @@ def _execute_attempt(
             tool_calls=result.tool_observations,
             prompt_envelope_ref=variant.prompt_envelope_ref,
             prompt_envelope_sha256=variant.prompt_envelope_sha256,
+            provider_trace_ref=result.cell_local_trace_ref,
+            provider_trace_sha256=result.cell_local_trace_sha256,
         )
         ledger.commit_attempt(completed)
         if workflow_ledger is not None:
@@ -1604,7 +1672,8 @@ def _assert_descriptor_covers_profile(
             "adapter descriptor capability does not cover the Execution Profile"
         )
     if (
-        profile.tool_policy
+        profile.semantic_input_delivery_mode in {"gateway_read", "hybrid"}
+        and profile.tool_policy
         and not descriptor.supports_dynamic_operation_authorization
     ):
         raise PermissionError(
@@ -1637,6 +1706,7 @@ def _record_failed_attempt(
     module: ModuleRelease | None = None,
     profile: ExecutionProfileRelease | None = None,
     tool_calls: tuple[ModuleToolCallObservation, ...] = (),
+    provider_trace: tuple[str, str] | None = None,
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Commit one kernel-owned failed Attempt with its bounded diagnostic."""
 
@@ -1654,6 +1724,7 @@ def _record_failed_attempt(
             payload=payload,
         ),
         tool_calls=tool_calls,
+        provider_trace=provider_trace,
     )
     ledger.commit_attempt(attempt)
     if workflow_ledger is not None:
@@ -1793,6 +1864,7 @@ def _failed_attempt(
     status: str = "failed",
     detail: tuple[str, str] | None = None,
     tool_calls: tuple[ModuleToolCallObservation, ...] = (),
+    provider_trace: tuple[str, str] | None = None,
 ) -> ModuleAttemptRecord:
     return ModuleAttemptRecord(
         module_run_id=variant.module_run_id,
@@ -1810,6 +1882,8 @@ def _failed_attempt(
         prompt_envelope_sha256=variant.prompt_envelope_sha256,
         failure_detail_ref=detail[0] if detail is not None else None,
         failure_detail_sha256=detail[1] if detail is not None else None,
+        provider_trace_ref=provider_trace[0] if provider_trace is not None else None,
+        provider_trace_sha256=provider_trace[1] if provider_trace is not None else None,
     )
 
 
@@ -1842,13 +1916,13 @@ def _assert_admitted_test_evaluation_profile(
         and profile.semantic_input_delivery_mode == "inline"
         and profile.attempt_workspace_policy == "own_draft_read_write"
         and profile.network_policy == "denied"
-        and not profile.tool_policy
+        and bool(profile.tool_policy)
         and not profile.gateway_access_reasons
         and not non_model_operations
         and profile.executor_adapter_id
-        == "claude_agent_sdk_inline_draft_workspace_executor"
-        and profile.executor_adapter_revision == "v2"
-        and profile.transport_kind == "claude_agent_sdk"
+        == "claude_cli_native_tools_executor"
+        and profile.executor_adapter_revision == "v1"
+        and profile.transport_kind == "claude_cli"
         and profile.provider_id == "anthropic"
     ):
         return

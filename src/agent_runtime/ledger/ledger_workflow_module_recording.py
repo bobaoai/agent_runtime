@@ -435,6 +435,10 @@ class WorkflowModuleLedgerRecorder:
                         ),
                     ),
                     failure_class=formal_attempt.failure_class,
+                    provider_trace_ref=formal_attempt.provider_trace_ref,
+                    provider_trace_sha256=formal_attempt.provider_trace_sha256,
+                    failure_detail_ref=formal_attempt.failure_detail_ref,
+                    failure_detail_sha256=formal_attempt.failure_detail_sha256,
                     period_start_at_utc=formal_attempt.period_start_at_utc,
                     period_end_at_utc=formal_attempt.period_end_at_utc,
                     recorded_at_utc=formal_attempt.recorded_at_utc,
@@ -1032,6 +1036,10 @@ class WorkflowModuleLedgerRecorder:
                 output.output_ref for output in execution_outputs
             ),
             failure_class=attempt.failure_class,
+            provider_trace_ref=attempt.provider_trace_ref,
+            provider_trace_sha256=attempt.provider_trace_sha256,
+            failure_detail_ref=attempt.failure_detail_ref,
+            failure_detail_sha256=attempt.failure_detail_sha256,
         )
         child_records: list[object] = [*execution_outputs]
         model_evidence = self._model_grants.get(attempt.attempt_id)
@@ -1103,14 +1111,19 @@ class WorkflowModuleLedgerRecorder:
                 )
             )
         tool_grants = tuple(self._tool_grants.get(attempt.attempt_id, ()))
-        if len(tool_grants) != len(attempt.tool_calls):
+        if (len(attempt.tool_calls) != len(tool_grants)
+            and (attempt.status == "completed" or attempt.tool_calls)):
             raise PermissionError(
                 "authorized tool grants differ from provider observations"
             )
+        # If a failed Adapter cannot supply the complete observation sequence,
+        # retain grants without guessing which grant a partial observation used.
         for observation, evidence in zip(
-            attempt.tool_calls, tool_grants, strict=True
+            attempt.tool_calls, tool_grants if attempt.tool_calls else (), strict=True
         ):
             grant = evidence.grant
+            if observation.tool_name != grant.action_id:
+                raise PermissionError("tool observation differs from its authorized action")
             tool_call = ToolCallRecord(
                 tool_call_id=observation.tool_call_id,
                 workflow_execution_id=request.workflow_execution_id,
@@ -1203,6 +1216,19 @@ class WorkflowModuleLedgerRecorder:
             recorded_at_utc=attempt.recorded_at_utc,
         )
         if self._binding.content_store is not None:
+            private_refs = [(attempt.provider_trace_ref, attempt.provider_trace_sha256),
+                            (attempt.failure_detail_ref, attempt.failure_detail_sha256)]
+            for observation in attempt.tool_calls:
+                private_refs.extend(((observation.request_ref, observation.request_sha256),
+                                     (observation.response_ref, observation.response_sha256)))
+            for ref, digest in private_refs:
+                if ref is not None:
+                    record_execution_content(
+                        content_store=self._binding.content_store, content_reader=artifact_host,
+                        workflow_execution_id=request.workflow_execution_id,
+                        content_ref=ref, content_sha256=digest, media_type="application/json",
+                        recorded_at_utc=attempt.recorded_at_utc, reference_is_committed=False,
+                    )
             for output in execution_outputs:
                 record_execution_content(
                     content_store=self._binding.content_store,

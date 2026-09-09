@@ -15,6 +15,7 @@ from ..foundation.foundation_contract_validation import (
     validate_exact_record_tuple,
     validate_usd_amount,
     validate_id,
+    validate_model_id,
     validate_int,
     validate_opaque_ref,
     validate_sha256,
@@ -476,7 +477,7 @@ class AgentExecutionResult:
             allowed={"completed", "failed", "cancelled"},
         )
         validate_id("provider_id", self.provider_id)
-        _validate_token("model_id", self.model_id)
+        validate_model_id("model_id", self.model_id)
         _validate_token("runtime_version", self.runtime_version)
         validate_exact_record_tuple(
             "outputs",

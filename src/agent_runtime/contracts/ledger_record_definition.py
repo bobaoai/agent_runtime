@@ -20,6 +20,7 @@ from typing import Any, Mapping, TypeAlias, TypeVar
 
 from .ledger_lineage_definition import ModuleOutputResolutionRecord
 from ..foundation.foundation_contract_validation import (
+    validate_model_id,
     validate_usd_amount,
     validate_utc_timestamp,
 )
@@ -522,6 +523,10 @@ class WorkflowAttemptRecord:
     trace_id: str
     execution_output_refs: tuple[str, ...]
     failure_class: str | None
+    provider_trace_ref: str | None = None
+    provider_trace_sha256: str | None = None
+    failure_detail_ref: str | None = None
+    failure_detail_sha256: str | None = None
 
     def validate(self) -> None:
         """Validate complete lineage, interval, outputs, and infrastructure status."""
@@ -555,12 +560,24 @@ class WorkflowAttemptRecord:
         if self.failure_class is not None:
             _validate_id("failure_class", self.failure_class)
 
+        for name in ("provider_trace", "failure_detail"):
+            ref, digest = getattr(self, name + "_ref"), getattr(self, name + "_sha256")
+            if (ref is None) != (digest is None):
+                raise ValueError(name + " reference and hash must be paired")
+            if ref is not None:
+                _validate_ref(name + "_ref", ref)
+                _validate_sha(name + "_sha256", digest)
+
     def as_dict(self) -> dict[str, Any]:
         """Return the canonical JSON-ready Attempt record."""
 
         self.validate()
         payload = asdict(self)
         payload["execution_output_refs"] = list(self.execution_output_refs)
+        for name in ("provider_trace", "failure_detail"):
+            if getattr(self, name + "_ref") is None:
+                payload.pop(name + "_ref")
+                payload.pop(name + "_sha256")
         return payload
 
 
@@ -1493,10 +1510,10 @@ class ModelCallRecord:
             ("resource_id", self.resource_id),
             ("action_id", self.action_id),
             ("agent_execution_adapter_id", self.agent_execution_adapter_id),
-            ("model_id", self.model_id),
             ("status_id", self.status_id),
         ):
             _validate_id(label, value)
+        validate_model_id("model_id", self.model_id)
         _validate_optional_authorization_refs(self)
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
 

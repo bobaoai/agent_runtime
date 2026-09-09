@@ -10,6 +10,7 @@ provider adapter boundary itself is the canonical
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 import hashlib
 import json
@@ -422,6 +423,10 @@ class ModuleExecutionLedger(Protocol):
 
     def commit_attempt(self, attempt: ModuleAttemptRecord) -> None:
         """Commit one terminal Attempt record."""
+
+    @abstractmethod
+    def record_attempt_start(self, started: ModuleAttemptStartedRecord) -> None:
+        """Record the immutable start when this Attempt actually begins."""
 
     def commit_result(self, request_id: str, result: ModuleRunResult) -> None:
         """Commit the terminal Module Run result."""

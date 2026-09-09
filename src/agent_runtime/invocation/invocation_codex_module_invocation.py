@@ -119,7 +119,7 @@ def _parse_usage(stdout: str) -> dict[str, int | None]:
     output_tokens: int | None = None
     cache_read_tokens: int | None = None
     cache_creation_tokens: int | None = None
-    for line in stdout.splitlines():
+    for line in stdout.split("\n"):
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -153,7 +153,7 @@ def _parse_final_agent_message(stdout: str) -> bytes:
     """Extract the last complete agent-message body from Codex JSONL events."""
 
     messages: list[str] = []
-    for line in stdout.splitlines():
+    for line in stdout.split("\n"):
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -187,10 +187,33 @@ def _failed_process_response(result: CodexCliInvocationResult) -> str:
 
     sections = []
     if result.stdout:
-        sections.append("stdout:\n" + result.stdout)
+        sections.append("stdout:\n" + _public_stdout(result.stdout))
     if result.stderr:
-        sections.append("stderr:\n" + result.stderr)
+        sections.append("stderr:\n" + _public_stdout(result.stderr))
     return "\n\n".join(sections)
+
+
+def _public_stdout(text: str) -> str:
+    """Exclude reasoning events before persisting public CLI diagnostics.
+
+    JSONL is delimited by LF, not Unicode line separators inside JSON strings.
+    Non-JSON process diagnostics are preserved, not guessed to be reasoning.
+    """
+    rows = []
+    for line in text.split("\n"):
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            rows.append(line)
+            continue
+        if isinstance(event, dict):
+            item = event.get("item")
+            if "reasoning" in str(event.get("type", "")) or (
+                isinstance(item, dict) and "reasoning" in str(item.get("type", ""))
+            ):
+                continue
+        rows.append(line)
+    return "\n".join(rows)
 
 
 class _CodexCliExecutorBase:
@@ -470,8 +493,8 @@ class _CodexCliExecutorBase:
         trace = {
             "transport": "codex_cli",
             "returncode": result.returncode,
-            "stdout": bounded_trace_text(result.stdout),
-            "stderr": bounded_trace_text(result.stderr),
+            "stdout": bounded_trace_text(_public_stdout(result.stdout)),
+            "stderr": bounded_trace_text(_public_stdout(result.stderr)),
         }
         if result.returncode != 0:
             raise_terminal_failure(
@@ -500,7 +523,7 @@ class _CodexCliExecutorBase:
                 failure_class="schema",
                 failure_code="codex_cli_output_json_invalid",
                 message=str(exc),
-                provider_response=result.stdout,
+                provider_response=_public_stdout(result.stdout),
                 retry_disposition_id="retry_allowed",
                 trace=trace,
                 cause=exc,
