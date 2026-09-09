@@ -7,7 +7,7 @@ implementation is not a reusable Runtime backend.
 
 from __future__ import annotations
 
-from ..contracts.durability_execution_definition import (
+from ..contracts.durability_topology_definition import (
     BackendAdmissionState,
     BackendDescriptor,
     BackendEvaluationRole,
@@ -21,7 +21,7 @@ NATIVE_POSTGRES_DESCRIPTOR = BackendDescriptor(
     admission_state=BackendAdmissionState.DEPENDENCY_PROBE,
     evaluation_role=BackendEvaluationRole.EVALUATION_CANDIDATE,
     implementation_ref=None,
-    supports_isolated_namespace=True,
-    supports_shared_namespace=False,
+    supports_dedicated=True,
+    supports_pooled=False,
     requires_external_service=False,
 )

@@ -428,6 +428,7 @@ class ModuleExecutionLedger(Protocol):
 
 
 __all__ = [
+    "MODEL_INVOCATION_OPERATION_IDS",
     "ModuleExecutionRequest",
     "ModuleExecutionLedger",
     "ModuleFailureDetailBinding",

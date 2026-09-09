@@ -7,7 +7,7 @@ Agent Runtime.
 
 from __future__ import annotations
 
-from ..contracts.durability_execution_definition import (
+from ..contracts.durability_topology_definition import (
     BackendAdmissionState,
     BackendDescriptor,
     BackendEvaluationRole,
@@ -21,7 +21,7 @@ HATCHET_DESCRIPTOR = BackendDescriptor(
     admission_state=BackendAdmissionState.REJECTED,
     evaluation_role=BackendEvaluationRole.REJECTED_CANDIDATE,
     implementation_ref=None,
-    supports_isolated_namespace=True,
-    supports_shared_namespace=True,
+    supports_dedicated=True,
+    supports_pooled=True,
     requires_external_service=True,
 )

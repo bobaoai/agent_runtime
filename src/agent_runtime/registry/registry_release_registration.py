@@ -9,10 +9,9 @@ atomic, duplicate-safe, and exact-hash based; no lookup resolves a mutable
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from threading import RLock
 from types import MappingProxyType
-from typing import Any, Callable, ClassVar, Mapping, TypeVar
+from typing import Any, ClassVar, Mapping, TypeVar
 
 from ..contracts.registry_release_definition import (
     BehaviorPolicyRelease,
@@ -23,12 +22,9 @@ from ..contracts.registry_release_definition import (
     ModuleEntryPolicy,
     ModuleExecutionPurpose,
     PromptBundleRelease,
-    ReleaseAdmissionIntent,
-    ReleaseAdmissionRecord,
-    ReleaseAdmissionState,
     ReleaseSubjectKind,
     RetryPolicyRelease,
-    RuntimeModuleRelease,
+    ModuleRelease,
     SchemaAssetRelease,
     WorkflowNodeKind,
     WorkflowRelease,
@@ -38,7 +34,6 @@ from ..foundation.foundation_json_schema_validation import (
     validate_json_document_against_schema,
     validate_json_schema_document,
 )
-from ..foundation.foundation_contract_validation import validate_utc_timestamp
 
 
 _ReleaseT = TypeVar(
@@ -50,7 +45,7 @@ _ReleaseT = TypeVar(
     RetryPolicyRelease,
     ExecutionVariantPolicyRelease,
     ExecutionProfileRelease,
-    RuntimeModuleRelease,
+    ModuleRelease,
     WorkflowRelease,
 )
 
@@ -64,49 +59,9 @@ _RELEASE_BUNDLE_FIELD_TYPES: tuple[tuple[str, type[Any]], ...] = (
     ("retry_policies", RetryPolicyRelease),
     ("execution_variant_policies", ExecutionVariantPolicyRelease),
     ("execution_profiles", ExecutionProfileRelease),
-    ("modules", RuntimeModuleRelease),
+    ("modules", ModuleRelease),
     ("workflows", WorkflowRelease),
-    ("admission_intents", ReleaseAdmissionIntent),
 )
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def allowed_release_admission_states(
-    purpose: ModuleExecutionPurpose,
-) -> frozenset[ReleaseAdmissionState]:
-    """Return the shared release-admission matrix for one execution purpose."""
-
-    if purpose in {
-        ModuleExecutionPurpose.TEST,
-        ModuleExecutionPurpose.EVALUATION,
-    }:
-        return frozenset(
-            {
-                ReleaseAdmissionState.CANDIDATE,
-                ReleaseAdmissionState.SHADOW_EXECUTABLE,
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-            }
-        )
-    if purpose is ModuleExecutionPurpose.REPLAY:
-        return frozenset(
-            {
-                ReleaseAdmissionState.CANDIDATE,
-                ReleaseAdmissionState.SHADOW_EXECUTABLE,
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-                ReleaseAdmissionState.SUPERSEDED,
-            }
-        )
-    return frozenset(
-        {
-            ReleaseAdmissionState.PRODUCTION_CANARY,
-            ReleaseAdmissionState.ACTIVE,
-        }
-    )
 
 
 @dataclass(frozen=True)
@@ -123,12 +78,11 @@ class RuntimeReleaseBundle:
     retry_policies: tuple[RetryPolicyRelease, ...] = ()
     execution_variant_policies: tuple[ExecutionVariantPolicyRelease, ...] = ()
     execution_profiles: tuple[ExecutionProfileRelease, ...] = ()
-    modules: tuple[RuntimeModuleRelease, ...] = ()
+    modules: tuple[ModuleRelease, ...] = ()
     workflows: tuple[WorkflowRelease, ...] = ()
-    admission_intents: tuple[ReleaseAdmissionIntent, ...] = ()
 
     def is_empty(self) -> bool:
-        """Return whether the bundle carries no release or admission records."""
+        """Return whether the bundle carries no immutable release records."""
 
         return not any(
             (
@@ -142,7 +96,6 @@ class RuntimeReleaseBundle:
                 self.execution_profiles,
                 self.modules,
                 self.workflows,
-                self.admission_intents,
             )
         )
 
@@ -161,10 +114,41 @@ class RuntimeReleaseRegistrySnapshot:
     retry_policies: tuple[RetryPolicyRelease, ...]
     execution_variant_policies: tuple[ExecutionVariantPolicyRelease, ...]
     execution_profiles: tuple[ExecutionProfileRelease, ...]
-    modules: tuple[RuntimeModuleRelease, ...]
+    modules: tuple[ModuleRelease, ...]
     workflows: tuple[WorkflowRelease, ...]
-    admissions: tuple[ReleaseAdmissionRecord, ...]
     active_release_refs: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class RuntimeActiveReleasePointerResult:
+    """Exact result of setting, clearing, or reading one entry pointer."""
+
+    record_type: ClassVar[str] = "runtime_active_release_pointer_result"
+
+    subject_kind: ReleaseSubjectKind
+    subject_id: str
+    active_release_ref: str | None
+    active_release_sha256: str | None
+
+
+@dataclass(frozen=True)
+class RuntimeReleaseRegistrationResult:
+    """Immutable success value shared by in-memory and persistent registration."""
+
+    record_type: ClassVar[str] = "runtime_release_registration_result"
+
+    submitted_bundle: RuntimeReleaseBundle
+    catalog_snapshot: RuntimeReleaseRegistrySnapshot
+
+    def validate(self) -> None:
+        if type(self.submitted_bundle) is not RuntimeReleaseBundle:
+            raise ValueError("submitted_bundle must be RuntimeReleaseBundle")
+        if self.submitted_bundle.is_empty():
+            raise ValueError("registration result cannot contain an empty bundle")
+        if type(self.catalog_snapshot) is not RuntimeReleaseRegistrySnapshot:
+            raise ValueError(
+                "catalog_snapshot must be RuntimeReleaseRegistrySnapshot"
+            )
 
 
 class RuntimeReleaseRegistry:
@@ -172,14 +156,7 @@ class RuntimeReleaseRegistry:
 
     service_id: ClassVar[str] = "runtime_release_registry"
 
-    def __init__(
-        self,
-        *,
-        recording_clock: Callable[[], str] = _utc_now,
-    ) -> None:
-        if not callable(recording_clock):
-            raise ValueError("recording_clock must be callable")
-        self._recording_clock = recording_clock
+    def __init__(self) -> None:
         self._registration_lock = RLock()
         self._schema_assets: dict[str, SchemaAssetRelease] = {}
         self._schema_version_keys: dict[tuple[str, str], str] = {}
@@ -194,13 +171,9 @@ class RuntimeReleaseRegistry:
             str, ExecutionVariantPolicyRelease
         ] = {}
         self._execution_profiles: dict[str, ExecutionProfileRelease] = {}
-        self._modules: dict[str, RuntimeModuleRelease] = {}
+        self._modules: dict[str, ModuleRelease] = {}
         self._workflows: dict[str, WorkflowRelease] = {}
         self._version_keys: dict[tuple[ReleaseSubjectKind, str, str], str] = {}
-        self._admissions_by_id: dict[str, ReleaseAdmissionRecord] = {}
-        self._admission_history: dict[
-            tuple[ReleaseSubjectKind, str], list[ReleaseAdmissionRecord]
-        ] = {}
         self._active_release_refs: dict[
             tuple[ReleaseSubjectKind, str], str
         ] = {}
@@ -208,19 +181,29 @@ class RuntimeReleaseRegistry:
     def register_bundle(
         self,
         bundle: RuntimeReleaseBundle,
-        /,
-    ) -> "RuntimeReleaseRegistry":
+    ) -> RuntimeReleaseRegistrationResult:
         """Validate and atomically install one dependency-closed release bundle."""
 
         with self._registration_lock:
-            self._register_bundle_unlocked(bundle)
-        return self
+            self._register_bundle_unlocked(bundle, validate_schema_content=True)
+            result = RuntimeReleaseRegistrationResult(
+                submitted_bundle=bundle,
+                catalog_snapshot=self.snapshot(),
+            )
+            result.validate()
+            return result
+
+    def _restore_persisted_bundle(self, bundle: RuntimeReleaseBundle) -> None:
+        """Restore already-admitted records without rerunning authoring validators."""
+
+        with self._registration_lock:
+            self._register_bundle_unlocked(bundle, validate_schema_content=False)
 
     def _register_bundle_unlocked(
         self,
         bundle: RuntimeReleaseBundle,
         *,
-        validate_schema_semantics: bool = True,
+        validate_schema_content: bool,
     ) -> None:
         """Install one bundle while the registration lock is held."""
 
@@ -240,9 +223,10 @@ class RuntimeReleaseRegistry:
         for record in bundle.schema_assets:
             staged._register_schema_asset(
                 record,
-                validate_schema_semantics=validate_schema_semantics,
+                validate_schema_content=validate_schema_content,
             )
         for record in bundle.prompt_components:
+            staged._validate_prompt_component_closure(record)
             staged._register_release(
                 record,
                 kind=ReleaseSubjectKind.PROMPT_COMPONENT,
@@ -262,7 +246,7 @@ class RuntimeReleaseRegistry:
         for record in bundle.behavior_policies:
             staged._validate_policy_closure(
                 record,
-                validate_schema_semantics=validate_schema_semantics,
+                validate_schema_content=validate_schema_content,
             )
             staged._register_release(
                 record,
@@ -274,7 +258,7 @@ class RuntimeReleaseRegistry:
         for record in bundle.evaluation_policies:
             staged._validate_policy_closure(
                 record,
-                validate_schema_semantics=validate_schema_semantics,
+                validate_schema_content=validate_schema_content,
             )
             staged._register_release(
                 record,
@@ -286,7 +270,7 @@ class RuntimeReleaseRegistry:
         for record in bundle.retry_policies:
             staged._validate_policy_closure(
                 record,
-                validate_schema_semantics=validate_schema_semantics,
+                validate_schema_content=validate_schema_content,
             )
             staged._register_release(
                 record,
@@ -324,7 +308,7 @@ class RuntimeReleaseRegistry:
         for record in bundle.execution_variant_policies:
             staged._validate_execution_variant_policy_closure(
                 record,
-                validate_schema_semantics=validate_schema_semantics,
+                validate_schema_content=validate_schema_content,
             )
             staged._register_release(
                 record,
@@ -333,30 +317,6 @@ class RuntimeReleaseRegistry:
                 version=record.policy_version,
                 target=staged._execution_variant_policies,
             )
-        admission_probe = staged._clone()
-        new_intents: list[ReleaseAdmissionIntent] = []
-        for intent in bundle.admission_intents:
-            intent.validate()
-            existing = staged._admissions_by_id.get(intent.admission_id)
-            if existing is None:
-                new_intents.append(intent)
-            elif existing.admission_intent_sha256 != intent.admission_intent_sha256:
-                raise ValueError(f"admission_id collision: {intent.admission_id}")
-            admission_probe._register_admission_intent(
-                intent,
-                recorded_at_utc="1970-01-01T00:00:00Z",
-            )
-
-        recorded_at_utc: str | None = None
-        if new_intents:
-            recorded_at_utc = self._recording_clock()
-            validate_utc_timestamp("recorded_at_utc", recorded_at_utc)
-        for intent in bundle.admission_intents:
-            staged._register_admission_intent(
-                intent,
-                recorded_at_utc=recorded_at_utc,
-            )
-
         self._replace_with(staged)
 
     def get_prompt_bundle(
@@ -462,8 +422,8 @@ class RuntimeReleaseRegistry:
 
     def get_module(
         self, release_ref: str, release_sha256: str
-    ) -> RuntimeModuleRelease:
-        """Resolve one exact Runtime Module Release."""
+    ) -> ModuleRelease:
+        """Resolve one exact Module Release."""
 
         return self._get_exact(
             self._modules,
@@ -476,7 +436,7 @@ class RuntimeReleaseRegistry:
         self,
         release_ref: str,
         release_sha256: str,
-    ) -> RuntimeModuleRelease:
+    ) -> ModuleRelease:
         """Resolve the exact Module Release created by Runtime registration."""
 
         return self.get_module(release_ref, release_sha256)
@@ -493,80 +453,120 @@ class RuntimeReleaseRegistry:
             "Workflow",
         )
 
-    def get_admission_state(
-        self,
-        subject_kind: ReleaseSubjectKind,
-        release_ref: str,
-    ) -> ReleaseAdmissionState:
-        """Return the latest append-only admission state for one exact release."""
-
-        with self._registration_lock:
-            history = self._admission_history.get((subject_kind, release_ref))
-            if not history:
-                raise RuntimeError(f"release has no admission record: {release_ref}")
-            return history[-1].state
-
-    def active_release_ref(
+    def set_active_release(
         self,
         subject_kind: ReleaseSubjectKind,
         subject_id: str,
-    ) -> str:
-        """Return the active pointer for inspection or new-execution binding."""
+        release_ref: str,
+        release_sha256: str,
+    ) -> RuntimeActiveReleasePointerResult:
+        """Atomically point one Module or Workflow identity at an exact release."""
 
         with self._registration_lock:
-            try:
-                return self._active_release_refs[(subject_kind, subject_id)]
-            except KeyError as exc:
+            record = self._entry_release(
+                subject_kind,
+                release_ref,
+                release_sha256,
+            )
+            if self._stable_id(record) != subject_id:
+                raise ValueError("active pointer subject_id differs from release")
+            self._active_release_refs[(subject_kind, subject_id)] = release_ref
+            return self._active_pointer_result(subject_kind, subject_id)
+
+    def clear_active_release(
+        self,
+        subject_kind: ReleaseSubjectKind,
+        subject_id: str,
+        *,
+        expected_release_ref: str,
+        expected_release_sha256: str,
+    ) -> RuntimeActiveReleasePointerResult:
+        """Clear one pointer only when its exact current target still matches."""
+
+        with self._registration_lock:
+            expected = self._entry_release(
+                subject_kind,
+                expected_release_ref,
+                expected_release_sha256,
+            )
+            if self._stable_id(expected) != subject_id:
+                raise ValueError("active pointer subject_id differs from release")
+            key = (subject_kind, subject_id)
+            current = self._active_release_refs.get(key)
+            if current is None:
+                return self._active_pointer_result(subject_kind, subject_id)
+            if current != expected_release_ref:
+                raise ValueError("active pointer current target differs from expected")
+            del self._active_release_refs[key]
+            return self._active_pointer_result(subject_kind, subject_id)
+
+    def resolve_active_release(
+        self,
+        subject_kind: ReleaseSubjectKind,
+        subject_id: str,
+    ) -> ModuleRelease | WorkflowRelease:
+        """Resolve the exact immutable release selected by one entry pointer."""
+
+        with self._registration_lock:
+            result = self._active_pointer_result(subject_kind, subject_id)
+            if result.active_release_ref is None or result.active_release_sha256 is None:
                 raise KeyError(
                     f"no active {subject_kind.value} release: {subject_id}"
-                ) from exc
+                )
+            return self._entry_release(
+                subject_kind,
+                result.active_release_ref,
+                result.active_release_sha256,
+            )
 
     def assert_module_execution_allowed(
         self,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
         purpose: ModuleExecutionPurpose,
     ) -> None:
-        """Fail closed when admission or entry policy does not allow execution."""
+        """Require an active standalone entry and preserve Module entry policy."""
 
-        if type(module) is not RuntimeModuleRelease:
-            raise ValueError("module must be an exact RuntimeModuleRelease")
+        if type(module) is not ModuleRelease:
+            raise ValueError("module must be an exact ModuleRelease")
         if type(purpose) is not ModuleExecutionPurpose:
             raise ValueError("purpose must be a ModuleExecutionPurpose")
-        state = self.get_admission_state(
-            ReleaseSubjectKind.RUNTIME_MODULE,
-            module.release_ref,
-        )
-        allowed = allowed_release_admission_states(purpose)
-        if state not in allowed:
-            raise PermissionError(
-                f"Module release is not admitted for {purpose.value}: {state.value}"
-            )
         if (
             purpose is ModuleExecutionPurpose.STANDALONE
             and module.entry_policy is ModuleEntryPolicy.WORKFLOW_BOUND
         ):
             raise PermissionError("workflow-bound Module cannot run as a product entry")
+        if purpose is ModuleExecutionPurpose.STANDALONE:
+            try:
+                active = self.resolve_active_release(
+                    ReleaseSubjectKind.RUNTIME_MODULE,
+                    module.module_id,
+                )
+            except KeyError as exc:
+                raise PermissionError("Module has no active standalone entry") from exc
+            if active != module:
+                raise PermissionError("Module release is not the active standalone entry")
 
     def assert_workflow_execution_allowed(
         self,
         workflow: WorkflowRelease,
         purpose: ModuleExecutionPurpose,
     ) -> None:
-        """Fail closed when Workflow admission does not allow this execution."""
+        """Require the active Workflow for ordinary Workflow execution."""
 
         if type(workflow) is not WorkflowRelease:
             raise ValueError("workflow must be an exact WorkflowRelease")
         if type(purpose) is not ModuleExecutionPurpose:
             raise ValueError("purpose must be a ModuleExecutionPurpose")
-        state = self.get_admission_state(
-            ReleaseSubjectKind.WORKFLOW,
-            workflow.release_ref,
-        )
-        allowed = allowed_release_admission_states(purpose)
-        if state not in allowed:
-            raise PermissionError(
-                f"Workflow release is not admitted for {purpose.value}: {state.value}"
-            )
+        if purpose is ModuleExecutionPurpose.WORKFLOW:
+            try:
+                active = self.resolve_active_release(
+                    ReleaseSubjectKind.WORKFLOW,
+                    workflow.workflow_id,
+                )
+            except KeyError as exc:
+                raise PermissionError("Workflow has no active entry") from exc
+            if active != workflow:
+                raise PermissionError("Workflow release is not the active entry")
 
     def snapshot(self) -> RuntimeReleaseRegistrySnapshot:
         """Return a deterministic immutable registry snapshot."""
@@ -615,50 +615,11 @@ class RuntimeReleaseRegistry:
                 workflows=tuple(
                     self._workflows[key] for key in sorted(self._workflows)
                 ),
-                admissions=tuple(self._admissions_by_id.values()),
                 active_release_refs=MappingProxyType(active),
             )
 
-    @classmethod
-    def restore_persisted_snapshot(
-        cls,
-        snapshot: RuntimeReleaseRegistrySnapshot,
-        *,
-        recording_clock: Callable[[], str] = _utc_now,
-    ) -> "RuntimeReleaseRegistry":
-        """Restore verified immutable authority without re-finalizing records."""
-
-        if type(snapshot) is not RuntimeReleaseRegistrySnapshot:
-            raise ValueError("snapshot must be a RuntimeReleaseRegistrySnapshot")
-        registry = cls(recording_clock=recording_clock)
-        bundle = RuntimeReleaseBundle(
-            schema_assets=snapshot.schema_assets,
-            prompt_components=snapshot.prompt_components,
-            prompt_bundles=snapshot.prompt_bundles,
-            behavior_policies=snapshot.behavior_policies,
-            evaluation_policies=snapshot.evaluation_policies,
-            retry_policies=snapshot.retry_policies,
-            execution_variant_policies=snapshot.execution_variant_policies,
-            execution_profiles=snapshot.execution_profiles,
-            modules=snapshot.modules,
-            workflows=snapshot.workflows,
-        )
-        if not bundle.is_empty():
-            registry._register_bundle_unlocked(
-                bundle,
-                validate_schema_semantics=False,
-            )
-        for admission in snapshot.admissions:
-            registry._register_final_admission(admission)
-        expected_active = dict(registry.snapshot().active_release_refs)
-        if expected_active != dict(snapshot.active_release_refs):
-            raise RuntimeError(
-                "persisted active release pointers do not match admission history"
-            )
-        return registry
-
     def _clone(self) -> "RuntimeReleaseRegistry":
-        staged = RuntimeReleaseRegistry(recording_clock=self._recording_clock)
+        staged = RuntimeReleaseRegistry()
         staged._schema_assets = dict(self._schema_assets)
         staged._schema_version_keys = dict(self._schema_version_keys)
         staged._prompt_components = dict(
@@ -675,10 +636,6 @@ class RuntimeReleaseRegistry:
         staged._modules = dict(self._modules)
         staged._workflows = dict(self._workflows)
         staged._version_keys = dict(self._version_keys)
-        staged._admissions_by_id = dict(self._admissions_by_id)
-        staged._admission_history = {
-            key: list(history) for key, history in self._admission_history.items()
-        }
         staged._active_release_refs = dict(self._active_release_refs)
         return staged
 
@@ -695,8 +652,6 @@ class RuntimeReleaseRegistry:
         self._modules = staged._modules
         self._workflows = staged._workflows
         self._version_keys = staged._version_keys
-        self._admissions_by_id = staged._admissions_by_id
-        self._admission_history = staged._admission_history
         self._active_release_refs = staged._active_release_refs
 
     def _register_release(
@@ -716,7 +671,7 @@ class RuntimeReleaseRegistry:
             RetryPolicyRelease,
             ExecutionVariantPolicyRelease,
             ExecutionProfileRelease,
-            RuntimeModuleRelease,
+            ModuleRelease,
             WorkflowRelease,
         }:
             raise ValueError("release bundle contains an unsupported record type")
@@ -739,12 +694,12 @@ class RuntimeReleaseRegistry:
         self,
         record: SchemaAssetRelease,
         *,
-        validate_schema_semantics: bool = True,
+        validate_schema_content: bool,
     ) -> None:
         if type(record) is not SchemaAssetRelease:
             raise ValueError("schema_assets must contain SchemaAssetRelease values")
         record.validate()
-        if validate_schema_semantics:
+        if validate_schema_content:
             validate_json_schema_document(record.schema_document())
         existing = self._schema_assets.get(record.release_ref)
         if existing is not None:
@@ -762,6 +717,25 @@ class RuntimeReleaseRegistry:
             )
         self._schema_assets[record.release_ref] = record
         self._schema_version_keys[version_key] = record.release_ref
+
+    def _validate_prompt_component_closure(
+        self,
+        component: PromptComponentRelease,
+    ) -> None:
+        """Resolve every Registry-addressed source member by its exact hash."""
+
+        component.validate()
+        for member in component.source_members:
+            if member.member_ref.startswith("schema:"):
+                schema = self.get_schema_asset(
+                    member.member_ref,
+                    member.member_sha256,
+                )
+                if member.media_type != "application/schema+json":
+                    raise ValueError(
+                        "Prompt Component Schema member media type differs from "
+                        "the registered Schema Asset"
+                    )
 
     def _validate_prompt_bundle_closure(
         self, prompt_bundle: PromptBundleRelease
@@ -804,9 +778,9 @@ class RuntimeReleaseRegistry:
             | ExecutionVariantPolicyRelease
         ),
         *,
-        validate_schema_semantics: bool = True,
+        validate_schema_content: bool,
     ) -> None:
-        """Require one policy document to satisfy its exact admitted schema."""
+        """Resolve policy schema exactly and validate new policy documents."""
 
         if type(policy) not in {
             BehaviorPolicyRelease,
@@ -820,7 +794,7 @@ class RuntimeReleaseRegistry:
             policy.policy_schema_ref,
             policy.policy_schema_sha256,
         )
-        if validate_schema_semantics:
+        if validate_schema_content:
             validate_json_document_against_schema(
                 policy.policy_document(),
                 schema.schema_document(),
@@ -830,7 +804,7 @@ class RuntimeReleaseRegistry:
         self,
         policy: ExecutionVariantPolicyRelease,
         *,
-        validate_schema_semantics: bool = True,
+        validate_schema_content: bool,
     ) -> None:
         """Validate exact origin and profile closure for one Variant Policy."""
 
@@ -841,7 +815,7 @@ class RuntimeReleaseRegistry:
             )
         self._validate_policy_closure(
             policy,
-            validate_schema_semantics=validate_schema_semantics,
+            validate_schema_content=validate_schema_content,
         )
         document = policy.policy_document()
         if not document["bindings"]:
@@ -874,7 +848,7 @@ class RuntimeReleaseRegistry:
                 binding["execution_profile_release_sha256"],
             )
 
-    def _validate_module_closure(self, module: RuntimeModuleRelease) -> None:
+    def _validate_module_closure(self, module: ModuleRelease) -> None:
         module.validate()
         if module.prompt_bundle_ref is not None:
             if module.prompt_bundle_sha256 is None:
@@ -920,163 +894,48 @@ class RuntimeReleaseRegistry:
                     node.module_release_sha256,
                 )
 
-    def _validate_admission_intent(self, intent: ReleaseAdmissionIntent) -> None:
-        if type(intent) is not ReleaseAdmissionIntent:
-            raise ValueError(
-                "admission_intents must contain exact ReleaseAdmissionIntent values"
-            )
-        intent.validate()
-        existing = self._admissions_by_id.get(intent.admission_id)
-        if existing is not None:
-            if existing.admission_intent_sha256 != intent.admission_intent_sha256:
-                raise ValueError(f"admission_id collision: {intent.admission_id}")
-            return
-        record = self._release_for_admission(intent)
-        if self._stable_id(record) != intent.subject_id:
-            raise ValueError("admission subject_id does not match the release")
-
-    def _register_admission_intent(
+    def _entry_release(
         self,
-        intent: ReleaseAdmissionIntent,
-        *,
-        recorded_at_utc: str | None,
-    ) -> None:
-        self._validate_admission_intent(intent)
-        existing = self._admissions_by_id.get(intent.admission_id)
-        if existing is not None:
-            return
-        if recorded_at_utc is None:
-            raise ValueError("new admission intent requires a store commit time")
-        self._register_final_admission(
-            ReleaseAdmissionRecord._from_intent(
-                intent,
-                recorded_at_utc=recorded_at_utc,
-            )
-        )
+        subject_kind: ReleaseSubjectKind,
+        release_ref: str,
+        release_sha256: str,
+    ) -> ModuleRelease | WorkflowRelease:
+        if subject_kind is ReleaseSubjectKind.RUNTIME_MODULE:
+            return self.get_module(release_ref, release_sha256)
+        if subject_kind is ReleaseSubjectKind.WORKFLOW:
+            return self.get_workflow(release_ref, release_sha256)
+        raise ValueError("active pointer supports only Module or Workflow")
 
-    def _register_final_admission(self, admission: ReleaseAdmissionRecord) -> None:
-        if type(admission) is not ReleaseAdmissionRecord:
-            raise ValueError("admissions must be exact ReleaseAdmissionRecord values")
-        admission.validate()
-        existing = self._admissions_by_id.get(admission.admission_id)
-        if existing is not None:
-            if existing.as_dict() != admission.as_dict():
-                raise ValueError(f"admission_id collision: {admission.admission_id}")
-            return
-
-        record = self._release_for_admission(admission)
-        record_id = self._stable_id(record)
-        if record_id != admission.subject_id:
-            raise ValueError("admission subject_id does not match the release")
-        if (
-            admission.subject_kind is ReleaseSubjectKind.RUNTIME_MODULE
-            and admission.state
-            in {
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-            }
-        ):
-            if not isinstance(record, RuntimeModuleRelease):
-                raise TypeError(
-                    "production Module admission must resolve to RuntimeModuleRelease"
-                )
-            if (
-                record.input_schema_ref not in self._schema_assets
-                or record.output_schema_ref not in self._schema_assets
-            ):
-                raise ValueError(
-                    "production Module admission requires registered input and "
-                    "output Schema Assets"
-                )
-            self.get_schema_asset(
-                record.input_schema_ref,
-                record.input_schema_sha256,
-            )
-            self.get_schema_asset(
-                record.output_schema_ref,
-                record.output_schema_sha256,
-            )
-        history_key = (admission.subject_kind, admission.release_ref)
-        history = self._admission_history.setdefault(history_key, [])
-        prior_state = history[-1].state if history else None
-        self._validate_admission_transition(prior_state, admission.state)
-
-        active_key = (admission.subject_kind, admission.subject_id)
-        current_active = self._active_release_refs.get(active_key)
-        if admission.state is ReleaseAdmissionState.ACTIVE:
-            if current_active is not None and current_active != admission.release_ref:
-                old_history = self._admission_history.get(
-                    (admission.subject_kind, current_active), []
-                )
-                old_state = old_history[-1].state if old_history else None
-                if old_state not in {
-                    ReleaseAdmissionState.SUPERSEDED,
-                    ReleaseAdmissionState.RETIRED,
-                }:
-                    raise ValueError(
-                        "activating a replacement requires the old release to be "
-                        "superseded before the replacement activation is applied"
-                    )
-            self._active_release_refs[active_key] = admission.release_ref
-        elif admission.state in {
-            ReleaseAdmissionState.SUPERSEDED,
-            ReleaseAdmissionState.RETIRED,
-        } and current_active == admission.release_ref:
-            del self._active_release_refs[active_key]
-
-        history.append(admission)
-        self._admissions_by_id[admission.admission_id] = admission
-
-    def _release_for_admission(
+    def _active_pointer_result(
         self,
-        admission: ReleaseAdmissionIntent | ReleaseAdmissionRecord,
-    ) -> Any:
-        table: Mapping[str, Any]
-        expected_type: type[Any]
-        if admission.subject_kind is ReleaseSubjectKind.SCHEMA_ASSET:
-            table = self._schema_assets
-            expected_type = SchemaAssetRelease
-        elif admission.subject_kind is ReleaseSubjectKind.PROMPT_COMPONENT:
-            table = self._prompt_components
-            expected_type = PromptComponentRelease
-        elif admission.subject_kind is ReleaseSubjectKind.PROMPT_BUNDLE:
-            table = self._prompt_bundles
-            expected_type = PromptBundleRelease
-        elif admission.subject_kind is ReleaseSubjectKind.BEHAVIOR_POLICY:
-            table = self._behavior_policies
-            expected_type = BehaviorPolicyRelease
-        elif admission.subject_kind is ReleaseSubjectKind.EVALUATION_POLICY:
-            table = self._evaluation_policies
-            expected_type = EvaluationPolicyRelease
-        elif admission.subject_kind is ReleaseSubjectKind.RETRY_POLICY:
-            table = self._retry_policies
-            expected_type = RetryPolicyRelease
-        elif admission.subject_kind is ReleaseSubjectKind.EXECUTION_VARIANT_POLICY:
-            table = self._execution_variant_policies
-            expected_type = ExecutionVariantPolicyRelease
-        elif admission.subject_kind is ReleaseSubjectKind.EXECUTION_PROFILE:
-            table = self._execution_profiles
-            expected_type = ExecutionProfileRelease
-        elif admission.subject_kind is ReleaseSubjectKind.RUNTIME_MODULE:
+        subject_kind: ReleaseSubjectKind,
+        subject_id: str,
+    ) -> RuntimeActiveReleasePointerResult:
+        if subject_kind not in {
+            ReleaseSubjectKind.RUNTIME_MODULE,
+            ReleaseSubjectKind.WORKFLOW,
+        }:
+            raise ValueError("active pointer supports only Module or Workflow")
+        release_ref = self._active_release_refs.get((subject_kind, subject_id))
+        if release_ref is None:
+            return RuntimeActiveReleasePointerResult(
+                subject_kind=subject_kind,
+                subject_id=subject_id,
+                active_release_ref=None,
+                active_release_sha256=None,
+            )
+        table: Mapping[str, ModuleRelease | WorkflowRelease]
+        if subject_kind is ReleaseSubjectKind.RUNTIME_MODULE:
             table = self._modules
-            expected_type = RuntimeModuleRelease
-        elif admission.subject_kind is ReleaseSubjectKind.WORKFLOW:
+        else:
             table = self._workflows
-            expected_type = WorkflowRelease
-        else:  # pragma: no cover - exhaustive enum guard
-            raise ValueError("unsupported admission subject kind")
-        record = self._get_exact(
-            table,
-            admission.release_ref,
-            admission.release_sha256,
-            admission.subject_kind.value,
+        release = table[release_ref]
+        return RuntimeActiveReleasePointerResult(
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            active_release_ref=release.release_ref,
+            active_release_sha256=release.release_sha256,
         )
-        if type(record) is not expected_type:
-            raise TypeError(
-                f"{admission.subject_kind.value} admission resolved to "
-                f"{type(record).__name__}, expected {expected_type.__name__}"
-            )
-        return record
 
     @staticmethod
     def _stable_id(record: Any) -> str:
@@ -1092,40 +951,6 @@ class RuntimeReleaseRegistry:
             if hasattr(record, field_name):
                 return getattr(record, field_name)
         raise TypeError("release record has no stable identity")
-
-    @staticmethod
-    def _validate_admission_transition(
-        prior: ReleaseAdmissionState | None,
-        target: ReleaseAdmissionState,
-    ) -> None:
-        allowed: dict[ReleaseAdmissionState | None, set[ReleaseAdmissionState]] = {
-            None: {ReleaseAdmissionState.CANDIDATE},
-            ReleaseAdmissionState.CANDIDATE: {
-                ReleaseAdmissionState.SHADOW_EXECUTABLE,
-                ReleaseAdmissionState.ACTIVE,
-                ReleaseAdmissionState.RETIRED,
-            },
-            ReleaseAdmissionState.SHADOW_EXECUTABLE: {
-                ReleaseAdmissionState.PRODUCTION_CANARY,
-                ReleaseAdmissionState.ACTIVE,
-                ReleaseAdmissionState.RETIRED,
-            },
-            ReleaseAdmissionState.PRODUCTION_CANARY: {
-                ReleaseAdmissionState.ACTIVE,
-                ReleaseAdmissionState.RETIRED,
-            },
-            ReleaseAdmissionState.ACTIVE: {
-                ReleaseAdmissionState.SUPERSEDED,
-                ReleaseAdmissionState.RETIRED,
-            },
-            ReleaseAdmissionState.SUPERSEDED: {ReleaseAdmissionState.RETIRED},
-            ReleaseAdmissionState.RETIRED: set(),
-        }
-        if target not in allowed[prior]:
-            prior_label = "unregistered" if prior is None else prior.value
-            raise ValueError(
-                f"illegal release admission transition: {prior_label} -> {target.value}"
-            )
 
     def _get_exact(
         self,
@@ -1145,8 +970,9 @@ class RuntimeReleaseRegistry:
 
 
 __all__ = [
+    "RuntimeActiveReleasePointerResult",
     "RuntimeReleaseBundle",
+    "RuntimeReleaseRegistrationResult",
     "RuntimeReleaseRegistry",
     "RuntimeReleaseRegistrySnapshot",
-    "allowed_release_admission_states",
 ]

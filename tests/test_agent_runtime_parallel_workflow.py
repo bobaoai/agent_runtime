@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from agent_runtime.contracts.durability_execution_definition import (
+from agent_runtime.contracts.durability_topology_definition import (
     BackendEvent,
     BackendExecutionRef,
     ExecutionSnapshot,
@@ -18,13 +18,10 @@ from agent_runtime.contracts.execution_host_definition import (
     RuntimeWorkflowStartRequest,
 )
 from agent_runtime.contracts.registry_release_definition import (
-    BehaviorPolicyRelease,
-    EvaluationPolicyRelease,
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
-    RuntimeModuleRelease,
-    RetryPolicyRelease,
+    ModuleRelease,
     SchemaAssetRelease,
     WorkflowEdge,
     WorkflowNodeBinding,
@@ -42,118 +39,79 @@ from agent_runtime.durability.durability_workflow_coordination import (
     DurableExecutionCoordinator,
     DurableExecutionStopReason,
 )
+from agent_runtime.inspection.inspection_release_rendering import (
+    build_runtime_release_inventory,
+)
 from agent_runtime.registry.registry_graph_projection import (
     RUNTIME_TERMINAL_STATE_ID,
     project_workflow_release_graph,
 )
-from agent_runtime.registry.registry_release_compilation import (
-    runtime_owned_policy_schema_assets,
+from agent_runtime.registry.registry_postgres_persistence import (
+    postgres_release_ddl,
+    serialize_registry_tables,
 )
 from agent_runtime.registry.registry_release_registration import (
     RuntimeReleaseBundle,
     RuntimeReleaseRegistry,
 )
+from agent_runtime.registry.registry_release_compilation import (
+    BehaviorPolicyReleaseCandidate,
+    EvaluationPolicyReleaseCandidate,
+    RetryPolicyReleaseCandidate,
+    compile_behavior_policy_release,
+    compile_evaluation_policy_release,
+    compile_retry_policy_release,
+    runtime_owned_policy_schema_assets,
+)
 
 
-def _policy_releases() -> tuple[
-    tuple[object, ...],
-    BehaviorPolicyRelease,
-    EvaluationPolicyRelease,
-    RetryPolicyRelease,
-]:
-    schemas = runtime_owned_policy_schema_assets()
-    schema_by_ref = {schema.release_ref: schema for schema in schemas}
-    behavior_schema = schema_by_ref["schema:runtime_behavior_policy@v1"]
-    evaluation_schema = schema_by_ref["schema:runtime_evaluation_policy@v1"]
-    retry_schema = schema_by_ref["schema:runtime_retry_policy@v1"]
-    behavior = BehaviorPolicyRelease.build(
-        policy_id="isolated",
-        policy_version="1",
-        release_ref="behavior-policy:isolated@1",
-        policy_schema_ref=behavior_schema.release_ref,
-        policy_schema_sha256=behavior_schema.schema_sha256,
-        policy_document={
-            "context_isolation": "workflow_execution_isolated",
-        },
+_BEHAVIOR_POLICY = compile_behavior_policy_release(
+    BehaviorPolicyReleaseCandidate(
+        policy_id="parallel_isolated",
+        policy_version="v1",
+        context_isolation="workflow_execution_isolated",
     )
-    evaluation = EvaluationPolicyRelease.build(
-        policy_id="none",
-        policy_version="1",
-        release_ref="evaluation-policy:none@1",
-        policy_schema_ref=evaluation_schema.release_ref,
-        policy_schema_sha256=evaluation_schema.schema_sha256,
-        policy_document={"evaluation_mode": "none"},
+)
+_EVALUATION_POLICY = compile_evaluation_policy_release(
+    EvaluationPolicyReleaseCandidate(
+        policy_id="parallel_none",
+        policy_version="v1",
+        evaluation_mode="none",
     )
-    retry = RetryPolicyRelease.build(
-        policy_id="bounded",
-        policy_version="1",
-        release_ref="retry-policy:bounded@1",
-        policy_schema_ref=retry_schema.release_ref,
-        policy_schema_sha256=retry_schema.schema_sha256,
-        policy_document={"max_attempts": 3},
+)
+_RETRY_POLICY = compile_retry_policy_release(
+    RetryPolicyReleaseCandidate(
+        policy_id="parallel_bounded",
+        policy_version="v1",
+        max_attempts=3,
     )
-    return schemas, behavior, evaluation, retry
+)
+_PARALLEL_INPUT_SCHEMA = SchemaAssetRelease.build(
+    schema_asset_id="parallel_input",
+    schema_asset_version="v1",
+    release_ref="schema:parallel_input@v1",
+    schema_document={
+        "$id": "schema:parallel_input@v1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": True,
+    },
+)
+_PARALLEL_OUTPUT_SCHEMA = SchemaAssetRelease.build(
+    schema_asset_id="parallel_output",
+    schema_asset_version="v1",
+    release_ref="schema:parallel_output@v1",
+    schema_document={
+        "$id": "schema:parallel_output@v1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": True,
+    },
+)
 
 
-def _module_schema_assets() -> tuple[SchemaAssetRelease, SchemaAssetRelease]:
-    def build(schema_id: str) -> SchemaAssetRelease:
-        release_ref = f"schema:{schema_id}@1"
-        return SchemaAssetRelease.build(
-            schema_asset_id=schema_id.replace("-", "_"),
-            schema_asset_version="1",
-            release_ref=release_ref,
-            schema_document={
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "$id": release_ref,
-                "type": "object",
-                "additionalProperties": True,
-            },
-        )
-
-    return build("parallel_input"), build("parallel_output")
-
-
-def _register_release_closure(
-    registry: RuntimeReleaseRegistry,
-    module: RuntimeModuleRelease,
-    workflow: WorkflowRelease,
-) -> None:
-    schemas, behavior, evaluation, retry = _policy_releases()
-    input_schema, output_schema = _module_schema_assets()
-    registry.register_bundle(
-        RuntimeReleaseBundle(
-            schema_assets=(*schemas, input_schema, output_schema),
-            behavior_policies=(behavior,),
-            evaluation_policies=(evaluation,),
-            retry_policies=(retry,),
-            modules=(module,),
-            workflows=(workflow,),
-        )
-    )
-
-
-def _module(
-    *,
-    behavior_policy_sha256: str | None = None,
-    evaluation_policy_sha256: str | None = None,
-    retry_policy_sha256: str | None = None,
-    input_schema_sha256: str | None = None,
-    output_schema_sha256: str | None = None,
-) -> RuntimeModuleRelease:
-    if (
-        behavior_policy_sha256 is None
-        or evaluation_policy_sha256 is None
-        or retry_policy_sha256 is None
-    ):
-        _, behavior, evaluation, retry = _policy_releases()
-        behavior_policy_sha256 = behavior.release_sha256
-        evaluation_policy_sha256 = evaluation.release_sha256
-        retry_policy_sha256 = retry.release_sha256
-    if input_schema_sha256 is None or output_schema_sha256 is None:
-        input_schema, output_schema = _module_schema_assets()
-        input_schema_sha256 = input_schema.schema_sha256
-        output_schema_sha256 = output_schema.schema_sha256
-    return RuntimeModuleRelease.build(
+def _module() -> ModuleRelease:
+    return ModuleRelease.build(
         module_id="parallel_test_module",
         module_version="1.0.0",
         release_ref="runtime-module:parallel_test_module@1",
@@ -162,26 +120,26 @@ def _module(
         owner_contract_sha256="1" * 64,
         executable_ref="python:tests.parallel_test_module",
         executable_sha256="2" * 64,
-        input_schema_ref="schema:parallel_input@1",
-        input_schema_sha256=input_schema_sha256,
-        output_schema_ref="schema:parallel_output@1",
-        output_schema_sha256=output_schema_sha256,
+        input_schema_ref=_PARALLEL_INPUT_SCHEMA.release_ref,
+        input_schema_sha256=_PARALLEL_INPUT_SCHEMA.schema_sha256,
+        output_schema_ref=_PARALLEL_OUTPUT_SCHEMA.release_ref,
+        output_schema_sha256=_PARALLEL_OUTPUT_SCHEMA.schema_sha256,
         prompt_bundle_ref=None,
         prompt_bundle_sha256=None,
         declared_operation_ids=(),
-        behavior_policy_ref="behavior-policy:isolated@1",
-        behavior_policy_sha256=behavior_policy_sha256,
-        evaluation_policy_ref="evaluation-policy:none@1",
-        evaluation_policy_sha256=evaluation_policy_sha256,
-        retry_policy_ref="retry-policy:bounded@1",
-        retry_policy_sha256=retry_policy_sha256,
+        behavior_policy_ref=_BEHAVIOR_POLICY.release_ref,
+        behavior_policy_sha256=_BEHAVIOR_POLICY.release_sha256,
+        evaluation_policy_ref=_EVALUATION_POLICY.release_ref,
+        evaluation_policy_sha256=_EVALUATION_POLICY.release_sha256,
+        retry_policy_ref=_RETRY_POLICY.release_ref,
+        retry_policy_sha256=_RETRY_POLICY.release_sha256,
         compatible_transport_kinds=("in_process_test",),
         entry_policy=ModuleEntryPolicy.WORKFLOW_BOUND,
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
     )
 
 
-def _module_node(node_id: str, module: RuntimeModuleRelease) -> WorkflowNodeBinding:
+def _module_node(node_id: str, module: ModuleRelease) -> WorkflowNodeBinding:
     return WorkflowNodeBinding(
         node_id=node_id,
         node_kind=WorkflowNodeKind.MODULE,
@@ -192,7 +150,25 @@ def _module_node(node_id: str, module: RuntimeModuleRelease) -> WorkflowNodeBind
     )
 
 
-def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
+def _release_bundle(
+    module: ModuleRelease,
+    workflow: WorkflowRelease,
+) -> RuntimeReleaseBundle:
+    return RuntimeReleaseBundle(
+        schema_assets=(
+            *runtime_owned_policy_schema_assets(),
+            _PARALLEL_INPUT_SCHEMA,
+            _PARALLEL_OUTPUT_SCHEMA,
+        ),
+        behavior_policies=(_BEHAVIOR_POLICY,),
+        evaluation_policies=(_EVALUATION_POLICY,),
+        retry_policies=(_RETRY_POLICY,),
+        modules=(module,),
+        workflows=(workflow,),
+    )
+
+
+def _workflow(module: ModuleRelease) -> WorkflowRelease:
     return WorkflowRelease.build(
         workflow_id="parallel_review",
         workflow_version="1.0.0",
@@ -259,7 +235,7 @@ def _workflow(module: RuntimeModuleRelease) -> WorkflowRelease:
     )
 
 
-def _workflow_with_prelude(module: RuntimeModuleRelease) -> WorkflowRelease:
+def _workflow_with_prelude(module: ModuleRelease) -> WorkflowRelease:
     base = _workflow(module)
     return WorkflowRelease.build(
         workflow_id="parallel_review_with_prelude",
@@ -460,7 +436,7 @@ def _coordinator(
     module = _module()
     workflow = _workflow(module)
     registry = RuntimeReleaseRegistry()
-    _register_release_closure(registry, module, workflow)
+    registry.register_bundle(_release_bundle(module, workflow))
     cursor = _Cursor(workflow)
     bridge = _Bridge(fail_fidelity_once=fail_fidelity_once)
     return (
@@ -514,6 +490,27 @@ def test_parallel_group_release_round_trips_and_rejects_ordinary_branch_entry() 
         bypass.validate()
 
 
+def test_parallel_group_is_persisted_and_projected_for_inspection() -> None:
+    module = _module()
+    workflow = _workflow(module)
+    registry = RuntimeReleaseRegistry()
+    registry.register_bundle(_release_bundle(module, workflow))
+
+    rows = serialize_registry_tables(registry.snapshot())
+    inventory = build_runtime_release_inventory(registry)
+
+    assert rows["workflow_parallel_group_binding"][0]["group_id"] == (
+        "overview_review_group"
+    )
+    assert inventory["workflows"][0]["parallel_groups"] == [
+        workflow.parallel_groups[0].as_dict()
+    ]
+    assert any(
+        "workflow_parallel_group_binding" in statement
+        for statement in postgres_release_ddl()
+    )
+
+
 def test_parallel_group_dispatches_branches_concurrently_and_joins_once() -> None:
     coordinator, request, cursor, bridge = _coordinator()
 
@@ -545,7 +542,9 @@ def test_parallel_group_waits_for_next_drive_instead_of_partial_dispatch() -> No
     module = _module()
     workflow = _workflow_with_prelude(module)
     registry = RuntimeReleaseRegistry()
-    _register_release_closure(registry, module, workflow)
+    registry.register_bundle(
+        _release_bundle(module, workflow)
+    )
     cursor = _Cursor(workflow)
     bridge = _Bridge()
     coordinator = DurableExecutionCoordinator(
@@ -588,7 +587,9 @@ def test_committed_parallel_wait_blocks_persistent_sibling_failure_on_replay() -
     module = _module()
     workflow = _workflow(module)
     registry = RuntimeReleaseRegistry()
-    _register_release_closure(registry, module, workflow)
+    registry.register_bundle(
+        _release_bundle(module, workflow)
+    )
     cursor = _Cursor(workflow)
 
     class _WaitBridge(_Bridge):
@@ -646,7 +647,9 @@ def test_committed_parallel_wait_precedes_sibling_retry_scan_exhaustion() -> Non
     module = _module()
     workflow = _workflow(module)
     registry = RuntimeReleaseRegistry()
-    _register_release_closure(registry, module, workflow)
+    registry.register_bundle(
+        _release_bundle(module, workflow)
+    )
     cursor = _Cursor(workflow)
 
     class _RetryAndWaitBridge(_Bridge):

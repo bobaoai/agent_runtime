@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from ..contracts.ledger_record_definition import (
+    CommitReceipt,
     CheckpointRecord,
     ExecutionInputRef,
     ExecutionOutputRef,
@@ -98,8 +99,8 @@ class WorkflowExecutionLedgerRecorder:
         *,
         execution: WorkflowExecutionRecord,
         inputs: tuple[ExecutionInputRef, ...],
-    ) -> None:
-        """Atomically commit one Workflow Execution and frozen input package."""
+    ) -> CommitReceipt:
+        """Commit frozen inputs and return the store's original commit receipt."""
 
         execution.validate()
         for row in inputs:
@@ -112,7 +113,7 @@ class WorkflowExecutionLedgerRecorder:
             raise ValueError(
                 "execution inputs differ from the frozen package membership"
             )
-        self.record_store.commit(
+        receipt = self.record_store.commit(
             RuntimeRecordBatch(
                 workflow_execution_id=execution.workflow_execution_id,
                 transaction_id=stable_runtime_id(
@@ -135,6 +136,7 @@ class WorkflowExecutionLedgerRecorder:
                     recorded_at_utc=row.recorded_at_utc,
                     reference_is_committed=True,
                 )
+        return receipt
 
     def record_execution_output(
         self,

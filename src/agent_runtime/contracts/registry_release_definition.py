@@ -42,6 +42,31 @@ NETWORK_POLICIES = frozenset({"denied", "gateway_only", "direct_sandboxed"})
 OUTPUT_CONSTRAINT_MODES = frozenset(
     {"prompt_only_json", "native_structured_output"}
 )
+MODEL_INVOCATION_OPERATION_IDS = frozenset({"invoke_model", "model_execute"})
+
+
+def partition_module_operation_ids(
+    operation_ids: tuple[str, ...],
+) -> tuple[str, frozenset[str]]:
+    """Return the sole model operation and exact non-model operation set."""
+
+    if type(operation_ids) is not tuple:
+        raise ValueError("Module declared_operation_ids must be an immutable tuple")
+    for operation_id in operation_ids:
+        validate_id("declared_operation_id", operation_id)
+    if len(operation_ids) != len(set(operation_ids)):
+        raise ValueError("Module declared_operation_ids must be unique")
+    model_operations = tuple(
+        operation_id
+        for operation_id in operation_ids
+        if operation_id in MODEL_INVOCATION_OPERATION_IDS
+    )
+    if len(model_operations) != 1:
+        raise ValueError("Module must declare exactly one model invocation operation")
+    return (
+        model_operations[0],
+        frozenset(operation_ids).difference(MODEL_INVOCATION_OPERATION_IDS),
+    )
 
 
 def _canonical_sha256(payload: Mapping[str, Any]) -> str:
@@ -131,8 +156,8 @@ class ReleaseSubjectKind(StrEnum):
     WORKFLOW = "workflow"
 
 
-class ReleaseAdmissionState(StrEnum):
-    """Append-only admission state of one exact immutable release."""
+class LegacyReleaseAdmissionState(StrEnum):
+    """Retired v1 state decoded only while migrating predecessor rows."""
 
     CANDIDATE = "candidate"
     SHADOW_EXECUTABLE = "shadow_executable"
@@ -935,7 +960,7 @@ class ExecutionProfileRelease:
 
 
 @dataclass(frozen=True)
-class RuntimeModuleRelease:
+class ModuleRelease:
     """One immutable, independently executable Runtime Module contract."""
 
     record_type: ClassVar[str] = "runtime_module_release"
@@ -1068,8 +1093,8 @@ class RuntimeModuleRelease:
         return {**self._payload(), "release_sha256": self.release_sha256}
 
     @classmethod
-    def build(cls, **fields: Any) -> "RuntimeModuleRelease":
-        """Build a hash-complete immutable Runtime Module Release."""
+    def build(cls, **fields: Any) -> "ModuleRelease":
+        """Build a hash-complete immutable Module Release."""
 
         provisional = cls(**fields, release_sha256="0" * 64)
         record = cls(**fields, release_sha256=_canonical_sha256(provisional._payload()))
@@ -1077,8 +1102,8 @@ class RuntimeModuleRelease:
         return record
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "RuntimeModuleRelease":
-        """Reconstruct a persisted Runtime Module Release."""
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ModuleRelease":
+        """Reconstruct a persisted Module Release."""
 
         return cls(
             module_id=payload["module_id"],
@@ -1113,7 +1138,7 @@ class RuntimeModuleRelease:
 
 @dataclass(frozen=True)
 class WorkflowNodeBinding:
-    """Workflow-local position bound to one exact Runtime Module Release."""
+    """Workflow-local position bound to one exact Module Release."""
 
     record_type: ClassVar[str] = "workflow_node_binding"
 
@@ -1290,7 +1315,7 @@ class WorkflowParallelGroupBinding:
 
 @dataclass(frozen=True)
 class WorkflowRelease:
-    """Immutable graph assembled only from exact Runtime Module Releases."""
+    """Immutable graph assembled only from exact Module Releases."""
 
     record_type: ClassVar[str] = "workflow_release"
 
@@ -1538,19 +1563,20 @@ class WorkflowRelease:
 
 
 @dataclass(frozen=True)
-class ReleaseAdmissionIntent:
-    """Timestamp-free request for one authoritative admission commit."""
+class LegacyReleaseAdmissionRecord:
+    """Retired v1 record decoded only while removing predecessor state."""
 
-    record_type: ClassVar[str] = "release_admission_intent"
+    record_type: ClassVar[str] = "release_admission_record"
 
     admission_id: str
     subject_kind: ReleaseSubjectKind
     subject_id: str
     release_ref: str
     release_sha256: str
-    state: ReleaseAdmissionState
+    state: LegacyReleaseAdmissionState
     evidence_members: tuple[ReleaseMember, ...]
-    admission_intent_sha256: str
+    recorded_at_utc: str
+    admission_sha256: str
 
     def _payload(self) -> dict[str, Any]:
         return {
@@ -1561,10 +1587,11 @@ class ReleaseAdmissionIntent:
             "release_sha256": self.release_sha256,
             "state": self.state.value,
             "evidence_members": [member.as_dict() for member in self.evidence_members],
+            "recorded_at_utc": self.recorded_at_utc,
         }
 
     def validate(self) -> None:
-        """Validate intent identity, evidence closure, and content hash."""
+        """Validate admission identity, evidence closure, time, and hash."""
 
         validate_snake_case_name("admission_id", self.admission_id)
         if type(self.subject_kind) is not ReleaseSubjectKind:
@@ -1572,8 +1599,8 @@ class ReleaseAdmissionIntent:
         validate_snake_case_name("subject_id", self.subject_id)
         validate_opaque_ref("release_ref", self.release_ref)
         validate_sha256("release_sha256", self.release_sha256)
-        if type(self.state) is not ReleaseAdmissionState:
-            raise ValueError("state must be a ReleaseAdmissionState")
+        if type(self.state) is not LegacyReleaseAdmissionState:
+            raise ValueError("state must be a LegacyReleaseAdmissionState")
         validate_exact_record_tuple(
             "evidence_members",
             self.evidence_members,
@@ -1583,132 +1610,21 @@ class ReleaseAdmissionIntent:
             unique_key_label="member_ref",
             require_non_empty=False,
         )
-        validate_sha256("admission_intent_sha256", self.admission_intent_sha256)
-        if self.admission_intent_sha256 != _canonical_sha256(self._payload()):
-            raise ValueError("release admission intent hash mismatch")
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return the canonical JSON-compatible intent."""
-
-        self.validate()
-        return {
-            **self._payload(),
-            "admission_intent_sha256": self.admission_intent_sha256,
-        }
-
-    @classmethod
-    def build(cls, **fields: Any) -> "ReleaseAdmissionIntent":
-        """Build one hash-complete timestamp-free intent."""
-
-        provisional = cls(**fields, admission_intent_sha256="0" * 64)
-        intent = cls(
-            **fields,
-            admission_intent_sha256=_canonical_sha256(provisional._payload()),
-        )
-        intent.validate()
-        return intent
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "ReleaseAdmissionIntent":
-        """Reconstruct one serialized admission intent."""
-
-        intent = cls(
-            admission_id=payload["admission_id"],
-            subject_kind=ReleaseSubjectKind(payload["subject_kind"]),
-            subject_id=payload["subject_id"],
-            release_ref=payload["release_ref"],
-            release_sha256=payload["release_sha256"],
-            state=ReleaseAdmissionState(payload["state"]),
-            evidence_members=tuple(
-                ReleaseMember.from_dict(member)
-                for member in payload["evidence_members"]
-            ),
-            admission_intent_sha256=payload["admission_intent_sha256"],
-        )
-        intent.validate()
-        return intent
-
-
-@dataclass(frozen=True)
-class ReleaseAdmissionRecord:
-    """Append-only admission decision committed by an authoritative store."""
-
-    record_type: ClassVar[str] = "release_admission_record"
-
-    admission_id: str
-    subject_kind: ReleaseSubjectKind
-    subject_id: str
-    release_ref: str
-    release_sha256: str
-    state: ReleaseAdmissionState
-    evidence_members: tuple[ReleaseMember, ...]
-    admission_intent_sha256: str
-    recorded_at_utc: str
-    admission_sha256: str
-
-    def _intent_payload(self) -> dict[str, Any]:
-        return {
-            "admission_id": self.admission_id,
-            "subject_kind": self.subject_kind.value,
-            "subject_id": self.subject_id,
-            "release_ref": self.release_ref,
-            "release_sha256": self.release_sha256,
-            "state": self.state.value,
-            "evidence_members": [member.as_dict() for member in self.evidence_members],
-        }
-
-    def _payload(self) -> dict[str, Any]:
-        return {
-            **self._intent_payload(),
-            "admission_intent_sha256": self.admission_intent_sha256,
-            "recorded_at_utc": self.recorded_at_utc,
-        }
-
-    def validate(self) -> None:
-        """Validate final admission identity, store time, and hashes."""
-
-        ReleaseAdmissionIntent(
-            admission_id=self.admission_id,
-            subject_kind=self.subject_kind,
-            subject_id=self.subject_id,
-            release_ref=self.release_ref,
-            release_sha256=self.release_sha256,
-            state=self.state,
-            evidence_members=self.evidence_members,
-            admission_intent_sha256=self.admission_intent_sha256,
-        ).validate()
         validate_utc_timestamp("recorded_at_utc", self.recorded_at_utc)
         validate_sha256("admission_sha256", self.admission_sha256)
         if self.admission_sha256 != _canonical_sha256(self._payload()):
             raise ValueError("release admission hash mismatch")
 
     def as_dict(self) -> dict[str, Any]:
-        """Return the canonical JSON-compatible final record."""
+        """Return the canonical JSON-compatible admission record."""
 
         self.validate()
         return {**self._payload(), "admission_sha256": self.admission_sha256}
 
     @classmethod
-    def _from_intent(
-        cls,
-        intent: ReleaseAdmissionIntent,
-        *,
-        recorded_at_utc: str,
-    ) -> "ReleaseAdmissionRecord":
-        """Finalize one intent with the authoritative store commit time."""
+    def build(cls, **fields: Any) -> "LegacyReleaseAdmissionRecord":
+        """Build a hash-complete append-only admission record."""
 
-        if type(intent) is not ReleaseAdmissionIntent:
-            raise ValueError("intent must be a ReleaseAdmissionIntent")
-        intent.validate()
-        validate_utc_timestamp("recorded_at_utc", recorded_at_utc)
-        fields = {
-            **intent._payload(),
-            "subject_kind": intent.subject_kind,
-            "state": intent.state,
-            "evidence_members": intent.evidence_members,
-            "admission_intent_sha256": intent.admission_intent_sha256,
-            "recorded_at_utc": recorded_at_utc,
-        }
         provisional = cls(**fields, admission_sha256="0" * 64)
         record = cls(
             **fields,
@@ -1718,26 +1634,26 @@ class ReleaseAdmissionRecord:
         return record
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "ReleaseAdmissionRecord":
+    def from_dict(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> "LegacyReleaseAdmissionRecord":
         """Reconstruct a persisted release admission record."""
 
-        record = cls(
+        return cls(
             admission_id=payload["admission_id"],
             subject_kind=ReleaseSubjectKind(payload["subject_kind"]),
             subject_id=payload["subject_id"],
             release_ref=payload["release_ref"],
             release_sha256=payload["release_sha256"],
-            state=ReleaseAdmissionState(payload["state"]),
+            state=LegacyReleaseAdmissionState(payload["state"]),
             evidence_members=tuple(
                 ReleaseMember.from_dict(member)
                 for member in payload["evidence_members"]
             ),
-            admission_intent_sha256=payload["admission_intent_sha256"],
             recorded_at_utc=payload["recorded_at_utc"],
             admission_sha256=payload["admission_sha256"],
         )
-        record.validate()
-        return record
 
 
 __all__ = [
@@ -1748,8 +1664,10 @@ __all__ = [
     "is_prompt_component_member_ref",
     "ExecutionProfileRelease",
     "ModuleEntryPolicy",
+    "MODEL_INVOCATION_OPERATION_IDS",
     "ModuleExecutionPurpose",
     "ModuleKind",
+    "partition_module_operation_ids",
     "NETWORK_POLICIES",
     "OUTPUT_CONSTRAINT_MODES",
     "SEMANTIC_INPUT_DELIVERY_MODES",
@@ -1757,13 +1675,10 @@ __all__ = [
     "PromptComponentRelease",
     "OutputResolutionPolicy",
     "PromptBundleRelease",
-    "ReleaseAdmissionIntent",
-    "ReleaseAdmissionRecord",
-    "ReleaseAdmissionState",
     "ReleaseMember",
     "ReleaseSubjectKind",
     "RetryPolicyRelease",
-    "RuntimeModuleRelease",
+    "ModuleRelease",
     "SchemaAssetRelease",
     "WorkflowEdge",
     "WorkflowNodeKind",

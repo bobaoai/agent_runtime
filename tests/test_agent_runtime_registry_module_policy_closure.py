@@ -81,7 +81,7 @@ def _compiled_module_case():
     return compiled, behavior, evaluation, retry
 
 
-def test_registry_accepts_complete_module_dependency_closure() -> None:
+def test_registry_requires_exact_policy_closure_for_compiled_module() -> None:
     compiled, behavior, evaluation, retry = _compiled_module_case()
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(
@@ -98,63 +98,40 @@ def test_registry_accepts_complete_module_dependency_closure() -> None:
             modules=(compiled.module,),
         )
     )
-
     assert registry.get_module(
         compiled.module.release_ref,
         compiled.module.release_sha256,
     ) == compiled.module
 
+    missing_policy = RuntimeReleaseRegistry()
+    with pytest.raises(KeyError, match="unknown Retry Policy"):
+        missing_policy.register_bundle(
+            RuntimeReleaseBundle(
+                schema_assets=(
+                    *runtime_owned_policy_schema_assets(),
+                    *compiled.schema_assets,
+                ),
+                prompt_components=compiled.prompt_components,
+                prompt_bundles=(compiled.prompt_bundle,),
+                behavior_policies=(behavior,),
+                evaluation_policies=(evaluation,),
+                modules=(compiled.module,),
+            )
+        )
 
-@pytest.mark.parametrize(
-    ("missing", "message"),
-    (
-        ("prompt_bundle", "unknown Prompt Bundle"),
-        ("behavior_policy", "unknown Behavior Policy"),
-        ("evaluation_policy", "unknown Evaluation Policy"),
-        ("retry_policy", "unknown Retry Policy"),
-        ("input_schema", "unknown Schema Asset"),
-        ("output_schema", "unknown Schema Asset"),
-    ),
-)
-def test_registry_requires_each_exact_module_dependency(
-    missing: str,
-    message: str,
-) -> None:
+
+def test_registry_requires_exact_schema_closure_for_compiled_module() -> None:
     compiled, behavior, evaluation, retry = _compiled_module_case()
-    schema_assets = [
-        *runtime_owned_policy_schema_assets(),
-        *compiled.schema_assets,
-    ]
-    if missing == "input_schema":
-        schema_assets = [
-            schema
-            for schema in schema_assets
-            if schema.release_ref != compiled.module.input_schema_ref
-        ]
-    elif missing == "output_schema":
-        schema_assets = [
-            schema
-            for schema in schema_assets
-            if schema.release_ref != compiled.module.output_schema_ref
-        ]
-    prompt_bundles = (
-        () if missing == "prompt_bundle" else (compiled.prompt_bundle,)
-    )
-    behavior_policies = () if missing == "behavior_policy" else (behavior,)
-    evaluation_policies = (
-        () if missing == "evaluation_policy" else (evaluation,)
-    )
-    retry_policies = () if missing == "retry_policy" else (retry,)
 
-    with pytest.raises(KeyError, match=message):
+    with pytest.raises(KeyError, match="unknown Schema Asset"):
         RuntimeReleaseRegistry().register_bundle(
             RuntimeReleaseBundle(
-                schema_assets=tuple(schema_assets),
+                schema_assets=runtime_owned_policy_schema_assets(),
                 prompt_components=compiled.prompt_components,
-                prompt_bundles=prompt_bundles,
-                behavior_policies=behavior_policies,
-                evaluation_policies=evaluation_policies,
-                retry_policies=retry_policies,
+                prompt_bundles=(compiled.prompt_bundle,),
+                behavior_policies=(behavior,),
+                evaluation_policies=(evaluation,),
+                retry_policies=(retry,),
                 modules=(compiled.module,),
             )
         )

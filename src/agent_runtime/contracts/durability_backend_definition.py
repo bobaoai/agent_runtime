@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
-from .durability_execution_definition import (
+from .durability_topology_definition import (
     BackendEvent,
     BackendExecutionRef,
     ExecutionSnapshot,

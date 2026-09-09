@@ -1,757 +1,336 @@
 ---
-title: Agent Runtime Execution Charter
-status: proposal
+title: Agent Runtime Domain Root
+status: candidate
 layer: T1
 canonical_owner: designDoc/agent_runtime_00_execution_charter.md
 parent: designDoc/the_agent_runtime.md
+owned_system_object: Agent Runtime domain
+language: zh-CN
 reader_persona:
-  - Product Owner
-  - Workflow Designer
+  - Runtime Product Owner
   - Runtime Maintainer
+  - Host Integrator
+  - Domain Plugin Owner
   - Security Reviewer
 ---
 
-# Agent Runtime Execution Charter
+# Agent Runtime Domain Root
 
-**Purpose**: Define domain-neutral execution behavior for workflows assembled
-from registered Runtime Modules and for independently invoked Modules,
-including identity, graph advancement, authorization binding, context,
-telemetry, recovery, evaluation, testing, and Module evolution.
-
-**Required reader gain**: A reader can determine whether one Workflow Execution conforms to the Runtime contract, distinguish the responsibilities of the Domain Graph Driver, Module Runner, Durable Workflow Orchestrator, Product Authorization, and Protected Operation Service, and classify a failure as retry, external wait, suspension, fail-closed rejection, cancellation, or domain completion.
-
-## 0. Contract Capsule
+## 0. Intent Capsule
 
 ```yaml
 layer: T1
-status: proposal
+status: candidate
 canonical_owner: designDoc/agent_runtime_00_execution_charter.md
 parent: designDoc/the_agent_runtime.md
+owned_system_object: Agent Runtime domain
 scope:
-  - workflow execution identity and lifecycle
-  - external authorization-decision/result binding, start/dispatch fences, and authorization-invalidation closure
-  - context lifecycle and provider-neutral reconstruction
-  - automatic trace, usage, and audit emission
-  - checkpoint, retry, recovery, cancellation, and terminal-state law
-  - Workflow Release, Runtime Module Release, Module Run, Variant, and Attempt execution model
-  - independently executable Module test, evaluation, replay, and A/B entry
-  - evaluation runtime, test harness, and Module update lifecycle
+  - Registry, Execution, Invocation, Durability, Ledger, and Inspection architecture
+  - immutable Module and Workflow release identity and active-pointer selection
+  - Workflow Execution, Module Run, Variant, Attempt, Outcome, and Resolution lifecycle
+  - provider-neutral execution and host integration boundary
+  - Runtime-hosted self-test independence and explicit test-resource boundaries
+  - Runtime-owned release and execution evidence
 non_goals:
-  - product deployment topology and Cell isolation, owned by the host platform
-  - exact Release Registry, graph-binding, Variant, Attempt, Evaluation, and As-Built schemas, owned by agent_runtime_01
-  - domain roles, artifacts, graph meaning, content quality, or terminal decisions
-  - provider SDK, API, CLI, prompt, or model-profile implementation
+  - business workflow meaning, domain role semantics, prompt content, or quality rubric
+  - Product Authorization policy or Entitlement issuance
+  - domain database schema, SQL, writer rule, or canonical business write
+  - Agency Platform product composition and control plane
+  - provider, database, or durable-backend product selection
 inputs:
-  - designDoc/the_charter.md
-  - designDoc/the_agent_runtime.md
-  - external:agency_platform
-  - external:timestamp_semantics
-  - external:product_authorization
-adjacent_engineering_contracts:
-  - designDoc/agent_runtime_01_module_contract_and_assembly.md
-  - designDoc/agent_runtime_03_authorized_external_event_ingress.md
-  - designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md
-  - designDoc/agent_runtime_07_temporal_durable_adapter_contract.md
-  - designDoc/agent_runtime_08_agent_execution_adapter_contract.md
-  - designDoc/agent_runtime_09_authorization_integration_contract.md
+  - host-accepted Runtime public request or Runtime-hosted self-test request from the classes defined in section 8
+  - exact test-resource bindings for Runtime-hosted self-tests
+  - external authorization and data-access decisions carried as opaque context where the requested effect requires them
 outputs:
-  - shared execution lifecycle
-  - Workflow Execution Kernel contract
-  - authorization-binding/fence/invalidation, context, telemetry, and recovery contracts
-  - evaluation, testing, and Module-update contracts
+  - registered immutable Runtime releases and active-pointer result
+  - durable execution receipt, snapshot, and terminal result
+  - external-event acknowledgement and durable control result
+  - authoritative release, Attempt, usage, failure, recovery, Outcome, and Resolution evidence
+  - authorized read-only inspection projection
 truth_surfaces:
-  - src/agent_runtime/contracts/execution_module_definition.py
-  - src/agent_runtime/contracts/registry_release_definition.py
-  - src/agent_runtime/registry/registry_release_registration.py
-  - src/agent_runtime/execution/execution_module_invocation.py
-  - src/agent_runtime/testing/registry_migration_validation.py
-runtime_triggers: none
+  - designDoc/agent_runtime_00_execution_charter.md
+  - code-owned Runtime release Registry and provider/tool adapter bindings
+  - authoritative Runtime execution records
+  - generated Runtime inspection
+runtime_triggers:
+  - Runtime release registration request
+  - Registry active-pointer change request
+  - authorized Workflow or standalone Module execution request
+  - Runtime-hosted Test or Evaluation request over exact registered releases
+  - typed external event for an existing execution
+  - durable wait, retry, replay, recovery, or cancellation request for an existing execution
+  - authorized release or execution inspection request
 downstream_consumers:
-  - domain Workflow Releases
-  - durable backends and Agent Execution Adapters
-  - Product Control and authorized external-event ingress
-  - protected-operation services
-open_decisions:
-  - cancellation and offboarding behavior for production Cells
-review_gate: document self-review before handoff; engineering-project-review after implementation commit
-runtime_surface_ledger:
-  - "target design: Workflow Release -> Runtime Module Release -> Module Run -> Variant -> Attempt"
-  - "implementation status comes only from generated Runtime inspection and deterministic cutover checks"
+  - Runtime T2 Design owners and implementation modules
+  - host integrations and domain plugin owners
+  - Software Delivery and Runtime operators
+open_decisions: []
+review_gate: independent design_contract_reviewer review and accountable Runtime domain-owner decision before implementation
+runtime_surface_ledger: generated from code-owned Runtime release and execution records
 verification_hooks:
-  - ./.venv/bin/python -m pytest tests/test_agent_runtime_conformance.py tests/test_runtime_architecture_validation.py -q
+  - T1/T2 parent and responsibility closure
+  - public release and execution boundary conformance
+  - standalone package and host-independence tests
+  - self-test independence, test-resource isolation, and explicit external-persistence checks
+  - durable execution, Ledger, and Inspection consistency
 ```
 
-## 1. Runtime Scope
-
-Agent Runtime manages two admitted execution entries:
-
-1. a complete Workflow Release assembled from exact Runtime Module Releases;
-2. one Runtime Module Release invoked independently for testing, Evaluation, A/B,
-   replay, repair, or an explicitly allowed standalone product action.
-
-The same infrastructure can host Research, Digestion, Technical, or other
-domain plugins while every plugin retains its own business objects, graph
-meaning, and quality contract.
-
-The canonical object model is:
+## 1. Primary System Flow
 
 ```mermaid
 flowchart LR
-    REG["Runtime Release Registry"] --> GRAPH["Workflow Release<br/>Module refs + edges"]
-    REG --> DIRECT["Direct Module invocation"]
-    GRAPH --> RUN["Module Run"]
-    DIRECT --> RUN
-    RUN --> V1["Variant A"]
-    RUN --> V2["Variant B"]
-    V1 --> A1["Attempt"]
-    V2 --> A2["Attempt"]
+    C["Host-accepted release candidate"] --> R["Registry"]
+    T["Host-accepted active-pointer change request"] --> R
+    R --> U["Registered release / active-pointer result"]
+    Q["Workflow / Standalone request + target subject kind/id"] --> E["Execution"]
+    Y["External Test / Evaluation / Replay request + exact release ref/hash"] --> E
+    S["Runtime-hosted Test / Evaluation<br/>exact release, input, and test-resource bindings"] --> E
+    H["Required external authority context"] -->|"validated by T2 09 for the requested effect"| E
+    X["Typed external event + execution ref"] --> E
+    K["Durable control request + execution ref"] --> D["Durability"]
+    O["Host-accepted inspection query"] --> N["Inspection"]
+    R --> E
+    E --> I["Invocation"]
+    I --> P["Execution Profile-selected code-owned adapter binding"]
+    P --> I
+    I --> E
+    E <--> D
+    E --> L["Ledger"]
+    R --> N
+    L --> N
 ```
 
-There is no separate Step or Component authority. A graph node is one binding
-to an exact Runtime Module Release. When the same Module appears more than
-once, a workflow-local `node_id` distinguishes graph positions; `node_id` is
-not registered and does not become another executable object.
+上图只表达 Runtime domain responsibilities 和权威事实流。每个 public operation、failure code、
+state machine 和 concrete binding 由对应 T2 定义。外部请求先通过其宿主的 public API access gate。
+Runtime-hosted self-test 指由 Runtime 测试宿主组织、仅使用明确绑定测试资源的执行；其入口边界见
+§8.1，不依赖另一个产品的生产授权服务。两类请求进入相同的 Runtime execution 和 evidence 边界。
 
-A workflow becomes executable only through an admitted immutable
-`workflow_release`. Its graph contains Module release refs, local node IDs when
-required, legal edges, input mappings, branch conditions, loops, waits, and
-terminal conditions. A Module becomes executable only through an admitted
-immutable `runtime_module_release`. The releases share one
-`runtime_release_registry`; no stable registration DTO or second graph registry
-exists beside that registry. Registry presence alone does not grant product
-entry, permission, or release admission.
+## 2. User Intent
 
-A Module declares one production entry policy:
+Agent Runtime domain 让宿主注册和执行任意业务无关的 Agent capability，同时保持 release identity、
+执行可靠性、授权边界、恢复能力和可审计事实一致。宿主继续拥有业务意义，Runtime 只拥有执行合同。
+Runtime 维护者也可以独立验证已注册 capability，无需为普通自测部署业务产品的授权服务。
 
-- `workflow_bound`: production invocation must originate from an admitted
-  Workflow Graph; isolated test and Evaluation runs remain allowed;
-- `standalone_allowed`: an authorized caller may start the Module directly.
+## 3. Reader Gain
 
-Both paths call the same `run_module()` execution service and produce the same
-Module Run, Variant, Attempt, output, authorization, Context, usage, and audit
-lineage. A one-Module Workflow is valid when it owns an independent product
-trigger, execution lifecycle, and terminal output. A Module embedded in a
-larger graph does not become a nested Workflow merely because it can be tested
-independently.
+- Runtime Product Owner 能判断一项能力属于哪个 Runtime responsibility 和 T2。
+- Runtime Maintainer 能判断 release、execution、durability、ledger 与 inspection 的依赖方向。
+- Host Integrator 能判断必须提供哪些 binding 和外部决定，以及 Runtime 返回什么稳定结果。
+- Domain Plugin Owner 能独立注册、测试和组合 Module，不把 Skill 或业务 Workflow 写进 Runtime core。
+- Security Reviewer 能追踪授权 context、protected operation、Attempt 和 inspection 的边界。
+- Runtime Maintainer 和 Host Integrator 能区分自测资源准入、外部生产访问与 provider 登录，
+  并判断测试证据何时仅在本地保留、何时可以写入明确提供的外部存储。
 
-When execution originates from a managed product workflow, the Agency Platform
-host resolves one Artifact Graph `project_workflow_registration`, one owning T1
-`workflow_behavior_release`, and one active `workflow_execution_binding` before
-Runtime admission. After Product Authorization allows the exact target, the
-host supplies one `runtime_execution_binding`. Runtime consumes those opaque refs
-and hashes plus the referenced Workflow and Module Releases. It never chooses
-the logical owner from a Skill name. The exact Workflow Release, Module
-Releases, execution release, and authorization binding are pinned when
-the Workflow Execution starts.
+§9 的 delegation matrix 是能力到 responsibility、T2 family、public boundary 和 failure owner 的完整
+解析表；§1 和 §5 固定 dependency direction。任何能力未能唯一落入该矩阵时，必须返回 T1 owner，
+不能由实现者选择附近 T2。
 
-A product-facing Skill is an authoring surface. It may declare zero, one, or
-many Runtime Module registration sources. Writer, Verifier, Debater, Reviewer,
-Router, and Expert Modules may share one Skill while each source compiles into
-an independent Module Release with its own input/output, authorization, Prompt,
-Evaluation, release, and execution contracts. The Skill itself is not a
-Runtime Release.
+## 4. Domain Outcome and Owned Objects
 
-```mermaid
-flowchart LR
-    SKILL["Skill authoring source"] --> S1["Module registration source A"]
-    SKILL --> S2["Module registration source B"]
-    S1 --> M1["Module Release A"]
-    S2 --> M2["Module Release B"]
-    M1 --> WF1["Workflow Release 1"]
-    M2 --> WF1
-    M2 --> WF2["Workflow Release 2"]
-```
+本 T1 拥有一个 `Agent Runtime domain`。该 domain 通过六项同层 responsibility 共同产生一个结果：
+已注册 capability 在精确 release、input 和适用的资源边界下可靠执行，并留下可恢复、可解析、
+可授权检查的权威事实。外部受保护效果还绑定其所需的 authorization context；普通自测绑定测试宿主
+明确提供的资源，不构造生产授权决定。
 
-Skill Governance owns the provider-neutral Skill authoring source and its
-Module declarations. Runtime owns each compiled Module's executable contract,
-admission, exact Prompt and Schema hashes, Executor binding, authorization
-requirements, Evaluation, and execution lineage. A Module may retain only the
-exact owner-contract ref/hash as authoring provenance; Skill identity remains
-outside the Runtime Release payload. A Workflow references
-`module_release_ref`, never a Skill path or Skill candidate revision. A Primary
-Agent development Skill may declare no product Module. A workflow-entry Skill
-may project one `workflow_release_ref` without itself becoming a Module.
+核心对象族分为三组：
 
-### 1.1 Runtime subsystem index
+| Object family | Stable meaning |
+| --- | --- |
+| Release | Module、Workflow、Prompt、Schema、Policy 与 Execution Profile 的 immutable release 和 active pointer |
+| Execution | Workflow Execution、Module Run、Variant、Attempt、Outcome 与 Resolution |
+| Evidence | release、input、authorization、usage、failure、checkpoint、recovery、output 与 inspection facts |
 
-The rows below are peer Runtime subsystems. Each owns one engineering concern and exchanges typed records with the others.
+本表中的 Policy 只指 Runtime-owned Behavior、Evaluation、Retry 和 Execution Variant Policy
+release。它们约束执行机制，不表达 Product Authorization policy、业务规则或 domain quality rubric。
 
-| Runtime subsystem | Engineering concern | Primary records | Contract section |
-| --- | --- | --- | --- |
-| Workflow Execution Kernel | Durable creation receipt, Module dispatch, cursor, wait, transition, terminal status | `backend_start_receipt_record`, `module_dispatch_request`, `module_outcome`, `execution_snapshot` | §3 |
-| Release Registry and Module Runner | Admit immutable releases and execute one Module binding or standalone Module request | `runtime_release_registry`, `runtime_module_release`, `module_run`, `variant`, `attempt` | §3 |
-| Execution Authorization Controller | Bind one external execution authorization context, validate it at durable boundaries, propagate protected-operation context, and fence invalidated work | `execution_authorization_context_binding`, `execution_authorization_status_observation`, `execution_control_fence`, `protected_operation_observation` | §4 |
-| Context Manager | Provider context create, resume, reconstruction, closure | `context_binding`, `context_event` | §5 |
-| Telemetry Pipeline | Automatic trace, usage, tool, search, and security events | `runtime_event`, `usage_event`, `audit_event` | §6 |
-| Checkpoint and Recovery Controller | Commit boundary, replay, crash recovery, cancellation | `checkpoint_record`, committed `module_outcome` | §7 |
-| Evaluation Runtime | Evaluator execution, candidate-set closure, Selection, and Module output resolution | `evaluation_run`, `evaluation_result`, `evaluation_set`, `selection`, `module_output_resolution_record` | §8 |
-| Test Harness | Contract, graph, adapter, isolation, failure, upgrade tests | `test_fixture`, `test_execution`, `test_result` | §9 |
-| Release and Update Manager | Version pinning, compatibility, rollout, rollback | `runtime_module_release`, `execution_release`, `update_plan` | §10 |
+具体 schema、field、storage 和 active pointer 属于 T2 machine contract 与 code truth。
 
-```mermaid
-flowchart TB
-    CONTROL["Runtime API and Runtime Release Registry"] --> KERNEL["Workflow Execution Kernel"]
-    CONTROL --> RUNNER["Module Runner"]
-    KERNEL --> ENTITLEMENT["Runtime Authorization Coordinator"]
-    ENTITLEMENT --> CONTEXT["Context Manager"]
-    KERNEL --> RUNNER
-    RUNNER --> CONTEXT
-    CONTEXT --> EXECUTOR["Registered Executor Adapter"]
-    EXECUTOR --> RECOVERY["Checkpoint and Recovery Controller"]
-    RECOVERY --> KERNEL
+## 5. Responsibility Architecture
 
-    RELEASE["Release and Update Manager"] --> KERNEL
-    RELEASE --> ENTITLEMENT
-    RELEASE --> CONTEXT
-    RELEASE --> RUNNER
-    RELEASE --> EXECUTOR
-
-    EVALUATION["Evaluation Runtime"] --> KERNEL
-    TESTS["Test Harness"] --> KERNEL
-    TESTS --> ENTITLEMENT
-    TESTS --> CONTEXT
-    TESTS --> RECOVERY
-
-    TELEMETRY["Telemetry Pipeline"] -. "observes typed events" .-> KERNEL
-    TELEMETRY -. "observes" .-> ENTITLEMENT
-    TELEMETRY -. "observes" .-> CONTEXT
-    TELEMETRY -. "observes" .-> RUNNER
-    TELEMETRY -. "observes" .-> EXECUTOR
-    TELEMETRY -. "observes" .-> RECOVERY
-    TELEMETRY -. "observes" .-> EVALUATION
-```
-
-The arrows show typed execution-record interaction, not authority rank or
-deployment containment. Subsystem ownership remains in the peer table above.
-
-Domain roles, content-quality gates, client personas, and user-interface implementations remain outside this diagram.
-
-## 2. Execution Identity and Lifecycle
-
-One Module invocation uses this stable identity chain:
-
-```text
-tenant_id
-cell_id
-initiating_principal_id
-execution_principal_id
-origin_kind: workflow_graph | standalone_module | evaluation | test
-product_workflow_registration_id | null
-product_workflow_registration_version | null
-product_workflow_registration_sha256 | null
-workflow_execution_binding_id | null
-workflow_execution_binding_version | null
-workflow_execution_binding_sha256 | null
-workflow_execution_resolution_id | null
-workflow_execution_resolution_sha256 | null
-workflow_id | null
-workflow_release_ref | null
-workflow_release_sha256 | null
-execution_release_ref
-execution_release_sha256
-workflow_execution_id | null
-node_id | null
-module_id
-module_version
-module_release_ref
-module_release_sha256
-module_run_id
-authorization_decision_id
-execution_authorization_context_id
-execution_authorization_context_binding_id
-variant_id
-attempt_id
-attempt_output_bundle_id
-execution_output_id
-```
-
-Workflow fields form one closed discriminator group. They are present for
-`origin_kind=workflow_graph` and absent for a root standalone, Evaluation, or
-test Module Run. `node_id` is present only when graph position must be
-distinguished from Module identity. Every origin pins the exact Module Release,
-input closure, execution profile, and authorization closure before invocation.
-
-The owning product or domain T1 owns `product_workflow_registration_*`; the
-Workflow Execution Binding and Admission Contract owns
-`workflow_execution_binding_*` and `workflow_execution_resolution_*`. Runtime
-pins those authorities for a graph origin and creates none of their identities.
-For a direct Module origin, Product Authorization evaluates the exact Module
-action and Runtime creates a root `module_run` without inventing a Workflow.
-
-`workflow_execution_id` spans the complete graph lifecycle when a Workflow is
-the origin. `module_run_id` spans one independently executable Module work unit
-under either origin. A backend workflow ID, task ID, queue ID, or provider
-session ID is an infrastructure mapping and never replaces either identity.
-
-```text
-accept authorized workflow intake
-validate the complete admission_authority_tuple
-bind workflow_authorization_decision, execution_authorization_context, and `execution_input_package` input references
-resolve current context status/window and commit execution_start_admission_record
-construct start_execution_request with that exact start-admission ref/hash
-create the durable backend execution idempotently
-commit backend_start_receipt_record or reconcile the same idempotent start
-load the execution-pinned graph projection and release
-for each current graph node, resolve its exact Module Release
-commit one exact module_dispatch_admission_record
-run the admitted Module through run_module()
-persist content-free cursor and wait state
-accept an authorized external_event while waiting
-continue until domain terminal state or Runtime cancellation
-```
-
-A nonterminal external event continues the same execution and immutable
-authorization binding. `execution_input_package` means the immutable intake refs and hash
-carried by `start_execution_request`; new scope, a new `execution_input_package`, or
-an invalidated authorization binding creates a new execution. A domain may create a
-`domain_package_artifact` later in that execution; `logical_name` is its only
-Runtime-visible domain package label. Replacing that `domain_package_artifact`
-changes the next `module_input_closure` and creates a new Module Run; it does not
-by itself replace the `execution_input_package` or Workflow Execution.
-
-Each execution carries two orthogonal state axes:
-
-- `domain_state` advances only along the pinned domain graph.
-- `runtime_status` expresses `starting`, `running`, `waiting`, `suspended`, `completed`, `failed`, `cancelled`, or terminal `authorization_invalidated`.
-
-Worker failure, timeout, operator cancellation, authorization invalidation, or a missing pinned release changes `runtime_status` while preserving the last committed `domain_state`.
-
-## 3. Workflow Execution Contract
-
-This section defines execution mechanics. Authorization policy, content quality, human interaction, persistence semantics, and publication decisions remain with their owning contracts.
-
-### 3.1 Runtime subsystem responsibilities
-
-| Runtime subsystem | Responsibility | Explicit non-responsibility |
+| Responsibility | Domain-level result | Prohibited takeover |
 | --- | --- | --- |
-| Durable Workflow Orchestrator | Persist graph cursor, timer, retry, external wait, acknowledged event, and Runtime status | Module behavior, authorization policy, content evaluation, formal write |
-| Generic Activity Bridge | Translate a content-free Module dispatch into a Cell-local Module Run request and return typed references | Domain edge meaning, model policy, artifact interpretation |
-| Domain Graph Driver | Resolve the current graph node, input mapping, and legal successor from the pinned domain graph | Infrastructure recovery, tenant authorization, provider-session durability |
-| Module Runner | Validate one admitted Module Release and frozen input closure; create Variant and Attempt lineage; return a typed `module_outcome` | Workflow edge selection, product permission, provider implementation |
-| Executor Adapter | Invoke the Executor selected by one Variant: Agent, deterministic code, human-task service, or external service | Workflow cursor, legal-successor choice, candidate Selection |
+| Registry | 产生可精确解析的 immutable Runtime releases 和 active pointer | 不执行 Module，不选择业务 owner |
+| Execution | 协调 Workflow、Module、Evaluation、Selection 和 terminal Resolution | 不调用 provider，不拥有 durability backend |
+| Invocation | 组装 Context，并调用 Execution Profile 选择的 code-owned provider/tool adapter binding | 不选择 release 或 Workflow edge |
+| Durability | 协调 wait、retry、replay、recovery 和 cancellation | 不改变业务结果或 Ledger facts |
+| Ledger | 保存权威 Attempt、usage、failure、Outcome 和 Resolution | 不驱动执行或形成 UI authority |
+| Inspection | 提供授权只读 release/execution projection | 不修改 Registry、Execution 或 Ledger |
 
-The Generic Activity Bridge resolves a durable `module_dispatch_request` into a
-Cell-local `cell_module_dispatch_context` using the pinned Cell binding and
-`execution_authorization_context_binding`. Before Domain Graph Driver entry, it
-validates the current execution context and control fence. It gives the Domain Graph Driver only
-`runtime_execution_services`: the pinned record store, authorized artifact
-resolver, execution-profile resolver, Module Run factory, `run_module()`
-service, and idempotent Outcome commit. A driver cannot construct or call an
-Executor Adapter directly. For each protected operation, the Module Runner
-commits the declared intent and calls the enforcing Gateway with the execution
-authorization context. The Gateway obtains or validates the current Product
-Authorization decision. A deny invokes no protected resource. A high-risk action
-additionally carries the exact Product-issued `operation_grant` required by its
-resource manifest. Runtime then records the returned decision and effect
-references with the terminal Attempt, `attempt_output_bundle`, member
-`execution_output_ref` records, model/tool calls, source usage observations, and
-terminal status.
+六项 responsibility 是同一 T1 下的架构分区，不是目录、进程、服务或技术产品。
+依赖方向固定为 Registry 向 Execution 提供 registered release 与 active pointer；Execution 调度 Invocation，与 Durability
+交换 durable command/state，并向 Ledger 提交事实；Inspection 只读取 Registry 与 Ledger。其他方向必须由
+具名 public interface 证明，不能由 source import 或当前技术反向推断。
 
-### 3.2 Module dispatch interaction
+## 6. Inherited T0 Constraints
 
-```mermaid
-sequenceDiagram
-    participant ORCH as Durable Workflow Orchestrator
-    participant BRIDGE as Generic Activity Bridge
-    participant DRIVER as Domain Graph Driver
-    participant RUNNER as Module Runner
-    participant EXECUTOR as Executor Adapter
+- Agent Runtime T0 定义 provider-neutral execution 与外部 authority handoff。
+- Product Authorization 的 `user_key` 只随 database operation 原样进入 project data-access adapter；它不授权
+  Workflow start、Module start 或 Runtime inspection。
+- Data Governance 与 domain owner 提供受控 data-access boundary；Runtime 不解析 credential 或接管 SQL。
+- 普通自测不要求生产 Entitlement、execution grant 或模拟的 allow-all 决定。涉及外部受治理数据库时，
+  仍由数据所属方提供适用的访问决定；测试用途不扩大其权限。
+- Timestamp Semantics 约束 Runtime time-bearing records。
+- Design Doc Management、Skill Management、Review Contract 和 Software Delivery 分别拥有 Design、
+  Skill、Reviewer common rules 与 delivery admission；Runtime 只执行已注册 Module。
 
-    ORCH->>BRIDGE: minimal module_dispatch_request with cursor identity and pinned versions
-    BRIDGE->>BRIDGE: commit module_dispatch_admission_record under serializable authorization fence
-    BRIDGE->>DRIVER: cell_module_dispatch_context + runtime_execution_services
-    DRIVER->>RUNNER: run_module(module_release_ref, input closure, execution context)
-    opt Module requires an Executor invocation
-        RUNNER->>EXECUTOR: context-bound Variant execution request
-        EXECUTOR-->>RUNNER: Structured result, execution_output_refs, and source usage refs
-    end
-    RUNNER-->>DRIVER: committed Module Run and output-resolution refs
-    DRIVER-->>BRIDGE: Committed typed module_outcome
-    BRIDGE-->>ORCH: Content-free outcome refs and disposition
-    ORCH->>ORCH: Validate expected state and graph edge
-```
-
-### 3.3 Execution invariants
-
-The exact execution-pinned `workflow_release` defines legal Module bindings and
-edges. The Domain Graph Driver interprets domain outcomes.
-The Durable Workflow Orchestrator validates identity, pinned versions,
-idempotency, and structural edge legality. No Runtime subsystem infers
-semantics from a state name, Module name, Agent role, finding prose, or
-artifact content.
-
-Domain content revision is represented as an ordinary typed transition plus a
-domain-owned feedback artifact. Runtime never inserts a verifier, reviewer, or
-other Module into a graph on its own.
-
-## 4. Runtime Authorization Integration
-
-Product Authorization owns Product Principal and Entitlement lifecycle, policy
-evaluation, decisions, execution authorization contexts, revocation, and
-high-risk grant issuance. Agent Runtime owns only the execution-local binding,
-ordering, propagation, status observation, and fencing mechanics defined by
-`agent_runtime_09`.
-
-Before first graph dispatch or standalone Module execution, Runtime validates
-and commits one immutable `execution_authorization_context_binding`. It binds
-the exact Workflow Execution and releases, initiating Product Principal,
-authenticated Runtime workload actor, tenant, Cell, input package, Product
-decision and context, policy and catalog versions, validity, and revocation
-status reference. The binding contains no Entitlement body, policy expression,
-credential, database role, or mutable permission list.
-
-Runtime revalidates the context before durable start, process re-entry, Module
-dispatch after a wait, and PM-requested revision. These checks are execution
-fences, not new Product authority. An Entitlement expansion never widens the
-existing binding.
-
-For a dynamic data, search, model, tool, publication, or side-effect operation,
-Runtime records one typed intent from trusted execution state and the Runtime
-Module Release declaration, then calls the enforcing Gateway. The Gateway
-resolves the actual resource and request context, obtains or validates a current
-Product Authorization decision, applies Data Governance and resource-local
-preconditions, and performs the operation through its own credential. Runtime
-records only the returned decision and effect references.
-
-An action classified as publication, external send, sensitive export, trade, or
-asynchronous cross-service mutation additionally requires a short-lived,
-audience-bound `operation_grant`. Ordinary authorized operations do not require a
-single-use grant. Domain approval, Evaluation, or Selection substitutes for
-neither a Product decision nor a required high-risk grant.
-
-Runtime rejects caller-supplied tenant or Principal expansion, cross-Cell reuse,
-mismatched or expired contexts, replayed high-risk grants, and operations absent
-from the registered declaration. Context invalidation fences new dispatch and
-event application, sets the old execution to terminal
-`runtime_status=authorization_invalidated`, preserves its last committed
-`domain_state`, quarantines returned-but-uncommitted output, closes live provider
-contexts, and reconciles already issued effects. The old execution cannot
-resume; continuation under changed authority requires a newly authorized
-Workflow Execution.
-
-## 5. Context Management
-
-Context belongs to one Module Variant lineage.
-
-`context_binding` pins the Agent execution adapter, model profile, adapter
-revision, context type, resume mode, read isolation, tool policy,
-`prompt_bundle` hash, `module_input_closure` hash, authorization-binding hash, and contract version. Native
-resume requires compatibility across every pinned field.
-
-When native resume is unavailable or incompatible, Context Manager creates a
-new Variant context from exact authorized input refs, including admitted
-Artifact Graph `artifact_instance` refs when applicable, the resolved prior
-`execution_output_ref`, continuity state, and the current typed task or
-`revision_packet`. It never copies an opaque provider workspace across Variants,
-models, SDKs, CLIs, tenants, or Cells.
-
-Context Manager appends `context_event` records for create, resume, reconstruct, compact, close, and invalidation. A domain revision may continue a compatible lineage. A model or adapter change creates a sibling or successor Variant. Domain completion, Runtime cancellation, or authorization invalidation closes every live provider context.
-
-## 6. Automatic Logging and Usage
-
-Runtime code records execution logs and provider/resource source usage
-observations. An Agent never authors its own execution, token, search,
-authorization, or usage observation. Runtime records no rate, charge, invoice,
-or other authoritative billing object; Rating and Billing remain separate
-owners.
-
-Every Runtime event binds its declared execution scope, Cell, Module Release,
-event type, its own ledger-assigned `recorded_at_utc`, applicable input and output
-references and hashes, and terminal classification. Attempt-scoped events bind
-Workflow Execution when present, Module Run, Variant, and Attempt; workflow- or Module-scoped events
-must not fabricate narrower identities. Model usage records normalized total
-input, output, cache-read, and cache-creation tokens. `input_tokens` includes
-cached input; cache-read and cache-creation are subset breakdowns and must not
-be added to it again. Adapters normalize provider differences before committing
-the record. A value the provider does not expose remains `null`; the Telemetry
-Pipeline aggregates the corresponding unknown-field count. Null preservation
-and aggregate admission are enforced by the telemetry schema and release tests.
-
-Tool calls, external search, semantic search, authorization decisions, context events, checkpoints, evaluations, and update events use separate typed event families. Durable-backend history and shared infrastructure logs contain identities, references, hashes, bounded classifications, and timings. Customer content and secrets remain in authorized Cell-local stores.
-
-Every `model_call_record`, `tool_call_record`, and corresponding `usage_event`
-binds the execution authorization context plus the Gateway decision or
-pre-materialized-input reference used for that operation. A high-risk operation
-also binds the Product-issued `operation_grant` disposition. The execution ledger
-rejects an Attempt commit when the required authorization observation is
-missing, belongs to another lineage, or lacks a required grant. A direct
-provider or tool call therefore has no committable conformant path.
-
-## 7. Checkpoint and Recovery
-
-One dispatch uses this authoritative commit order:
+## 7. Architecture and Lifecycle
 
 ```mermaid
-sequenceDiagram
-    participant KERNEL as Workflow Execution Kernel
-    participant RUNNER as Attempt Runner
-    participant LEDGER as Execution Ledger
-    participant BACKEND as Durable Workflow Backend
-
-    KERNEL->>RUNNER: Dispatch with stable dispatch ID
-    RUNNER->>LEDGER: Commit Module Run + Variant + attempt_started
-    RUNNER->>LEDGER: Commit protected-operation intent
-    RUNNER->>RUNNER: Invoke authorized Gateway or adapter
-    RUNNER->>LEDGER: Commit Gateway decision and effect observations
-    RUNNER->>LEDGER: Finalize terminal Attempt + attempt_output_bundle + execution_output_refs + source usage + invocation_commit
-    RUNNER->>LEDGER: Close required evaluation_set + Selection
-    RUNNER->>LEDGER: Atomically commit module_output_resolution_record + module_outcome + pre-ack Checkpoint
-    RUNNER-->>KERNEL: Return committed outcome ref
-    KERNEL->>BACKEND: Commit transition acknowledgement
+flowchart LR
+    C["Release candidate"] --> R["Registered immutable release"]
+    P["Set or clear active pointer"] --> A["Active pointer"]
+    A -. "points to" .-> R
+    A --> N["Workflow / Standalone execution"]
+    R --> X["Exact Test / Evaluation / Replay"]
+    N --> W["Waiting"]
+    W --> N
+    N --> T["Terminal result"]
+    X --> T
 ```
 
-This ordering is the production-provider admission invariant. A provider
-adapter cannot be admitted for production unless the implementation durably
-commits Attempt start and the protected-operation intent before the real SDK,
-API, CLI, or Gateway invocation, then records the returned authorization and
-effect references. A grant is pre-bound only for a registered high-risk action.
+Registry 不给 immutable release 维护一套可变 lifecycle state。某个 `(subject_kind, subject_id)` 的
+active pointer 指向哪一份 registered release，该 release 就是 active；其余 registered release 都是
+inactive。正常 Workflow/Standalone 通过 active pointer 解析目标；Test/Evaluation/Replay 通过 exact
+release ref/hash 使用任意 registered release。Active pointer 不授权 caller 执行。Execution 固定所用
+release、input 和适用的资源绑定；需要外部授权时，同时固定该 context。Durability 可以恢复同一
+execution，但不能创建第二个 logical run，也不能扩大原资源范围。Terminal result 必须解析到 Ledger facts。
 
-Crash recovery distinguishes three commit windows:
+自测仍产生同一类 Runtime execution facts，其保留期限由明确的测试资源策略决定。临时存储在存续期间
+是该次执行的事实权威；清理后不能声称仍可从已销毁资源恢复或检查。已有持久 Release Registry records
+保持原保留规则，不因某次测试使用了其 release 而成为可删除的测试资源。
 
-1. Before `invocation_commit_record`, the active Attempt is orphaned or
-   terminalized according to policy; a retry may create a new business Attempt.
-2. After `invocation_commit_record` and before `module_outcome` commit, the same
-   dispatch reconstructs the committed invocation result and continues
-   evaluation and output resolution. It creates no new Attempt and repeats no
-   provider call or protected operation.
-3. After `module_outcome` and its pre-ack checkpoint commit but before backend
-   acknowledgement, replay returns the existing Outcome for the exact dispatch
-   ID and appends only the missing acknowledgement.
+Parent T0 所称 Runtime release admission 在本层没有第三种 state：成功 registration 证明 release 可按
+exact ref 使用；active pointer 只决定 Workflow/Standalone 的默认可解析目标。
 
-A committed `retryable_failure` preserves the domain transition sequence and
-creates the next Runtime `retry_sequence`; that new dispatch may append a new
-Attempt under the compatible Module Run and Variant.
+## 8. Public Boundaries and Quality Rules
 
-`checkpoint_record` binds dispatch ID, execution release, graph hash,
-authorization-binding hash, current domain state, Runtime status, committed
-Outcome ref, and backend acknowledgement state. Recovery requires the
-execution-pinned release. Missing pinned code suspends the execution.
+Runtime public boundary 接受以下 request/input classes：
 
-Cancellation or authorization invalidation changes `runtime_status` and preserves the last committed `domain_state`. Runtime failure, suspension, cancellation, and authorization invalidation never fabricate a domain transition.
+1. content-addressed release candidate；
+2. subject kind/id、exact registered release ref/hash 或 clear target 组成的 active-pointer change request；
+3. target subject kind/id、Workflow 或 Standalone `execution_purpose`、authorization context 与 typed input
+   组成的正常 execution request；
+4. exact registered release ref/hash、Test、Evaluation 或 Replay `execution_purpose` 与 typed input
+   组成的 exact execution request；外部请求携带其受保护效果所需的 authorization context，
+   Runtime-hosted Test/Evaluation 按 §8.1 携带测试资源绑定；
+5. exact execution ref 绑定的 typed external event；
+6. exact execution ref 绑定的 wait、retry、replay、recovery 或 cancellation control request；
+7. exact release 或 execution query 组成的 inspection request。
 
-## 8. Evaluation Runtime
+请求所属的 host integration 决定谁可以调用 Runtime public operation；Runtime 自测由其测试宿主负责入口。
+这是 public API access，不是 Runtime release selection、execution authorization 或 database permission。
+Host denial 在请求进入 Runtime 前结束并保留 host
+owner。Runtime 各 responsibility 不复判 caller eligibility，只校验本 operation 的 payload、exact identity、
+current precondition，以及 request 明确携带的 external decision ref。Registry 因此只校验 candidate、exact
+target、hash、dependency closure 和 current-pointer precondition，并只产生 §9 row 01 的 Registry failure。
 
-The domain registers evaluator identity, rubric schema, required evaluator set,
-required inputs, veto semantics, and one Module-output selection policy. Runtime
-owns scheduling, isolation, lineage, storage, candidate-set closure, comparison,
-immutable Selection, and mechanical downstream enforcement.
+对应稳定结果是 immutable release/active-pointer fact、durable execution receipt/snapshot、external-event
+acknowledgement、durable control result、terminal result 和 authorized inspection projection。每一类
+request/result 的 exact interface 继续由 §9 对应 T2 定义。
 
-Each `evaluation_run` binds one evaluator release and one exact candidate Variant,
-terminal Attempt, output-bundle hash, rubric hash, immutable evaluation input
-refs/hash, and result identity. A deterministic evaluator may execute through an admitted
-deterministic evaluator adapter. A model-backed evaluator executes as an
-admitted Runtime Module Release through the ordinary Module Run/Variant/Attempt invocation
-and authorization path. Its `evaluation_result` references the evaluator's
-producing Workflow Execution when present, Module Run, Variant, Attempt, resolved
-`execution_output_ref`, execution
-release, and operation-grant lineage. Evaluators run in contexts isolated from
-the candidate Agent and sibling evaluators; an evaluator result with no admitted
-producing Attempt cannot satisfy a formal gate.
+Execution 在创建 run 前，使用 Workflow/Standalone request 的 target subject kind/id 查询 Registry active
+pointer；使用 Test/Evaluation/Replay request 的 exact registered release ref/hash 直接解析目标，不查询 active
+pointer。Request 的 target identity 与 `execution_purpose` 类型不匹配或无法解析时，由 Execution 拒绝并产生
+execution-invalid failure；Registry 不执行 run，也不把 pointer failure 改写成 authorization denial。
 
-For every Module Run requiring evaluation, Runtime commits an immutable
-`evaluation_set` that binds the complete candidate set, required evaluator set,
-rubric set, candidate-by-evaluator `evaluation_result` refs/hashes, veto state,
-and a coverage hash. Closure succeeds only when every eligible candidate has
-all required results over its exact terminal Attempt and output bundle. A
-multi-Variant `selection` references this closed evaluation_set and the exact
-selected candidate; a single evaluation ref is insufficient.
+质量规则：
 
-Every Runtime Module Release can be evaluated independently and declares
-`selection_policy: direct_single | evaluated_single | selected` in its
-immutable release. Each policy produces one immutable `module_output_resolution_record`
-that is the only downstream-consumption authority:
+1. Runtime core 保持 domain-neutral 和 provider-neutral。
+2. release、execution 和 evidence identity 可重放且不会依赖 timestamp 生成同一性。
+3. 每个 observable failure 由 owning T2 产生 stable error code 和 caller action。
+4. wait、retry、replay 和 recovery 不重复已提交 effect。
+5. Ledger 是 execution fact authority；Inspection 只投影。
+6. Module 可独立运行测试；Workflow 只组合 exact Module releases。
+7. Runtime 不读取宿主 editable authoring tree；host adapter 提交 repository-independent candidate content。
+8. 测试用途不会放宽 exact identity、declared operation、Profile/Adapter compatibility、workspace、network
+   或 output validation；资源越界在相应效果发生前拒绝。
 
-- `direct_single` resolves the sole eligible Variant, terminal Attempt, and
-  canonical output bundle without an evaluation_set or Selection;
-- `evaluated_single` resolves the sole eligible candidate only after its closed
-  evaluation_set passes without veto;
-- `selected` requires a closed evaluation_set and one immutable Selection; every
-  Module Run with multiple eligible Variants must use this policy.
+本 T1 不声明 owner-local public operation。Public interfaces 与 caller-visible failure 全部按 §9
+逐项委派；T2 必须进一步定义 exact input、success output、effect、stable error code 和 caller action。
 
-Runtime rejects downstream consumption of a raw Attempt, unresolved
-`execution_output_ref`,
-evaluation_result, or Selection that is not named by the Module Run's exact
-`module_output_resolution_record`.
+### 8.1 Runtime-hosted self-test
 
-`attempt_output_bundle` and its member `execution_output_ref` records are the sole
-canonical Runtime output types. Neither denotes an Artifact Graph
-`artifact_instance` or grants product delivery, readiness, domain acceptance,
-or canonical-admission authority.
+普通自测使用 Test 或 Evaluation purpose，经既有 execution kernel 执行 exact registered release 和
+frozen input。Runtime 测试宿主明确提供可用的测试资源，调用者仅设置 purpose 不能获得该资源范围，
+也不能据此读取生产数据、触发生产操作或取得外部服务权限。对不满足这一路径资源约束的请求，
+Runtime 在效果发生前拒绝，不自动补生产授权或转入生产入口。
 
-After Resolution, Runtime returns the exact resolved `execution_output_ref` and
-its bundle and Resolution lineage. Artifact Service may then register that
-output as a candidate, after which the owning domain independently decides
-admission. Only that external candidate-registration and domain-admission chain
-can create or advance an Artifact Graph `artifact_instance`.
+自测的必要条件是 release/input closure、compatible Execution Profile、admitted Adapter、declared
+operations，以及可执行的 workspace、network 和资源限制。它不需要 Product Authorization client、
+生产 Entitlement、execution grant 或伪造的生产批准。Provider 登录由已有 Adapter 和宿主环境处理，
+登录失败保留 Invocation/environment failure，不改写为缺少产品授权。
 
-## 9. Test Harness
+Runtime 自测宿主提供临时 record store、artifact store 和其他测试资源。没有明确的外部 Ledger binding
+时，测试结果只写入这些资源。外部保存需要宿主显式提供目标 binding 及其必要的访问凭据，不能从业务
+环境配置自动选取目标。凭据由宿主取得并交给对应 storage/data-access adapter；Runtime core 不读取、
+解析、签发、刷新或持久保管凭据。模型进程不能取得 storage adapter 的凭据或未声明的资源。
 
-Testing proves deterministic engineering behavior. Evaluation measures candidate behavior against a registered domain rubric.
+测试资源的创建、证据导出、保留和清理由测试宿主的显式策略决定。可选外部保存只改变证据目的地，
+不授予模型生产操作能力；未提供外部保存时仍可完成普通自测。请求已明确要求的外部保存失败，必须保留
+失败结果，不能用本地结果冒充保存成功。测试宿主只清理它创建并拥有的临时资源，不删除已有持久
+Registry 或外部记录。独立进程的重试与恢复继续遵守 §7 的同一 execution lineage 和资源边界。
 
-| Suite | Verifies |
-| --- | --- |
-| Module contract | Admitted release, input/output schema, declared permissions, standalone-entry policy, Attempt, and Outcome lineage |
-| Graph simulation | Legal edge, wait, loop, terminal state, dispatch guardrail |
-| Adapter conformance | SDK, CLI, model API, durable backend, and storage contracts |
-| Authorization isolation | Tenant, Cell, Principal, actor workload, execution context, decision, high-risk grant, resource, expiry, invalidation, and replay negatives |
-| Context portability | Native resume, incompatible rebuild, cross-model switch, context closure |
-| Failure injection | Crash before invocation_commit, after invocation_commit before Outcome, after Outcome before acknowledgement, duplicate event, lost acknowledgement, partial side effect |
-| Evaluation closure | Model evaluator producing-Attempt lineage, candidate/evaluator-set completeness, veto, Selection, and module_output_resolution_record policy enforcement |
-| Observability | Trace linkage, token components, unknown semantics, secret absence |
-| Upgrade compatibility | Pinned recovery, drain/cancel, forked replacement execution, rollback, revoked-release behavior |
+这一路径不改变外部生产请求的 acceptance、Replay/control request 的既有约束，也不把测试通过解释成
+业务接受、生产部署或 subject-specific review approval。Registry 提供 release facts，Execution 与
+Invocation 执行资源边界，Ledger 保存执行事实；Agent Capability Verification 组织并汇总其验证证据。
 
-Shared fixtures use opaque state IDs and synthetic artifacts. Domain fixtures appear only in domain-owned tests.
+## 9. T2 Partition and Dependencies
 
-`execution_context_resolution` is the provider-neutral boundary for resolving
-registered task-context slots. The host supplies an authorized content
-resolver and category/key/release selectors; Runtime validates the returned
-immutable releases, applies the registered JSON Schema, freezes provenance,
-and exposes only the semantic content tree to the model. Runtime does not
-interpret domain categories and does not grant content access.
+| T2 family | Primary responsibility | Public boundary delegated by this T1 | Failure family and true owner |
+| --- | --- | --- | --- |
+| 01 Registry | Registry | compile、register、set/clear active pointer、resolve immutable release | release invalid / conflict / active-pointer invalid，Registry owns |
+| 02 Source Architecture | T1-delegated cross-cutting conformance | validate source ownership、import direction、public surface 与 naming | architecture conformance failed，Source Architecture owns |
+| 03 External Event Ingress | Execution | accept and acknowledge typed external event | event invalid / stale，External Event Ingress owns |
+| 04 Ledger | Ledger | commit and read Attempt、usage、failure、Outcome、Resolution 与 checkpoint facts | ledger commit failed，Ledger owns |
+| 05 Standalone Release | T1-delegated cross-cutting conformance | verify package、Design bundle、dependency isolation 与 release unit | release conformance failed，Standalone Release owns |
+| 06 Inspection | Inspection | validate exact query；read and project release/execution facts | inspection query invalid / unavailable，Inspection owns；host denial retains host owner |
+| 07 Durability | Durability | wait、timer、retry、replay、recovery、cancel 与 backend coordination | durability unavailable / recovery conflict，Durability owns |
+| 08 Invocation | Invocation | prepare Context and invoke Execution Profile-selected code-owned provider/tool adapter binding；在自测中同样执行声明的 capability 与资源限制，隔离 provider 登录和产品授权 | adapter binding unavailable / invocation failed / output invalid，Invocation owns |
+| 09 External Authority Integration | Execution boundary integration | 区分自测资源边界与外部受保护效果；仅对需要外部决定的效果 validate and carry authorization context、protected-operation intent 与 data-access handoff；普通自测不要求生产批准 | external denial retains its actual external authority；database permission retains Product Authorization or Data Governance/domain owner；Runtime owns only invalid ref、fence and late-result quarantine |
+| 10 Execution | Execution | resolve target by execution_purpose；start、advance、evaluate、select、resolve and terminate Workflow/Module execution | execution purpose/target invalid / terminal failure，Execution owns |
+| 11 Agent Capability Verification | T1-delegated cross-cutting conformance | consume owner-qualified peer capability evidence，verify complete inventory、canonical Example/runbook 与 required environment-gate closure；验证自测独立性、临时资源策略与显式外部保存边界，不接管 peer 的存储或执行语义 | verification case failed / environment unavailable / coverage incomplete，Agent Capability Verification owns；peer capability failure retains its peer owner |
 
-`agent_runtime.testing.execution_module_evaluation` is the portable isolated
-Module Test/Evaluation entry. Runtime owns input staging, Prompt assembly,
-adapter dispatch, execution ledgering, and result projection. The host must
-supply the exact Product authorization authority; the helper cannot issue an
-Entitlement, manufacture an execution context, or bypass a closed execution
-fence. Domain packages supply only their registered releases, semantic input,
-adapters, authorization composition, and evaluation assertions.
-When a test freezes time, the same injected clock must drive both authority
-issuance/revalidation and Runtime invocation; mixing a frozen authority clock
-with the process clock correctly closes the execution fence.
+每个 T2 只拥有表中一个 bounded capability。T2 之间只能通过公开 interface 和 stable facts 依赖，不能读取
+sibling private implementation。当前文件 identity、implementation binding 和 migration status 来自
+code-owned Design registration 与 generated inspection，不由本表维护。
 
-## 10. Release and Module Update Management
+02 和 05 的 cross-cutting authority 只来自本 T1 对 source/package conformance 的明确委派。它们可以
+拒绝不符合已批准 responsibility contract 的 representation 或 release unit，但不能重新定义 Registry、
+Execution、Invocation、Durability、Ledger、Inspection 的语义、状态或 public behavior。
 
-Every executable Module is versioned independently. Workflow graph, Domain
-Graph Driver, Behavior Policy, Evaluation Policy, Retry Policy, Executor
-Adapter, `prompt_bundle`, model profile, tool policy, artifact schema, durable
-adapter, and worker are separately pinned release dependencies rather than
-unnamed parts of a second executable layer.
+## 10. Completion and Failure
 
-`execution_release` pins the compatible set used by one Workflow Execution.
-`execution_release`, `runtime_module_release`, and `update_plan` are immutable records
-with their own `recorded_at_utc`. `runtime_module_release` records one immutable
-Module version, contract version, artifact hash, dependency set, admission
-state, and rollback target. `update_plan` records affected workflows,
-compatibility result, required tests, rollout policy, and recovery policy.
+Agent Runtime domain 在以下结果同时成立时完成最低产品闭包：
 
-A Module update follows this sequence because order changes safety:
+1. 外部 host 只通过公开 Registry interface 即可注册 immutable Module/Workflow releases。
+2. authorized caller 可启动 Workflow 或允许 standalone 的 Module，并获得 durable receipt。
+3. Invocation、Durability、Ledger 和 Inspection 对同一 execution identity 保持一致。
+4. crash、wait、retry、replay、cancellation 和 recovery 有可重复验证的正向与失败用例。
+5. Runtime package 不 import host product、domain Skill tree 或业务数据库实现。
+6. canonical Design bundle、public exports、schema 与 code-owned registrations 通过 deterministic parity gate。
+7. Agent capability inventory、canonical Example/runbook、owner-qualified peer results、local deterministic gates 与 release-required environment gates 形成 exact aggregate verification result；该结果不复制 peer conformance authority。
+8. Runtime-hosted Test/Evaluation 在没有生产授权服务或外部 Ledger binding 时可重复执行；资源越界、
+   incompatible Profile/Adapter、provider 登录失败和外部保存失败都有真实、可重现的失败证据。
 
-1. Register a new immutable release while the active release remains unchanged.
-2. Compute affected Release Registry bindings and execution-release combinations.
-3. Run Module tests and every impacted contract, conformance, isolation, and recovery suite.
-4. Run a shadow or sibling-Variant comparison when behavior can change.
-5. Admit the release for new or canary executions.
-6. Keep in-flight executions pinned, drain or cancel them, or create a new
-   forked Workflow Execution with freshly authorized immutable pins. An
-   executable or Module hash is never patched inside an in-flight execution.
-7. Promote or roll back through release state.
+Runtime-owned failure family 与 §9 一一对应：01 release invalid/conflict/active-pointer invalid；02 architecture conformance
+failed；03 event invalid/stale；04 ledger commit failed；05 release conformance failed；06 inspection query
+invalid/unavailable；07 durability unavailable/recovery conflict；08 adapter binding unavailable/invocation failed/output invalid；
+09 external-authority context invalid、invalidation fence 与 late-result quarantine；10 execution
+invalid/terminal failure；11 capability test failed/environment unavailable/coverage incomplete。Product Authorization 的 denial 与 Data Governance/domain Gateway 的
+data-access denial 是 peer decision；Runtime 09 只验证引用、执行 fence 并保留原 owner identity。
+具体 error code、retryability、caller action 与 rollback 由 §9 对应 T2 定义。T1 不把 peer denial 或一个
+T2 failure 重写成另一个 owner 的 failure。Host 对任一 Runtime public operation caller 的 denial 都在进入
+Runtime interface 前结束并保留 host owner；Runtime 不把该 denial 改写成 Registry、Execution、Event、
+Durability、Inspection 或其他 T2 failure。
 
-`resume`, domain `revision`, A/B comparison, and Module update are separate operations with separate records.
+## 11. References
 
-## 11. Failure Classification
-
-| Signal | Runtime behavior |
-| --- | --- |
-| Provider timeout, CLI interrupt, temporary network error | Preserve `domain_state`; record `retryable_failure`; apply the exact registered Module Retry Policy budget |
-| Worker crashes before invocation_commit | Orphan or terminalize the Attempt according to policy; a retry may create a new Attempt |
-| Worker crashes after invocation_commit and before Outcome commit | Reconstruct the committed invocation; perform no duplicate provider/tool call or protected operation |
-| Worker crashes after local Outcome commit and before backend acknowledgement | Return the committed Outcome for the same dispatch ID; perform no duplicate call or side effect |
-| Expected state, graph hash, or transition mismatch | Reject Outcome; preserve cursor and current domain state |
-| Execution authorization context or Cell binding becomes invalid | Atomically enter the invalidation fence; set terminal `runtime_status=authorization_invalidated`; preserve domain state; quarantine uncommitted output; close contexts; reconcile committed effects and high-risk grants; prohibit resume; require a new execution for any continuation |
-| Domain Graph Driver returns external wait | Set `runtime_status=waiting`; preserve domain state and wait-policy ref |
-| Missing pinned release, operator suspension, or exhausted Runtime dispatch safety ceiling | Set `runtime_status=suspended`; preserve domain state; only the authorized operator or release-recovery path may resume the same dispatch ID |
-| Authorized external_event is acknowledged | Apply exactly one pinned-graph transition and return the acknowledged snapshot |
-| Runtime cancellation | Set `runtime_status=cancelled`; preserve the last domain state |
-| Domain Graph Driver returns a legal terminal Outcome | Commit the terminal transition and set `runtime_status=completed` |
-
-An admitted `external_event` is an ingress transport object. External Event
-Ingress first commits an `external_event_ingress_record`; that record proves a
-validated outbox intent was durably accepted, but not that backend delivery or
-application occurred. A backend acknowledgement proves delivery. The
-Cell-local Activity Bridge
-then atomically commits the sole `external_event_application_record`, bound to the
-ingress receipt, decision Artifact, authorization ref, execution graph,
-expected state, and target state, before acknowledging the transition. The
-application record, not an in-memory callback argument or ingress receipt, is
-the continuation evidence consumed by the next domain state.
-
-Runtime does not interpret content quality or finding prose. Domain contracts and the Domain Graph Driver own revision routes and domain terminal states.
-
-## 12. Required Machine Contract
-
-The machine contract has four surfaces joined through immutable refs and
-hashes:
-
-1. **Runtime Release Registry**: Schema Asset, Prompt Component, Prompt Bundle,
-   Behavior Policy, Evaluation Policy, Retry Policy, Execution Variant Policy,
-   Execution Profile, Runtime Module, Workflow, admission, and active-release
-   records.
-   `workflow_release` owns its graph; `runtime_module_release` owns its executable
-   contract. No parallel stable registration table owns either identity.
-2. **Module Execution Ledger**: Module Run, Variant, Attempt, outputs,
-   Evaluation, Selection, Resolution, Context, authorization, usage, and
-   recovery lineage.
-3. **Skill Governance authority**: provider-neutral Skill authoring, review,
-   lifecycle, and zero-to-many Module registration sources. Runtime compiles
-   one selected source into an immutable Module Release and cannot rewrite the
-   Skill candidate.
-4. **Cell-local execution content**: dynamic input packages, Prompt Envelopes,
-   provider inputs and outputs, and governed content. The shared Runtime ledger
-   retains bounded refs, hashes, status, time, and usage.
-
-For managed execution, the Runtime Release Registry is the logical system of
-record for all ten admitted release families and their active pointers.
-PostgreSQL is one persistence binding for that Registry. Code owns their
-schemas, validators, compiler, seed
-manifests, and deterministic inspection. Repository Skill and prompt files are
-authoring or compatibility projections after managed cutover; Runtime does not
-read a mutable working-tree file as production instruction authority.
-
-The graph node shape is deliberately small:
-
-```yaml
-node_id: optional_workflow_local_identity
-module_release_ref: runtime-module:source_fidelity_verifier@1
-module_release_sha256: <sha256>
-input_mapping_ref: runtime-input-map:source_fidelity_verifier@1
-input_mapping_sha256: <sha256>
-```
-
-`node_id` exists only when the same Module Release is bound more than once or a
-stable graph-position identity is required. Module purpose, schemas,
-permissions, Executor, Skill, retry defaults, and Evaluation contract are not
-copied into the node.
-
-Every executable graph position resolves one exact `runtime_module_release`.
-Every isolated invocation enters `run_module()`; every admitted Workflow
-Module Activity enters `run_workflow_module()`. Both produce `module_run_record`,
-`module_execution_variant_record`, Attempt, and output-resolution lineage. The
-deterministic removed-surface scan must be empty across source, package exports,
-registries, codecs, persistence schemas, workers, and generated inspection.
-
-## 13. Adjacent Contracts
-
-- `the_agent_runtime.md` is the T0 authority for standalone boundaries, public modules, plugin admission, execution identity, adapters, evaluation mechanics, and releases.
-- `agent_runtime_01` owns Module and Workflow Releases, Module Run/Variant/Attempt/
-`attempt_output_bundle`/`execution_output_ref`,
-  evaluation_run/evaluation_result/evaluation_set, Selection,
-  module_output_resolution_record, graph assembly, and generated inspection.
-- `agent_runtime_02` owns deployment planes, Cell isolation, data placement, durable-backend selection, and backend conformance.
-- `designDoc/product_authorization_00_service_and_persistence_contract.md` owns Product Principal, Group, Entitlement, assignment, policy, decision, execution-context, high-risk grant, and break-glass semantics.
-- `agent_runtime_03` owns trusted-request conversion into an authorized, domain-valid external event.
-- `agent_runtime_04` owns the isolated publication transaction after domain intent and operation authorization exist.
-- `agent_runtime_06` owns the standalone namespace and append-only Attempt, protected-operation observation, invocation-commit, checkpoint, and backend-acknowledgement lifecycle.
-- `agent_runtime_07` owns the Temporal durable adapter and acknowledged Update semantics.
-- `agent_runtime_08` owns the provider-neutral Agent Execution Adapter protocol and provider admission.
-- `agent_runtime_09` owns Product Authorization client integration, execution authorization context binding, protected-operation handoff, fencing, and authorization conformance.
-- The owning product or domain T1 owns logical workflow behavior and lifecycle.
-- `agent_runtime_10` owns host-side `workflow_execution_binding` validation,
-  target resolution, compatibility mapping, cutover, and fail-closed admission.
-- `the_agency_platform` owns the enterprise host/product composition around the independently publishable Runtime.
-- Agent Runtime owns the mechanical ledger-to-Inspector projection, read-only
-  Runtime query contract, live Inspector application, and portable review
-  bundle. Agency Platform may host those surfaces and supply current Product
-  authentication and authorization; it does not copy the Runtime ledger or
-  maintain a second execution projection model.
-- Each domain Design Doc owns business objects, role names, content-quality criteria, evaluator semantics, revision rules, and domain terminal states.
+- [Agent Runtime Charter](the_charter.md)
+- [Agent Runtime T0](the_agent_runtime.md)
+- [Design Doc Management](the_design_doc_management.md)
+- [Product Authorization](the_product_authorization.md)
+- [Data Governance](the_data_governance.md)
+- [Timestamp Semantics](the_timestamp_semantic.md)
+- [Review Contract](the_review_contract.md)
+- [Software Delivery](the_software_delivery.md)
+- [Agent Capability Verification](agent_runtime_11_agent_capability_verification.md)

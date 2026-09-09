@@ -32,10 +32,10 @@ from ..contracts.execution_host_definition import (
     RuntimeWorkflowStartRequest,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
-from ..contracts.durability_execution_definition import (
+from ..contracts.durability_topology_definition import (
     BackendEvent,
     BackendExecutionRef,
-    DurableExecutionBinding,
+    CellRuntimeBinding,
     ExecutionSnapshot,
     ExternalEvent,
     WorkflowGraphProjection,
@@ -271,7 +271,7 @@ class TemporalWorkflowReleaseBackendAdapter:
     """Temporal cursor adapter backed by the target Runtime Release Registry."""
 
     client: Client
-    binding: DurableExecutionBinding
+    binding: CellRuntimeBinding
     release_registry: RuntimeReleaseRegistry
     task_queue: str
     execution_purpose: ModuleExecutionPurpose

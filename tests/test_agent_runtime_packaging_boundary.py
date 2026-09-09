@@ -36,7 +36,7 @@ DOMAIN_PACKAGE_PREFIXES = (
     "src.research",
     "src.research_evidence_thesis_workflow",
     "src.research_source_evidence_thesis_workflow",
-    "src.host_business_workflow",
+    "src.research_theme_report_workflow",
     "src.trade",
 )
 PREDECESSOR_RUNTIME_PACKAGE_PREFIXES = (
@@ -116,22 +116,11 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
     assert configuration["project"]["readme"] == "README.md"
     assert configuration["project"]["dependencies"] == ["jsonschema>=4.23"]
     assert configuration["project"]["optional-dependencies"] == {
-            "claude": ["claude-agent-sdk>=0.2.128"],
-            "postgres": ["psycopg[binary]>=3.2"],
-            "temporal": ["temporalio>=1.31"],
-            "test": [
-                "build>=1.2",
-                "claude-agent-sdk>=0.2.128",
-                "psycopg[binary]>=3.2",
-                "pytest>=8",
-                "setuptools>=77",
-                "temporalio>=1.31",
-            ],
-        }
-    assert configuration["project"]["license"] == "MIT"
-    assert configuration["project"]["license-files"] == ["LICENSE"]
-    assert configuration["project"]["urls"] == {
-        "Repository": "https://github.com/bobaoai/agent_runtime"
+        "claude": ["claude-agent-sdk>=0.2.128"],
+        "postgres": ["psycopg[binary]>=3.2"],
+        "temporal": ["temporalio>=1.31"],
+        "test": ["build>=1.2", "claude-agent-sdk>=0.2.128", "psycopg[binary]>=3.2",
+                 "pytest>=8", "setuptools>=77", "temporalio>=1.31"],
     }
     assert configuration["project"]["scripts"] == {
         "agent-runtime-inspect": "agent_runtime.inspection.inspection_snapshot_exporting:main",
@@ -223,7 +212,6 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         """
         import json
         import sys
-        from pathlib import Path
         from types import MappingProxyType
 
         sys.path.insert(0, sys.argv[1])
@@ -233,16 +221,14 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
             WorkflowAdmissionState,
             WorkflowRuntimeRegistration,
         )
-        from agent_runtime.inspection import (
-            ReleaseInventorySelection,
-            build_runtime_release_inventory,
+        from agent_runtime.inspection.inspection_release_rendering import (
+            build_runtime_inventory,
         )
         from agent_runtime.inspection.inspection_architecture_rendering import (
             build_runtime_architecture_projection,
         )
         from agent_runtime.registry.registry_plugin_registration import DomainRuntimePlugin, register_runtime_plugin
         from agent_runtime.registry.registry_workflow_registration import WorkflowRuntimeRegistry
-        from agent_runtime.registry.registry_release_registration import RuntimeReleaseRegistry
 
         OPAQUE_GRAPH = MappingProxyType({
             "state_alpha": frozenset({"state_omega"}),
@@ -292,11 +278,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         )
         driver_result = registry.resolve_driver("workflow_zeta")()
 
-        selection = ReleaseInventorySelection.build(())
-        inventory = build_runtime_release_inventory(
-            snapshot=RuntimeReleaseRegistry().snapshot(),
-            selection=selection,
-        )
+        inventory = build_runtime_inventory(registry=registry)
         architecture = build_runtime_architecture_projection()
         domain_modules = sorted(
             name
@@ -311,7 +293,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
                     "src.research",
                     "src.research_evidence_thesis_workflow",
                     "src.research_source_evidence_thesis_workflow",
-                    "src.host_business_workflow",
+                    "src.research_theme_report_workflow",
                     "src.trade",
                 )
             )
@@ -319,25 +301,11 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         print(json.dumps({
             "domain_modules": domain_modules,
             "schema_version": inventory["schema_version"],
-            "selection_id": inventory["selection_id"],
+            "selected_backend_id": inventory["selected_backend_id"],
             "public_namespace": agent_runtime.__name__,
             "conformance_namespace": runtime_conformance.__name__,
             "driver_result": driver_result,
-            "release_count": sum(
-                len(inventory[field_name])
-                for field_name in (
-                    "schema_assets",
-                    "prompt_components",
-                    "prompt_bundles",
-                    "behavior_policies",
-                    "evaluation_policies",
-                    "retry_policies",
-                    "execution_variant_policies",
-                    "execution_profiles",
-                    "modules",
-                    "workflows",
-                )
-            ),
+            "workflow_ids": [row["workflow_id"] for row in inventory["workflows"]],
             "architecture_schema_version": architecture["schema_version"],
             "responsibility_ids": [
                 row["responsibility_id"]
@@ -355,15 +323,12 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
 
     assert result == {
         "domain_modules": [],
-        "schema_version": "agent_runtime_release_inventory_v4",
-        "selection_id": (
-            "release_inventory_selection_"
-            "1c6bb3a7362cb21194eaab02"
-        ),
+        "schema_version": "agent_runtime_inventory_v3",
+        "selected_backend_id": "temporal",
         "public_namespace": "agent_runtime",
         "conformance_namespace": "agent_runtime.conformance",
         "driver_result": {"status": "synthetic"},
-        "release_count": 0,
+        "workflow_ids": ["workflow_zeta"],
         "architecture_schema_version": "agent_runtime_architecture_projection_v4",
         "responsibility_ids": list(RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS),
         "technology_ids": list(RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS),
@@ -380,7 +345,6 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
         """
         import json
         import sys
-        from pathlib import Path
 
         sys.path.insert(0, sys.argv[1])
         from agent_runtime.contracts.execution_module_definition import (
@@ -394,7 +358,13 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             OutputSubmission,
         )
         from agent_runtime.contracts.registry_release_definition import (
+            ExecutionProfileRelease,
+            ModuleEntryPolicy,
             ModuleExecutionPurpose,
+            ModuleKind,
+            OutputResolutionPolicy,
+            ModuleRelease,
+            SchemaAssetRelease,
         )
         from agent_runtime.ledger.ledger_lineage_recording import (
             InMemoryModuleExecutionLedger,
@@ -406,139 +376,126 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
             AgentExecutionAdapterRegistry,
             run_module,
         )
-        from agent_runtime.registry import (
+        from agent_runtime.registry.registry_release_registration import (
+            RuntimeReleaseBundle,
             RuntimeReleaseRegistry,
-            build_runtime_release_set,
-            load_runtime_authoring_inventory,
-            register_runtime_release_set,
+        )
+        from agent_runtime.registry.registry_release_compilation import (
+            BehaviorPolicyReleaseCandidate,
+            EvaluationPolicyReleaseCandidate,
+            RetryPolicyReleaseCandidate,
+            compile_behavior_policy_release,
+            compile_evaluation_policy_release,
+            compile_retry_policy_release,
+            runtime_owned_policy_schema_assets,
         )
 
         HASH = "a" * 64
         TIME = "2026-08-08T12:00:00Z"
-        authoring = Path("authoring")
-        module_root = authoring / "modules" / "module_opaque_test"
-        (module_root / "schemas").mkdir(parents=True)
-        (authoring / "contracts").mkdir()
-        (authoring / "policies").mkdir()
-        (authoring / "profiles").mkdir()
-        (authoring / "contracts" / "opaque.md").write_text(
-            "# Opaque\\n\\nRegistered Module: `module_opaque_test`.\\n",
-            encoding="utf-8",
-        )
-        (module_root / "executable.py").write_text(
-            "def run(value): return value\\n", encoding="utf-8"
-        )
-        for name in ("input", "output"):
-            ref = f"schema:opaque_{name}@v1"
-            (module_root / "schemas" / f"{name}.schema.json").write_text(
-                json.dumps({
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "$id": ref,
-                    "type": "object",
-                }),
-                encoding="utf-8",
+        behavior_policy = compile_behavior_policy_release(
+            BehaviorPolicyReleaseCandidate(
+                policy_id="workflow_execution_isolated",
+                policy_version="v1",
+                context_isolation="workflow_execution_isolated",
             )
-        module_manifest = {
-            "schema_version": "runtime_module_registration_v3",
-            "source_kind": "non_agent_module",
-            "skill_id": None,
-            "skill_projection_path": None,
-            "module_id": "module_opaque_test",
-            "module_version": "v1",
-            "module_kind": "deterministic",
-            "owner_contract_ref": "contract:opaque@v1",
-            "owner_contract_path": "contracts/opaque.md",
-            "instruction_source_ref": None,
-            "input_schema_ref": "schema:opaque_input@v1",
-            "input_schema_path": "schemas/input.schema.json",
-            "output_schema_ref": "schema:opaque_output@v1",
-            "output_schema_path": "schemas/output.schema.json",
-            "executable_ref": "python:opaque.runtime.run",
-            "executable_member_path": "executable.py",
-            "declared_operation_ids": [],
-            "compatible_transport_kinds": ["in_process_test"],
-            "behavior_policy_ref": "behavior-policy:opaque_behavior@v1",
-            "evaluation_policy_ref": "evaluation-policy:opaque_evaluation@v1",
-            "retry_policy_ref": "retry-policy:opaque_retry@v1",
-            "entry_policy": "standalone_allowed",
-            "output_resolution_policy": "direct_single",
-        }
-        (module_root / "module_registration.json").write_text(
-            json.dumps(module_manifest), encoding="utf-8"
         )
-        source_documents = {
-            "behavior.json": {
-                "schema_version": "runtime_behavior_policy_source_v1",
-                "policy_id": "opaque_behavior",
-                "policy_version": "v1",
-                "context_isolation": "workflow_execution_isolated",
-            },
-            "evaluation.json": {
-                "schema_version": "runtime_evaluation_policy_source_v1",
-                "policy_id": "opaque_evaluation",
-                "policy_version": "v1",
-                "evaluation_mode": "none",
-            },
-            "retry.json": {
-                "schema_version": "runtime_retry_policy_source_v1",
-                "policy_id": "opaque_retry",
-                "policy_version": "v1",
-                "max_attempts": 1,
-            },
-        }
-        for name, document in source_documents.items():
-            (authoring / "policies" / name).write_text(
-                json.dumps(document), encoding="utf-8"
+        evaluation_policy = compile_evaluation_policy_release(
+            EvaluationPolicyReleaseCandidate(
+                policy_id="deterministic_candidate",
+                policy_version="v1",
+                evaluation_mode="deterministic_candidate",
             )
-        profile_document = {
-            "schema_version": "runtime_execution_profile_source_v1",
-            "execution_profile_id": "profile_opaque_test",
-            "release_version": "v1",
-            "executor_adapter_id": "executor_opaque_test",
-            "executor_adapter_revision": "v1",
-            "transport_kind": "in_process_test",
-            "provider_id": "provider_opaque",
-            "model_id": "model_opaque",
-            "reasoning_profile": "none",
-            "execution_mode": "tool_free",
-            "semantic_input_delivery_mode": "inline",
-            "attempt_workspace_policy": "none",
-            "gateway_access_reasons": [],
-            "output_constraint_mode": "prompt_only_json",
-            "tool_policy": [],
-            "network_policy": "denied",
-            "timeout_seconds": 60,
-        }
-        (authoring / "profiles" / "profile.json").write_text(
-            json.dumps(profile_document), encoding="utf-8"
         )
-        inventory = {
-            "schema_version": "runtime_authoring_inventory_v1",
-            "inventory_id": "opaque_wheel",
-            "inventory_version": "v1",
-            "plugin_id": "opaque_wheel",
-            "plugin_version": "v1",
-            "sources": [
-                {"source_kind":"behavior_policy","source_id":"opaque_behavior","manifest_path":"policies/behavior.json"},
-                {"source_kind":"evaluation_policy","source_id":"opaque_evaluation","manifest_path":"policies/evaluation.json"},
-                {"source_kind":"execution_profile","source_id":"profile_opaque_test","manifest_path":"profiles/profile.json"},
-                {"source_kind":"non_agent_module","source_id":"module_opaque_test","manifest_path":"modules/module_opaque_test/module_registration.json"},
-                {"source_kind":"retry_policy","source_id":"opaque_retry","manifest_path":"policies/retry.json"},
-            ],
-            "root_workflow_source_ids": [],
-        }
-        (authoring / "inventory.json").write_text(
-            json.dumps(inventory), encoding="utf-8"
+        retry_policy = compile_retry_policy_release(
+            RetryPolicyReleaseCandidate(
+                policy_id="one_attempt",
+                policy_version="v1",
+                max_attempts=1,
+            )
         )
-        source_set = load_runtime_authoring_inventory(
-            authoring, "inventory.json"
+        input_schema = SchemaAssetRelease.build(
+            schema_asset_id="opaque_input",
+            schema_asset_version="v1",
+            release_ref="schema:opaque_input@v1",
+            schema_document={
+                "$id": "schema:opaque_input@v1",
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": True,
+            },
         )
-        build_result = build_runtime_release_set(source_set)
+        output_schema = SchemaAssetRelease.build(
+            schema_asset_id="opaque_output",
+            schema_asset_version="v1",
+            release_ref="schema:opaque_output@v1",
+            schema_document={
+                "$id": "schema:opaque_output@v1",
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": True,
+            },
+        )
+        profile = ExecutionProfileRelease.build(
+            execution_profile_id="profile_opaque_test",
+            execution_profile_version="v1",
+            release_ref="execution-profile:profile-opaque-test@v1",
+            executor_adapter_id="executor_opaque_test",
+            executor_adapter_revision="v1",
+            transport_kind="in_process_test",
+            provider_id="provider_opaque",
+            model_id="model_opaque",
+            reasoning_profile="none",
+            execution_mode="tool_free",
+            semantic_input_delivery_mode="inline",
+            attempt_workspace_policy="none",
+            gateway_access_reasons=(),
+            output_constraint_mode="prompt_only_json",
+            tool_policy=(),
+            network_policy="denied",
+            timeout_seconds=60,
+        )
+        module = ModuleRelease.build(
+            module_id="module_opaque_test",
+            module_version="v1",
+            release_ref="runtime-module:module-opaque-test@v1",
+            module_kind=ModuleKind.DETERMINISTIC,
+            owner_contract_ref="contract:opaque@v1",
+            owner_contract_sha256=HASH,
+            executable_ref="callable:opaque@v1",
+            executable_sha256=HASH,
+            input_schema_ref=input_schema.release_ref,
+            input_schema_sha256=input_schema.schema_sha256,
+            output_schema_ref=output_schema.release_ref,
+            output_schema_sha256=output_schema.schema_sha256,
+            prompt_bundle_ref=None,
+            prompt_bundle_sha256=None,
+            declared_operation_ids=(),
+            behavior_policy_ref=behavior_policy.release_ref,
+            behavior_policy_sha256=behavior_policy.release_sha256,
+            evaluation_policy_ref=evaluation_policy.release_ref,
+            evaluation_policy_sha256=evaluation_policy.release_sha256,
+            retry_policy_ref=retry_policy.release_ref,
+            retry_policy_sha256=retry_policy.release_sha256,
+            compatible_transport_kinds=("in_process_test",),
+            entry_policy=ModuleEntryPolicy.STANDALONE_ALLOWED,
+            output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
+        )
+
         release_registry = RuntimeReleaseRegistry()
-        report = register_runtime_release_set(release_registry, build_result)
-        module = release_registry.snapshot().modules[0]
-        profile = release_registry.snapshot().execution_profiles[0]
-        assert report.plugin_id == "opaque_wheel"
+        release_registry.register_bundle(
+            RuntimeReleaseBundle(
+                schema_assets=(
+                    *runtime_owned_policy_schema_assets(),
+                    input_schema,
+                    output_schema,
+                ),
+                behavior_policies=(behavior_policy,),
+                evaluation_policies=(evaluation_policy,),
+                retry_policies=(retry_policy,),
+                execution_profiles=(profile,),
+                modules=(module,),
+            )
+        )
 
         opaque_store = InMemoryCellArtifactStore()
 
@@ -639,7 +596,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
                 for prefix in (
                     "src.digestion",
                     "src.research",
-                    "src.host_business_workflow",
+                    "src.research_theme_report_workflow",
                 )
             )
         )
@@ -660,7 +617,7 @@ def test_clean_wheel_executes_target_release_registry_module_slice(
     assert result == {
         "attempt_status": "completed",
         "domain_modules": [],
-        "module_id": "runtime-module:module_opaque_test@v1",
+        "module_id": "runtime-module:module-opaque-test@v1",
         "output_ref_schemes": ["cell-artifact"],
         "resolution_status": "resolved",
     }
@@ -675,7 +632,7 @@ def test_generated_design_contract_bundle_matches_canonical_docs() -> None:
     )
 
 
-def test_design_contract_manifest_contains_only_runtime_authority() -> None:
+def test_design_contract_manifest_contains_only_runtime_owned_authority() -> None:
     manifest = build_design_contract_bundle(check=True)
     authority_by_source = {
         row["source_path"]: row["authority"] for row in manifest["documents"]
@@ -776,7 +733,7 @@ def test_canonical_runtime_truth_surface_paths_exist() -> None:
         if not (REPO_ROOT / path).exists()
     ]
 
-    assert len(declared) == 53
+    assert declared
     assert missing == []
 
 

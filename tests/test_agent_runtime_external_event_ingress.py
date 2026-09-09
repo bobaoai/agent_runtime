@@ -15,24 +15,16 @@ from agent_runtime.contracts.execution_event_definition import (
     ExternalEventExecutionSnapshot,
 )
 from agent_runtime.contracts.registry_release_definition import (
-    BehaviorPolicyRelease,
-    EvaluationPolicyRelease,
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
-    ReleaseAdmissionIntent,
-    ReleaseAdmissionState,
     ReleaseSubjectKind,
-    RuntimeModuleRelease,
-    RetryPolicyRelease,
+    ModuleRelease,
     SchemaAssetRelease,
     WorkflowEdge,
     WorkflowNodeKind,
     WorkflowNodeBinding,
     WorkflowRelease,
-)
-from agent_runtime.registry.registry_release_compilation import (
-    runtime_owned_policy_schema_assets,
 )
 from agent_runtime.execution.execution_event_ingestion import (
     ExternalActionAuthorizationEvidence,
@@ -45,78 +37,65 @@ from agent_runtime.registry.registry_release_registration import (
     RuntimeReleaseBundle,
     RuntimeReleaseRegistry,
 )
+from agent_runtime.registry.registry_release_compilation import (
+    BehaviorPolicyReleaseCandidate,
+    EvaluationPolicyReleaseCandidate,
+    RetryPolicyReleaseCandidate,
+    compile_behavior_policy_release,
+    compile_evaluation_policy_release,
+    compile_retry_policy_release,
+    runtime_owned_policy_schema_assets,
+)
 
 
 NOW = "2026-08-05T12:00:00Z"
-
-
-def _module_schema_assets() -> tuple[SchemaAssetRelease, SchemaAssetRelease]:
-    def build(schema_id: str) -> SchemaAssetRelease:
-        release_ref = f"schema:{schema_id}@1"
-        return SchemaAssetRelease.build(
-            schema_asset_id=schema_id.replace("-", "_"),
-            schema_asset_version="1",
-            release_ref=release_ref,
-            schema_document={
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "$id": release_ref,
-                "type": "object",
-                "additionalProperties": True,
-            },
-        )
-
-    return build("event_input"), build("event_output")
-
-
-def _policy_releases() -> tuple[
-    tuple[object, ...],
-    BehaviorPolicyRelease,
-    EvaluationPolicyRelease,
-    RetryPolicyRelease,
-]:
-    schemas = runtime_owned_policy_schema_assets()
-    schema_by_ref = {schema.release_ref: schema for schema in schemas}
-    behavior_schema = schema_by_ref["schema:runtime_behavior_policy@v1"]
-    evaluation_schema = schema_by_ref["schema:runtime_evaluation_policy@v1"]
-    retry_schema = schema_by_ref["schema:runtime_retry_policy@v1"]
-    behavior = BehaviorPolicyRelease.build(
-        policy_id="isolated",
-        policy_version="1",
-        release_ref="behavior-policy:isolated@1",
-        policy_schema_ref=behavior_schema.release_ref,
-        policy_schema_sha256=behavior_schema.schema_sha256,
-        policy_document={
-            "context_isolation": "workflow_execution_isolated",
-        },
+_BEHAVIOR_POLICY = compile_behavior_policy_release(
+    BehaviorPolicyReleaseCandidate(
+        policy_id="external_event_isolated",
+        policy_version="v1",
+        context_isolation="workflow_execution_isolated",
     )
-    evaluation = EvaluationPolicyRelease.build(
-        policy_id="none",
-        policy_version="1",
-        release_ref="evaluation-policy:none@1",
-        policy_schema_ref=evaluation_schema.release_ref,
-        policy_schema_sha256=evaluation_schema.schema_sha256,
-        policy_document={"evaluation_mode": "none"},
+)
+_EVALUATION_POLICY = compile_evaluation_policy_release(
+    EvaluationPolicyReleaseCandidate(
+        policy_id="external_event_none",
+        policy_version="v1",
+        evaluation_mode="none",
     )
-    retry = RetryPolicyRelease.build(
-        policy_id="bounded",
-        policy_version="1",
-        release_ref="retry-policy:bounded@1",
-        policy_schema_ref=retry_schema.release_ref,
-        policy_schema_sha256=retry_schema.schema_sha256,
-        policy_document={"max_attempts": 3},
+)
+_RETRY_POLICY = compile_retry_policy_release(
+    RetryPolicyReleaseCandidate(
+        policy_id="external_event_bounded",
+        policy_version="v1",
+        max_attempts=3,
     )
-    return schemas, behavior, evaluation, retry
+)
+_EVENT_INPUT_SCHEMA = SchemaAssetRelease.build(
+    schema_asset_id="event_input",
+    schema_asset_version="v1",
+    release_ref="schema:event_input@v1",
+    schema_document={
+        "$id": "schema:event_input@v1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": True,
+    },
+)
+_EVENT_OUTPUT_SCHEMA = SchemaAssetRelease.build(
+    schema_asset_id="event_output",
+    schema_asset_version="v1",
+    release_ref="schema:event_output@v1",
+    schema_document={
+        "$id": "schema:event_output@v1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": True,
+    },
+)
 
 
-def _module(
-    *,
-    behavior_policy_sha256: str,
-    evaluation_policy_sha256: str,
-    retry_policy_sha256: str,
-    input_schema_sha256: str,
-    output_schema_sha256: str,
-) -> RuntimeModuleRelease:
-    return RuntimeModuleRelease.build(
+def _module() -> ModuleRelease:
+    return ModuleRelease.build(
         module_id="research_event_handler",
         module_version="1.0.0",
         release_ref="runtime-module:research_event_handler@1",
@@ -125,19 +104,19 @@ def _module(
         owner_contract_sha256="1" * 64,
         executable_ref="python:tests.test_agent_runtime_external_event_ingress._module",
         executable_sha256="0" * 64,
-        input_schema_ref="schema:event_input@1",
-        input_schema_sha256=input_schema_sha256,
-        output_schema_ref="schema:event_output@1",
-        output_schema_sha256=output_schema_sha256,
+        input_schema_ref=_EVENT_INPUT_SCHEMA.release_ref,
+        input_schema_sha256=_EVENT_INPUT_SCHEMA.schema_sha256,
+        output_schema_ref=_EVENT_OUTPUT_SCHEMA.release_ref,
+        output_schema_sha256=_EVENT_OUTPUT_SCHEMA.schema_sha256,
         prompt_bundle_ref=None,
         prompt_bundle_sha256=None,
         declared_operation_ids=(),
-        behavior_policy_ref="behavior-policy:isolated@1",
-        behavior_policy_sha256=behavior_policy_sha256,
-        evaluation_policy_ref="evaluation-policy:none@1",
-        evaluation_policy_sha256=evaluation_policy_sha256,
-        retry_policy_ref="retry-policy:bounded@1",
-        retry_policy_sha256=retry_policy_sha256,
+        behavior_policy_ref=_BEHAVIOR_POLICY.release_ref,
+        behavior_policy_sha256=_BEHAVIOR_POLICY.release_sha256,
+        evaluation_policy_ref=_EVALUATION_POLICY.release_ref,
+        evaluation_policy_sha256=_EVALUATION_POLICY.release_sha256,
+        retry_policy_ref=_RETRY_POLICY.release_ref,
+        retry_policy_sha256=_RETRY_POLICY.release_sha256,
         compatible_transport_kinds=("in_process_test",),
         entry_policy=ModuleEntryPolicy.WORKFLOW_BOUND,
         output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
@@ -145,7 +124,7 @@ def _module(
 
 
 def _workflow(
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     *,
     approval_is_terminal: bool = False,
 ) -> WorkflowRelease:
@@ -216,54 +195,33 @@ def _workflow(
 
 def _catalog(
     *,
-    workflow_state: ReleaseAdmissionState = ReleaseAdmissionState.ACTIVE,
+    workflow_active: bool = True,
     approval_is_terminal: bool = False,
 ) -> tuple[RuntimeReleaseRegistry, WorkflowRelease]:
-    schemas, behavior, evaluation, retry = _policy_releases()
-    input_schema, output_schema = _module_schema_assets()
-    module = _module(
-        behavior_policy_sha256=behavior.release_sha256,
-        evaluation_policy_sha256=evaluation.release_sha256,
-        retry_policy_sha256=retry.release_sha256,
-        input_schema_sha256=input_schema.schema_sha256,
-        output_schema_sha256=output_schema.schema_sha256,
-    )
+    module = _module()
     workflow = _workflow(module, approval_is_terminal=approval_is_terminal)
-    admissions = [
-        ReleaseAdmissionIntent.build(
-            admission_id="workflow_admission_candidate_001",
-            subject_kind=ReleaseSubjectKind.WORKFLOW,
-            subject_id=workflow.workflow_id,
-            release_ref=workflow.release_ref,
-            release_sha256=workflow.release_sha256,
-            state=ReleaseAdmissionState.CANDIDATE,
-            evidence_members=(),
-        )
-    ]
-    if workflow_state is ReleaseAdmissionState.ACTIVE:
-        admissions.append(
-            ReleaseAdmissionIntent.build(
-                admission_id="workflow_admission_active_001",
-                subject_kind=ReleaseSubjectKind.WORKFLOW,
-                subject_id=workflow.workflow_id,
-                release_ref=workflow.release_ref,
-                release_sha256=workflow.release_sha256,
-                state=ReleaseAdmissionState.ACTIVE,
-                evidence_members=(),
-            )
-        )
     catalog = RuntimeReleaseRegistry()
     catalog.register_bundle(
         RuntimeReleaseBundle(
-            schema_assets=(*schemas, input_schema, output_schema),
-            behavior_policies=(behavior,),
-            evaluation_policies=(evaluation,),
-            retry_policies=(retry,),
+            schema_assets=(
+                *runtime_owned_policy_schema_assets(),
+                _EVENT_INPUT_SCHEMA,
+                _EVENT_OUTPUT_SCHEMA,
+            ),
+            behavior_policies=(_BEHAVIOR_POLICY,),
+            evaluation_policies=(_EVALUATION_POLICY,),
+            retry_policies=(_RETRY_POLICY,),
             modules=(module,),
             workflows=(workflow,),
-            admission_intents=tuple(admissions),
         )
     )
+    if workflow_active:
+        catalog.set_active_release(
+            ReleaseSubjectKind.WORKFLOW,
+            workflow.workflow_id,
+            workflow.release_ref,
+            workflow.release_sha256,
+        )
     return catalog, workflow
 
 
@@ -808,11 +766,9 @@ def test_deny_or_unadmitted_workflow_produces_no_ingress_record() -> None:
             ),
         )
 
-    candidate_catalog, candidate_workflow = _catalog(
-        workflow_state=ReleaseAdmissionState.CANDIDATE
-    )
+    candidate_catalog, candidate_workflow = _catalog(workflow_active=False)
     candidate_binding = _binding(candidate_workflow)
-    with pytest.raises(PermissionError, match="not admitted"):
+    with pytest.raises(PermissionError, match="no active entry"):
         _prepare(
             InMemoryExternalEventIngress(),
             release_registry=candidate_catalog,

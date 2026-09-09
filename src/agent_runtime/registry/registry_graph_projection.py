@@ -18,7 +18,7 @@ from ..contracts import (
 )
 from ..contracts.registry_release_definition import WorkflowRelease
 from .registry_workflow_registration import resolve_registration_reference
-from ..contracts.durability_execution_definition import (
+from ..contracts.durability_topology_definition import (
     GraphStateProjection,
     WorkflowGraphProjection,
 )

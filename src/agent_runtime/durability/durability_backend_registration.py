@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from importlib.util import find_spec
 
-from ..contracts.durability_execution_definition import (
+from ..contracts.durability_topology_definition import (
     BackendAdmissionState,
     BackendDescriptor,
     BackendEvaluationRole,
@@ -27,8 +27,8 @@ TEMPORAL_DESCRIPTOR = BackendDescriptor(
         "agent_runtime.durability.durability_backend_registration:"
         "load_temporal_workflow_release_adapter"
     ),
-    supports_isolated_namespace=True,
-    supports_shared_namespace=True,
+    supports_dedicated=True,
+    supports_pooled=True,
     requires_external_service=True,
 )
 

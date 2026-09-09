@@ -1,0 +1,651 @@
+# Agent Runtime 测试与样例 runbook
+
+从 [README](../README.md) 或 [能力索引](agent_runtime_capabilities.md) 进入。本文由同一份 AgentCapabilityTestCase 生成，帮助使用者找到实际样例并重复运行测试。
+
+## 1. 阅读和运行环境
+
+wheel 随附本文档；完整测试和 fixtures 位于同版本 Runtime 源码 checkout。以下路径均相对源码根目录，命令中的 python 指安装了 Runtime 与测试依赖的解释器。测试依赖、可选 Provider/PG/Temporal 依赖以 pyproject.toml 为准。
+
+每组的样例 selector 指向真实测试函数。先读该函数及它直接使用的 fixture，再运行对应命令；fixture 中的 Provider 替身和测试授权对象用于验证，不是生产宿主配置。这些是已有能力的具体样例，尚未实现的完整 agent_capability_example Workflow 不在其中。
+
+## 2. 单例、分组与全仓批量运行
+
+单例和分组命令见第 4 节。全仓使用 pytest 自动收集，不需要手工维护另一个测试列表。可以先列出所有实际测试，再执行：
+
+```sh
+python -B -m pytest --collect-only -q
+python -B -m pytest -q -rs -p no:cacheprovider
+```
+
+默认不开启真实 Provider 和 Temporal。为避免继承了已开启的环境变量，普通批次可显式设置：
+
+```sh
+RUN_PROVIDER_INTEGRATION=0 RUN_TEMPORAL_INTEGRATION=0 python -B -m pytest -q -rs -p no:cacheprovider
+```
+
+提供 AGENT_RUNTIME_TEST_DATABASE_URL 后，同一批次也会运行 PG 测试；不提供时真实 PG 用例跳过。只使用已授权的测试数据库，fixtures 负责临时 schema 的创建和清理。SQL_ASCII 测试数据库可在连接环境设置 PGCLIENTENCODING=UTF8，不改变数据库编码。
+
+需要真实环境时，按第 4 节准备依赖，再显式开启 RUN_TEMPORAL_INTEGRATION=1 或 RUN_PROVIDER_INTEGRATION=1。Provider 调用可能计费；后者会开启现有 Codex 和 Claude 用例，不是选择某一个模型。模型、工具、超时和登录要求以所选测试的 Profile/fixture 为准。公共文档不填写 DSN、token 或密码。
+
+向同一 pytest 命令添加 --junitxml=PATH 可导出机器可读结果。PATH 由调用者选择新的报告路径，避免覆盖旧报告；pytest 默认终端输出已含真实计数与 -rs 的跳过原因。
+
+## 3. 怎样判断这一批是否完成
+
+pytest 退出零表示实际执行的断言未失败，不表示所有用例都执行了。先核对本次选择、通过数、失败数和 skip 原因。必需用例仍未运行时，这一批的验证尚未完成。JUnit 中的 skipped 也不能算通过；CI 消费报告时要保留这一差异。
+
+分组中的测试文件可能含有其他回归或集成测试，同一文件也可能服务多个能力分组。若要一次运行全仓，直接使用全仓命令，避免把所有分组命令串起来重复执行。正确拒绝负例可以通过；模型返回合法的 non_pass 或 blocked 也可能满足 transport 测试。
+
+当前批次结果不能替代完整 T2 11 的 AgentCapabilityVerificationResult。完整 Example、所需真实环境或完整能力证据未齐时，保留未完成状态。
+
+## 4. 用例索引
+
+- [编译 Module 与检查 Reviewer 格式](#module_release_assembly_case)
+- [模型输入输出与工具边界](#agent_invocation_case)
+- [调用已注册 Module 与重放](#module_execution_case)
+- [Workflow 注册、并行与恢复](#workflow_graph_case)
+- [查看执行与注册记录](#ledger_inspection_case)
+- [真实 PostgreSQL 写入与重新读取](#persistent_runtime_case)
+- [真实 Temporal 恢复与取消](#durable_backend_case)
+- [真实 Provider 与 Reviewer 调用](#live_module_transport_case)
+- [独立安装与 public API](#public_package_case)
+
+<a id="module_release_assembly_case"></a>
+
+### 4.1 编译 Module 与检查 Reviewer 格式
+
+Case：`module_release_assembly_case`；证据来源：`executable_owner_case`。
+
+验证能力：`explicit_module_loading`, `path_free_release_identity`, `schema_closure`, `prompt_closure`, `policy_closure`, `profile_independence`, `generic_profile_compatibility`, `registered_module_transport`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- 测试 fixture 提供完整 Skill/Module source、schemas、policies 和两个不同模型的 Profile。
+
+前置环境：
+
+- 安装测试依赖的 Runtime 源码 checkout；无需真实 Provider。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_module_authoring.py::test_module_reviewer_exports_release_and_profile_independently`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_module_authoring.py::test_module_reviewer_exports_release_and_profile_independently
+```
+
+`tests/test_agent_runtime_reviewer_output_format.py::test_different_module_specific_schemas_share_the_format`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_reviewer_output_format.py::test_different_module_specific_schemas_share_the_format
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_module_authoring.py tests/test_agent_runtime_registry_candidate_compilation.py tests/test_agent_runtime_reviewer_output_format.py
+```
+
+预期结果：
+
+- ModuleReviewer.from_registration().export() 在只改 Profile 时保留相同 Module release hash，Variant hash 改变。
+- 不同 Reviewer 的 schema 使用共同输出格式；格式拒绝和兼容负例见同组测试。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+<a id="agent_invocation_case"></a>
+
+### 4.2 模型输入输出与工具边界
+
+Case：`agent_invocation_case`；证据来源：`executable_owner_case`。
+
+验证能力：`inline_semantic_input`, `structured_output`, `tool_free_execution`, `runtime_hosted_self_test`, `authorized_gateway_read`, `attempt_workspace`, `context_isolation`, `network_enforcement`, `provider_failure_normalization`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- fixture 提供无工具 Profile 或声明 Gateway 的 Profile，以及受控输入和工具响应。
+
+前置环境：
+
+- 普通用例使用 Provider 测试替身；真实调用的开启方式见批量运行说明。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_native_structured_output.py::test_tool_free_profile_rejects_undeclared_gateway_surface_before_provider`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_native_structured_output.py::test_tool_free_profile_rejects_undeclared_gateway_surface_before_provider
+```
+
+`tests/test_agent_runtime_native_structured_output.py::test_gateway_read_authorizes_each_resource_call_and_records_lineage`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_native_structured_output.py::test_gateway_read_authorizes_each_resource_call_and_records_lineage
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_native_structured_output.py tests/test_agent_runtime_public_adapter_contracts.py tests/test_agent_runtime_attempt_workspace.py
+```
+
+预期结果：
+
+- 无工具 Profile 拒绝未声明 Gateway，Provider 不进入；允许的 Gateway 调用经过逐次授权并记录实际调用。
+- structured output、workspace、隔离和错误路径由同组测试断言，真实模型结果只由 live 用例证明。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+<a id="module_execution_case"></a>
+
+### 4.3 调用已注册 Module 与重放
+
+Case：`module_execution_case`；证据来源：`executable_owner_case`。
+
+验证能力：`module_run`, `multiple_variants`, `evaluation_and_selection`, `retry_budget`, `idempotent_replay`, `operation_boundary_enforcement`, `cancellation`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- fixture 注册一节点 Workflow；run_registered_workflow_module 接收 {"value": "example"} 和同一个 key。
+
+前置环境：
+
+- 普通用例使用内存 stores 和 Provider 测试替身。
+- 本组的 PG 用例需要 AGENT_RUNTIME_TEST_DATABASE_URL；未提供时这些用例跳过。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_registered_module_execution.py::test_candidate_result_replay_preserves_policy_and_recorded_bytes`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_registered_module_execution.py::test_candidate_result_replay_preserves_policy_and_recorded_bytes
+```
+
+`tests/test_agent_runtime_registered_module_execution.py::test_invalid_input_stops_before_authorization_or_provider`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_registered_module_execution.py::test_invalid_input_stops_before_authorization_or_provider
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_execution_records.py tests/test_agent_runtime_execution_authorization.py tests/test_agent_runtime_module_evaluation.py tests/test_agent_runtime_registered_module_execution.py
+```
+
+预期结果：
+
+- 首次执行输出 {"value": "done"}；同 key 重放返回相同 execution 和输出，Provider 替身只调用一次。
+- evaluated_single 保持未决 candidate，没有伪造 Resolution；非法输入在授权或 Provider 调用前拒绝。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+<a id="workflow_graph_case"></a>
+
+### 4.4 Workflow 注册、并行与恢复
+
+Case：`workflow_graph_case`；证据来源：`executable_owner_case`。
+
+验证能力：`graph_authoring`, `sequential_and_branch_routing`, `parallel_fan_out_and_join`, `revision_loop`, `wait_and_external_event`, `crash_recovery`, `portable_workflow_registration`, `per_registry_execution_binding`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- 同一 Workflow export 注册到两个独立 Registry；并行 fixture 声明两个 branch 和一个 join。
+
+前置环境：
+
+- 本组使用内存 Registry 与受控执行替身，不启动真实 Temporal。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_workflow_authoring.py::test_same_workflow_export_registers_into_two_independent_registries`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_workflow_authoring.py::test_same_workflow_export_registers_into_two_independent_registries
+```
+
+`tests/test_agent_runtime_parallel_workflow.py::test_parallel_group_dispatches_branches_concurrently_and_joins_once`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_parallel_workflow.py::test_parallel_group_dispatches_branches_concurrently_and_joins_once
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_workflow_authoring.py tests/test_agent_runtime_parallel_workflow.py tests/test_agent_runtime_product_host_execution_api.py
+```
+
+预期结果：
+
+- 同一 origin 可以复用，两个 Registry 的执行配置独立。
+- 两个 branch 并发执行，join 执行一次；恢复与失败路径见同组回归测试。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+<a id="ledger_inspection_case"></a>
+
+### 4.5 查看执行与注册记录
+
+Case：`ledger_inspection_case`；证据来源：`executable_owner_case`。
+
+验证能力：`attempt_and_workflow_ledger`, `usage_truth`, `release_inspection`, `execution_inspection`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- 输入为 fixture 中已记录的 Workflow、Attempt、usage、输入输出引用及 Registry facts。
+
+前置环境：
+
+- 使用固定的 execution trace 与 release fixtures，无需数据库或模型。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_execution_inspection.py::test_execution_trace_projects_directly_to_portable_inspector_view`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_execution_inspection.py::test_execution_trace_projects_directly_to_portable_inspector_view
+```
+
+`tests/test_agent_runtime_release_inspection.py::test_release_inventory_projects_prompt_components_under_schema_v4`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_release_inspection.py::test_release_inventory_projects_prompt_components_under_schema_v4
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_execution_inspection.py tests/test_agent_runtime_release_inspection.py tests/test_workflow_execution_ledger_recording.py
+```
+
+预期结果：
+
+- Inspector 从记录生成只读视图；样例的 Module 已完成，但 Workflow 仍为 running，不能推断整体结束。
+- usage 和 release 内容与原始记录一致，Inspection 不成为第二份 Ledger。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+<a id="persistent_runtime_case"></a>
+
+### 4.6 真实 PostgreSQL 写入与重新读取
+
+Case：`persistent_runtime_case`；证据来源：`environment_gate`。
+
+验证能力：`persistent_registry`, `persistent_ledger`, `persistent_inspection`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- 在临时 PG stores 执行一节点 Workflow，分别使用正常输出、Provider 失败和 schema 失败 fixture。
+
+前置环境：
+
+- 调用者显式提供 AGENT_RUNTIME_TEST_DATABASE_URL；现有 fixtures 创建和清理独立临时 schema。
+- SQL_ASCII 数据库可配置 PGCLIENTENCODING=UTF8；不修改服务器编码。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_registered_module_execution.py::test_postgres_fresh_read_and_replay_preserve_candidate_policy`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_registered_module_execution.py::test_postgres_fresh_read_and_replay_preserve_candidate_policy
+```
+
+`tests/test_agent_runtime_registered_module_execution.py::test_postgres_concurrent_first_call_has_one_provider_entry`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_registered_module_execution.py::test_postgres_concurrent_first_call_has_one_provider_entry
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_postgres_release_store.py tests/test_agent_runtime_postgres_execution_ledger.py tests/test_agent_runtime_registered_module_execution.py
+```
+
+预期结果：
+
+- 新建查询连接能读取相同执行记录和内容 hash；重放不重复调用 Provider，不伪造 candidate Resolution。
+- 同 key 并发首次调用只有一个 Provider 入口；PG 是真实连接，Provider 仍是测试替身。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+<a id="durable_backend_case"></a>
+
+### 4.7 真实 Temporal 恢复与取消
+
+Case：`durable_backend_case`；证据来源：`environment_gate`。
+
+验证能力：`durable_backend`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- fixtures 提供两个 Cell、独立 worker、事件及取消请求，并在本地测试 server 上运行。
+
+前置环境：
+
+- 设置 RUN_TEMPORAL_INTEGRATION=1，并安装 temporal 测试依赖；fixtures 启动本地 Temporal dev server。
+- SDK 可能需要取得 server binary；先准备运行环境。未开启时真实集成用例跳过。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_temporal_integration.py::test_real_temporal_two_cell_durable_execution`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_temporal_integration.py::test_real_temporal_two_cell_durable_execution
+```
+
+`tests/test_agent_runtime_temporal_target_adapter.py::test_real_target_temporal_cancellation_is_replay_safe`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_temporal_target_adapter.py::test_real_target_temporal_cancellation_is_replay_safe
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_temporal_integration.py tests/test_agent_runtime_temporal_target_adapter.py
+```
+
+预期结果：
+
+- 真实 Temporal 验证隔离、事件恢复、重放与 worker 恢复；取消重放不重复产生影响。
+- 测试结束按既有 fixture 关闭 worker 和 server；纯内存测试不能替代这些真实集成结果。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+<a id="live_module_transport_case"></a>
+
+### 4.8 真实 Provider 与 Reviewer 调用
+
+Case：`live_module_transport_case`；证据来源：`environment_gate`。
+
+验证能力：`live_provider_adapter`, `registered_module_transport`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- 已注册测试 Module、固定 prompt/input/schema 与 transport Profile；审核 smoke 消费受控 Design fixture。
+
+前置环境：
+
+- 设置 RUN_PROVIDER_INTEGRATION=1，准备既有测试所用 Codex/Claude executable、SDK 和有效登录。
+- 真实调用可能计费并消耗额度；先检查测试中的模型、超时、工具和环境设置，不自动登录。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_native_structured_output.py::test_live_codex_evaluation_runs_through_run_module`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_native_structured_output.py::test_live_codex_evaluation_runs_through_run_module
+```
+
+`tests/test_agent_runtime_managed_design_reviewer.py::test_registered_design_reviewer_runs_live_opus_5_through_runtime`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_managed_design_reviewer.py::test_registered_design_reviewer_runs_live_opus_5_through_runtime
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_native_structured_output.py tests/test_agent_runtime_managed_design_reviewer.py
+```
+
+预期结果：
+
+- 真实调用通过 Runtime 交付输入、验证输出并记录执行；Codex/Claude 的不同用例各自提供证据。
+- Reviewer 返回合法 non_pass 或 blocked 不代表 transport 失败；Provider 退出零也不代表输出校验通过。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+<a id="public_package_case"></a>
+
+### 4.9 独立安装与 public API
+
+Case：`public_package_case`；证据来源：`referenced_peer_result`。
+
+验证能力：`public_package`
+
+输入与 fixtures：
+
+- 本次 Runtime 候选的准确引用与 hash。
+- 本次测试代码的准确引用与 hash。
+- 本次依赖和配置的准确引用与 hash。
+- 从 Runtime 源码构建并安装临时 wheel，在独立解释器里使用 public API。
+
+前置环境：
+
+- 准备已有 build/test 依赖；测试在临时源码和安装目录中构建 wheel，不联网安装依赖。
+
+样例代码位置及单例命令：
+
+`tests/test_agent_runtime_packaging_boundary.py::test_clean_wheel_import_uses_public_namespace_without_domain_packages`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_packaging_boundary.py::test_clean_wheel_import_uses_public_namespace_without_domain_packages
+```
+
+`tests/test_agent_runtime_packaging_boundary.py::test_clean_wheel_executes_target_release_registry_module_slice`
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_packaging_boundary.py::test_clean_wheel_executes_target_release_registry_module_slice
+```
+
+整组命令：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_packaging_boundary.py tests/test_agent_runtime_conformance_package.py
+```
+
+预期结果：
+
+- wheel 的 public import 与注册执行样例不依赖宿主 domain package。
+- 随包 docs 与源码 docs 一致；这些测试结果不替代完整验证所需的独立 package conformance 结果。
+
+结果与证据：
+
+- pytest 显示真实 passed、failed、skipped 及 skip 原因；可用 --junitxml 导出报告。
+- 样例中的断言核对实际输出与记录；测试通过不代表完整 T2 11 或被审对象通过。
+
+清理：
+
+- 只清理本次用例创建的临时资源，保留需要交付的结果。
+
+失败处理：
+
+- 测试装置故障由 Agent Capability Verification 负责人处理。
+- Runtime 能力缺陷按其所属 Design 与错误含义处理。
+
+需要重跑的变化：
+
+- Runtime 候选或测试代码变化后重跑。
+- 依赖或环境配置变化后重跑，不把旧报告作为新候选的通过结果。
+
+## 5. 更新用例与重新生成文档
+
+能力分组和样例导航在 conformance_agent_capability_verification.py 中维护。example_test_refs 指向真实测试函数；新增普通回归放入 tests 后由 pytest 自动收集，涉及能力分组时再更新对应 case。不要手工同时编辑 docs 与随包投影。
+
+从源码根目录调用现有 renderer 更新两份文档：
+
+```python
+from pathlib import Path
+from agent_runtime.testing.conformance_agent_capability_verification import (
+    required_agent_capability_cases, required_agent_capability_inventory,
+    render_agent_capability_catalog_markdown, render_agent_capability_runbook_markdown,
+)
+
+cases = required_agent_capability_cases()
+documents = {
+    "agent_runtime_capabilities.md": render_agent_capability_catalog_markdown(
+        required_agent_capability_inventory(), cases),
+    "agent_runtime_capability_runbook.md": render_agent_capability_runbook_markdown(cases),
+}
+for directory in (Path("docs"), Path("src/agent_runtime/docs")):
+    for name, body in documents.items():
+        (directory / name).write_text(body, encoding="utf-8")
+```
+
+生成后运行以下检查，再按第 2 节跑本次需要的全仓批次：
+
+```sh
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_capability_verification.py
+```

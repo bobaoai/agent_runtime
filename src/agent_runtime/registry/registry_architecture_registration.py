@@ -265,6 +265,7 @@ RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
         technology_id="postgresql",
         implementation_source_paths=(
             "src/agent_runtime/registry/registry_postgres_persistence.py",
+            "src/agent_runtime/registry/registry_schema_migration.py",
         ),
     ),
     RuntimeImplementationBindingRegistration(
@@ -353,18 +354,11 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "registry",
         "migration",
         "validation",
-        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+        "designDoc/agent_runtime_05_delivery_roadmap.md",
         source_directory_id="testing",
     ),
     _source(
         "registry",
-        "release",
-        "definition",
-        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
-        source_directory_id="contracts",
-    ),
-    _source(
-        "inspection",
         "release",
         "definition",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
@@ -386,9 +380,9 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "durability",
-        "execution",
+        "topology",
         "definition",
-        "designDoc/agent_runtime_07_temporal_durable_adapter_contract.md",
+        "designDoc/agent_runtime_02_product_target_topology.md",
         source_directory_id="contracts",
     ),
     _source(
@@ -461,6 +455,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "registry",
+        "migration",
+        "candidate_set",
+        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+    ),
+    _source(
+        "registry",
         "release",
         "retrieval",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
@@ -473,20 +473,20 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "registry",
-        "authoring_inventory",
+        "module",
         "loading",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
     ),
     _source(
         "registry",
-        "authoring_release",
-        "building",
+        "module",
+        "authoring",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
     ),
     _source(
         "registry",
-        "authoring_release",
-        "submission",
+        "workflow",
+        "authoring",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
     ),
     _source(
@@ -661,14 +661,14 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "durability",
         "hatchet",
         "evaluation",
-        "designDoc/agent_runtime_07_temporal_durable_adapter_contract.md",
+        "designDoc/agent_runtime_02_product_target_topology.md",
         source_directory_id="testing",
     ),
     _source(
         "durability",
         "native",
         "evaluation",
-        "designDoc/agent_runtime_07_temporal_durable_adapter_contract.md",
+        "designDoc/agent_runtime_02_product_target_topology.md",
         source_directory_id="testing",
     ),
     _source(
@@ -688,6 +688,13 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "registry",
         "postgres",
         "persistence",
+        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+        implementation_binding_id="registry_postgres_persistence",
+    ),
+    _source(
+        "registry",
+        "schema",
+        "migration",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
         implementation_binding_id="registry_postgres_persistence",
     ),
@@ -754,21 +761,24 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
 RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
     RuntimeSupportingSourceFileRegistration(
         source_path=(
+            "src/agent_runtime/testing/"
+            "conformance_agent_capability_verification.py"
+        ),
+        supporting_plane_id="conformance",
+        source_directory_id="testing",
+        subject="agent_capability",
+        nominalized_action="verification",
+        owner_contract_ref=(
+            "designDoc/agent_runtime_11_agent_capability_verification.md"
+        ),
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path=(
             "src/agent_runtime/foundation/foundation_contract_validation.py"
         ),
         supporting_plane_id="foundation",
         source_directory_id="foundation",
         subject="contract",
-        nominalized_action="validation",
-        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
-    ),
-    RuntimeSupportingSourceFileRegistration(
-        source_path=(
-            "src/agent_runtime/foundation/foundation_retry_policy_validation.py"
-        ),
-        supporting_plane_id="foundation",
-        source_directory_id="foundation",
-        subject="retry_policy",
         nominalized_action="validation",
         owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
     ),

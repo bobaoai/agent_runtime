@@ -26,7 +26,7 @@ from ..registry.registry_graph_projection import project_workflow_release_graph
 from ..contracts.execution_host_definition import RuntimeWorkflowStartRequest
 from ..contracts.durability_backend_definition import DurableBackendAdapter
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
-from ..contracts.durability_execution_definition import (
+from ..contracts.durability_topology_definition import (
     BackendExecutionRef,
     ExecutionSnapshot,
     ExternalEvent,

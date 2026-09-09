@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from agent_runtime.invocation.invocation_prompt_assembly import (
-    codex_native_output_schema,
     normalize_codex_native_output,
 )
 from agent_runtime.invocation.invocation_schema_projection import (
+    claude_native_output_schema,
+    codex_native_output_schema,
     task_plane_output_schema,
 )
 
@@ -67,6 +69,23 @@ def test_codex_projection_does_not_treat_property_maps_as_schema_nodes() -> None
         "title",
     ]
     assert projected["properties"]["properties"] == {"type": "string"}
+    assert "$defs" not in projected
+
+
+def test_codex_projection_preserves_referenced_keyword_named_definition() -> None:
+    canonical_schema = _schema_with_keyword_named_properties()
+    canonical_schema["properties"]["definition_ref"] = {
+        "$ref": "#/$defs/items"
+    }
+    canonical_schema["required"].append("definition_ref")
+
+    projected = codex_native_output_schema(
+        task_plane_output_schema(canonical_schema)
+    )
+
+    assert projected["properties"]["definition_ref"] == {
+        "$ref": "#/$defs/items"
+    }
     assert projected["$defs"]["items"]["required"] == [
         "additionalProperties"
     ]
@@ -106,15 +125,53 @@ def test_codex_projection_defers_one_of_to_canonical_validation() -> None:
     assert projected["properties"] == canonical_schema["properties"]
 
 
-def test_claude_projection_does_not_treat_property_maps_as_schema_nodes() -> None:
-    pytest.importorskip("claude_agent_sdk")
-    from agent_runtime.invocation.invocation_claude_module_invocation import (
-        _structured_output_format,
+def test_codex_projection_defers_unique_items_to_canonical_validation() -> None:
+    canonical_schema = {
+        "type": "object",
+        "properties": {
+            "finding_ids": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["finding_ids"],
+        "additionalProperties": False,
+    }
+
+    projected = codex_native_output_schema(canonical_schema)
+
+    assert "uniqueItems" not in projected["properties"]["finding_ids"]
+    assert not list(
+        Draft202012Validator(canonical_schema).iter_errors(
+            {"finding_ids": ["same", "different"]}
+        )
+    )
+    assert list(
+        Draft202012Validator(canonical_schema).iter_errors(
+            {"finding_ids": ["same", "same"]}
+        )
     )
 
-    projected = _structured_output_format(
+
+def test_codex_projection_rejects_empty_any_of() -> None:
+    canonical_schema = {
+        "type": "object",
+        "properties": {
+            "result": {"anyOf": []},
+        },
+        "required": ["result"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ValueError, match="anyOf must be non-empty"):
+        codex_native_output_schema(canonical_schema)
+
+
+def test_claude_projection_does_not_treat_property_maps_as_schema_nodes() -> None:
+    projected = claude_native_output_schema(
         task_plane_output_schema(_schema_with_keyword_named_properties())
-    )["schema"]
+    )
 
     assert list(projected["properties"]) == [
         "items",

@@ -22,15 +22,15 @@ from agent_runtime.contracts.registry_release_definition import (
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
-    RuntimeModuleRelease,
+    ModuleRelease,
 )
 
 
 NOW = "2026-08-05T12:00:00Z"
 
 
-def _module() -> RuntimeModuleRelease:
-    return RuntimeModuleRelease.build(
+def _module() -> ModuleRelease:
+    return ModuleRelease.build(
         module_id="research_source_verifier",
         module_version="1.0.0",
         release_ref="runtime-module:research_source_verifier@1",
@@ -102,7 +102,7 @@ def _status(
 
 def _request(
     binding: ExecutionAuthorizationBinding,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     *,
     operation_id: str = "knowledge_search",
     binding_ref: str | None = None,
@@ -276,7 +276,7 @@ def test_binding_or_module_substitution_fails_before_product_call() -> None:
         )
 
     other_module = _module()
-    other_module = RuntimeModuleRelease.build(
+    other_module = ModuleRelease.build(
         **{
             key: value
             for key, value in other_module.__dict__.items()

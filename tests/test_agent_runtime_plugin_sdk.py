@@ -14,11 +14,18 @@ from agent_runtime.contracts import (
     validate_domain_runtime_manifest,
 )
 from agent_runtime.registry.registry_graph_projection import compile_registered_graph
+from agent_runtime.inspection.inspection_release_rendering import build_runtime_inventory
 from agent_runtime.registry.registry_plugin_registration import (
     DomainRuntimePlugin,
     register_runtime_plugin,
 )
 from agent_runtime.registry.registry_workflow_registration import WorkflowRuntimeRegistry
+from agent_runtime.contracts.durability_topology_definition import (
+    BackendAdmissionState,
+    BackendCandidateSet,
+    BackendDescriptor,
+    BackendEvaluationRole,
+)
 
 
 OPAQUE_GRAPH = MappingProxyType(
@@ -77,7 +84,21 @@ def _opaque_registration(*, workflow_id: str) -> WorkflowRuntimeRegistration:
     )
 
 
-def test_opaque_plugin_registers_and_projects_graph() -> None:
+def _opaque_backend() -> BackendDescriptor:
+    return BackendDescriptor(
+        backend_id="backend_zeta",
+        adapter_contract_version="backend_contract_v1",
+        sdk_package="stdlib",
+        admission_state=BackendAdmissionState.INTEGRATION_TESTED,
+        evaluation_role=BackendEvaluationRole.SELECTED_CANDIDATE,
+        implementation_ref="opaque-runtime:backend_zeta",
+        supports_dedicated=True,
+        supports_pooled=True,
+        requires_external_service=False,
+    )
+
+
+def test_opaque_plugin_registers_projects_graph_and_builds_inventory() -> None:
     registration = _opaque_registration(workflow_id="workflow_zeta")
     plugin = DomainRuntimePlugin(
         plugin_id="plugin_zeta",
@@ -89,10 +110,17 @@ def test_opaque_plugin_registers_and_projects_graph() -> None:
     register_runtime_plugin(registry, plugin)
     manifest = registry.resolve_domain_manifest(registration.workflow_id)
     projection = compile_registered_graph(registration)
+    inventory = build_runtime_inventory(
+        registry=registry,
+        backend_candidate_set=BackendCandidateSet((_opaque_backend(),)),
+    )
+
     assert tuple(registry.all()) == ("workflow_zeta",)
     assert manifest["state_ids"] == ("state_alpha", "state_omega")
     assert tuple(state.state_id for state in projection.states) == manifest["state_ids"]
     assert projection.allowed_targets("state_alpha") == ("state_omega",)
+    assert inventory["workflows"][0]["workflow_id"] == "workflow_zeta"
+    assert inventory["selected_backend_id"] == "backend_zeta"
 
 
 def test_plugin_registration_is_atomic_when_one_workflow_collides() -> None:
@@ -188,7 +216,9 @@ def test_runtime_core_imports_only_runtime_modules_from_project_namespace() -> N
     assert violations == []
 
 
-def test_standalone_workflow_registry_has_no_builtin_domain_workflows() -> None:
+def test_standalone_registry_and_inventory_have_no_builtin_domain_workflows() -> None:
     registry = WorkflowRuntimeRegistry()
+    inventory = build_runtime_inventory(registry=registry)
 
     assert registry.all() == {}
+    assert inventory["workflows"] == []

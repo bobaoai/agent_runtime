@@ -11,20 +11,14 @@ adapter resolution.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import hashlib
 import json
 from typing import Any, Callable, Mapping
 
-from ..foundation.foundation_contract_validation import (
-    format_utc_timestamp,
-    parse_utc_timestamp,
-    validate_id,
-)
-from ..foundation.foundation_retry_policy_validation import (
-    validate_retry_attempt_budget,
-)
+from ..foundation.foundation_contract_validation import validate_id
 from ..contracts.execution_authorization_definition import (
+    ExecutionAuthorizationContextEnvelope,
     ExecutionAuthorizationContextBinding,
     ExecutionAuthorizationFence,
     ExecutionAuthorizationFenceState,
@@ -37,10 +31,15 @@ from ..contracts.execution_authorization_definition import (
 from ..contracts.execution_module_definition import (
     ModuleExecutionLedger,
     ModuleExecutionRequest,
+    ModuleInputBinding,
     ModuleOutputBinding,
     ModuleRunResult,
     ModuleVariantRequest,
     WorkflowModuleExecutionRequest,
+)
+from ..contracts.registry_release_definition import (
+    MODEL_INVOCATION_OPERATION_IDS,
+    partition_module_operation_ids,
 )
 from ..contracts.invocation_adapter_definition import (
     AgentExecutionAdapterDescriptor,
@@ -54,16 +53,16 @@ from ..contracts.invocation_adapter_definition import (
     isolated_execution_scope_id,
 )
 from ..contracts.registry_release_definition import (
-    BehaviorPolicyRelease,
-    EvaluationPolicyRelease,
     ExecutionProfileRelease,
+    ExecutionVariantPolicyRelease,
     ModuleExecutionPurpose,
     OutputResolutionPolicy,
-    ReleaseAdmissionState,
-    ReleaseSubjectKind,
-    RetryPolicyRelease,
-    RuntimeModuleRelease,
+    ModuleRelease,
+    WorkflowNodeKind,
+    WorkflowRelease,
 )
+from ..contracts.registry_workflow_definition import ResolvedArtifactRef
+from ..contracts.ledger_record_definition import CommitReceipt, ExecutionInputRef, WorkflowExecutionRecord
 from ..contracts.ledger_lineage_definition import (
     ModuleAttemptRecord,
     ModuleAttemptStartedRecord,
@@ -73,27 +72,28 @@ from ..contracts.ledger_lineage_definition import (
     ModuleRunRecord,
     ModuleUsageObservation,
 )
-from ..contracts.ledger_record_definition import (
-    WorkflowAttemptRecord,
-    WorkflowAttemptStartedRecord,
-)
 from ..invocation.invocation_tool_definition import ModuleArtifactHost
 from ..ledger.ledger_workflow_module_recording import (
+    WorkflowModuleLedgerBinding,
     WorkflowModuleLedgerRecorder,
 )
-from ..registry.registry_release_registration import (
-    RuntimeReleaseRegistry,
-    allowed_release_admission_states,
+from ..ledger.ledger_workflow_execution_recording import (
+    WorkflowExecutionLedgerBinding,
+    WorkflowExecutionLedgerRecorder,
 )
-from .execution_authorization_coordination import ExecutionAuthorizationController
-from .execution_authorization_resolution import ProductOperationAuthorizationClient
-
-
-_MODEL_INVOCATION_OPERATION_IDS = frozenset({"invoke_model", "model_execute"})
-
-
-class AttemptToolReconciliationRequiredError(RuntimeError):
-    """An Adapter failed after a tool grant but before observation closure."""
+from ..ledger.ledger_execution_content_recording import RuntimeExecutionContentStore
+from ..ledger.ledger_record_persistence import RuntimeExecutionRecordStore
+from ..ledger.ledger_lineage_recording import InMemoryModuleExecutionLedger
+from ..invocation.invocation_prompt_assembly import build_inline_provider_prompt
+from ..registry.registry_release_registration import RuntimeReleaseRegistry
+from .execution_authorization_coordination import (
+    ExecutionAuthorizationController,
+    InMemoryExecutionAuthorizationLedger,
+)
+from .execution_authorization_resolution import (
+    ProductAuthorizationContextClient,
+    ProductOperationAuthorizationClient,
+)
 
 
 def _canonical_sha256(payload: Mapping[str, Any] | list[Any]) -> str:
@@ -206,7 +206,7 @@ class _AttemptExecutionHost:
         *,
         request: AuthorizedAgentExecutionRequest,
         artifact_host: ModuleArtifactHost,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
         profile: ExecutionProfileRelease,
         purpose: ModuleExecutionPurpose,
         authority: ModuleExecutionAuthority | None,
@@ -411,12 +411,6 @@ class _AttemptExecutionHost:
                 "tool observations differ from Runtime-authorized operations"
             )
 
-    @property
-    def authorized_operation_count(self) -> int:
-        """Return the number of dynamic operations granted in this Attempt."""
-
-        return len(self._authorized_operation_names)
-
     def staged_output(self, output_slot_id: str) -> bytes:
         try:
             return self._staged[output_slot_id][1]
@@ -424,6 +418,237 @@ class _AttemptExecutionHost:
             raise ValueError(
                 f"adapter reported an unstaged output slot: {output_slot_id}"
             ) from exc
+
+
+def run_registered_workflow_module(
+    *,
+    module_id: str,
+    input_payload: dict[str, Any],
+    idempotency_key: str,
+    release_registry: RuntimeReleaseRegistry,
+    workflow: WorkflowRelease,
+    variant_policy: ExecutionVariantPolicyRelease,
+    authorize: Callable[
+        [WorkflowModuleExecutionRequest],
+        tuple[ExecutionAuthorizationContextEnvelope, ResolvedArtifactRef,
+              ResolvedArtifactRef, ResolvedArtifactRef],
+    ],
+    context_client: ProductAuthorizationContextClient,
+    operation_client: ProductOperationAuthorizationClient,
+    enforcing_gateway_id: str,
+    environment_id: str,
+    adapters: AgentExecutionAdapterRegistry,
+    artifact_host: ModuleArtifactHost,
+    record_store: RuntimeExecutionRecordStore,
+    content_store: RuntimeExecutionContentStore,
+    claim_token_secret: bytes,
+    clock: Callable[[], str] = _utc_now,
+) -> ModuleRunResult:
+    """Prepare one registered, single-node Workflow evaluation and record it.
+
+    Bind the environment arguments once; each call supplies the intended
+    Module, JSON input and a key unique within the record store. The staging
+    host supplies ``put_bytes``, ``artifact`` and ``resolve_artifact_ref`` as
+    provided by InMemoryCellArtifactStore. ``authorize`` supplies an existing
+    context plus exact decision, delegation and entitlement artifact refs.
+    Their meaning and all permission decisions remain with the host.
+
+    No registration, activation, source loading or Provider configuration is
+    performed here. A committed call replays; an incomplete execution returns
+    to the existing recovery owner instead of repeating unknown effects.
+    """
+    from jsonschema import Draft202012Validator
+
+    validate_id("module_id", module_id)
+    validate_id("idempotency_key", idempotency_key)
+    validate_id("enforcing_gateway_id", enforcing_gateway_id)
+    validate_id("environment_id", environment_id)
+    if type(input_payload) is not dict:
+        raise ValueError("input_payload must be one JSON object")
+    if type(workflow) is not WorkflowRelease or type(variant_policy) is not ExecutionVariantPolicyRelease:
+        raise ValueError("execution requires exact Workflow and Variant Policy releases")
+    if release_registry.get_workflow(workflow.release_ref, workflow.release_sha256) != workflow:
+        raise ValueError("Workflow differs from the registered release")
+    if release_registry.get_execution_variant_policy(variant_policy.release_ref, variant_policy.release_sha256) != variant_policy:
+        raise ValueError("Variant Policy differs from the registered release")
+    release_registry.assert_workflow_execution_allowed(workflow, ModuleExecutionPurpose.EVALUATION)
+    if len(workflow.nodes) != 1 or workflow.nodes[0].node_kind is not WorkflowNodeKind.MODULE:
+        raise ValueError("entry requires one registered Module node")
+    node = workflow.nodes[0]
+    if workflow.initial_node_id != node.node_id:
+        raise ValueError("the Module node must be the Workflow entry")
+    module = release_registry.get_module(node.module_release_ref, node.module_release_sha256)
+    if module.module_id != module_id:
+        raise ValueError("Workflow Module differs from the requested target")
+    release_registry.assert_module_execution_allowed(module, ModuleExecutionPurpose.EVALUATION)
+    selection = variant_policy.policy_document()
+    if (
+        selection["origin_kind"] != "workflow"
+        or selection["origin_release_ref"] != workflow.release_ref
+        or selection["origin_release_sha256"] != workflow.release_sha256
+        or len(selection["bindings"]) != 1
+        or selection["bindings"][0]["position_id"] != node.node_id
+    ):
+        raise ValueError("Variant Policy must select the exact Workflow Module node")
+    selected = selection["bindings"][0]
+    profile = release_registry.get_execution_profile(
+        selected["execution_profile_release_ref"], selected["execution_profile_release_sha256"]
+    )
+    if (
+        len(module.declared_operation_ids) != 1
+        or module.declared_operation_ids[0] not in MODEL_INVOCATION_OPERATION_IDS
+        or profile.execution_mode != "tool_free"
+        or profile.semantic_input_delivery_mode != "inline"
+        or profile.attempt_workspace_policy != "none"
+        or profile.tool_policy or profile.gateway_access_reasons
+        or profile.network_policy != "denied"
+    ):
+        raise ValueError("entry requires an admitted tool-free inline model call")
+    _assert_admitted_test_evaluation_profile(module, profile)
+    adapter = adapters.resolve(profile.executor_adapter_id, profile.executor_adapter_revision)
+    _assert_descriptor_covers_profile(adapter.descriptor, profile)
+    for method in ("put_bytes", "artifact", "resolve_artifact_ref"):
+        if not callable(getattr(artifact_host, method, None)):
+            raise ValueError(f"artifact_host must implement {method}")
+    if not callable(authorize):
+        raise ValueError("host authorize callback is required")
+    if content_store is None:
+        raise ValueError("recorded execution requires an explicit content store")
+    workflow_binding = WorkflowExecutionLedgerBinding(record_store, artifact_host, content_store)
+    workflow_binding.validate()
+    WorkflowModuleLedgerBinding(record_store, "0" * 64, claim_token_secret, content_store).validate()
+    schema = release_registry.get_schema_asset(module.input_schema_ref, module.input_schema_sha256)
+    input_bytes = json.dumps(input_payload, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":"), allow_nan=False).encode("utf-8")
+    Draft202012Validator(schema.schema_document()).validate(json.loads(input_bytes))
+    execution_id = _stable_id("execution", idempotency_key)
+    put_bytes = getattr(artifact_host, "put_bytes")
+    task = put_bytes(
+        artifact_kind_id="module_input", schema_version=module.input_schema_ref.rsplit("@", 1)[-1],
+        schema_ref=module.input_schema_ref, schema_sha256=module.input_schema_sha256,
+        media_type="application/json", content=input_bytes,
+        idempotency_key=execution_id + "_task", logical_name="task_input",
+    )
+    input_binding = ModuleInputBinding("task_input", task.artifact_ref, task.artifact_sha256,
+                                      module.input_schema_ref, module.input_schema_sha256, "application/json")
+    bundle = release_registry.get_prompt_bundle(module.prompt_bundle_ref, module.prompt_bundle_sha256)
+    prompt = build_inline_provider_prompt(
+        compiled_static_body=bundle.compiled_static_body, execution_specific_instructions="",
+        inputs=((input_binding, input_bytes),), output_constraint_mode=profile.output_constraint_mode,
+    )
+    prompt_ref = put_bytes(
+        artifact_kind_id="prompt_envelope", schema_version="v1",
+        schema_ref="schema:prompt_envelope@v1", schema_sha256=_canonical_sha256({"type": "string"}),
+        media_type="text/plain", content=prompt.encode("utf-8"),
+        idempotency_key=execution_id + "_prompt", logical_name="prompt_envelope",
+    )
+    request = WorkflowModuleExecutionRequest.build(
+        request_id=_stable_id("request", execution_id), purpose=ModuleExecutionPurpose.EVALUATION,
+        workflow_execution_id=execution_id, dispatch_id=_stable_id("dispatch", execution_id),
+        workflow_node_id=node.node_id, module_run_id=_stable_id("module_run", execution_id),
+        module_release_ref=module.release_ref, module_release_sha256=module.release_sha256,
+        input_package_ref=task.artifact_ref, input_package_sha256=task.artifact_sha256,
+        inputs=(input_binding,), variants=(ModuleVariantRequest(
+            "default", 0, profile.release_ref, profile.release_sha256,
+            prompt_ref.artifact_ref, prompt_ref.artifact_sha256,
+        ),), idempotency_key=idempotency_key,
+    )
+    trace = record_store.load_trace(execution_id)
+    starts = trace.records_of_type(WorkflowExecutionRecord)
+    if starts:
+        if len(starts) != 1:
+            raise ValueError("execution has conflicting start records")
+        prior = starts[0]
+        if (
+            prior.workflow_release_ref != workflow.release_ref
+            or prior.workflow_release_sha256 != workflow.release_sha256
+            or prior.execution_profile_selection_ref != variant_policy.release_ref
+            or prior.execution_profile_selection_sha256 != variant_policy.release_sha256
+            or prior.execution_input_package_sha256 != task.artifact_sha256
+        ):
+            raise ValueError("execution key was already bound to different inputs or releases")
+        recorder = WorkflowModuleLedgerRecorder(WorkflowModuleLedgerBinding(
+            record_store, prior.entitlement_snapshot_hash, claim_token_secret, content_store
+        ))
+        replay = recorder.replay_result(request=request, module=module)
+        if replay is not None:
+            return replay
+        raise RuntimeError("execution already started; existing Runtime recovery is required")
+    authorization = authorize(request)
+    if type(authorization) is not tuple or len(authorization) != 4:
+        raise ValueError("authorize must return a context and three existing evidence refs")
+    envelope, decision, delegation, entitlement = authorization
+    if type(envelope) is not ExecutionAuthorizationContextEnvelope:
+        raise ValueError("host must provide an ExecutionAuthorizationContextEnvelope")
+    evidence = (decision, delegation, entitlement)
+    for ref in evidence:
+        if type(ref) is not ResolvedArtifactRef:
+            raise ValueError("host evidence must use ResolvedArtifactRef")
+        ref.validate()
+        if getattr(artifact_host, "resolve_artifact_ref")(ref.artifact_ref) != ref:
+            raise ValueError("host evidence differs from its staged artifact")
+        body = artifact_host.read_bytes(ref.artifact_ref, ref.artifact_sha256)
+        if hashlib.sha256(body).hexdigest() != ref.artifact_sha256:
+            raise ValueError("host evidence content hash mismatch")
+    if envelope.authorization_decision_ref != decision.artifact_ref:
+        raise PermissionError("context decision differs from supplied host evidence")
+    if request.input_package_ref not in envelope.input_scope_refs:
+        raise PermissionError("host context does not include the frozen input")
+    recorded_at_utc = clock()
+    controller = ExecutionAuthorizationController(
+        client=context_client, ledger=InMemoryExecutionAuthorizationLedger(), module_release_client=release_registry,
+    )
+    admission = controller.bind_execution_context(
+        envelope=envelope, expected_workflow_execution_id=execution_id,
+        expected_workflow_release_id=workflow.workflow_id, expected_principal_id=envelope.principal_id,
+        expected_actor_workload_id=envelope.actor_workload_id, expected_tenant_id=envelope.tenant_id,
+        expected_cell_id=envelope.cell_id, execution_input_package_ref=request.input_package_ref,
+        execution_input_package_sha256=request.input_package_sha256, observed_at_utc=recorded_at_utc,
+    )
+    authority = ModuleExecutionAuthority(controller, admission.binding, operation_client,
+                                         enforcing_gateway_id, environment_id)
+    artifacts = tuple({ref.artifact_ref: ref for ref in (task, prompt_ref, *evidence)}.values())
+    execution = WorkflowExecutionRecord(
+        workflow_execution_id=execution_id, workflow_id=workflow.workflow_id,
+        workflow_contract_version=workflow.workflow_contract_version, tenant_id=envelope.tenant_id,
+        cell_id=envelope.cell_id, principal_id=envelope.principal_id,
+        execution_release_ref=workflow.execution_release_ref, graph_sha256=workflow.graph_sha256,
+        runtime_execution_binding_ref=workflow.execution_release_ref,
+        runtime_execution_binding_sha256=workflow.execution_release_sha256,
+        authorization_decision_ref=decision.artifact_ref, authorization_decision_sha256=decision.artifact_sha256,
+        execution_principal_delegation_ref=delegation.artifact_ref,
+        execution_principal_delegation_sha256=delegation.artifact_sha256,
+        entitlement_snapshot_ref=entitlement.artifact_ref, entitlement_snapshot_hash=entitlement.artifact_sha256,
+        execution_input_package_refs=tuple(ref.artifact_ref for ref in artifacts),
+        execution_input_package_sha256=request.input_package_sha256, recorded_at_utc=recorded_at_utc,
+        workflow_release_ref=workflow.release_ref, workflow_release_sha256=workflow.release_sha256,
+        execution_release_sha256=workflow.execution_release_sha256,
+        execution_profile_selection_ref=variant_policy.release_ref,
+        execution_profile_selection_sha256=variant_policy.release_sha256,
+    )
+    inputs = tuple(ExecutionInputRef(
+        execution_input_id=_stable_id("execution_input", execution_id, ref.artifact_ref),
+        workflow_execution_id=execution_id, input_type_id=ref.artifact_kind_id, schema_version=ref.schema_version,
+        input_ref=ref.artifact_ref, input_sha256=ref.artifact_sha256,
+        byte_size=len(artifact_host.read_bytes(ref.artifact_ref, ref.artifact_sha256)),
+        media_type=getattr(artifact_host, "artifact")(ref.artifact_ref).media_type,
+        recorded_at_utc=recorded_at_utc, logical_name=ref.logical_name,
+    ) for ref in artifacts)
+    receipt = WorkflowExecutionLedgerRecorder(workflow_binding).record_execution_start(execution=execution, inputs=inputs)
+    if type(receipt) is not CommitReceipt or type(receipt.replayed) is not bool:
+        raise ValueError("execution start must return the native commit receipt")
+    recorder = WorkflowModuleLedgerRecorder(WorkflowModuleLedgerBinding(
+        record_store, entitlement.artifact_sha256, claim_token_secret, content_store,
+    ))
+    if receipt.replayed:
+        replay = recorder.replay_result(request=request, module=module)
+        if replay is not None:
+            return replay
+        raise RuntimeError("execution already started; existing Runtime recovery is required")
+    return run_workflow_module(
+        request, release_registry=release_registry, adapters=adapters, artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(), workflow_ledger=recorder, authority=authority, clock=clock,
+    )
 
 
 def run_module(
@@ -539,21 +764,64 @@ def _run_module(
         request.module_release_ref,
         request.module_release_sha256,
     )
+    behavior_policy = release_registry.get_behavior_policy(
+        module.behavior_policy_ref,
+        module.behavior_policy_sha256,
+    )
+    evaluation_policy = release_registry.get_evaluation_policy(
+        module.evaluation_policy_ref,
+        module.evaluation_policy_sha256,
+    )
+    retry_policy = release_registry.get_retry_policy(
+        module.retry_policy_ref,
+        module.retry_policy_sha256,
+    )
+    behavior_mode = behavior_policy.policy_document()["context_isolation"]
+    if behavior_mode != "workflow_execution_isolated":
+        raise ValueError("unsupported Module Behavior Policy")
+    evaluation_mode = evaluation_policy.policy_document()["evaluation_mode"]
+    max_attempts = retry_policy.policy_document()["max_attempts"]
     release_registry.assert_module_execution_allowed(module, request.purpose)
-    _validate_module_execution_authority(
-        module=module,
-        request=request,
-        authority=authority,
+    model_operation_ids = tuple(
+        operation_id
+        for operation_id in module.declared_operation_ids
+        if operation_id in MODEL_INVOCATION_OPERATION_IDS
     )
-    _, _, retry_policy = _resolve_and_admit_module_policies(
-        release_registry,
-        module=module,
-        purpose=request.purpose,
-    )
-    max_attempts = validate_retry_attempt_budget(
-        retry_policy.policy_document().get("max_attempts")
-    )
-    _assert_module_dependencies_shadow_executable(release_registry, module)
+    candidate_purpose = request.purpose in {
+        ModuleExecutionPurpose.TEST,
+        ModuleExecutionPurpose.EVALUATION,
+    }
+    if evaluation_mode == "module_candidate":
+        if not candidate_purpose or len(model_operation_ids) != 1:
+            raise ValueError(
+                "module_candidate Evaluation Policy requires a candidate "
+                "purpose and one model operation"
+            )
+    elif evaluation_mode == "deterministic_candidate":
+        if not candidate_purpose or model_operation_ids:
+            raise ValueError(
+                "deterministic_candidate Evaluation Policy requires a "
+                "candidate purpose and no model operation"
+            )
+    elif evaluation_mode != "none":
+        raise ValueError("unsupported Module Evaluation Policy")
+    if module.declared_operation_ids and len(model_operation_ids) != 1:
+        raise ValueError(
+            "the model-backed slice admits exactly one declared model operation"
+        )
+    if module.declared_operation_ids:
+        if authority is None:
+            raise PermissionError(
+                "a Module that declares a model operation requires a "
+                "module execution authority"
+            )
+        authority.validate()
+        _assert_authority_binding_closure(authority.binding, request)
+    elif authority is not None:
+        raise ValueError(
+            "a module execution authority was supplied for an operation-free "
+            "Module; nothing would consume or enforce it"
+        )
     if (
         module.output_resolution_policy is OutputResolutionPolicy.DIRECT_SINGLE
         and len(request.variants) != 1
@@ -595,6 +863,7 @@ def _run_module(
     )
 
     resolved_profiles: list[ExecutionProfileRelease] = []
+    resolved_adapters: list[AuthorizedAgentExecutionAdapter] = []
     variant_records: list[ModuleExecutionVariantRecord] = []
     attempt_starts: list[ModuleAttemptStartedRecord] = []
     for variant_request in request.variants:
@@ -602,13 +871,25 @@ def _run_module(
             variant_request.execution_profile_ref,
             variant_request.execution_profile_sha256,
         )
-        _assert_profile_shadow_executable(release_registry, profile)
         if profile.transport_kind not in module.compatible_transport_kinds:
             raise ValueError("Execution Profile transport is incompatible with Module")
         if module.declared_operation_ids:
             _assert_admitted_test_evaluation_profile(
                 module,
                 profile,
+            )
+        adapter = adapters.resolve(
+            profile.executor_adapter_id,
+            profile.executor_adapter_revision,
+        )
+        descriptor = adapter.descriptor
+        _assert_descriptor_covers_profile(descriptor, profile)
+        if (
+            descriptor.transport_family != "in_process"
+            and not module.declared_operation_ids
+        ):
+            raise PermissionError(
+                "a provider transport requires a declared model invocation operation"
             )
         if module.prompt_bundle_ref is not None and (
             variant_request.prompt_envelope_ref is None
@@ -633,6 +914,7 @@ def _run_module(
             "module_attempt", variant_id, str(attempt_ordinal)
         )
         resolved_profiles.append(profile)
+        resolved_adapters.append(adapter)
         variant_records.append(
             ModuleExecutionVariantRecord(
                 module_run_id=module_run_id,
@@ -657,24 +939,6 @@ def _run_module(
             )
         )
 
-    if workflow_ledger is not None:
-        if type(request) is not WorkflowModuleExecutionRequest:
-            raise ValueError(
-                "canonical Workflow ledger supplied for an isolated Module Run"
-            )
-        for variant, attempt_start in zip(
-            variant_records,
-            attempt_starts,
-            strict=True,
-        ):
-            _assert_workflow_attempt_may_start(
-                workflow_ledger=workflow_ledger,
-                request=request,
-                variant_id=variant.variant_id,
-                attempt_id=attempt_start.attempt_id,
-                max_attempts=max_attempts,
-            )
-
     concurrent_result = ledger.begin(
         request,
         module_run,
@@ -685,7 +949,10 @@ def _run_module(
         return concurrent_result
 
     if workflow_ledger is not None:
-        assert type(request) is WorkflowModuleExecutionRequest
+        if type(request) is not WorkflowModuleExecutionRequest:
+            raise ValueError(
+                "canonical Workflow ledger supplied for an isolated Module Run"
+            )
         workflow_ledger.record_module_start(
             request=request,
             module=module,
@@ -696,38 +963,6 @@ def _run_module(
             max_attempts=max_attempts,
             recorded_at_utc=started_at_utc,
         )
-        for variant, profile, attempt_start in zip(
-            variant_records,
-            resolved_profiles,
-            attempt_starts,
-            strict=True,
-        ):
-            workflow_ledger.begin_attempt(
-                request=request,
-                variant=variant,
-                profile=profile,
-                attempt_id=attempt_start.attempt_id,
-                attempt_ordinal=attempt_start.attempt_ordinal,
-                parent_attempt_id=request.parent_attempt_id,
-                recorded_at_utc=attempt_start.recorded_at_utc,
-            )
-
-    resolved_adapters: list[AuthorizedAgentExecutionAdapter] = []
-    for profile in resolved_profiles:
-        adapter = adapters.resolve(
-            profile.executor_adapter_id,
-            profile.executor_adapter_revision,
-        )
-        descriptor = adapter.descriptor
-        _assert_descriptor_covers_profile(descriptor, profile)
-        if (
-            descriptor.transport_family != "in_process"
-            and not module.declared_operation_ids
-        ):
-            raise PermissionError(
-                "a provider transport requires a declared model invocation operation"
-            )
-        resolved_adapters.append(adapter)
 
     attempts: list[ModuleAttemptRecord] = []
     outputs: list[ModuleOutputBinding] = []
@@ -794,7 +1029,7 @@ def _run_module(
 def _execute_attempt(
     *,
     run_request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     profile: ExecutionProfileRelease,
     adapter: AuthorizedAgentExecutionAdapter,
     variant_request: ModuleVariantRequest,
@@ -808,6 +1043,19 @@ def _execute_attempt(
     release_registry: RuntimeReleaseRegistry,
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Authorize, invoke, and atomically finalize one Attempt."""
+
+    if workflow_ledger is not None:
+        if type(run_request) is not WorkflowModuleExecutionRequest:
+            raise ValueError("Workflow ledger requires a Workflow Module request")
+        workflow_ledger.begin_attempt(
+            request=run_request,
+            variant=variant,
+            profile=profile,
+            attempt_id=attempt_start.attempt_id,
+            attempt_ordinal=attempt_start.attempt_ordinal,
+            recorded_at_utc=attempt_start.recorded_at_utc,
+            parent_attempt_id=run_request.parent_attempt_id,
+        )
 
     evidence: _AttemptAuthorizationEvidence | None = None
     if authority is not None:
@@ -878,7 +1126,7 @@ def _execute_attempt(
                 operation_id=next(
                     operation_id
                     for operation_id in module.declared_operation_ids
-                    if operation_id in _MODEL_INVOCATION_OPERATION_IDS
+                    if operation_id in MODEL_INVOCATION_OPERATION_IDS
                 ),
                 authorization_intent_ref=evidence.intent.intent_ref,
                 authorization_intent_sha256=evidence.intent.intent_sha256,
@@ -917,8 +1165,6 @@ def _execute_attempt(
     )
 
     staged: tuple[tuple[OutputSubmission, bytes], ...] = ()
-    validated_tool_observations: tuple[ModuleToolCallObservation, ...] = ()
-    tool_observation_closure_validated = False
     try:
         result = adapter.execute(canonical_request, host)
         if type(result) is not AgentExecutionResult:
@@ -931,8 +1177,6 @@ def _execute_attempt(
         ):
             raise ValueError("adapter result provider identity differs from profile")
         _assert_result_lineage_resolvable(artifact_host, result)
-        validated_tool_observations = result.tool_observations
-        tool_observation_closure_validated = True
         if result.terminal_status == "completed":
             if not result.outputs:
                 raise ValueError(
@@ -950,14 +1194,6 @@ def _execute_attempt(
                     content=content,
                 )
     except PermissionError as exc:
-        if (
-            host.authorized_operation_count
-            and not tool_observation_closure_validated
-        ):
-            raise AttemptToolReconciliationRequiredError(
-                "Adapter failed after tool authorization; reconcile the "
-                "durable Attempt before retry"
-            ) from exc
         return _record_failed_attempt(
             variant=variant,
             attempt_start=attempt_start,
@@ -979,17 +1215,8 @@ def _execute_attempt(
             ),
             module=module,
             profile=profile,
-            tool_calls=validated_tool_observations,
         )
     except Exception as exc:
-        if (
-            host.authorized_operation_count
-            and not tool_observation_closure_validated
-        ):
-            raise AttemptToolReconciliationRequiredError(
-                "Adapter failed after tool authorization; reconcile the "
-                "durable Attempt before retry"
-            ) from exc
         return _record_failed_attempt(
             variant=variant,
             attempt_start=attempt_start,
@@ -1011,7 +1238,6 @@ def _execute_attempt(
             ),
             module=module,
             profile=profile,
-            tool_calls=validated_tool_observations,
         )
 
     usage = ModuleUsageObservation(
@@ -1021,43 +1247,6 @@ def _execute_attempt(
         cache_creation_tokens=result.cache_creation_tokens,
     )
     ended_at_utc = clock()
-    deadline = parse_utc_timestamp(
-        "attempt_start.recorded_at_utc",
-        attempt_start.recorded_at_utc,
-    ) + timedelta(seconds=profile.timeout_seconds)
-    if parse_utc_timestamp("ended_at_utc", ended_at_utc) >= deadline:
-        return _record_failed_attempt(
-            variant=variant,
-            attempt_start=attempt_start,
-            failure_class="timeout",
-            usage=usage,
-            ended_at_utc=ended_at_utc,
-            period_end_at_utc=format_utc_timestamp(deadline),
-            payload={
-                "disposition": "execution_deadline_exceeded",
-                "deadline_at_utc": format_utc_timestamp(deadline),
-                "observed_at_utc": ended_at_utc,
-                "observed_terminal_status": result.terminal_status,
-                "observed_failure_class": (
-                    result.failure.failure_class
-                    if result.failure is not None
-                    else None
-                ),
-                "adapter_trace_ref": result.cell_local_trace_ref,
-                "adapter_trace_sha256": result.cell_local_trace_sha256,
-            },
-            artifact_host=artifact_host,
-            ledger=ledger,
-            workflow_ledger=workflow_ledger,
-            workflow_request=(
-                run_request
-                if type(run_request) is WorkflowModuleExecutionRequest
-                else None
-            ),
-            module=module,
-            profile=profile,
-            tool_calls=result.tool_observations,
-        )
 
     if result.terminal_status != "completed":
         assert result.failure is not None
@@ -1191,7 +1380,7 @@ def _execute_attempt(
 def _authorize_model_attempt(
     *,
     authority: ModuleExecutionAuthority,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     profile: ExecutionProfileRelease,
     purpose: ModuleExecutionPurpose,
     module_run_id: str,
@@ -1209,7 +1398,7 @@ def _authorize_model_attempt(
     operation_id = next(
         operation_id
         for operation_id in module.declared_operation_ids
-        if operation_id in _MODEL_INVOCATION_OPERATION_IDS
+        if operation_id in MODEL_INVOCATION_OPERATION_IDS
     )
     intent = authority.controller.commit_protected_operation_intent(
         binding_ref=binding.binding_ref,
@@ -1270,7 +1459,7 @@ def _authorize_model_attempt(
 def _build_canonical_request(
     *,
     run_request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     profile: ExecutionProfileRelease,
     variant_request: ModuleVariantRequest,
     variant: ModuleExecutionVariantRecord,
@@ -1383,150 +1572,6 @@ def _assert_authority_binding_closure(
         raise PermissionError("module execution authority closure mismatch")
 
 
-def _validate_module_execution_authority(
-    *,
-    module: RuntimeModuleRelease,
-    request: ModuleExecutionRequest | WorkflowModuleExecutionRequest,
-    authority: ModuleExecutionAuthority | None,
-) -> None:
-    """Validate the request-bound authority before resolving Module Policies."""
-
-    model_operation_ids = tuple(
-        operation_id
-        for operation_id in module.declared_operation_ids
-        if operation_id in _MODEL_INVOCATION_OPERATION_IDS
-    )
-    if module.declared_operation_ids and len(model_operation_ids) != 1:
-        raise ValueError(
-            "the model-backed slice admits exactly one declared model operation"
-        )
-    if module.declared_operation_ids:
-        if authority is None:
-            raise PermissionError(
-                "a Module that declares a model operation requires a "
-                "module execution authority"
-            )
-        authority.validate()
-        _assert_authority_binding_closure(authority.binding, request)
-        return
-    if authority is not None:
-        raise ValueError(
-            "a module execution authority was supplied for an operation-free "
-            "Module; nothing would consume or enforce it"
-        )
-
-
-def _resolve_and_admit_module_policies(
-    release_registry: RuntimeReleaseRegistry,
-    *,
-    module: RuntimeModuleRelease,
-    purpose: ModuleExecutionPurpose,
-) -> tuple[
-    BehaviorPolicyRelease,
-    EvaluationPolicyRelease,
-    RetryPolicyRelease,
-]:
-    """Resolve exact Module Policies and require purpose-specific admission."""
-
-    behavior_policy = release_registry.get_behavior_policy(
-        module.behavior_policy_ref,
-        module.behavior_policy_sha256,
-    )
-    evaluation_policy = release_registry.get_evaluation_policy(
-        module.evaluation_policy_ref,
-        module.evaluation_policy_sha256,
-    )
-    retry_policy = release_registry.get_retry_policy(
-        module.retry_policy_ref,
-        module.retry_policy_sha256,
-    )
-    allowed = allowed_release_admission_states(purpose)
-    for kind, release_ref in (
-        (ReleaseSubjectKind.BEHAVIOR_POLICY, behavior_policy.release_ref),
-        (ReleaseSubjectKind.EVALUATION_POLICY, evaluation_policy.release_ref),
-        (ReleaseSubjectKind.RETRY_POLICY, retry_policy.release_ref),
-    ):
-        state = release_registry.get_admission_state(kind, release_ref)
-        if state not in allowed:
-            raise PermissionError(
-                f"{kind.value} release is not admitted for "
-                f"{purpose.value}: {state.value}"
-            )
-    return behavior_policy, evaluation_policy, retry_policy
-
-
-def _assert_workflow_attempt_may_start(
-    *,
-    workflow_ledger: WorkflowModuleLedgerRecorder,
-    request: WorkflowModuleExecutionRequest,
-    variant_id: str,
-    attempt_id: str,
-    max_attempts: int,
-) -> None:
-    """Prove one contiguous committed Attempt lineage before execution effects."""
-
-    request.validate()
-    validate_retry_attempt_budget(max_attempts)
-    if request.attempt_ordinal > max_attempts:
-        raise ValueError("Attempt ordinal exceeds Retry Policy max_attempts")
-    starts: tuple[WorkflowAttemptStartedRecord, ...] = (
-        workflow_ledger.committed_attempt_starts(
-            workflow_execution_id=request.workflow_execution_id,
-        )
-    )
-    duplicate_ordinal = next(
-        (
-            row
-            for row in starts
-            if row.variant_id == variant_id
-            and row.attempt_ordinal == request.attempt_ordinal
-        ),
-        None,
-    )
-    if duplicate_ordinal is not None:
-        raise ValueError(
-            "Variant already has a committed Attempt with this ordinal"
-        )
-    if any(row.attempt_id == attempt_id for row in starts):
-        raise ValueError("derived Attempt identity is already committed")
-
-    if request.attempt_ordinal == 1:
-        return
-    parent = next(
-        (
-            row
-            for row in starts
-            if row.attempt_id == request.parent_attempt_id
-        ),
-        None,
-    )
-    if parent is None:
-        raise ValueError("retry Attempt requires a committed parent Attempt start")
-    if parent.module_run_id != request.module_run_id:
-        raise ValueError("parent Attempt start belongs to another Module Run")
-    if parent.variant_id != variant_id:
-        raise ValueError("parent Attempt start belongs to another Variant")
-    if parent.attempt_ordinal != request.attempt_ordinal - 1:
-        raise ValueError("retry Attempt parent ordinal is not contiguous")
-    terminals: tuple[WorkflowAttemptRecord, ...] = (
-        workflow_ledger.committed_attempts(
-            workflow_execution_id=request.workflow_execution_id,
-        )
-    )
-    parent_terminal = next(
-        (
-            row
-            for row in terminals
-            if row.attempt_id == parent.attempt_id
-        ),
-        None,
-    )
-    if parent_terminal is None:
-        raise ValueError("retry Attempt parent is not terminal")
-    if parent_terminal.status == "completed":
-        raise ValueError("completed Attempt cannot parent a retry")
-
-
 def _assert_descriptor_covers_profile(
     descriptor: AgentExecutionAdapterDescriptor,
     profile: ExecutionProfileRelease,
@@ -1584,57 +1629,29 @@ def _record_failed_attempt(
     failure_class: str,
     usage: ModuleUsageObservation,
     ended_at_utc: str,
-    period_end_at_utc: str | None = None,
     payload: Mapping[str, Any],
     artifact_host: ModuleArtifactHost,
     ledger: ModuleExecutionLedger,
     workflow_ledger: WorkflowModuleLedgerRecorder | None = None,
     workflow_request: WorkflowModuleExecutionRequest | None = None,
-    module: RuntimeModuleRelease | None = None,
+    module: ModuleRelease | None = None,
     profile: ExecutionProfileRelease | None = None,
     tool_calls: tuple[ModuleToolCallObservation, ...] = (),
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Commit one kernel-owned failed Attempt with its bounded diagnostic."""
 
-    effective_failure_class = failure_class
-    effective_period_end_at_utc = period_end_at_utc or ended_at_utc
-    effective_payload = dict(payload)
-    if profile is not None:
-        deadline = parse_utc_timestamp(
-            "attempt_start.recorded_at_utc",
-            attempt_start.recorded_at_utc,
-        ) + timedelta(seconds=profile.timeout_seconds)
-        if parse_utc_timestamp("ended_at_utc", ended_at_utc) >= deadline:
-            effective_failure_class = "timeout"
-            effective_period_end_at_utc = format_utc_timestamp(deadline)
-            if failure_class != "timeout":
-                effective_payload.setdefault(
-                    "original_failure_class",
-                    failure_class,
-                )
-            effective_payload.setdefault(
-                "disposition",
-                "execution_deadline_exceeded",
-            )
-            effective_payload.setdefault(
-                "deadline_at_utc",
-                format_utc_timestamp(deadline),
-            )
-            effective_payload.setdefault("observed_at_utc", ended_at_utc)
-
     attempt = _failed_attempt(
         variant=variant,
         attempt_start=attempt_start,
-        failure_class=effective_failure_class,
+        failure_class=failure_class,
         usage=usage,
         ended_at_utc=ended_at_utc,
-        period_end_at_utc=effective_period_end_at_utc,
         detail=_commit_kernel_failure_detail(
             artifact_host,
             variant=variant,
             attempt_start=attempt_start,
-            failure_class=effective_failure_class,
-            payload=effective_payload,
+            failure_class=failure_class,
+            payload=payload,
         ),
         tool_calls=tool_calls,
     )
@@ -1693,7 +1710,7 @@ def _assert_result_lineage_resolvable(
 def _assert_staged_output_conforms(
     release_registry: RuntimeReleaseRegistry,
     *,
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     output_slot_id: str,
     content: bytes,
 ) -> None:
@@ -1773,7 +1790,6 @@ def _failed_attempt(
     failure_class: str,
     usage: ModuleUsageObservation,
     ended_at_utc: str,
-    period_end_at_utc: str | None = None,
     status: str = "failed",
     detail: tuple[str, str] | None = None,
     tool_calls: tuple[ModuleToolCallObservation, ...] = (),
@@ -1787,7 +1803,7 @@ def _failed_attempt(
         usage=usage,
         failure_class=failure_class,
         period_start_at_utc=attempt_start.recorded_at_utc,
-        period_end_at_utc=period_end_at_utc or ended_at_utc,
+        period_end_at_utc=ended_at_utc,
         recorded_at_utc=ended_at_utc,
         tool_calls=tool_calls,
         prompt_envelope_ref=variant.prompt_envelope_ref,
@@ -1797,25 +1813,8 @@ def _failed_attempt(
     )
 
 
-def _assert_profile_shadow_executable(
-    release_registry: RuntimeReleaseRegistry,
-    profile: ExecutionProfileRelease,
-) -> None:
-    state = release_registry.get_admission_state(
-        ReleaseSubjectKind.EXECUTION_PROFILE,
-        profile.release_ref,
-    )
-    if state not in {
-        ReleaseAdmissionState.CANDIDATE,
-        ReleaseAdmissionState.SHADOW_EXECUTABLE,
-        ReleaseAdmissionState.PRODUCTION_CANARY,
-        ReleaseAdmissionState.ACTIVE,
-    }:
-        raise PermissionError(f"Execution Profile is not shadow-executable: {state.value}")
-
-
 def _assert_admitted_test_evaluation_profile(
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     profile: ExecutionProfileRelease,
 ) -> None:
     """Admit the exact model-backed Test/Evaluation capability slices.
@@ -1825,8 +1824,8 @@ def _assert_admitted_test_evaluation_profile(
     hybrid cannot become executable by accident.
     """
 
-    non_model_operations = frozenset(module.declared_operation_ids).difference(
-        _MODEL_INVOCATION_OPERATION_IDS
+    _, non_model_operations = partition_module_operation_ids(
+        module.declared_operation_ids
     )
     if (
         profile.execution_mode == "tool_free"
@@ -1848,7 +1847,7 @@ def _assert_admitted_test_evaluation_profile(
         and not non_model_operations
         and profile.executor_adapter_id
         == "claude_agent_sdk_inline_draft_workspace_executor"
-        and profile.executor_adapter_revision == "v1"
+        and profile.executor_adapter_revision == "v2"
         and profile.transport_kind == "claude_agent_sdk"
         and profile.provider_id == "anthropic"
     ):
@@ -1862,7 +1861,7 @@ def _assert_admitted_test_evaluation_profile(
         and bool(profile.gateway_access_reasons)
         and frozenset(profile.tool_policy) == non_model_operations
         and profile.executor_adapter_id == "claude_agent_sdk_gateway_executor"
-        and profile.executor_adapter_revision == "v2"
+        and profile.executor_adapter_revision == "v3"
         and profile.transport_kind == "claude_agent_sdk"
         and profile.provider_id == "anthropic"
     ):
@@ -1873,45 +1872,8 @@ def _assert_admitted_test_evaluation_profile(
     )
 
 
-def _assert_module_dependencies_shadow_executable(
-    release_registry: RuntimeReleaseRegistry,
-    module: RuntimeModuleRelease,
-) -> None:
-    dependencies: list[tuple[ReleaseSubjectKind, str]] = []
-    if module.prompt_bundle_ref is not None:
-        if module.prompt_bundle_sha256 is None:
-            raise ValueError("Module Prompt Bundle hash is missing")
-        prompt_bundle = release_registry.get_prompt_bundle(
-            module.prompt_bundle_ref,
-            module.prompt_bundle_sha256,
-        )
-        dependencies.append(
-            (ReleaseSubjectKind.PROMPT_BUNDLE, module.prompt_bundle_ref)
-        )
-        dependencies.extend(
-            (
-                ReleaseSubjectKind.PROMPT_COMPONENT,
-                member.member_ref,
-            )
-            for member in prompt_bundle.members
-            if member.member_ref.startswith("prompt-component:")
-        )
-    allowed = {
-        ReleaseAdmissionState.CANDIDATE,
-        ReleaseAdmissionState.SHADOW_EXECUTABLE,
-        ReleaseAdmissionState.PRODUCTION_CANARY,
-        ReleaseAdmissionState.ACTIVE,
-    }
-    for kind, release_ref in dependencies:
-        state = release_registry.get_admission_state(kind, release_ref)
-        if state not in allowed:
-            raise PermissionError(
-                f"{kind.value} dependency is not shadow-executable: {state.value}"
-            )
-
-
 def _resolve_shadow_outputs(
-    module: RuntimeModuleRelease,
+    module: ModuleRelease,
     module_run_id: str,
     variants: tuple[ModuleExecutionVariantRecord, ...],
     attempts: tuple[ModuleAttemptRecord, ...],

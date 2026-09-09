@@ -28,13 +28,10 @@ from .contracts import (
     ModuleOutputResolutionRecord,
     OutputResolutionPolicy,
     PromptBundleRelease,
-    ReleaseAdmissionIntent,
-    ReleaseAdmissionRecord,
-    ReleaseAdmissionState,
     ReleaseMember,
     ReleaseSubjectKind,
     RetryPolicyRelease,
-    RuntimeModuleRelease,
+    ModuleRelease,
     SchemaAssetRelease,
     WorkflowEdge,
     WorkflowNodeBinding,
@@ -121,14 +118,32 @@ from .contracts.execution_module_definition import (
 )
 from .execution.execution_module_invocation import (
     AgentExecutionAdapterRegistry,
-    AttemptToolReconciliationRequiredError,
     ModuleExecutionAuthority,
     isolated_execution_scope_id,
     run_module,
+    run_registered_workflow_module,
     run_workflow_module,
 )
 from .contracts.ledger_lineage_definition import ModuleUsageObservation
-from .registry.registry_release_retrieval import RuntimeModuleReleaseClient
+from .registry.registry_release_retrieval import ModuleReleaseClient
+from .registry.registry_module_authoring import (
+    EXECUTION_PROFILE_UNAVAILABLE,
+    MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
+    MODULE_OPERATION_DECLARATION_INVALID,
+    Module,
+    ModuleAuthoringError,
+    ModuleExport,
+    ModuleReviewer,
+)
+from .registry.registry_workflow_authoring import (
+    WORKFLOW_MODULE_CLOSURE_INVALID,
+    Workflow,
+    WorkflowAuthoringError,
+    WorkflowExport,
+)
+from .registry.registry_release_compilation import (
+    WORKFLOW_EXECUTION_BINDING_INVALID,
+)
 from .contracts.execution_host_definition import (
     AgentRuntimeProductHostApi,
     RuntimeCancellationRequest,
@@ -141,11 +156,15 @@ from .contracts.execution_host_definition import (
 from .registry.registry_plugin_registration import (
     DomainRuntimePlugin,
     RuntimeModulePlugin,
+    register_runtime_module_plugin,
     register_runtime_plugin,
 )
 from .registry.registry_release_registration import (
+    RuntimeActiveReleasePointerResult,
     RuntimeReleaseBundle,
+    RuntimeReleaseRegistrationResult,
     RuntimeReleaseRegistry,
+    RuntimeReleaseRegistrySnapshot,
 )
 from .registry.registry_workflow_registration import WorkflowRuntimeRegistry
 from .ledger.ledger_usage_aggregation import aggregate_model_usage
@@ -159,7 +178,6 @@ __all__ = [
     "AgenticWorkflowConformancePackage",
     "AgentExecutionAdapterDescriptor",
     "AgentExecutionAdapterRegistry",
-    "AttemptToolReconciliationRequiredError",
     "AgentExecutionFailure",
     "AgentExecutionResult",
     "AgentRuntimeProductHostApi",
@@ -192,6 +210,7 @@ __all__ = [
     "ExecutionAuthorizationStatus",
     "ExecutionAuthorizationStatusEvidence",
     "ExecutionControlFenceStatus",
+    "EXECUTION_PROFILE_UNAVAILABLE",
     "ExecutionSnapshotToken",
     "ExternalActionAuthorizationEvidence",
     "AuthorizedExternalEvent",
@@ -207,6 +226,8 @@ __all__ = [
     "InMemoryExecutionAuthorizationLedger",
     "InMemoryExternalEventIngress",
     "ModuleEntryPolicy",
+    "Module",
+    "ModuleExport",
     "ModuleExecutionAuthority",
     "ModuleExecutionPurpose",
     "ModuleExecutionRequest",
@@ -238,15 +259,16 @@ __all__ = [
     "BehaviorPolicyRelease",
     "EvaluationPolicyRelease",
     "ExecutionVariantPolicyRelease",
-    "ReleaseAdmissionIntent",
-    "ReleaseAdmissionRecord",
-    "ReleaseAdmissionState",
     "ReleaseMember",
     "ReleaseSubjectKind",
     "RetryPolicyRelease",
     "RuntimeModulePlugin",
-    "RuntimeModuleReleaseClient",
-    "RuntimeModuleRelease",
+    "ModuleReleaseClient",
+    "ModuleRelease",
+    "ModuleReviewer",
+    "ModuleAuthoringError",
+    "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
+    "MODULE_OPERATION_DECLARATION_INVALID",
     "SchemaAssetRelease",
     "RuntimeProtectedOperationClient",
     "RuntimeAuthorizationCoordinator",
@@ -256,9 +278,17 @@ __all__ = [
     "RuntimeExecutionView",
     "RuntimeReconciliationResult",
     "RuntimeWorkflowStartRequest",
+    "RuntimeActiveReleasePointerResult",
     "RuntimeReleaseBundle",
+    "RuntimeReleaseRegistrationResult",
     "RuntimeReleaseRegistry",
+    "RuntimeReleaseRegistrySnapshot",
     "TrustedRequestContext",
+    "Workflow",
+    "WorkflowAuthoringError",
+    "WorkflowExport",
+    "WORKFLOW_EXECUTION_BINDING_INVALID",
+    "WORKFLOW_MODULE_CLOSURE_INVALID",
     "WorkflowAdmissionState",
     "WorkflowManagementLifecycle",
     "WorkflowRuntimeRegistration",
@@ -274,7 +304,9 @@ __all__ = [
     "aggregate_model_usage",
     "isolated_execution_scope_id",
     "register_runtime_plugin",
+    "register_runtime_module_plugin",
     "run_module",
+    "run_registered_workflow_module",
     "run_workflow_module",
     "validate_domain_runtime_manifest",
 ]

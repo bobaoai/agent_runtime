@@ -29,20 +29,26 @@
     "tools/build_agent_runtime_design_contract_bundle.py",
     "tools/public_repository_validation.py",
     "tests/test_public_repository_validation.py",
-    "tests/test_workflow_execution_ledger_recording.py"
+    "tests/test_workflow_execution_ledger_recording.py",
+    "tools/registry_schema_migration_planning.py",
+    "tests/test_registry_schema_migration_planning_tool.py"
   ],
   "allowed_path_prefixes": [
     "src/agent_runtime/",
-    "examples/runtime_authoring_reference/"
+    "examples/runtime_authoring_reference/",
+    "docs/"
   ],
   "allowed_path_patterns": [
     "designDoc/agent_runtime_00_*.md",
     "designDoc/agent_runtime_01_*.md",
+    "designDoc/agent_runtime_02_*.md",
     "designDoc/agent_runtime_03_*.md",
+    "designDoc/agent_runtime_05_*.md",
     "designDoc/agent_runtime_06_*.md",
     "designDoc/agent_runtime_07_*.md",
     "designDoc/agent_runtime_08_*.md",
     "designDoc/agent_runtime_09_*.md",
+    "designDoc/agent_runtime_11_*.md",
     "tests/test_agent_runtime_*.py",
     "tests/test_runtime_*.py"
   ],

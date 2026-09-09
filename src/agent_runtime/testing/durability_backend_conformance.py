@@ -14,12 +14,16 @@ from hashlib import sha256
 from types import MappingProxyType
 from typing import ClassVar
 
-from ..contracts.durability_execution_definition import (
+from ..contracts.durability_topology_definition import (
     ArtifactRef,
-    DurableExecutionBinding,
+    CellRuntimeBinding,
+    DeploymentMode,
     EntitlementSnapshot,
     ExecutionEnvelope,
+    LlmSupply,
+    Region,
     ModuleVariantBinding,
+    assert_dedicated_cell_isolation,
     assert_ref_only_backend_payload,
 )
 
@@ -145,7 +149,7 @@ class ConformanceModuleBinding:
 class ConformanceCase:
     """One synthetic institution Cell and its frozen execution input."""
 
-    binding: DurableExecutionBinding
+    binding: CellRuntimeBinding
     entitlement: EntitlementSnapshot
     envelope: ExecutionEnvelope
     modules: tuple[ConformanceModuleBinding, ...]
@@ -241,24 +245,13 @@ class TwoCellConformanceFixture:
     beta: ConformanceCase
 
     def validate(self) -> None:
-        """Assert binding isolation and complete execution-input validity."""
+        """Assert dedicated isolation and complete per-Cell input validity."""
 
         if self.alpha.binding.backend_id != self.backend_id:
             raise ValueError("Alpha Cell uses the wrong backend")
         if self.beta.binding.backend_id != self.backend_id:
             raise ValueError("Beta Cell uses the wrong backend")
-        for field in (
-            "tenant_id",
-            "cell_id",
-            "backend_namespace",
-            "backend_endpoint_ref",
-            "backend_persistence_ref",
-        ):
-            if getattr(self.alpha.binding, field) == getattr(
-                self.beta.binding,
-                field,
-            ):
-                raise ValueError(f"conformance bindings share {field}")
+        assert_dedicated_cell_isolation((self.alpha.binding, self.beta.binding))
         self.alpha.validate()
         self.beta.validate()
 
@@ -274,10 +267,18 @@ def _binding(
     tenant_id: str,
     cell_id: str,
     backend_id: str,
-) -> DurableExecutionBinding:
-    return DurableExecutionBinding(
+    region: Region,
+    llm_supply: LlmSupply,
+) -> CellRuntimeBinding:
+    return CellRuntimeBinding(
         tenant_id=tenant_id,
         cell_id=cell_id,
+        region=region,
+        llm_supply=llm_supply,
+        deployment_mode=DeploymentMode.DEDICATED,
+        artifact_store_ref=f"artifact-store:{cell_id}",
+        audit_store_ref=f"audit-store:{cell_id}",
+        model_credential_ref=f"secret-ref:model:{cell_id}",
         backend_id=backend_id,
         backend_namespace=f"ns_{cell_id}",
         backend_endpoint_ref=f"endpoint-ref:{backend_id}:{cell_id}",
@@ -287,7 +288,7 @@ def _binding(
 
 def _case(
     *,
-    binding: DurableExecutionBinding,
+    binding: CellRuntimeBinding,
     principal_id: str,
     suffix: str,
     capabilities: tuple[str, ...],
@@ -407,11 +408,15 @@ def build_two_cell_conformance_fixture(
         tenant_id="institution_alpha",
         cell_id="cell_alpha_us",
         backend_id=backend_id,
+        region=Region.US,
+        llm_supply=LlmSupply.PLATFORM,
     )
     beta_binding = _binding(
         tenant_id="institution_beta",
         cell_id="cell_beta_cn",
         backend_id=backend_id,
+        region=Region.CN,
+        llm_supply=LlmSupply.BYO,
     )
     fixture = TwoCellConformanceFixture(
         backend_id=backend_id,

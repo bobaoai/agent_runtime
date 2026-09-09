@@ -15,7 +15,7 @@ from agent_runtime.contracts.registry_release_definition import (
     ModuleEntryPolicy,
     ModuleKind,
     OutputResolutionPolicy,
-    RuntimeModuleRelease,
+    ModuleRelease,
 )
 from agent_runtime.execution.execution_authorization_coordination import (
     ExecutionAuthorizationController,
@@ -74,8 +74,8 @@ class _Client:
 def _module(
     *,
     operation_ids: tuple[str, ...] = ("knowledge_search", "publish_report"),
-) -> RuntimeModuleRelease:
-    return RuntimeModuleRelease.build(
+) -> ModuleRelease:
+    return ModuleRelease.build(
         module_id="research_writer",
         module_version="1.0.0",
         release_ref="runtime-module:research_writer@1",
@@ -104,14 +104,14 @@ def _module(
 
 
 class _ModuleReleaseClient:
-    def __init__(self, module: RuntimeModuleRelease) -> None:
+    def __init__(self, module: ModuleRelease) -> None:
         self.module = module
 
     def resolve_registered_module_release(
         self,
         release_ref: str,
         release_sha256: str,
-    ) -> RuntimeModuleRelease:
+    ) -> ModuleRelease:
         if (
             release_ref != self.module.release_ref
             or release_sha256 != self.module.release_sha256
@@ -121,7 +121,7 @@ class _ModuleReleaseClient:
 
 
 def _controller(
-    module: RuntimeModuleRelease | None = None,
+    module: ModuleRelease | None = None,
 ) -> tuple[ExecutionAuthorizationController, _Client]:
     envelope = _envelope()
     client = _Client(envelope)

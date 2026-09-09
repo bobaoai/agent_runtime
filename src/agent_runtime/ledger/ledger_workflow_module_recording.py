@@ -59,12 +59,10 @@ from ..foundation.foundation_contract_validation import (
     parse_utc_timestamp,
     validate_sha256,
 )
-from ..foundation.foundation_retry_policy_validation import (
-    validate_retry_attempt_budget,
-)
 from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
-    RuntimeModuleRelease,
+    ModuleRelease,
+    OutputResolutionPolicy,
 )
 from ..invocation.invocation_tool_definition import (
     ModuleArtifactHost,
@@ -158,7 +156,7 @@ class WorkflowModuleLedgerRecorder:
         self,
         *,
         request: WorkflowModuleExecutionRequest,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
         variants: tuple[ModuleExecutionVariantRecord, ...],
         profiles: tuple[ExecutionProfileRelease, ...],
         retry_policy_ref: str,
@@ -175,7 +173,8 @@ class WorkflowModuleLedgerRecorder:
             or retry_policy_sha256 != module.retry_policy_sha256
         ):
             raise ValueError("Retry Policy primitives differ from the Module binding")
-        validate_retry_attempt_budget(max_attempts)
+        if type(max_attempts) is not int or not 1 <= max_attempts <= 100:
+            raise ValueError("Retry Policy max_attempts must be between 1 and 100")
         if len(variants) != len(profiles) or len(variants) != len(
             request.variants
         ):
@@ -261,37 +260,11 @@ class WorkflowModuleLedgerRecorder:
             )
         )
 
-    def committed_attempt_starts(
-        self,
-        *,
-        workflow_execution_id: str,
-    ) -> tuple[WorkflowAttemptStartedRecord, ...]:
-        """Return committed Attempt-start facts without interpreting them."""
-
-        return self.record_store.load_trace(
-            workflow_execution_id
-        ).records_of_type(
-            WorkflowAttemptStartedRecord
-        )
-
-    def committed_attempts(
-        self,
-        *,
-        workflow_execution_id: str,
-    ) -> tuple[WorkflowAttemptRecord, ...]:
-        """Return committed terminal Attempt facts without interpreting them."""
-
-        return self.record_store.load_trace(
-            workflow_execution_id
-        ).records_of_type(
-            WorkflowAttemptRecord
-        )
-
     def replay_result(
         self,
         *,
         request: WorkflowModuleExecutionRequest,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
     ) -> ModuleRunResult | None:
         """Reconstruct a committed result without re-entering a provider."""
 
@@ -394,17 +367,18 @@ class WorkflowModuleLedgerRecorder:
                 raise ValueError(
                     "completed invocation lacks canonical execution outputs"
                 )
-            resolution = self._direct_output_resolution(
-                request=request,
-                resolved_execution_output_refs=(
-                    formal_attempt.execution_output_refs
-                ),
-                recorded_at_utc=formal_attempt.recorded_at_utc,
-            )
-            self.record_output_resolution(
-                request=request,
-                resolution=resolution,
-            )
+            if module.output_resolution_policy is OutputResolutionPolicy.DIRECT_SINGLE:
+                resolution = self._direct_output_resolution(
+                    request=request,
+                    resolved_execution_output_refs=(
+                        formal_attempt.execution_output_refs
+                    ),
+                    recorded_at_utc=formal_attempt.recorded_at_utc,
+                )
+                self.record_output_resolution(
+                    request=request,
+                    resolution=resolution,
+                )
         return ModuleRunResult(
             module_run=ModuleRunRecord(
                 module_run_id=request.module_run_id,
@@ -661,6 +635,47 @@ class WorkflowModuleLedgerRecorder:
                 )
             self._claims[attempt_id] = claim
             return claim
+        starts = tuple(
+            row
+            for row in trace.records_of_type(WorkflowAttemptStartedRecord)
+            if row.module_run_id == request.module_run_id
+            and row.variant_id == variant.variant_id
+        )
+        if any(row.attempt_ordinal == attempt_ordinal for row in starts):
+            raise ValueError(
+                "Attempt ordinal is already bound to another durable Attempt"
+            )
+        if attempt_ordinal == 1:
+            if parent_attempt_id is not None:
+                raise ValueError("first durable Attempt cannot declare a parent")
+        else:
+            predecessors = tuple(
+                row
+                for row in starts
+                if row.attempt_ordinal == attempt_ordinal - 1
+            )
+            if len(predecessors) != 1:
+                raise ValueError(
+                    "retry Attempt requires one contiguous durable predecessor"
+                )
+            predecessor = predecessors[0]
+            if parent_attempt_id != predecessor.attempt_id:
+                raise ValueError(
+                    "retry parent_attempt_id differs from durable predecessor"
+                )
+            terminal = _one_by_id(
+                trace.records_of_type(WorkflowAttemptRecord),
+                "attempt_id",
+                predecessor.attempt_id,
+            )
+            if terminal is None:
+                raise ValueError(
+                    "retry Attempt requires a terminal durable predecessor"
+                )
+            if terminal.status != "failed":
+                raise ValueError(
+                    "retry Attempt requires a failed durable predecessor"
+                )
         receipt = self.record_store.begin_attempt(
             LegacyAttemptBeginBatch(
                 workflow_execution_id=request.workflow_execution_id,
@@ -948,7 +963,7 @@ class WorkflowModuleLedgerRecorder:
         self,
         *,
         request: WorkflowModuleExecutionRequest,
-        module: RuntimeModuleRelease,
+        module: ModuleRelease,
         profile: ExecutionProfileRelease,
         attempt: ModuleAttemptRecord,
         outputs: tuple[ModuleOutputBinding, ...],

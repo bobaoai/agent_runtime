@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import json
 from typing import Any
 
@@ -17,15 +17,10 @@ from agent_runtime.contracts.registry_release_definition import (
     ExecutionVariantPolicyRelease,
     ModuleEntryPolicy,
     ModuleExecutionPurpose,
-    ReleaseAdmissionIntent,
-    ReleaseAdmissionState,
     ReleaseSubjectKind,
-    RuntimeModuleRelease,
     SchemaAssetRelease,
     WorkflowEdge,
-    WorkflowNodeBinding,
     WorkflowNodeKind,
-    WorkflowRelease,
 )
 from agent_runtime.registry.registry_release_compilation import (
     AgentModuleReleaseCandidate,
@@ -37,7 +32,6 @@ from agent_runtime.registry.registry_release_compilation import (
     RetryPolicyReleaseCandidate,
     WorkflowNodeReleaseCandidate,
     WorkflowReleaseCandidate,
-    candidate_admission_intent,
     compile_agent_module_release,
     compile_behavior_policy_release,
     compile_evaluation_policy_release,
@@ -50,6 +44,10 @@ from agent_runtime.registry.registry_release_compilation import (
 from agent_runtime.registry.registry_release_registration import (
     RuntimeReleaseBundle,
     RuntimeReleaseRegistry,
+)
+from agent_runtime.inspection.inspection_release_rendering import (
+    build_runtime_release_inventory,
+    render_runtime_release_markdown,
 )
 
 
@@ -209,9 +207,9 @@ def _complete_registry_case() -> _CompleteRegistryCase:
                 "execution-binding:registry_catalog_workflow@v1"
             ),
             execution_binding_document={
-                "variant_policy_ref": (
-                    "execution-variant-policy:registry_catalog_workflow@v1"
-                )
+                "schema_version": "workflow_execution_binding_v1",
+                "workflow_id": "registry_catalog_workflow",
+                "variant_policy_family": "execution_variant_policy",
             },
         )
     )
@@ -259,10 +257,6 @@ def _complete_registry_case() -> _CompleteRegistryCase:
         ReleaseSubjectKind.RUNTIME_MODULE: compiled_module.module,
         ReleaseSubjectKind.WORKFLOW: workflow,
     }
-    admission_intents = tuple(
-        candidate_admission_intent(record)
-        for record in records.values()
-    )
     return _CompleteRegistryCase(
         bundle=RuntimeReleaseBundle(
             schema_assets=(
@@ -278,7 +272,6 @@ def _complete_registry_case() -> _CompleteRegistryCase:
             execution_profiles=(profile,),
             modules=(compiled_module.module,),
             workflows=(workflow,),
-            admission_intents=admission_intents,
         ),
         records=records,
         module_variant=module_variant,
@@ -286,120 +279,47 @@ def _complete_registry_case() -> _CompleteRegistryCase:
     )
 
 
-def _admission(
-    record: Any,
-    *,
-    admission_id: str,
-    state: ReleaseAdmissionState,
-) -> ReleaseAdmissionIntent:
-    candidate = candidate_admission_intent(record)
-    return ReleaseAdmissionIntent.build(
-        admission_id=admission_id,
-        subject_kind=candidate.subject_kind,
-        subject_id=candidate.subject_id,
-        release_ref=candidate.release_ref,
-        release_sha256=candidate.release_sha256,
-        state=state,
-        evidence_members=(),
+def test_release_inspection_projects_every_registered_policy_family() -> None:
+    case = _complete_registry_case()
+    registry = RuntimeReleaseRegistry()
+    registry.register_bundle(case.bundle)
+    before = registry.snapshot()
+
+    inventory = build_runtime_release_inventory(registry)
+    markdown = render_runtime_release_markdown(registry)
+    repeated_inventory = build_runtime_release_inventory(registry)
+    repeated_markdown = render_runtime_release_markdown(registry)
+
+    assert [item["release_ref"] for item in inventory["behavior_policies"]] == [
+        case.records[ReleaseSubjectKind.BEHAVIOR_POLICY].release_ref
+    ]
+    assert [item["release_ref"] for item in inventory["evaluation_policies"]] == [
+        case.records[ReleaseSubjectKind.EVALUATION_POLICY].release_ref
+    ]
+    assert [item["release_ref"] for item in inventory["retry_policies"]] == [
+        case.records[ReleaseSubjectKind.RETRY_POLICY].release_ref
+    ]
+    assert [
+        item["release_ref"]
+        for item in inventory["execution_variant_policies"]
+    ] == sorted(
+        [case.module_variant.release_ref, case.workflow_variant.release_ref]
     )
-
-
-def _module_with_retry_hash(
-    module: RuntimeModuleRelease,
-    retry_policy_sha256: str,
-) -> RuntimeModuleRelease:
-    return RuntimeModuleRelease.build(
-        module_id=module.module_id,
-        module_version=module.module_version,
-        release_ref=module.release_ref,
-        module_kind=module.module_kind,
-        owner_contract_ref=module.owner_contract_ref,
-        owner_contract_sha256=module.owner_contract_sha256,
-        executable_ref=module.executable_ref,
-        executable_sha256=module.executable_sha256,
-        input_schema_ref=module.input_schema_ref,
-        input_schema_sha256=module.input_schema_sha256,
-        output_schema_ref=module.output_schema_ref,
-        output_schema_sha256=module.output_schema_sha256,
-        prompt_bundle_ref=module.prompt_bundle_ref,
-        prompt_bundle_sha256=module.prompt_bundle_sha256,
-        declared_operation_ids=module.declared_operation_ids,
-        behavior_policy_ref=module.behavior_policy_ref,
-        behavior_policy_sha256=module.behavior_policy_sha256,
-        evaluation_policy_ref=module.evaluation_policy_ref,
-        evaluation_policy_sha256=module.evaluation_policy_sha256,
-        retry_policy_ref=module.retry_policy_ref,
-        retry_policy_sha256=retry_policy_sha256,
-        compatible_transport_kinds=module.compatible_transport_kinds,
-        entry_policy=module.entry_policy,
-        output_resolution_policy=module.output_resolution_policy,
-    )
-
-
-def _workflow_with_module_hash(
-    workflow: WorkflowRelease,
-    module_release_sha256: str,
-) -> WorkflowRelease:
-    nodes = (
-        WorkflowNodeBinding(
-            node_id=workflow.nodes[0].node_id,
-            node_kind=workflow.nodes[0].node_kind,
-            module_release_ref=workflow.nodes[0].module_release_ref,
-            module_release_sha256=module_release_sha256,
-            input_mapping_ref=workflow.nodes[0].input_mapping_ref,
-            input_mapping_sha256=workflow.nodes[0].input_mapping_sha256,
-        ),
-    )
-    return WorkflowRelease.build(
-        workflow_id=workflow.workflow_id,
-        workflow_version=workflow.workflow_version,
-        workflow_contract_version=workflow.workflow_contract_version,
-        release_ref=workflow.release_ref,
-        owner_contract_ref=workflow.owner_contract_ref,
-        owner_contract_sha256=workflow.owner_contract_sha256,
-        graph_ref=workflow.graph_ref,
-        graph_sha256=workflow.graph_sha256,
-        initial_node_id=workflow.initial_node_id,
-        nodes=nodes,
-        edges=workflow.edges,
-        authorization_manifest_ref=workflow.authorization_manifest_ref,
-        authorization_manifest_sha256=workflow.authorization_manifest_sha256,
-        execution_release_ref=workflow.execution_release_ref,
-        execution_release_sha256=workflow.execution_release_sha256,
-        parallel_groups=workflow.parallel_groups,
-    )
-
-
-def _bundle_for_closure_test(
-    case: _CompleteRegistryCase,
-    *,
-    modules: tuple[RuntimeModuleRelease, ...],
-    workflows: tuple[WorkflowRelease, ...] = (),
-    variants: tuple[ExecutionVariantPolicyRelease, ...] = (),
-) -> RuntimeReleaseBundle:
-    return RuntimeReleaseBundle(
-        schema_assets=case.bundle.schema_assets,
-        prompt_components=case.bundle.prompt_components,
-        prompt_bundles=case.bundle.prompt_bundles,
-        behavior_policies=case.bundle.behavior_policies,
-        evaluation_policies=case.bundle.evaluation_policies,
-        retry_policies=case.bundle.retry_policies,
-        execution_profiles=case.bundle.execution_profiles,
-        modules=modules,
-        workflows=workflows,
-        execution_variant_policies=variants,
-    )
+    assert "## Policies" in markdown
+    assert "Execution Variant" in markdown
+    assert repeated_inventory == inventory
+    assert repeated_markdown == markdown
+    assert registry.snapshot() == before
 
 
 def test_complete_catalog_registers_all_families_and_variant_origins() -> None:
     case = _complete_registry_case()
     registry = RuntimeReleaseRegistry()
-    registry.register_bundle(case.bundle)
+    result = registry.register_bundle(case.bundle)
 
     snapshot = registry.snapshot()
-    assert {record.subject_kind for record in snapshot.admissions} == set(
-        ReleaseSubjectKind
-    )
+    assert result.submitted_bundle == case.bundle
+    assert result.catalog_snapshot == snapshot
     assert registry.get_execution_profile(
         case.records[ReleaseSubjectKind.EXECUTION_PROFILE].release_ref,
         case.records[ReleaseSubjectKind.EXECUTION_PROFILE].release_sha256,
@@ -486,57 +406,6 @@ def test_exact_retrieval_rejects_wrong_hash_for_every_release_family(
         getattr(registry, getter_name)(record.release_ref, "0" * 64)
 
 
-def test_module_registration_uses_the_declared_retry_policy_hash() -> None:
-    case = _complete_registry_case()
-    module = case.records[ReleaseSubjectKind.RUNTIME_MODULE]
-    corrupted = _module_with_retry_hash(module, "0" * 64)
-
-    with pytest.raises(ValueError, match="Retry Policy release hash mismatch"):
-        RuntimeReleaseRegistry().register_bundle(
-            _bundle_for_closure_test(case, modules=(corrupted,))
-        )
-
-
-def test_workflow_registration_uses_the_declared_module_hash() -> None:
-    case = _complete_registry_case()
-    module = case.records[ReleaseSubjectKind.RUNTIME_MODULE]
-    workflow = case.records[ReleaseSubjectKind.WORKFLOW]
-    corrupted = _workflow_with_module_hash(workflow, "0" * 64)
-
-    with pytest.raises(ValueError, match="Runtime Module release hash mismatch"):
-        RuntimeReleaseRegistry().register_bundle(
-            _bundle_for_closure_test(
-                case,
-                modules=(module,),
-                workflows=(corrupted,),
-            )
-        )
-
-
-def test_variant_registration_uses_the_declared_profile_hash() -> None:
-    case = _complete_registry_case()
-    module = case.records[ReleaseSubjectKind.RUNTIME_MODULE]
-    document = case.module_variant.policy_document()
-    document["bindings"][0]["execution_profile_release_sha256"] = "0" * 64
-    corrupted = ExecutionVariantPolicyRelease.build(
-        policy_id=case.module_variant.policy_id,
-        policy_version=case.module_variant.policy_version,
-        release_ref=case.module_variant.release_ref,
-        policy_schema_ref=case.module_variant.policy_schema_ref,
-        policy_schema_sha256=case.module_variant.policy_schema_sha256,
-        policy_document=document,
-    )
-
-    with pytest.raises(ValueError, match="Execution Profile release hash mismatch"):
-        RuntimeReleaseRegistry().register_bundle(
-            _bundle_for_closure_test(
-                case,
-                modules=(module,),
-                variants=(corrupted,),
-            )
-        )
-
-
 @pytest.mark.parametrize(
     ("field_name", "wrong_subject_kind"),
     (
@@ -550,7 +419,6 @@ def test_variant_registration_uses_the_declared_profile_hash() -> None:
         ("execution_profiles", ReleaseSubjectKind.BEHAVIOR_POLICY),
         ("modules", ReleaseSubjectKind.BEHAVIOR_POLICY),
         ("workflows", ReleaseSubjectKind.BEHAVIOR_POLICY),
-        ("admission_intents", ReleaseSubjectKind.BEHAVIOR_POLICY),
     ),
 )
 def test_bundle_slots_reject_records_from_another_release_family(
@@ -566,7 +434,7 @@ def test_bundle_slots_reject_records_from_another_release_family(
         RuntimeReleaseRegistry().register_bundle(bundle)
 
 
-def test_registry_replay_is_idempotent_without_admission_duplication() -> None:
+def test_registry_release_replay_is_idempotent() -> None:
     case = _complete_registry_case()
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(case.bundle)
@@ -579,7 +447,7 @@ def test_registry_replay_is_idempotent_without_admission_duplication() -> None:
     assert registry.get_module(module.release_ref, module.release_sha256) is module
 
 
-def test_candidate_and_active_admission_gate_module_and_workflow_execution() -> None:
+def test_active_pointer_gates_module_and_workflow_product_entry() -> None:
     case = _complete_registry_case()
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(case.bundle)
@@ -591,29 +459,28 @@ def test_candidate_and_active_admission_gate_module_and_workflow_execution() -> 
         workflow,
         ModuleExecutionPurpose.TEST,
     )
-    with pytest.raises(PermissionError, match="not admitted for standalone"):
+    with pytest.raises(PermissionError, match="no active standalone entry"):
         registry.assert_module_execution_allowed(
             module,
             ModuleExecutionPurpose.STANDALONE,
         )
-    with pytest.raises(PermissionError, match="not admitted for workflow"):
+    with pytest.raises(PermissionError, match="no active entry"):
         registry.assert_workflow_execution_allowed(
             workflow,
             ModuleExecutionPurpose.WORKFLOW,
         )
 
-    module_active = _admission(
-        module,
-        admission_id="admission_runtime_module_registry_catalog_active",
-        state=ReleaseAdmissionState.ACTIVE,
+    module_pointer = registry.set_active_release(
+        ReleaseSubjectKind.RUNTIME_MODULE,
+        module.module_id,
+        module.release_ref,
+        module.release_sha256,
     )
-    workflow_active = _admission(
-        workflow,
-        admission_id="admission_workflow_registry_catalog_active",
-        state=ReleaseAdmissionState.ACTIVE,
-    )
-    registry.register_bundle(
-        RuntimeReleaseBundle(admission_intents=(module_active, workflow_active))
+    workflow_pointer = registry.set_active_release(
+        ReleaseSubjectKind.WORKFLOW,
+        workflow.workflow_id,
+        workflow.release_ref,
+        workflow.release_sha256,
     )
 
     registry.assert_module_execution_allowed(
@@ -624,87 +491,80 @@ def test_candidate_and_active_admission_gate_module_and_workflow_execution() -> 
         workflow,
         ModuleExecutionPurpose.WORKFLOW,
     )
-    assert registry.active_release_ref(
+    assert module_pointer.active_release_ref == module.release_ref
+    assert workflow_pointer.active_release_ref == workflow.release_ref
+    assert registry.resolve_active_release(
         ReleaseSubjectKind.RUNTIME_MODULE,
         module.module_id,
-    ) == module.release_ref
-    assert registry.active_release_ref(
+    ) == module
+    assert registry.resolve_active_release(
         ReleaseSubjectKind.WORKFLOW,
         workflow.workflow_id,
-    ) == workflow.release_ref
+    ) == workflow
 
 
-def test_active_replacement_requires_supersession_and_retirement_clears_pointer() -> None:
-    original = _profile(model_id="claude-opus-5", release_version="v1")
-    replacement = _profile(model_id="gpt-5.6", release_version="v2")
+def test_active_pointer_replacement_and_clear_use_exact_preconditions() -> None:
+    case = _complete_registry_case()
+    original = case.records[ReleaseSubjectKind.RUNTIME_MODULE]
+    replacement_fields = {
+        field.name: getattr(original, field.name)
+        for field in fields(original)
+        if field.name != "release_sha256"
+    }
+    replacement_fields.update(
+        {
+            "module_version": "v2",
+            "release_ref": f"runtime-module:{original.module_id}@v2",
+        }
+    )
+    replacement = type(original).build(**replacement_fields)
     registry = RuntimeReleaseRegistry()
-    registry.register_bundle(
-        RuntimeReleaseBundle(
-            execution_profiles=(original, replacement),
-            admission_intents=(
-                candidate_admission_intent(
-                    original,
-                ),
-                candidate_admission_intent(
-                    replacement,
-                ),
-            ),
+    registry.register_bundle(case.bundle)
+    registry.register_bundle(RuntimeReleaseBundle(modules=(replacement,)))
+    registry.set_active_release(
+        ReleaseSubjectKind.RUNTIME_MODULE,
+        original.module_id,
+        original.release_ref,
+        original.release_sha256,
+    )
+    registry.set_active_release(
+        ReleaseSubjectKind.RUNTIME_MODULE,
+        replacement.module_id,
+        replacement.release_ref,
+        replacement.release_sha256,
+    )
+    assert registry.resolve_active_release(
+        ReleaseSubjectKind.RUNTIME_MODULE,
+        replacement.module_id,
+    ) == replacement
+    with pytest.raises(ValueError, match="current target differs"):
+        registry.clear_active_release(
+            ReleaseSubjectKind.RUNTIME_MODULE,
+            original.module_id,
+            expected_release_ref=original.release_ref,
+            expected_release_sha256=original.release_sha256,
         )
+    cleared = registry.clear_active_release(
+        ReleaseSubjectKind.RUNTIME_MODULE,
+        replacement.module_id,
+        expected_release_ref=replacement.release_ref,
+        expected_release_sha256=replacement.release_sha256,
     )
-    registry.register_bundle(
-        RuntimeReleaseBundle(
-            admission_intents=(
-                _admission(
-                    original,
-                    admission_id="admission_execution_profile_original_active",
-                    state=ReleaseAdmissionState.ACTIVE,
-                ),
-            )
-        )
-    )
-    replacement_active = _admission(
-        replacement,
-        admission_id="admission_execution_profile_replacement_active",
-        state=ReleaseAdmissionState.ACTIVE,
-    )
+    assert cleared.active_release_ref is None
+    assert registry.clear_active_release(
+        ReleaseSubjectKind.RUNTIME_MODULE,
+        replacement.module_id,
+        expected_release_ref=replacement.release_ref,
+        expected_release_sha256=replacement.release_sha256,
+    ) == cleared
 
-    with pytest.raises(ValueError, match="old release to be superseded"):
-        registry.register_bundle(
-            RuntimeReleaseBundle(admission_intents=(replacement_active,))
-        )
-
-    registry.register_bundle(
-        RuntimeReleaseBundle(
-            admission_intents=(
-                _admission(
-                    original,
-                    admission_id="admission_execution_profile_original_superseded",
-                    state=ReleaseAdmissionState.SUPERSEDED,
-                ),
-                replacement_active,
-            )
-        )
-    )
-    assert registry.active_release_ref(
-        ReleaseSubjectKind.EXECUTION_PROFILE,
-        replacement.execution_profile_id,
-    ) == replacement.release_ref
-
-    registry.register_bundle(
-        RuntimeReleaseBundle(
-            admission_intents=(
-                _admission(
-                    replacement,
-                    admission_id="admission_execution_profile_replacement_retired",
-                    state=ReleaseAdmissionState.RETIRED,
-                ),
-            )
-        )
-    )
-    with pytest.raises(KeyError, match="no active execution_profile release"):
-        registry.active_release_ref(
+    profile = case.records[ReleaseSubjectKind.EXECUTION_PROFILE]
+    with pytest.raises(ValueError, match="only Module or Workflow"):
+        registry.set_active_release(
             ReleaseSubjectKind.EXECUTION_PROFILE,
-            replacement.execution_profile_id,
+            profile.execution_profile_id,
+            profile.release_ref,
+            profile.release_sha256,
         )
 
 
@@ -777,39 +637,6 @@ def test_schema_release_ref_collision_is_rejected() -> None:
         registry.register_bundle(RuntimeReleaseBundle(schema_assets=(conflicting,)))
 
 
-def test_admission_id_collision_is_rejected() -> None:
-    case = _complete_registry_case()
-    registry = RuntimeReleaseRegistry()
-    registry.register_bundle(case.bundle)
-    schema = case.records[ReleaseSubjectKind.SCHEMA_ASSET]
-    original = candidate_admission_intent(schema)
-    conflicting = _admission(
-        schema,
-        admission_id=original.admission_id,
-        state=ReleaseAdmissionState.RETIRED,
-    )
-
-    with pytest.raises(ValueError, match="admission_id collision"):
-        registry.register_bundle(RuntimeReleaseBundle(admission_intents=(conflicting,)))
-
-
-def test_illegal_admission_transition_is_rejected() -> None:
-    case = _complete_registry_case()
-    registry = RuntimeReleaseRegistry()
-    registry.register_bundle(case.bundle)
-    schema = case.records[ReleaseSubjectKind.SCHEMA_ASSET]
-    repeated_candidate = _admission(
-        schema,
-        admission_id="admission_schema_asset_registry_catalog_repeated_candidate",
-        state=ReleaseAdmissionState.CANDIDATE,
-    )
-
-    with pytest.raises(ValueError, match="illegal release admission transition"):
-        registry.register_bundle(
-            RuntimeReleaseBundle(admission_intents=(repeated_candidate,))
-        )
-
-
 def test_execution_variant_requires_at_least_one_profile_binding() -> None:
     candidate = ExecutionVariantPolicyReleaseCandidate(
         policy_id="empty_variant",
@@ -861,7 +688,7 @@ def test_predecessor_profile_selection_types_are_absent_from_public_surfaces() -
         assert retired_names.isdisjoint(module.__all__)
 
 
-def test_registry_facade_exports_2c1_without_unimplemented_2c2_migration() -> None:
+def test_registry_facade_exports_slice_2ab_and_slice_2c_public_surfaces() -> None:
     slice_2ab_exports = {
         "AgentModuleReleaseCandidate",
         "BehaviorPolicyReleaseCandidate",
@@ -873,11 +700,11 @@ def test_registry_facade_exports_2c1_without_unimplemented_2c2_migration() -> No
         "ExecutionVariantProfileBindingCandidate",
         "NonAgentModuleReleaseCandidate",
         "RetryPolicyReleaseCandidate",
+        "RuntimeActiveReleasePointerResult",
         "RuntimeReleaseBundle",
         "RuntimeReleaseRegistry",
         "WorkflowNodeReleaseCandidate",
         "WorkflowReleaseCandidate",
-        "candidate_admission_intent",
         "compile_agent_module_release",
         "compile_behavior_policy_release",
         "compile_evaluation_policy_release",
@@ -889,12 +716,7 @@ def test_registry_facade_exports_2c1_without_unimplemented_2c2_migration() -> No
         "compile_workflow_release",
         "runtime_owned_policy_schema_assets",
     }
-    slice_2c1_exports = {
-        "PostgresRuntimeReleaseQueryStore",
-        "PostgresRuntimeReleaseStore",
-        "REGISTRY_SCHEMA_RELEASE_ID",
-    }
-    slice_2c2_exports = {
+    slice_2c_exports = {
         "CompiledRegistryMigrationCandidateSet",
         "RegistryActivePointerDisposition",
         "RegistryActivePointerDispositionCandidate",
@@ -905,11 +727,9 @@ def test_registry_facade_exports_2c1_without_unimplemented_2c2_migration() -> No
         "RegistryReleaseIdentityDisposition",
         "RegistrySchemaInstallation",
         "RegistrySchemaMigrationPlan",
-        "RegistryTargetAdmissionCandidate",
         "compile_registry_migration_candidate_set",
     }
 
     public_exports = set(runtime_registry.__all__)
     assert slice_2ab_exports <= public_exports
-    assert slice_2c1_exports <= public_exports
-    assert slice_2c2_exports.isdisjoint(public_exports)
+    assert slice_2c_exports <= public_exports

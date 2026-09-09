@@ -8,7 +8,6 @@ import json
 from ..contracts.execution_module_definition import ModuleInputBinding
 from ..foundation.foundation_schema_traversal import (
     resolve_local_schema_reference,
-    transform_json_schema_nodes,
 )
 from .invocation_schema_projection import task_plane_output_schema
 
@@ -19,44 +18,6 @@ OUTPUT_CONSTRAINT_MODES = frozenset(
     {PROMPT_ONLY_JSON, NATIVE_STRUCTURED_OUTPUT}
 )
 OUTPUT_SCHEMA_MARKER = "\n## Required Output Shape\n"
-_CODEX_NATIVE_UNSUPPORTED_SCHEMA_KEYS = frozenset(
-    {
-        "allOf",
-        "oneOf",
-        "not",
-        "dependentRequired",
-        "dependentSchemas",
-        "if",
-        "then",
-        "else",
-        "uniqueItems",
-    }
-)
-_CODEX_NATIVE_SUPPORTED_SCHEMA_KEYS = frozenset(
-    {
-        "$defs",
-        "$ref",
-        "additionalProperties",
-        "anyOf",
-        "const",
-        "description",
-        "enum",
-        "format",
-        "items",
-        "maxItems",
-        "maxLength",
-        "maximum",
-        "minItems",
-        "minLength",
-        "minimum",
-        "multipleOf",
-        "pattern",
-        "properties",
-        "required",
-        "title",
-        "type",
-    }
-)
 
 
 def validate_registered_output_schema(
@@ -117,118 +78,6 @@ def provider_output_schema(
         compiled_static_body
     )
     return schema
-
-
-def codex_native_output_schema(
-    registered_output_schema: dict[str, object],
-) -> dict[str, object]:
-    """Project the registered task schema onto Codex native Structured Outputs.
-
-    OpenAI accepts only a JSON Schema subset for strict Structured Outputs.
-    Runtime keeps the complete registered task schema authoritative and
-    validates the returned artifact against it after provider execution.
-    """
-
-    def make_nullable(value: dict[str, object]) -> dict[str, object]:
-        """Represent one canonical optional property in Codex strict JSON."""
-
-        projected = dict(value)
-        declared_type = projected.get("type")
-        if isinstance(declared_type, str):
-            projected["type"] = [declared_type, "null"]
-            return projected
-        if isinstance(declared_type, list):
-            if "null" not in declared_type:
-                projected["type"] = [*declared_type, "null"]
-            return projected
-        enum_values = projected.get("enum")
-        if isinstance(enum_values, list):
-            if None not in enum_values:
-                projected["enum"] = [*enum_values, None]
-            return projected
-        any_of = projected.get("anyOf")
-        if isinstance(any_of, list):
-            if {"type": "null"} not in any_of:
-                projected["anyOf"] = [*any_of, {"type": "null"}]
-            return projected
-        return {"anyOf": [projected, {"type": "null"}]}
-
-    def project_node(node: dict[str, object]) -> dict[str, object]:
-        projected = {
-            key: item
-            for key, item in node.items()
-            if key not in _CODEX_NATIVE_UNSUPPORTED_SCHEMA_KEYS
-        }
-        properties = projected.get("properties")
-        if isinstance(properties, dict):
-            canonical_required = node.get("required", [])
-            required_names = (
-                set(canonical_required)
-                if isinstance(canonical_required, list)
-                else set()
-            )
-            for name, property_schema in tuple(properties.items()):
-                if name in required_names or not isinstance(property_schema, dict):
-                    continue
-                properties[name] = make_nullable(property_schema)
-            projected["required"] = list(properties)
-            projected["additionalProperties"] = False
-        return projected
-
-    projected = transform_json_schema_nodes(
-        registered_output_schema,
-        project_node,
-    )
-    if not isinstance(projected, dict) or projected.get("type") != "object":
-        raise ValueError("Codex native output schema root must be one object")
-    _validate_codex_native_schema(projected)
-    return projected
-
-
-def _validate_codex_native_schema(schema: dict[str, object]) -> None:
-    """Fail before invocation for schema shapes outside the admitted subset."""
-
-    def walk(node: object, path: str) -> None:
-        if not isinstance(node, dict):
-            return
-        unknown = set(node) - _CODEX_NATIVE_SUPPORTED_SCHEMA_KEYS
-        if unknown:
-            rendered = ", ".join(sorted(unknown))
-            raise ValueError(
-                f"Codex native output schema has unsupported keys at {path}: "
-                f"{rendered}"
-            )
-        properties = node.get("properties")
-        if properties is not None:
-            if not isinstance(properties, dict):
-                raise ValueError(f"Codex schema properties must be an object at {path}")
-            required = node.get("required")
-            if not isinstance(required, list) or required != list(properties):
-                raise ValueError(
-                    f"Codex schema must require every ordered property at {path}"
-                )
-            if node.get("additionalProperties") is not False:
-                raise ValueError(
-                    f"Codex schema object must forbid additional properties at {path}"
-                )
-            for name, child in properties.items():
-                walk(child, f"{path}/properties/{name}")
-        definitions = node.get("$defs")
-        if definitions is not None:
-            if not isinstance(definitions, dict):
-                raise ValueError(f"Codex schema $defs must be an object at {path}")
-            for name, child in definitions.items():
-                walk(child, f"{path}/$defs/{name}")
-        if "items" in node:
-            walk(node["items"], f"{path}/items")
-        alternatives = node.get("anyOf")
-        if alternatives is not None:
-            if not isinstance(alternatives, list) or not alternatives:
-                raise ValueError(f"Codex schema anyOf must be non-empty at {path}")
-            for index, child in enumerate(alternatives):
-                walk(child, f"{path}/anyOf/{index}")
-
-    walk(schema, "#")
 
 
 def normalize_codex_native_output(
@@ -448,7 +297,6 @@ __all__ = [
     "PROMPT_ONLY_JSON",
     "build_gateway_provider_prompt",
     "build_inline_provider_prompt",
-    "codex_native_output_schema",
     "model_visible_static_instructions",
     "normalize_codex_native_output",
     "provider_output_schema",

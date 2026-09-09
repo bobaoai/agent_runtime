@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import replace
@@ -121,23 +122,122 @@ def test_shared_fixture_modules_define_no_domain_vocabulary(
         ) is None
 
 
-def test_runtime_core_defines_no_domain_role_vocabulary() -> None:
+def _role_check_text(runtime_path: Path, source: str) -> str:
+    if runtime_path != Path("testing/conformance_agent_capability_verification.py"):
+        return source.lower()
+
+    tree = ast.parse(source)
+    descriptions: set[ast.Constant] = set()
+
+    def mark_text(node: ast.AST) -> None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            descriptions.add(node)
+        elif isinstance(node, (ast.Tuple, ast.List)):
+            for item in node.elts:
+                mark_text(item)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            mark_text(node.left)
+            mark_text(node.right)
+        elif isinstance(node, ast.JoinedStr):
+            for item in node.values:
+                if isinstance(item, ast.Constant):
+                    mark_text(item)
+
+    def render_body_nodes(node: ast.AST):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return
+        yield node
+        for child in ast.iter_child_nodes(node):
+            yield from render_body_nodes(child)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_capability_case":
+            for keyword in node.keywords:
+                if keyword.arg in {
+                    "test_paths", "example_test_refs", "input_description",
+                    "expected_result", "environment_prerequisites",
+                }:
+                    mark_text(keyword.value)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "_CASE_LABELS" for target in node.targets
+        ) and isinstance(node.value, ast.Dict):
+            for value in node.value.values:
+                mark_text(value)
+        if isinstance(node, ast.FunctionDef) and node.name in {
+            "render_agent_capability_catalog_markdown", "render_agent_capability_runbook_markdown",
+        }:
+            for item in (child for statement in node.body for child in render_body_nodes(statement)):
+                if isinstance(item, ast.Return) and item.value is not None:
+                    mark_text(item.value)
+                elif isinstance(item, ast.Assign) and any(
+                    isinstance(target, ast.Name) and target.id == "sections" for target in item.targets
+                ):
+                    mark_text(item.value)
+                elif isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute) and (
+                    isinstance(item.func.value, ast.Name) and item.func.value.id == "sections"
+                    and item.func.attr == "append"
+                ):
+                    for argument in item.args:
+                        mark_text(argument)
+    for node in descriptions:
+        node.value = ""
+    return ast.unparse(tree).lower()
+
+
+def _assert_generic_role_vocabulary(runtime_path: Path, source: str) -> None:
+    checked = _role_check_text(runtime_path, source)
+    for role in ("theme", "writer", "verifier", "reviewer", "debater", "pm"):
+        assert re.search(rf"(?<![a-z]){role}(?![a-z])", checked) is None, runtime_path
+
+
+@pytest.mark.parametrize("source", (
+    '_CASE_LABELS = {"case": "Reviewer 文档"}',
+    '_capability_case(test_paths=("tests/test_reviewer.py",), expected_result=("Reviewer 输出",))',
+    'def render_agent_capability_runbook_markdown():\n    sections = ["Reviewer 文档"]\n    sections.append(f"Reviewer: {value}")\n    return "Reviewer 索引"',
+))
+def test_capability_navigation_literals_are_not_executable_roles(source: str) -> None:
+    _assert_generic_role_vocabulary(Path("testing/conformance_agent_capability_verification.py"), source)
+
+
+@pytest.mark.parametrize("source", (
+    'if kind == "reviewer":\n    execute()',
+    'dispatch = {"reviewer": execute}',
+    'import reviewer',
+    'from module import reviewer',
+    'reviewer.run()',
+    '_capability_case(expected_result=("reviewer" if condition else "value",))',
+    'def render_agent_capability_runbook_markdown():\n    return f"Label: {kind == \'reviewer\'}"',
+    'def render_agent_capability_runbook_markdown():\n    sections = [lookup("reviewer")]',
+    'def render_agent_capability_runbook_markdown():\n    def role_name():\n        return "reviewer"\n    if kind == role_name():\n        execute()\n    return "document"',
+    'def render_agent_capability_runbook_markdown():\n    async def role_name():\n        return "reviewer"\n    return "document"',
+    'def render_agent_capability_runbook_markdown():\n    class Handler:\n        def role_name(self):\n            return "reviewer"\n    return "document"',
+))
+def test_capability_navigation_does_not_hide_role_decisions_or_imports(source: str) -> None:
+    with pytest.raises(AssertionError):
+        _assert_generic_role_vocabulary(Path("testing/conformance_agent_capability_verification.py"), source)
+
+
+def test_capability_navigation_exemption_does_not_apply_to_other_runtime_files() -> None:
+    for path in ("execution/execution_module_invocation.py", "testing/other.py"):
+        with pytest.raises(AssertionError):
+            _assert_generic_role_vocabulary(Path(path), '_CASE_LABELS = {"case": "Reviewer 文档"}')
+
+
+def test_runtime_role_vocabulary_is_confined_to_module_authoring() -> None:
     runtime_root = Path(__file__).resolve().parents[1] / "src" / "agent_runtime"
+    role_source = runtime_root / "registry/registry_module_authoring.py"
 
     for runtime_path in sorted(runtime_root.rglob("*.py")):
-        source = runtime_path.read_text(encoding="utf-8").lower()
-        for domain_role_token in (
-            "theme",
-            "writer",
-            "verifier",
-            "reviewer",
-            "debater",
-            "pm",
-        ):
-            assert re.search(
-                rf"(?<![a-z]){domain_role_token}(?![a-z])",
-                source,
-            ) is None, runtime_path
+        source = runtime_path.read_text(encoding="utf-8")
+        if runtime_path == role_source:
+            for domain_token in ("research", "theme", "thesis", "pm"):
+                assert re.search(
+                    rf"(?<![a-z]){domain_token}(?![a-z])",
+                    source.lower(),
+                ) is None, runtime_path
+            continue
+        _assert_generic_role_vocabulary(runtime_path.relative_to(runtime_root), source)
 
 
 def test_fixture_rejects_an_invalid_backend_identity() -> None:

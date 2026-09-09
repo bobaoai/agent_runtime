@@ -1,12 +1,10 @@
 from __future__ import annotations
 
+import agent_runtime.registry.registry_release_registration as release_registration
 import pytest
 
 from agent_runtime.contracts.registry_release_definition import (
     BehaviorPolicyRelease,
-    ReleaseAdmissionIntent,
-    ReleaseAdmissionState,
-    ReleaseSubjectKind,
 )
 from agent_runtime.registry.registry_release_compilation import (
     BehaviorPolicyReleaseCandidate,
@@ -14,7 +12,6 @@ from agent_runtime.registry.registry_release_compilation import (
     ExecutionVariantPolicyReleaseCandidate,
     ExecutionVariantProfileBindingCandidate,
     RetryPolicyReleaseCandidate,
-    candidate_admission_intent,
     compile_behavior_policy_release,
     compile_evaluation_policy_release,
     compile_execution_variant_policy_release,
@@ -72,7 +69,7 @@ def test_runtime_owned_policy_schemas_and_documents_are_closed() -> None:
     assert evaluation.policy_document() == {"evaluation_mode": "module_candidate"}
     assert retry.policy_document() == {"max_attempts": 3}
 
-    with pytest.raises(ValueError, match="admitted schema"):
+    with pytest.raises(ValueError, match="registered schema"):
         compile_evaluation_policy_release(
             EvaluationPolicyReleaseCandidate(
                 policy_id="invalid",
@@ -107,6 +104,44 @@ def test_policy_bundle_registers_with_exact_schema_closure() -> None:
     assert snapshot.retry_policies == (retry,)
 
 
+def test_persisted_catalog_restore_does_not_rerun_authoring_schema_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behavior, evaluation, retry = _policy_releases()
+    bundle = RuntimeReleaseBundle(
+        schema_assets=runtime_owned_policy_schema_assets(),
+        behavior_policies=(behavior,),
+        evaluation_policies=(evaluation,),
+        retry_policies=(retry,),
+    )
+    expected = RuntimeReleaseRegistry()
+    expected.register_bundle(bundle)
+
+    def unavailable(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("authoring validator unavailable")
+
+    monkeypatch.setattr(
+        release_registration,
+        "validate_json_schema_document",
+        unavailable,
+    )
+    monkeypatch.setattr(
+        release_registration,
+        "validate_json_document_against_schema",
+        unavailable,
+    )
+    restored = RuntimeReleaseRegistry()
+    restored._restore_persisted_bundle(bundle)
+
+    assert restored.snapshot() == expected.snapshot()
+    fresh = RuntimeReleaseRegistry()
+    before = fresh.snapshot()
+    with pytest.raises(RuntimeError, match="authoring validator unavailable"):
+        fresh.register_bundle(bundle)
+    assert fresh.snapshot() == before
+
+
 def test_policy_bundle_refuses_missing_or_substituted_schema() -> None:
     behavior, _, _ = _policy_releases()
     registry = RuntimeReleaseRegistry()
@@ -127,7 +162,7 @@ def test_policy_bundle_refuses_missing_or_substituted_schema() -> None:
         policy_schema_sha256=retry_schema.schema_sha256,
         policy_document={"context_isolation": "workflow_execution_isolated"},
     )
-    with pytest.raises(ValueError, match="admitted schema"):
+    with pytest.raises(ValueError, match="registered schema"):
         registry.register_bundle(
             RuntimeReleaseBundle(
                 schema_assets=(retry_schema,),
@@ -136,40 +171,22 @@ def test_policy_bundle_refuses_missing_or_substituted_schema() -> None:
         )
 
 
-def test_schema_and_policy_are_admissible_release_families() -> None:
+def test_schema_and_policy_are_registered_release_families() -> None:
     behavior, _, _ = _policy_releases()
     schema = runtime_owned_policy_schema_assets()[0]
-    schema_admission = candidate_admission_intent(schema)
-    policy_admission = candidate_admission_intent(behavior)
-    assert schema_admission.subject_kind is ReleaseSubjectKind.SCHEMA_ASSET
-    assert policy_admission.subject_kind is ReleaseSubjectKind.BEHAVIOR_POLICY
-
-
-def test_registry_snapshot_preserves_admission_transition_order() -> None:
-    schema = runtime_owned_policy_schema_assets()[0]
-    candidate = candidate_admission_intent(schema)
-    active = ReleaseAdmissionIntent.build(
-        admission_id="admission_schema_active_before_candidate_alphabetically",
-        subject_kind=candidate.subject_kind,
-        subject_id=candidate.subject_id,
-        release_ref=candidate.release_ref,
-        release_sha256=candidate.release_sha256,
-        state=ReleaseAdmissionState.ACTIVE,
-        evidence_members=(),
-    )
-    registry = RuntimeReleaseRegistry(
-        recording_clock=lambda: "2026-08-17T20:00:01Z"
-    )
+    registry = RuntimeReleaseRegistry()
     registry.register_bundle(
         RuntimeReleaseBundle(
             schema_assets=(schema,),
-            admission_intents=(candidate, active),
+            behavior_policies=(behavior,),
         )
     )
 
-    assert tuple(
-        record.admission_id for record in registry.snapshot().admissions
-    ) == (candidate.admission_id, active.admission_id)
+    assert registry.get_schema_asset(schema.release_ref, schema.schema_sha256) == schema
+    assert registry.get_behavior_policy(
+        behavior.release_ref,
+        behavior.release_sha256,
+    ) == behavior
 
 
 def test_execution_variant_policy_requires_exact_origin_and_profiles() -> None:

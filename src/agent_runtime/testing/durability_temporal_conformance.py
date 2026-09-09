@@ -29,7 +29,7 @@ from .durability_backend_conformance import (
     ConformanceModulePhase,
     build_conformance_module_dispatch,
 )
-from ..contracts.durability_execution_definition import assert_ref_only_backend_payload
+from ..contracts.durability_topology_definition import assert_ref_only_backend_payload
 
 
 TEMPORAL_ACTIVITY_NAME = "agent_runtime_temporal_conformance_module"

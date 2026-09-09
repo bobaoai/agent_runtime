@@ -13,10 +13,13 @@ pytest.importorskip("temporalio")
 from agent_runtime.contracts.durability_backend_definition import (  # noqa: E402
     DurableBackendAdapter,
 )
-from agent_runtime.contracts.durability_execution_definition import (  # noqa: E402
+from agent_runtime.contracts.durability_topology_definition import (  # noqa: E402
     BackendExecutionRef,
-    DurableExecutionBinding,
+    CellRuntimeBinding,
+    DeploymentMode,
     GraphStateProjection,
+    LlmSupply,
+    Region,
     WorkflowGraphProjection,
 )
 from agent_runtime.contracts.execution_host_definition import (  # noqa: E402
@@ -40,10 +43,16 @@ HASH = "a" * 64
 NOW = "2026-08-08T12:00:00Z"
 
 
-def _binding() -> DurableExecutionBinding:
-    return DurableExecutionBinding(
+def _binding() -> CellRuntimeBinding:
+    return CellRuntimeBinding(
         tenant_id="tenant-alpha",
         cell_id="cell-alpha",
+        region=Region.US,
+        llm_supply=LlmSupply.PLATFORM,
+        deployment_mode=DeploymentMode.DEDICATED,
+        artifact_store_ref="runtime-store:artifact-alpha",
+        audit_store_ref="runtime-store:audit-alpha",
+        model_credential_ref="secret-ref:model-alpha",
         backend_id="temporal",
         backend_namespace="runtime.production",
         backend_endpoint_ref="temporal-endpoint:alpha",

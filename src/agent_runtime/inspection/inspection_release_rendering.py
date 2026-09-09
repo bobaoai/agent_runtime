@@ -1,587 +1,415 @@
-"""Project selected Runtime Release metadata without reading another authority."""
+"""Emit a stable, machine-readable inventory of Agent Runtime registrations.
+
+The inventory is deliberately assembled from code-owned registrations and
+backend descriptors.  It lets tests, operators, and generated documentation
+inspect names, authority references, admission states, and implementation
+readiness without treating a hand-maintained architecture diagram as runtime
+truth.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
-from enum import StrEnum
-import hashlib
+import argparse
 import json
-from typing import Any, Mapping
+from typing import Any, Sequence
 
-from ..contracts.inspection_release_definition import ReleaseInventorySelection
-from ..contracts.registry_release_definition import (
-    BehaviorPolicyRelease,
-    EvaluationPolicyRelease,
-    ExecutionProfileRelease,
-    ExecutionVariantPolicyRelease,
-    PromptBundleRelease,
-    PromptComponentRelease,
-    ReleaseAdmissionRecord,
-    ReleaseAdmissionState,
-    ReleaseMember,
-    ReleaseSubjectKind,
-    RetryPolicyRelease,
-    RuntimeModuleRelease,
-    SchemaAssetRelease,
-    WorkflowRelease,
+from ..durability.durability_backend_registration import TEMPORAL_DESCRIPTOR
+from .inspection_architecture_rendering import (
+    build_runtime_architecture_projection,
+    render_runtime_architecture_markdown,
 )
-from ..foundation.foundation_contract_validation import validate_sha256
-from ..registry.registry_release_registration import RuntimeReleaseRegistrySnapshot
+from ..registry.registry_workflow_registration import WorkflowRuntimeRegistry
+from ..contracts.durability_topology_definition import BackendCandidateSet
+from ..registry.registry_release_registration import RuntimeReleaseRegistry
 
 
+INVENTORY_SCHEMA_VERSION = "agent_runtime_inventory_v3"
 RELEASE_INVENTORY_SCHEMA_VERSION = "agent_runtime_release_inventory_v4"
 
 
-@dataclass(frozen=True)
-class _ReleaseFamilyProjection:
-    snapshot_field: str
-    subject_kind: ReleaseSubjectKind
-    record_type: type[Any]
-    subject_id_field: str
-    version_field: str
-    extension_fields: tuple[str, ...]
-
-
-_RELEASE_FAMILIES = (
-    _ReleaseFamilyProjection(
-        "schema_assets", ReleaseSubjectKind.SCHEMA_ASSET, SchemaAssetRelease,
-        "schema_asset_id", "schema_asset_version", ("schema_sha256",),
-    ),
-    _ReleaseFamilyProjection(
-        "prompt_components", ReleaseSubjectKind.PROMPT_COMPONENT,
-        PromptComponentRelease, "prompt_component_id", "prompt_component_version",
-        (
-            "component_kind", "media_type", "formatter_id", "formatter_version",
-            "source_members", "formatted_content_sha256",
-        ),
-    ),
-    _ReleaseFamilyProjection(
-        "prompt_bundles", ReleaseSubjectKind.PROMPT_BUNDLE, PromptBundleRelease,
-        "prompt_bundle_id", "prompt_bundle_version",
-        ("compiler_version", "members", "compiled_static_body_sha256"),
-    ),
-    _ReleaseFamilyProjection(
-        "behavior_policies", ReleaseSubjectKind.BEHAVIOR_POLICY,
-        BehaviorPolicyRelease, "policy_id", "policy_version",
-        ("policy_schema_ref", "policy_schema_sha256", "policy_sha256"),
-    ),
-    _ReleaseFamilyProjection(
-        "evaluation_policies", ReleaseSubjectKind.EVALUATION_POLICY,
-        EvaluationPolicyRelease, "policy_id", "policy_version",
-        ("policy_schema_ref", "policy_schema_sha256", "policy_sha256"),
-    ),
-    _ReleaseFamilyProjection(
-        "retry_policies", ReleaseSubjectKind.RETRY_POLICY, RetryPolicyRelease,
-        "policy_id", "policy_version",
-        ("policy_schema_ref", "policy_schema_sha256", "policy_sha256"),
-    ),
-    _ReleaseFamilyProjection(
-        "execution_variant_policies", ReleaseSubjectKind.EXECUTION_VARIANT_POLICY,
-        ExecutionVariantPolicyRelease, "policy_id", "policy_version",
-        ("policy_schema_ref", "policy_schema_sha256", "policy_sha256"),
-    ),
-    _ReleaseFamilyProjection(
-        "execution_profiles", ReleaseSubjectKind.EXECUTION_PROFILE,
-        ExecutionProfileRelease, "execution_profile_id", "execution_profile_version",
-        (
-            "executor_adapter_id", "executor_adapter_revision", "transport_kind",
-            "provider_id", "model_id", "reasoning_profile", "execution_mode",
-            "semantic_input_delivery_mode", "attempt_workspace_policy",
-            "gateway_access_reasons", "output_constraint_mode", "tool_policy",
-            "network_policy", "timeout_seconds",
-        ),
-    ),
-    _ReleaseFamilyProjection(
-        "modules", ReleaseSubjectKind.RUNTIME_MODULE, RuntimeModuleRelease,
-        "module_id", "module_version",
-        (
-            "module_kind", "owner_contract_ref", "owner_contract_sha256",
-            "executable_ref", "executable_sha256", "input_schema_ref",
-            "input_schema_sha256", "output_schema_ref", "output_schema_sha256",
-            "prompt_bundle_ref", "prompt_bundle_sha256", "declared_operation_ids",
-            "behavior_policy_ref", "behavior_policy_sha256",
-            "evaluation_policy_ref", "evaluation_policy_sha256",
-            "retry_policy_ref", "retry_policy_sha256", "compatible_transport_kinds",
-            "entry_policy", "output_resolution_policy",
-        ),
-    ),
-    _ReleaseFamilyProjection(
-        "workflows", ReleaseSubjectKind.WORKFLOW, WorkflowRelease,
-        "workflow_id", "workflow_version",
-        (
-            "workflow_contract_version", "owner_contract_ref",
-            "owner_contract_sha256", "graph_ref", "graph_sha256",
-            "initial_node_id", "node_count", "edge_count", "parallel_group_count",
-            "authorization_manifest_ref", "authorization_manifest_sha256",
-            "execution_release_ref", "execution_release_sha256",
-        ),
-    ),
-)
-
-_SNAPSHOT_FIELDS = tuple(family.snapshot_field for family in _RELEASE_FAMILIES) + (
-    "admissions", "active_release_refs",
-)
-_INVENTORY_FIELDS = (
-    "schema_version", "selection_id", "selection_sha256",
-    "projected_closure_sha256", *_SNAPSHOT_FIELDS,
-)
-_COMMON_RELEASE_ROW_FIELDS = (
-    "subject_kind", "subject_id", "version", "release_ref", "release_sha256",
-    "latest_admission_state", "active",
-)
-_ADMISSION_ROW_FIELDS = (
-    "admission_id", "subject_kind", "subject_id", "release_ref",
-    "release_sha256", "state", "evidence_members", "admission_intent_sha256",
-    "recorded_at_utc",
-    "admission_sha256",
-)
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
-
-
-def _canonical_sha256(value: Any) -> str:
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
-
-
-def _project_value(value: Any) -> Any:
-    if isinstance(value, StrEnum):
-        return value.value
-    if type(value) is ReleaseMember:
-        return value.as_dict()
-    if type(value) is tuple:
-        return [_project_value(item) for item in value]
-    if value is None or type(value) in {str, int, bool}:
-        return value
-    raise TypeError(
-        f"unsupported Release inventory metadata type: {type(value).__name__}"
-    )
-
-
-def _family_extension_value(release: Any, field_name: str) -> Any:
-    if field_name == "node_count":
-        return len(release.nodes)
-    if field_name == "edge_count":
-        return len(release.edges)
-    if field_name == "parallel_group_count":
-        return len(release.parallel_groups)
-    return _project_value(getattr(release, field_name))
-
-
-def _validate_snapshot_shape(snapshot: RuntimeReleaseRegistrySnapshot) -> None:
-    if type(snapshot) is not RuntimeReleaseRegistrySnapshot:
-        raise ValueError("snapshot must be a RuntimeReleaseRegistrySnapshot")
-    actual_fields = tuple(field.name for field in fields(RuntimeReleaseRegistrySnapshot))
-    if actual_fields != _SNAPSHOT_FIELDS:
-        raise RuntimeError("RuntimeReleaseRegistrySnapshot projection fence mismatch")
-    for family in _RELEASE_FAMILIES:
-        records = getattr(snapshot, family.snapshot_field)
-        if type(records) is not tuple:
-            raise ValueError(f"snapshot {family.snapshot_field} must be a tuple")
-        for record in records:
-            if type(record) is not family.record_type:
-                raise ValueError(
-                    f"snapshot {family.snapshot_field} contains an invalid release"
-                )
-            record.validate()
-    if type(snapshot.admissions) is not tuple:
-        raise ValueError("snapshot admissions must be a tuple")
-    for admission in snapshot.admissions:
-        if type(admission) is not ReleaseAdmissionRecord:
-            raise ValueError("snapshot admissions contain an invalid record")
-        admission.validate()
-    if not isinstance(snapshot.active_release_refs, Mapping):
-        raise ValueError("snapshot active_release_refs must be a mapping")
-    if any(
-        type(key) is not str or type(value) is not str
-        for key, value in snapshot.active_release_refs.items()
-    ):
-        raise ValueError("snapshot active_release_refs must map strings to strings")
-
-
-def _selected_release_records(
-    snapshot: RuntimeReleaseRegistrySnapshot,
-    selection: ReleaseInventorySelection,
-) -> dict[str, tuple[_ReleaseFamilyProjection, Any]]:
-    candidates_by_ref: dict[str, list[tuple[_ReleaseFamilyProjection, Any]]] = {}
-    for family in _RELEASE_FAMILIES:
-        for release in getattr(snapshot, family.snapshot_field):
-            if release.release_ref in selection.selected_release_refs:
-                candidates_by_ref.setdefault(release.release_ref, []).append(
-                    (family, release)
-                )
-    selected: dict[str, tuple[_ReleaseFamilyProjection, Any]] = {}
-    for release_ref in selection.selected_release_refs:
-        candidates = candidates_by_ref.get(release_ref, [])
-        if not candidates:
-            raise ValueError(f"unknown selected release_ref: {release_ref}")
-        if len(candidates) != 1:
-            raise ValueError(f"ambiguous selected release_ref: {release_ref}")
-        selected[release_ref] = candidates[0]
-    return selected
-
-
-def _selected_admissions(
-    snapshot: RuntimeReleaseRegistrySnapshot,
-    selected: Mapping[str, tuple[_ReleaseFamilyProjection, Any]],
-) -> dict[tuple[ReleaseSubjectKind, str], tuple[ReleaseAdmissionRecord, ...]]:
-    grouped: dict[
-        tuple[ReleaseSubjectKind, str], list[ReleaseAdmissionRecord]
-    ] = {}
-    for admission in snapshot.admissions:
-        selected_release = selected.get(admission.release_ref)
-        if selected_release is None:
-            continue
-        family, release = selected_release
-        if admission.subject_kind is not family.subject_kind:
-            raise ValueError(
-                "selected admission subject_kind does not match its Release family"
-            )
-        if admission.subject_id != getattr(release, family.subject_id_field):
-            raise ValueError("selected admission subject_id does not match its Release")
-        if admission.release_sha256 != release.release_sha256:
-            raise ValueError("selected admission hash does not match its Release")
-        grouped.setdefault(
-            (admission.subject_kind, admission.release_ref), []
-        ).append(admission)
-    return {key: tuple(records) for key, records in grouped.items()}
-
-
-def _active_pointer_projection(
-    snapshot: RuntimeReleaseRegistrySnapshot,
-    selected: Mapping[str, tuple[_ReleaseFamilyProjection, Any]],
-) -> dict[str, str]:
-    expected_keys = {
-        release_ref: (
-            f"{family.subject_kind.value}:"
-            f"{getattr(release, family.subject_id_field)}"
-        )
-        for release_ref, (family, release) in selected.items()
-    }
-    projected: dict[str, str] = {}
-    for key, release_ref in snapshot.active_release_refs.items():
-        if release_ref not in selected:
-            continue
-        if key != expected_keys[release_ref]:
-            raise ValueError("selected active pointer does not match its Release identity")
-        projected[key] = release_ref
-    return {key: projected[key] for key in sorted(projected)}
-
-
-def _latest_selected_admission_state(
-    subject_kind: ReleaseSubjectKind,
-    release_ref: str,
-    admissions: Mapping[
-        tuple[ReleaseSubjectKind, str], tuple[ReleaseAdmissionRecord, ...]
-    ],
-) -> str | None:
-    matching = admissions.get((subject_kind, release_ref), ())
-    if not matching:
-        return None
-    lifecycle_rank = {
-        state: rank for rank, state in enumerate(ReleaseAdmissionState)
-    }
-    return max(matching, key=lambda row: lifecycle_rank[row.state]).state.value
-
-
-def _release_row(
-    family: _ReleaseFamilyProjection,
-    release: Any,
-    admissions: Mapping[
-        tuple[ReleaseSubjectKind, str], tuple[ReleaseAdmissionRecord, ...]
-    ],
-    active_release_refs: Mapping[str, str],
+def build_runtime_inventory(
+    *,
+    registry: WorkflowRuntimeRegistry | None = None,
+    backend_candidate_set: BackendCandidateSet | None = None,
 ) -> dict[str, Any]:
-    subject_id = getattr(release, family.subject_id_field)
-    active_key = f"{family.subject_kind.value}:{subject_id}"
-    row = {
-        "subject_kind": family.subject_kind.value,
-        "subject_id": subject_id,
-        "version": getattr(release, family.version_field),
-        "release_ref": release.release_ref,
-        "release_sha256": release.release_sha256,
-        "latest_admission_state": _latest_selected_admission_state(
-            family.subject_kind, release.release_ref, admissions
-        ),
-        "active": active_release_refs.get(active_key) == release.release_ref,
-    }
-    row.update(
-        {
-            field_name: _family_extension_value(release, field_name)
-            for field_name in family.extension_fields
-        }
+    """Return a deterministic inventory for an explicit host composition.
+
+    The standalone package has no built-in domain workflows. Callers that want
+    a product inventory pass the host's registry and backend release_registry.
+    """
+
+    registry = registry or WorkflowRuntimeRegistry()
+    backend_candidate_set = backend_candidate_set or BackendCandidateSet(
+        (TEMPORAL_DESCRIPTOR,)
     )
-    return row
+    registered_backend_ids = set(backend_candidate_set.all())
 
+    workflows = []
+    for registration in registry.all().values():
+        missing_backend_ids = (
+            set(registration.allowed_backend_ids) - registered_backend_ids
+        )
+        if missing_backend_ids:
+            raise RuntimeError(
+                f"workflow {registration.workflow_id} references unknown backends: "
+                f"{sorted(missing_backend_ids)}"
+            )
+        workflows.append(
+            {
+                "workflow_id": registration.workflow_id,
+                "domain": registration.domain,
+                "registration_version": registration.registration_version,
+                "contract_version": registration.contract_version,
+                "intent_ref": registration.intent_ref,
+                "graph_authority_ref": registration.graph_authority_ref,
+                "domain_manifest_ref": registration.domain_manifest_ref,
+                "admission_state": registration.admission_state.value,
+                "capabilities": sorted(registration.capabilities),
+                "entitlement_mode": registration.entitlement_mode,
+                "initial_state": registration.initial_state,
+                "executable": registration.executable,
+                "driver_ref": registration.driver_ref,
+                "store_ref": registration.store_ref,
+                "default_backend_id": registration.default_backend_id,
+                "allowed_backend_ids": list(registration.allowed_backend_ids),
+            }
+        )
 
-def _admission_row(admission: ReleaseAdmissionRecord) -> dict[str, Any]:
+    backends = []
+    for descriptor in backend_candidate_set.all().values():
+        backends.append(
+            {
+                "backend_id": descriptor.backend_id,
+                "adapter_contract_version": descriptor.adapter_contract_version,
+                "sdk_package": descriptor.sdk_package,
+                "admission_state": descriptor.admission_state.value,
+                "evaluation_role": descriptor.evaluation_role.value,
+                "implementation_ref": descriptor.implementation_ref,
+                "supports_dedicated": descriptor.supports_dedicated,
+                "supports_pooled": descriptor.supports_pooled,
+                "requires_external_service": descriptor.requires_external_service,
+            }
+        )
+
     return {
-        "admission_id": admission.admission_id,
-        "subject_kind": admission.subject_kind.value,
-        "subject_id": admission.subject_id,
-        "release_ref": admission.release_ref,
-        "release_sha256": admission.release_sha256,
-        "state": admission.state.value,
-        "evidence_members": [
-            member.as_dict() for member in admission.evidence_members
-        ],
-        "admission_intent_sha256": admission.admission_intent_sha256,
-        "recorded_at_utc": admission.recorded_at_utc,
-        "admission_sha256": admission.admission_sha256,
+        "schema_version": INVENTORY_SCHEMA_VERSION,
+        "selected_backend_id": backend_candidate_set.selected_candidate().backend_id,
+        "workflows": workflows,
+        "durable_backend_candidates": backends,
     }
 
 
-def _closure_payload(inventory: Mapping[str, Any]) -> dict[str, Any]:
-    return {field_name: inventory[field_name] for field_name in _SNAPSHOT_FIELDS}
+def build_runtime_surface_inventory() -> dict[str, Any]:
+    """Compatibility wrapper for the target architecture projection."""
+
+    return build_runtime_architecture_projection()
 
 
 def build_runtime_release_inventory(
-    *,
-    snapshot: RuntimeReleaseRegistrySnapshot,
-    selection: ReleaseInventorySelection,
+    release_registry: RuntimeReleaseRegistry,
 ) -> dict[str, Any]:
-    """Project selected, content-free metadata from one immutable snapshot."""
+    """Return a content-free inspection of one target Runtime Release Registry."""
 
-    _validate_snapshot_shape(snapshot)
-    if type(selection) is not ReleaseInventorySelection:
-        raise ValueError("selection must be a ReleaseInventorySelection")
-    selection.validate()
-    selected = _selected_release_records(snapshot, selection)
-    admissions_by_release = _selected_admissions(snapshot, selected)
-    active_release_refs = _active_pointer_projection(snapshot, selected)
-
-    inventory: dict[str, Any] = {
+    if type(release_registry) is not RuntimeReleaseRegistry:
+        raise ValueError("release_registry must be a RuntimeReleaseRegistry")
+    snapshot = release_registry.snapshot()
+    return {
         "schema_version": RELEASE_INVENTORY_SCHEMA_VERSION,
-        "selection_id": selection.selection_id,
-        "selection_sha256": selection.selection_sha256,
-        "projected_closure_sha256": "",
+        "schema_assets": [
+            {
+                "schema_asset_id": release.schema_asset_id,
+                "version": release.schema_asset_version,
+                "release_ref": release.release_ref,
+                "schema_sha256": release.schema_sha256,
+                "release_sha256": release.release_sha256,
+            }
+            for release in snapshot.schema_assets
+        ],
+        "prompt_components": [
+            {
+                "prompt_component_id": release.prompt_component_id,
+                "version": release.prompt_component_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "component_kind": release.component_kind.value,
+                "media_type": release.media_type,
+                "formatter_id": release.formatter_id,
+                "formatter_version": release.formatter_version,
+                "formatted_content_sha256": release.formatted_content_sha256,
+            }
+            for release in snapshot.prompt_components
+        ],
+        "prompt_bundles": [
+            {
+                "prompt_bundle_id": release.prompt_bundle_id,
+                "version": release.prompt_bundle_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+            }
+            for release in snapshot.prompt_bundles
+        ],
+        "behavior_policies": [
+            {
+                "policy_id": release.policy_id,
+                "version": release.policy_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "policy_schema_ref": release.policy_schema_ref,
+                "policy_schema_sha256": release.policy_schema_sha256,
+            }
+            for release in snapshot.behavior_policies
+        ],
+        "evaluation_policies": [
+            {
+                "policy_id": release.policy_id,
+                "version": release.policy_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "policy_schema_ref": release.policy_schema_ref,
+                "policy_schema_sha256": release.policy_schema_sha256,
+            }
+            for release in snapshot.evaluation_policies
+        ],
+        "retry_policies": [
+            {
+                "policy_id": release.policy_id,
+                "version": release.policy_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "policy_schema_ref": release.policy_schema_ref,
+                "policy_schema_sha256": release.policy_schema_sha256,
+            }
+            for release in snapshot.retry_policies
+        ],
+        "execution_variant_policies": [
+            {
+                "policy_id": release.policy_id,
+                "version": release.policy_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "policy_schema_ref": release.policy_schema_ref,
+                "policy_schema_sha256": release.policy_schema_sha256,
+            }
+            for release in snapshot.execution_variant_policies
+        ],
+        "execution_profiles": [
+            {
+                "execution_profile_id": release.execution_profile_id,
+                "version": release.execution_profile_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "executor_adapter_id": release.executor_adapter_id,
+                "transport_kind": release.transport_kind,
+                "provider_id": release.provider_id,
+                "model_id": release.model_id,
+                "reasoning_profile": release.reasoning_profile,
+                "output_constraint_mode": release.output_constraint_mode,
+            }
+            for release in snapshot.execution_profiles
+        ],
+        "modules": [
+            {
+                "module_id": release.module_id,
+                "version": release.module_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "module_kind": release.module_kind.value,
+                "owner_contract_ref": release.owner_contract_ref,
+                "entry_policy": release.entry_policy.value,
+                "declared_operation_ids": list(
+                    release.declared_operation_ids
+                ),
+                "active": snapshot.active_release_refs.get(
+                    f"runtime_module:{release.module_id}"
+                ) == release.release_ref,
+            }
+            for release in snapshot.modules
+        ],
+        "workflows": [
+            {
+                "workflow_id": release.workflow_id,
+                "version": release.workflow_version,
+                "contract_version": release.workflow_contract_version,
+                "release_ref": release.release_ref,
+                "release_sha256": release.release_sha256,
+                "graph_ref": release.graph_ref,
+                "graph_sha256": release.graph_sha256,
+                "nodes": [node.as_dict() for node in release.nodes],
+                "edges": [edge.as_dict() for edge in release.edges],
+                "parallel_groups": [
+                    group.as_dict() for group in release.parallel_groups
+                ],
+                "active": snapshot.active_release_refs.get(
+                    f"workflow:{release.workflow_id}"
+                ) == release.release_ref,
+            }
+            for release in snapshot.workflows
+        ],
+        "active_release_refs": dict(snapshot.active_release_refs),
     }
-    for family in _RELEASE_FAMILIES:
-        releases = [
-            release
-            for selected_family, release in selected.values()
-            if selected_family is family
-        ]
-        inventory[family.snapshot_field] = [
-            _release_row(
-                family, release, admissions_by_release, active_release_refs
-            )
-            for release in sorted(releases, key=lambda item: item.release_ref)
-        ]
-
-    selected_admissions = [
-        admission
-        for records in admissions_by_release.values()
-        for admission in records
-    ]
-    inventory["admissions"] = [
-        _admission_row(admission)
-        for admission in sorted(
-            selected_admissions,
-            key=lambda row: (
-                row.release_ref, row.recorded_at_utc, row.admission_id
-            ),
-        )
-    ]
-    inventory["active_release_refs"] = active_release_refs
-    inventory["projected_closure_sha256"] = _canonical_sha256(
-        _closure_payload(inventory)
-    )
-    _validate_runtime_release_inventory(inventory)
-    return inventory
 
 
-def _validate_runtime_release_inventory(inventory: Mapping[str, Any]) -> None:
-    if type(inventory) is not dict or set(inventory) != set(_INVENTORY_FIELDS):
-        raise ValueError("Runtime Release inventory fields are invalid")
-    if inventory["schema_version"] != RELEASE_INVENTORY_SCHEMA_VERSION:
-        raise ValueError("unsupported Runtime Release inventory schema")
+def render_runtime_surface_markdown() -> str:
+    """Compatibility wrapper for the target architecture renderer."""
 
-    observed_refs: list[str] = []
-    release_rows_by_ref: dict[str, dict[str, Any]] = {}
-    for family in _RELEASE_FAMILIES:
-        rows = inventory[family.snapshot_field]
-        if type(rows) is not list:
-            raise ValueError(f"inventory {family.snapshot_field} must be an array")
-        release_refs = [row.get("release_ref") for row in rows]
-        if release_refs != sorted(release_refs):
-            raise ValueError(f"inventory {family.snapshot_field} is not sorted")
-        expected_fields = (*_COMMON_RELEASE_ROW_FIELDS, *family.extension_fields)
-        for row in rows:
-            if type(row) is not dict or set(row) != set(expected_fields):
-                raise ValueError(
-                    f"inventory {family.snapshot_field} row fields are invalid"
-                )
-            if row["subject_kind"] != family.subject_kind.value:
-                raise ValueError("inventory Release row subject_kind is invalid")
-            validate_sha256("release_sha256", row["release_sha256"])
-            if row["latest_admission_state"] is not None:
-                ReleaseAdmissionState(row["latest_admission_state"])
-            if type(row["active"]) is not bool:
-                raise ValueError("inventory Release row active must be a bool")
-            observed_refs.append(row["release_ref"])
-            release_rows_by_ref[row["release_ref"]] = row
-
-    selection = ReleaseInventorySelection.from_dict(
-        {
-            "selection_id": inventory["selection_id"],
-            "selected_release_refs": sorted(observed_refs),
-            "selection_sha256": inventory["selection_sha256"],
-        }
-    )
-    selected_refs = set(selection.selected_release_refs)
-    if tuple(sorted(observed_refs)) != selection.selected_release_refs:
-        raise ValueError("inventory Release rows do not close the selection")
-    if len(observed_refs) != len(selected_refs):
-        raise ValueError("inventory Release refs are ambiguous")
-
-    admission_rows = inventory["admissions"]
-    if type(admission_rows) is not list:
-        raise ValueError("inventory admissions must be an array")
-    if admission_rows != sorted(
-        admission_rows,
-        key=lambda row: (
-            row.get("release_ref"),
-            row.get("recorded_at_utc"),
-            row.get("admission_id"),
-        ),
-    ):
-        raise ValueError("inventory admissions are not sorted")
-    for row in admission_rows:
-        if type(row) is not dict or set(row) != set(_ADMISSION_ROW_FIELDS):
-            raise ValueError("inventory admission row fields are invalid")
-        if row["release_ref"] not in selected_refs:
-            raise ValueError("inventory admission falls outside the selection")
-        ReleaseSubjectKind(row["subject_kind"])
-        ReleaseAdmissionState(row["state"])
-        validate_sha256("release_sha256", row["release_sha256"])
-        validate_sha256("admission_sha256", row["admission_sha256"])
-        release_row = release_rows_by_ref[row["release_ref"]]
-        if (
-            row["subject_kind"] != release_row["subject_kind"]
-            or row["subject_id"] != release_row["subject_id"]
-            or row["release_sha256"] != release_row["release_sha256"]
-        ):
-            raise ValueError("inventory admission identity does not match its Release")
-
-    lifecycle_rank = {
-        state.value: rank for rank, state in enumerate(ReleaseAdmissionState)
-    }
-    for release_ref, release_row in release_rows_by_ref.items():
-        states = [
-            row["state"]
-            for row in admission_rows
-            if row["subject_kind"] == release_row["subject_kind"]
-            and row["release_ref"] == release_ref
-        ]
-        latest_state = max(states, key=lifecycle_rank.__getitem__) if states else None
-        if release_row["latest_admission_state"] != latest_state:
-            raise ValueError("inventory latest admission state is inconsistent")
-
-    active_release_refs = inventory["active_release_refs"]
-    if type(active_release_refs) is not dict:
-        raise ValueError("inventory active_release_refs must be an object")
-    if list(active_release_refs) != sorted(active_release_refs):
-        raise ValueError("inventory active_release_refs are not sorted")
-    if any(ref not in selected_refs for ref in active_release_refs.values()):
-        raise ValueError("inventory active pointer falls outside the selection")
-    for key, release_ref in active_release_refs.items():
-        release_row = release_rows_by_ref[release_ref]
-        expected_key = (
-            f"{release_row['subject_kind']}:{release_row['subject_id']}"
-        )
-        if key != expected_key:
-            raise ValueError("inventory active pointer identity is inconsistent")
-    for release_ref, release_row in release_rows_by_ref.items():
-        expected_key = (
-            f"{release_row['subject_kind']}:{release_row['subject_id']}"
-        )
-        if release_row["active"] != (
-            active_release_refs.get(expected_key) == release_ref
-        ):
-            raise ValueError("inventory active Release state is inconsistent")
-    validate_sha256(
-        "projected_closure_sha256", inventory["projected_closure_sha256"]
-    )
-    if inventory["projected_closure_sha256"] != _canonical_sha256(
-        _closure_payload(inventory)
-    ):
-        raise ValueError("Runtime Release inventory closure hash mismatch")
+    return render_runtime_architecture_markdown()
 
 
-def render_runtime_release_markdown(inventory: Mapping[str, Any]) -> str:
-    """Render one validated Release inventory without reading another source."""
+def render_runtime_release_markdown(
+    release_registry: RuntimeReleaseRegistry,
+) -> str:
+    """Render a content-free human projection of one Release Registry."""
 
-    _validate_runtime_release_inventory(inventory)
-    labels = {
-        "schema_assets": "Schema Assets",
-        "prompt_components": "Prompt Components",
-        "prompt_bundles": "Prompt Bundles",
-        "behavior_policies": "Behavior Policies",
-        "evaluation_policies": "Evaluation Policies",
-        "retry_policies": "Retry Policies",
-        "execution_variant_policies": "Execution Variant Policies",
-        "execution_profiles": "Execution Profiles",
-        "modules": "Runtime Modules",
-        "workflows": "Workflows",
-    }
+    inventory = build_runtime_release_inventory(release_registry)
     lines = [
         "# Agent Runtime Release Inventory",
         "",
         (
-            "> Deterministic, selection-bounded metadata projection; not "
-            "Registry or authorization authority."
+            "> Generated from the host-composed Runtime Release Registry. "
+            "It contains release metadata only and does not admit a candidate."
         ),
-        "",
-        f"- Selection: `{inventory['selection_id']}`",
-        f"- Selection SHA-256: `{inventory['selection_sha256']}`",
-        f"- Projected closure SHA-256: `{inventory['projected_closure_sha256']}`",
         "",
         "## Summary",
         "",
         "| Release kind | Count |",
         "| --- | ---: |",
+        f"| Schema Asset | `{len(inventory['schema_assets'])}` |",
+        f"| Prompt Component | `{len(inventory['prompt_components'])}` |",
+        f"| Prompt Bundle | `{len(inventory['prompt_bundles'])}` |",
+        f"| Behavior Policy | `{len(inventory['behavior_policies'])}` |",
+        f"| Evaluation Policy | `{len(inventory['evaluation_policies'])}` |",
+        f"| Retry Policy | `{len(inventory['retry_policies'])}` |",
+        (
+            "| Execution Variant Policy | "
+            f"`{len(inventory['execution_variant_policies'])}` |"
+        ),
+        f"| Execution Profile | `{len(inventory['execution_profiles'])}` |",
+        f"| Runtime Module | `{len(inventory['modules'])}` |",
+        f"| Workflow | `{len(inventory['workflows'])}` |",
+        f"| Active release pointer | `{len(inventory['active_release_refs'])}` |",
+        "",
+        "## Workflows",
+        "",
+        (
+            "| Workflow | Release version | Contract version | Nodes | Edges | "
+            "Parallel groups | Active | Release |"
+        ),
+        "| --- | --- | --- | ---: | ---: | ---: | --- | --- |",
     ]
-    for family in _RELEASE_FAMILIES:
+    for workflow in inventory["workflows"]:
         lines.append(
-            f"| {labels[family.snapshot_field]} | "
-            f"`{len(inventory[family.snapshot_field])}` |"
+            f"| `{workflow['workflow_id']}` | `{workflow['version']}` | "
+            f"`{workflow['contract_version']}` | `{len(workflow['nodes'])}` | "
+            f"`{len(workflow['edges'])}` | "
+            f"`{len(workflow['parallel_groups'])}` | "
+            f"`{workflow['active']}` | "
+            f"`{workflow['release_ref']}` |"
         )
     lines.extend(
         [
-            f"| Admission records | `{len(inventory['admissions'])}` |",
-            f"| Active pointers | `{len(inventory['active_release_refs'])}` |",
+            "",
+            "## Runtime Modules",
+            "",
+            (
+                "| Module | Version | Kind | Entry policy | Owner contract | "
+                "Active |"
+            ),
+            "| --- | --- | --- | --- | --- | --- |",
         ]
     )
-    for family in _RELEASE_FAMILIES:
-        lines.extend(
-            [
-                "",
-                f"## {labels[family.snapshot_field]}",
-                "",
-                "| ID | Version | Admission | Active | Release |",
-                "| --- | --- | --- | --- | --- |",
-            ]
+    for module in inventory["modules"]:
+        lines.append(
+            f"| `{module['module_id']}` | `{module['version']}` | "
+            f"`{module['module_kind']}` | `{module['entry_policy']}` | "
+            f"`{module['owner_contract_ref']}` | "
+            f"`{module['active']}` |"
         )
-        for row in inventory[family.snapshot_field]:
-            admission_state = row["latest_admission_state"] or "unadmitted"
-            active = "yes" if row["active"] else "no"
+    lines.extend(
+        [
+            "",
+            "## Schema Assets",
+            "",
+            "| Schema asset | Version | Schema ref | Schema hash |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for schema_asset in inventory["schema_assets"]:
+        lines.append(
+            f"| `{schema_asset['schema_asset_id']}` | "
+            f"`{schema_asset['version']}` | "
+            f"`{schema_asset['release_ref']}` | "
+            f"`{schema_asset['schema_sha256']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Prompt Components",
+            "",
+            (
+                "| Component | Version | Kind | Formatter | Content hash | "
+                "Release |"
+            ),
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for component in inventory["prompt_components"]:
+        lines.append(
+            f"| `{component['prompt_component_id']}` | "
+            f"`{component['version']}` | `{component['component_kind']}` | "
+            f"`{component['formatter_id']}@{component['formatter_version']}` | "
+            f"`{component['formatted_content_sha256']}` | "
+            f"`{component['release_ref']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Policies",
+            "",
+            "| Family | Policy | Version | Schema | Release |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for family, inventory_key in (
+        ("Behavior", "behavior_policies"),
+        ("Evaluation", "evaluation_policies"),
+        ("Retry", "retry_policies"),
+        ("Execution Variant", "execution_variant_policies"),
+    ):
+        for policy in inventory[inventory_key]:
             lines.append(
-                f"| `{row['subject_id']}` | `{row['version']}` | "
-                f"`{admission_state}` | `{active}` | `{row['release_ref']}` |"
+                f"| {family} | `{policy['policy_id']}` | "
+                f"`{policy['version']}` | `{policy['policy_schema_ref']}` | "
+                f"`{policy['release_ref']}` |"
             )
+    lines.extend(
+        [
+            "",
+            "## Execution Profiles",
+            "",
+            (
+                "| Profile | Version | Adapter | Transport | Provider | Model | "
+                "Reasoning | Output constraint | Release |"
+            ),
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for profile in inventory["execution_profiles"]:
+        lines.append(
+            f"| `{profile['execution_profile_id']}` | "
+            f"`{profile['version']}` | `{profile['executor_adapter_id']}` | "
+            f"`{profile['transport_kind']}` | `{profile['provider_id']}` | "
+            f"`{profile['model_id']}` | `{profile['reasoning_profile']}` | "
+            f"`{profile['output_constraint_mode']}` | "
+            f"`{profile['release_ref']}` |"
+        )
     lines.extend(
         [
             "",
             "## Boundary",
             "",
             (
-                "Prompt text, Schema bodies, Policy documents, owner-contract "
-                "bodies, task inputs, outputs, credentials, and provider "
-                "transcripts are structurally absent."
+                "Prompt bodies, task input, Artifact bodies, tenant content, "
+                "credentials, and provider transcripts are intentionally absent."
             ),
             "",
         ]
@@ -589,8 +417,53 @@ def render_runtime_release_markdown(inventory: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def main(argv: Sequence[str] | None = None) -> int:
+    """Print a deterministic Runtime inventory or surface projection."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--format",
+        choices=("inventory-json", "surface-json", "surface-markdown"),
+        default="inventory-json",
+        help="inspection output format",
+    )
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="indent JSON for human inspection",
+    )
+    args = parser.parse_args(argv)
+    if args.format == "surface-markdown":
+        print(render_runtime_surface_markdown(), end="")
+        return 0
+    inventory = (
+        build_runtime_surface_inventory()
+        if args.format == "surface-json"
+        else build_runtime_inventory()
+    )
+    print(
+        json.dumps(
+            inventory,
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+            sort_keys=True,
+            separators=None if args.pretty else (",", ":"),
+        )
+    )
+    return 0
+
+
 __all__ = [
+    "INVENTORY_SCHEMA_VERSION",
     "RELEASE_INVENTORY_SCHEMA_VERSION",
+    "build_runtime_inventory",
     "build_runtime_release_inventory",
+    "build_runtime_surface_inventory",
+    "main",
     "render_runtime_release_markdown",
+    "render_runtime_surface_markdown",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -131,6 +131,15 @@ Product Authorization and governed Data Access remain external authorities.
 Runtime carries the admitted authorization context and calls those authorities
 when an execution requires a current decision or authorized product data.
 
+## Capability documentation
+
+从能力索引按使用任务找到样例，再用 runbook 的单例、分组或全仓命令执行测试。
+样例指向真实 pytest 函数，说明输入、预期结果与所需环境；测试代码位于同版本源码 checkout 的
+`tests/`，wheel 随附文档。批量测试直接使用 pytest 自动收集，结果中的跳过项不算通过。
+
+- [Agent Runtime capabilities](docs/agent_runtime_capabilities.md)
+- [Agent Runtime capability runbook](docs/agent_runtime_capability_runbook.md)
+
 ### Durable parallel groups
 
 A Workflow Release may declare an `all_required` parallel group at one control
@@ -241,9 +250,12 @@ semantic surfaces while migration is in progress. They are listed in
 illustrative tree, is the exhaustive current source map.
 
 Before a public cutover, Conformance freezes every downstream Runtime import at
-symbol level in a host-owned consumer manifest. Derived dispositions can
-inventory migration work, while compatibility-facade retirement remains
-blocked until every affected site carries an explicit owner decision.
+symbol level. The current trading-platform baseline is stored in
+`review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json`;
+it records a `replace` or `retire` disposition for every observed import site.
+Those values are derived defaults used to freeze the surface, not owner
+decisions. Compatibility-facade retirement remains blocked until every site is
+explicitly marked `owner_decision`.
 
 Package initializers temporarily re-export some predecessor types for existing
 downstream callers. Those re-exports are compatibility-only, must not be used
@@ -287,32 +299,6 @@ flowchart LR
 Production execution reads the admitted PostgreSQL release. It never rebuilds
 a Prompt, Schema, Skill, Module, or Workflow by reopening Git.
 
-Every host uses the same explicit authoring client. The host owns only its
-inventory and selected source files:
-
-```python
-from pathlib import Path
-
-from agent_runtime.registry import (
-    RuntimeReleaseRegistry,
-    build_runtime_release_set,
-    load_runtime_authoring_inventory,
-    register_runtime_release_set,
-)
-
-sources = load_runtime_authoring_inventory(
-    Path.cwd(),
-    "runtime_authoring_inventory.json",
-)
-build = build_runtime_release_set(sources)
-report = register_runtime_release_set(RuntimeReleaseRegistry(), build)
-```
-
-The same submission call accepts `PostgresRuntimeReleaseStore` after an
-administrator has installed the Registry schema. The client performs no source
-discovery, schema creation, migration, provider invocation, or business
-routing. Its report contains Release identities only.
-
 ## Workflow execution
 
 The Product host requests an already authorized Workflow start. Runtime freezes
@@ -345,6 +331,76 @@ flowchart TB
     ROUTE -- "terminal state" --> COMPLETE["Complete Agent Workflow"]
 ```
 
+### 已注册 Module 的一节点执行
+
+宿主已有一节点 Workflow 和选择其 Profile 的 Variant Policy 时，使用
+`run_registered_workflow_module`。Stores、Adapter、授权接口和注册绑定配置一次，日常只传
+目标 Module、JSON 输入和本次 key。Key 在使用的 record store 命名空间内唯一。
+
+```python
+from functools import partial
+from agent_runtime import run_registered_workflow_module
+from agent_runtime.ledger import PostgresRuntimeExecutionQueryStore
+
+review = partial(
+    run_registered_workflow_module,
+    release_registry=registry,
+    workflow=registry.get_workflow(workflow_ref, workflow_sha256),
+    variant_policy=registry.get_execution_variant_policy(variant_ref, variant_sha256),
+    authorize=host.authorize,
+    context_client=host.context_client,
+    operation_client=host.operation_client,
+    enforcing_gateway_id=enforcing_gateway_id,
+    environment_id=environment_id,
+    adapters=adapters,
+    artifact_host=cell,
+    record_store=execution_store,
+    content_store=execution_store,
+    claim_token_secret=host_claim_secret,
+)
+
+result = review(
+    module_id=target_module_id,
+    input_payload=payload,
+    idempotency_key=review_key,
+)
+execution_id = result.module_run.workflow_execution_id
+
+query = PostgresRuntimeExecutionQueryStore.from_dsn(database_url, schema=execution_schema)
+trace = query.load_trace(execution_id)
+for output in result.outputs:
+    content = query.load_content(execution_id, output.output_ref)
+    assert content.content_sha256 == output.output_sha256
+```
+
+宿主提供已初始化的 Registry、Cell staging 接口、明确的 PostgreSQL 记录及内容存储，以及
+已配置的执行 Adapter。Staging 可以使用 `InMemoryCellArtifactStore`，需提供 `put_bytes`、
+`read_bytes`、`artifact` 和 `resolve_artifact_ref`。Provider 登录和独立 CLI 环境继续由现有
+Adapter 配置处理；这个入口不读取环境文件，不执行注册或 activation。
+
+`authorize(request)` 接收已冻结的 `WorkflowModuleExecutionRequest`，返回一个 tuple：
+`ExecutionAuthorizationContextEnvelope`，以及依次代表 decision、delegation、entitlement snapshot
+的三个 `ResolvedArtifactRef`。它们对应现有记录槽位，不是新增 grant。宿主拥有这些引用的含义，
+并将精确内容放入 artifact host。Runtime 校验身份，通过原有 controller 绑定 context，再调用
+宿主提供的接口取得操作决定。授权内容和 claim secret 不进入模型 Prompt；同一 execution 使用
+相同的 claim secret。
+
+入口从已注册 Workflow 和 Variant Policy 派生 Module、节点与 Profile，并核对它们确实指向
+`target_module_id`。当前支持 tool-free inline `evaluation`，不执行多节点图，也不代表
+无 Workflow 的持久 standalone 已实现。入口冻结任务与 Prompt，记录执行起点和输入，再通过
+`run_workflow_module` 完成实际 Attempt 与原子提交。
+
+返回值是原始 `ModuleRunResult`，业务审核结论由所属 Reviewer 解释。`evaluated_single` 在
+尚未独立选择结果时保持 `resolution=None`，重放也一样；只有 `direct_single` 可以从已提交输出
+补全缺少的直接 Resolution。同 key、同输入和绑定会复用已提交结果，不再次调用 Provider；
+内容冲突会被拒绝。未完成执行返回现有 Runtime 恢复路径，Store 失败不能当作落库成功。
+使用示例中的新查询连接核对实际记录和内容。
+
+并发首次调用使用 PG 原生 `CommitReceipt.replayed` 判定进入权，只有首次提交者进入模型执行。
+竞争调用取得已提交结果，或在结果尚未完成时返回既有恢复路径。
+`WorkflowExecutionLedgerRecorder.record_execution_start` 现在返回这份已有 receipt；
+它的输入和写入行为不变，原有忽略返回值的调用可以继续使用。
+
 ## Workflow Inspector
 
 The installed Runtime exposes a read-only web interface backed by its formal
@@ -367,33 +423,13 @@ The package also retains an explicit offline snapshot exporter for portable
 review artifacts. It is a secondary export path, not the primary interface or
 a second persisted source of truth, and it is never created automatically.
 
-## External contract references
+## PostgreSQL and Live Inspector quick start
 
-The packaged Design Contract manifest may name adjacent authority contracts
-published by a host, Agency Platform, Product Authorization, Data Governance,
-or Software Delivery. Those names document interface dependencies only. Their
-files and content are not part of the Runtime repository or wheel.
-
-## Development verification
-
-Install the complete development test environment with:
+Install the optional PostgreSQL client and initialize both Runtime-owned
+schemas:
 
 ```bash
-pip install -e ".[test]"
-```
-
-The default suite includes every deterministic test and collects the Claude,
-Temporal, and PostgreSQL adapter surfaces. Live Provider, PostgreSQL, and
-Temporal integration calls remain explicitly environment-gated.
-
-## PostgreSQL first-time provisioning and Live Inspector
-
-This development candidate is not published on PyPI. From a local checkout,
-install the package and optional PostgreSQL client, then provision the
-Runtime-owned schemas:
-
-```bash
-pip install -e ".[postgres]"
+pip install "agent-runtime-core[postgres]"
 ```
 
 ```python
@@ -401,14 +437,11 @@ from agent_runtime.ledger import PostgresRuntimeExecutionRecordStore
 from agent_runtime.registry import PostgresRuntimeReleaseStore
 
 database_url = "postgresql://runtime@localhost/runtime"
-PostgresRuntimeReleaseStore.from_dsn(database_url).create_schema()
+PostgresRuntimeReleaseStore.from_dsn(database_url).create_schema(
+    installed_at_utc="2026-08-17T20:00:00Z",
+)
 PostgresRuntimeExecutionRecordStore.from_dsn(database_url).initialize_schema()
 ```
-
-`create_schema()` is an administrator-only, absent-namespace operation. It is
-deliberately non-idempotent and never runs during application startup. Registry
-startup uses `installed_schema_release()` and refuses every state except the
-exact ready release.
 
 The live application deliberately has no allow-all mode and does not trust a
 request header by default. A host supplies its authenticated request context
@@ -500,17 +533,17 @@ or keep a parallel shadow trace.
 | Execution purpose | Why is this run being performed? | `test`, `evaluation`, `workflow`, `standalone`, `replay` |
 | Provider transport | How is the adapter reached? | `transport_kind`: `in_process_test`, `claude_agent_sdk`, `codex_cli`; `transport_family`: `in_process`, `sdk`, `cli`, `api` |
 | Capability profile | What may the model do and receive? | `execution_mode`, semantic input delivery, Attempt workspace, Gateway tools, and network policy |
-| Runtime admission | May this exact request execute now? | Purpose gate, release state, Module operations, exact profile, registered adapter identity and capability coverage, and — for model operations — committed AR09 authorization evidence must all pass |
+| Runtime execution gate | May this exact request execute now? | Purpose gate, exact registered releases, Module operations, exact profile, registered adapter identity and capability coverage, and — for model operations — committed AR09 authorization evidence must all pass; Workflow/Standalone entry additionally resolves its active pointer |
 
-`production` is not a `ModuleExecutionPurpose` value. It describes a lifecycle
-and admission scope normally entered through `workflow` or `standalone`; those
+`production` is not a `ModuleExecutionPurpose` value. It describes a deployment
+scope normally entered through `workflow` or `standalone`; those
 purposes are not admitted by the current public entry point.
 
 ### Current Module-execution admission matrix
 
 | Purpose and Module shape | Capability profile | Registered transport | Current result |
 | --- | --- | --- | --- |
-| `test` or `evaluation`, no protected operation | Exact registered profile | `in_process` transport family only; a provider transport requires a declared model operation | Admitted without authorization evidence, subject to release and adapter checks |
+| `test` or `evaluation`, no protected operation | Exact registered profile | `in_process` transport family only; a provider transport requires a declared model operation | Admitted without authorization evidence, subject to exact release and adapter checks |
 | `test` or `evaluation`, exactly one model operation (`invoke_model` or `model_execute`) and no other operation | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible, explicitly registered Claude SDK or Codex CLI adapter | Admitted with a required `ModuleExecutionAuthority`; a Product `DENY` or closed fence fails the Attempt with zero Provider invocation |
 | `test` or `evaluation`, exactly one model operation and no other operation | `agent` + `inline` + workspace `own_draft_read_write` + empty Gateway tool policy + network `denied` | Exact Claude SDK inline-draft adapter revision | Admitted. Every exposed Read/Write/Edit is checked against the Attempt root; the model receives no governed Gateway resource and no general network |
 | `test` or `evaluation`, exactly one model operation plus one or more declared Gateway read operations | `agent` + `gateway_read` + workspace `none` + exact non-empty tool policy and access reason + network `gateway_only` | Claude SDK Gateway adapter with dynamic-operation authorization support | Admitted. Model dispatch is authorized first; every tool call then requires a fresh Stack-A decision and Runtime receipt before the resource callable is entered |

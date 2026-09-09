@@ -23,12 +23,9 @@ from ..contracts.registry_release_definition import (
     ModuleKind,
     OutputResolutionPolicy,
     PromptBundleRelease,
-    ReleaseAdmissionIntent,
-    ReleaseAdmissionState,
     ReleaseMember,
-    ReleaseSubjectKind,
     RetryPolicyRelease,
-    RuntimeModuleRelease,
+    ModuleRelease,
     SchemaAssetRelease,
     WorkflowEdge,
     WorkflowNodeBinding,
@@ -41,11 +38,9 @@ from ..foundation import (
     validate_json_document_against_schema,
     validate_json_schema_document,
 )
-from ..foundation.foundation_retry_policy_validation import (
-    RETRY_POLICY_MAX_ATTEMPTS,
-    RETRY_POLICY_MIN_ATTEMPTS,
-    validate_retry_attempt_budget,
-)
+
+
+WORKFLOW_EXECUTION_BINDING_INVALID = "WORKFLOW_EXECUTION_BINDING_INVALID"
 
 
 def sha256_text(value: str) -> str:
@@ -118,7 +113,7 @@ class CompiledAgentModuleRelease:
     schema_assets: tuple[SchemaAssetRelease, ...]
     prompt_components: tuple[PromptComponentRelease, ...]
     prompt_bundle: PromptBundleRelease
-    module: RuntimeModuleRelease
+    module: ModuleRelease
 
 
 @dataclass(frozen=True)
@@ -126,7 +121,7 @@ class CompiledNonAgentModuleRelease:
     """Dependency-closed records produced for one non-Agent Module."""
 
     schema_assets: tuple[SchemaAssetRelease, ...]
-    module: RuntimeModuleRelease
+    module: ModuleRelease
 
 
 @dataclass(frozen=True)
@@ -276,6 +271,30 @@ def compile_workflow_release(
         raise ValueError("Workflow candidate edges must be a non-empty tuple")
     if type(candidate.parallel_groups) is not tuple:
         raise ValueError("Workflow parallel_groups must be an immutable tuple")
+    expected_execution_binding_ref = (
+        f"execution-binding:{candidate.workflow_id}@{candidate.workflow_version}"
+    )
+    if candidate.execution_binding_ref != expected_execution_binding_ref:
+        raise ValueError(
+            f"{WORKFLOW_EXECUTION_BINDING_INVALID}: execution_binding_ref "
+            "must derive from Workflow identity and version"
+        )
+    execution_binding_document, execution_binding_sha256 = (
+        _canonical_json_payload(
+            "execution_binding_document",
+            candidate.execution_binding_document,
+        )
+    )
+    expected_execution_binding_document = {
+        "schema_version": "workflow_execution_binding_v1",
+        "variant_policy_family": "execution_variant_policy",
+        "workflow_id": candidate.workflow_id,
+    }
+    if execution_binding_document != expected_execution_binding_document:
+        raise ValueError(
+            f"{WORKFLOW_EXECUTION_BINDING_INVALID}: execution_binding_document "
+            "must be the exact target-independent workflow_execution_binding_v1"
+        )
 
     nodes: list[WorkflowNodeBinding] = []
     mapping_hashes: dict[str, str] = {}
@@ -322,10 +341,6 @@ def compile_workflow_release(
     _, authorization_sha256 = _canonical_json_payload(
         "authorization_manifest_document",
         candidate.authorization_manifest_document,
-    )
-    _, execution_binding_sha256 = _canonical_json_payload(
-        "execution_binding_document",
-        candidate.execution_binding_document,
     )
     node_tuple = tuple(nodes)
     graph_payload = {
@@ -415,13 +430,7 @@ def runtime_owned_policy_schema_assets() -> tuple[SchemaAssetRelease, ...]:
         ),
         (
             "runtime_retry_policy",
-            {
-                "max_attempts": {
-                    "type": "integer",
-                    "minimum": RETRY_POLICY_MIN_ATTEMPTS,
-                    "maximum": RETRY_POLICY_MAX_ATTEMPTS,
-                }
-            },
+            {"max_attempts": {"type": "integer", "minimum": 1, "maximum": 100}},
             ("max_attempts",),
         ),
         (
@@ -551,7 +560,8 @@ def compile_retry_policy_release(
 ) -> RetryPolicyRelease:
     """Compile one closed retry policy."""
 
-    validate_retry_attempt_budget(candidate.max_attempts)
+    if type(candidate.max_attempts) is not int or not 1 <= candidate.max_attempts <= 100:
+        raise ValueError("max_attempts must be an integer between 1 and 100")
     return _compile_policy_release(
         release_type=RetryPolicyRelease,
         policy_id=candidate.policy_id,
@@ -774,7 +784,7 @@ def compile_agent_module_release(
         compiler_version="task_plane_module_prompt_v3",
         components=prompt_components,
     )
-    module = RuntimeModuleRelease.build(
+    module = ModuleRelease.build(
         module_id=candidate.module_id,
         module_version=candidate.module_version,
         release_ref=(
@@ -831,7 +841,7 @@ def compile_non_agent_module_release(
         schema_ref=candidate.output_schema_ref,
         schema_document=candidate.output_schema_document,
     )
-    module = RuntimeModuleRelease.build(
+    module = ModuleRelease.build(
         module_id=candidate.module_id,
         module_version=candidate.module_version,
         release_ref=(
@@ -865,61 +875,6 @@ def compile_non_agent_module_release(
     )
 
 
-def candidate_admission_intent(
-    record: Any,
-    *,
-    evidence_members: tuple[ReleaseMember, ...] = (),
-) -> ReleaseAdmissionIntent:
-    """Build one timestamp-free candidate intent for an exact release."""
-
-    if isinstance(record, SchemaAssetRelease):
-        kind = ReleaseSubjectKind.SCHEMA_ASSET
-        subject_id = record.schema_asset_id
-    elif isinstance(record, PromptComponentRelease):
-        kind = ReleaseSubjectKind.PROMPT_COMPONENT
-        subject_id = record.prompt_component_id
-    elif isinstance(record, PromptBundleRelease):
-        kind = ReleaseSubjectKind.PROMPT_BUNDLE
-        subject_id = record.prompt_bundle_id
-    elif isinstance(record, BehaviorPolicyRelease):
-        kind = ReleaseSubjectKind.BEHAVIOR_POLICY
-        subject_id = record.policy_id
-    elif isinstance(record, EvaluationPolicyRelease):
-        kind = ReleaseSubjectKind.EVALUATION_POLICY
-        subject_id = record.policy_id
-    elif isinstance(record, RetryPolicyRelease):
-        kind = ReleaseSubjectKind.RETRY_POLICY
-        subject_id = record.policy_id
-    elif isinstance(record, ExecutionVariantPolicyRelease):
-        kind = ReleaseSubjectKind.EXECUTION_VARIANT_POLICY
-        subject_id = record.policy_id
-    elif isinstance(record, ExecutionProfileRelease):
-        kind = ReleaseSubjectKind.EXECUTION_PROFILE
-        subject_id = record.execution_profile_id
-    elif isinstance(record, RuntimeModuleRelease):
-        kind = ReleaseSubjectKind.RUNTIME_MODULE
-        subject_id = record.module_id
-    else:
-        from ..contracts.registry_release_definition import WorkflowRelease
-
-        if not isinstance(record, WorkflowRelease):
-            raise ValueError("candidate admission received an unknown release type")
-        kind = ReleaseSubjectKind.WORKFLOW
-        subject_id = record.workflow_id
-    return ReleaseAdmissionIntent.build(
-        admission_id=(
-            f"admission_{kind.value}_{subject_id}_"
-            f"{record.release_sha256[:16]}"
-        ),
-        subject_kind=kind,
-        subject_id=subject_id,
-        release_ref=record.release_ref,
-        release_sha256=record.release_sha256,
-        state=ReleaseAdmissionState.CANDIDATE,
-        evidence_members=evidence_members,
-    )
-
-
 __all__ = [
     "AgentModuleReleaseCandidate",
     "BehaviorPolicyReleaseCandidate",
@@ -933,7 +888,7 @@ __all__ = [
     "RetryPolicyReleaseCandidate",
     "WorkflowNodeReleaseCandidate",
     "WorkflowReleaseCandidate",
-    "candidate_admission_intent",
+    "WORKFLOW_EXECUTION_BINDING_INVALID",
     "compile_agent_module_release",
     "compile_behavior_policy_release",
     "compile_evaluation_policy_release",

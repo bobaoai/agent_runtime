@@ -16,7 +16,6 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 import json
 from pathlib import Path
-import re
 from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
@@ -65,7 +64,10 @@ from .invocation_result_assembly import (
     provider_adapter_descriptor,
     raise_terminal_failure,
 )
-from ..foundation.foundation_schema_traversal import transform_json_schema_nodes
+from .invocation_schema_projection import (
+    NativeOutputSchemaProjectionError,
+    claude_native_output_schema,
+)
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
     lease_attempt_workspace,
@@ -75,57 +77,7 @@ from .invocation_workspace_preparation import (
 
 _MCP_SERVER_NAME = "runtime_data_access"
 _DRAFT_WORKSPACE_TOOLS = ("Read", "Write", "Edit")
-_PROFILE_REFUSAL_LIMIT = 8
-_PROFILE_REFUSAL_TOOL_CHARS = 128
-_PROFILE_REFUSAL_REASON_CHARS = 1024
-_PROFILE_REFUSAL_PATH_CHARS = 2048
-
-
-def _exact_tool_matcher(tool_names: tuple[str, ...] | list[str]) -> str:
-    """Return one anchored SDK hook matcher for exact exposed tool names."""
-
-    if not tool_names:
-        raise ValueError("tool matcher requires at least one tool name")
-    return "^(?:" + "|".join(re.escape(name) for name in tool_names) + ")$"
-
-
-def _bounded_profile_refusal(
-    *,
-    tool_name: object,
-    reason: object,
-    path: object,
-) -> dict[str, str]:
-    """Return one bounded policy-refusal trace member."""
-
-    return {
-        "tool_name": bounded_trace_text(str(tool_name))[
-            :_PROFILE_REFUSAL_TOOL_CHARS
-        ],
-        "reason": bounded_trace_text(str(reason))[
-            :_PROFILE_REFUSAL_REASON_CHARS
-        ],
-        "path": bounded_trace_text(str(path))[:_PROFILE_REFUSAL_PATH_CHARS],
-    }
-
-
-def _record_profile_refusal(
-    refusals: list[dict[str, str]],
-    *,
-    tool_name: object,
-    reason: object,
-    path: object,
-) -> None:
-    """Append one bounded refusal until the trace row limit is reached."""
-
-    if len(refusals) >= _PROFILE_REFUSAL_LIMIT:
-        return
-    refusals.append(
-        _bounded_profile_refusal(
-            tool_name=tool_name,
-            reason=reason,
-            path=path,
-        )
-    )
+_CLAUDE_SANDBOX_WORKSPACE_ROOTS = (Path("/root"), Path("/repo"))
 
 
 def _inside(root: Path, raw_path: str) -> bool:
@@ -137,6 +89,21 @@ def _inside(root: Path, raw_path: str) -> bool:
     )
     resolved_root = root.resolve()
     return resolved == resolved_root or resolved_root in resolved.parents
+
+
+def _inside_attempt_workspace(root: Path, raw_path: str) -> bool:
+    """Accept host and Claude-sandbox views of one Attempt workspace."""
+
+    candidate = Path(raw_path)
+    provider_top_level_file = (
+        candidate.is_absolute()
+        and len(candidate.parts) == 2
+        and candidate.name not in {"", ".", ".."}
+    )
+    return provider_top_level_file or _inside(root, raw_path) or any(
+        _inside(provider_root, raw_path)
+        for provider_root in _CLAUDE_SANDBOX_WORKSPACE_ROOTS
+    )
 
 
 def _json_tool_result(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -264,35 +231,6 @@ def _canonical_output(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-
-
-def _structured_output_format(
-    registered_output_schema: dict[str, object],
-) -> dict[str, Any]:
-    """Project the registered schema for provider structured output framing.
-
-    Provider structured output is only a framing aid. Runtime still validates
-    the committed object against the exact registered Module output schema.
-    """
-
-    unsupported_composition = {
-        "allOf",
-        "anyOf",
-        "oneOf",
-        "if",
-        "then",
-        "else",
-    }
-
-    provider_schema = transform_json_schema_nodes(
-        registered_output_schema,
-        lambda node: {
-            key: value
-            for key, value in node.items()
-            if key not in unsupported_composition
-        },
-    )
-    return {"type": "json_schema", "schema": provider_schema}
 
 
 def _is_quota_response(provider_response: str) -> bool:
@@ -430,6 +368,32 @@ class _ClaudeAgentSdkExecutorBase:
         registered_output_schema = prepared.registered_output_schema
         prompt = prepared.prompt
 
+        native_output_format = None
+        if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT:
+            try:
+                native_output_format = {
+                    "type": "json_schema",
+                    "schema": claude_native_output_schema(
+                        registered_output_schema
+                    ),
+                }
+            except NativeOutputSchemaProjectionError as exc:
+                raise_terminal_failure(
+                    artifact_host=self._artifact_host,
+                    request=request,
+                    profile=profile,
+                    failure_class="schema",
+                    failure_code="native_output_schema_projection_unsupported",
+                    message=str(exc),
+                    provider_response="",
+                    retry_disposition_id="retry_denied",
+                    trace={
+                        "stage": "native_output_schema_projection",
+                        "error": str(exc),
+                    },
+                    cause=exc,
+                )
+
         session = None
         definitions: tuple[ProviderToolDefinition, ...] = ()
         if self.requires_gateway:
@@ -486,10 +450,14 @@ class _ClaudeAgentSdkExecutorBase:
                 path_value = tool_input.get("file_path") or tool_input.get(
                     "path"
                 )
-                if not path_value or not _inside(workspace, str(path_value)):
+                if not path_value or not _inside_attempt_workspace(
+                    workspace,
+                    str(path_value),
+                ):
                     return PermissionResultDeny(
                         message=(
-                            f"tool {tool_name} path escapes the Attempt draft workspace"
+                            f"tool {tool_name} path {str(path_value)!r} escapes "
+                            "the Attempt draft workspace"
                         ),
                         interrupt=True,
                     )
@@ -500,7 +468,7 @@ class _ClaudeAgentSdkExecutorBase:
             )
 
         profile_policy_refused = False
-        profile_policy_refusals: list[dict[str, str]] = []
+        profile_policy_refusal_reason: str | None = None
 
         async def enforce_profile_tool(
             hook_input: dict[str, Any],
@@ -509,7 +477,7 @@ class _ClaudeAgentSdkExecutorBase:
         ) -> dict[str, Any]:
             """Gate every exposed tool, including SDK-auto-approved Read calls."""
 
-            nonlocal profile_policy_refused
+            nonlocal profile_policy_refused, profile_policy_refusal_reason
             decision = await can_use_tool(
                 hook_input["tool_name"],
                 hook_input["tool_input"],
@@ -523,16 +491,7 @@ class _ClaudeAgentSdkExecutorBase:
                     }
                 }
             profile_policy_refused = True
-            _record_profile_refusal(
-                profile_policy_refusals,
-                tool_name=hook_input.get("tool_name", ""),
-                reason=decision.message,
-                path=(
-                    hook_input.get("tool_input", {}).get("file_path")
-                    or hook_input.get("tool_input", {}).get("path")
-                    or ""
-                ),
-            )
+            profile_policy_refusal_reason = decision.message
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
@@ -582,7 +541,7 @@ class _ClaudeAgentSdkExecutorBase:
             {
                 "PreToolUse": [
                     HookMatcher(
-                        matcher=_exact_tool_matcher(exposed_tools),
+                        matcher="|".join(exposed_tools),
                         hooks=[enforce_profile_tool],
                     )
                 ]
@@ -609,9 +568,7 @@ class _ClaudeAgentSdkExecutorBase:
             strict_mcp_config=True,
             sandbox=_sandbox_options(),
             output_format=(
-                _structured_output_format(registered_output_schema)
-                if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT
-                else None
+                native_output_format
             ),
         )
 
@@ -732,10 +689,9 @@ class _ClaudeAgentSdkExecutorBase:
             "message_count": len(messages),
             "is_error": bool(result_message.is_error),
             "provider_response": bounded_trace_text(provider_text),
-            "profile_policy_refusals": profile_policy_refusals,
         }
         if profile_policy_refused:
-            first_refusal = profile_policy_refusals[0]
+            trace["policy_refusal_reason"] = profile_policy_refusal_reason
             raise_terminal_failure(
                 artifact_host=self._artifact_host,
                 request=request,
@@ -743,10 +699,8 @@ class _ClaudeAgentSdkExecutorBase:
                 failure_class="policy_violation",
                 failure_code="claude_profile_tool_refused",
                 message=(
-                    "Claude Profile refused tool "
-                    f"{first_refusal['tool_name']}: "
-                    f"{first_refusal['reason']}; "
-                    f"path={first_refusal['path']!r}"
+                    "Claude requested a tool outside its Profile boundary: "
+                    f"{profile_policy_refusal_reason}"
                 ),
                 provider_response=provider_text,
                 retry_disposition_id="retry_denied",
@@ -865,7 +819,7 @@ class ClaudeAgentSdkInlineModuleExecutor(_ClaudeAgentSdkExecutorBase):
     """Execute one fully inline, tool-free Claude SDK Attempt."""
 
     executor_adapter_id = "claude_agent_sdk_inline_executor"
-    executor_adapter_revision = "v1"
+    executor_adapter_revision = "v2"
 
 
 class ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
@@ -876,7 +830,7 @@ class ClaudeAgentSdkInlineDraftWorkspaceModuleExecutor(
     executor_adapter_id = (
         "claude_agent_sdk_inline_draft_workspace_executor"
     )
-    executor_adapter_revision = "v1"
+    executor_adapter_revision = "v2"
     expected_execution_mode = "agent"
     expected_attempt_workspace_policy = "own_draft_read_write"
     workspace_tools = _DRAFT_WORKSPACE_TOOLS
@@ -886,7 +840,7 @@ class ClaudeAgentSdkGatewayModuleExecutor(_ClaudeAgentSdkExecutorBase):
     """Execute an Agent Module with only its registered Gateway read tools."""
 
     executor_adapter_id = "claude_agent_sdk_gateway_executor"
-    executor_adapter_revision = "v2"
+    executor_adapter_revision = "v3"
     expected_execution_mode = "agent"
     expected_semantic_input_delivery_mode = "gateway_read"
     expected_network_policy = "gateway_only"

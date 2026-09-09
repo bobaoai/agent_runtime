@@ -7,6 +7,7 @@ from agent_runtime.contracts.registry_release_definition import (
     PromptComponentKind,
     PromptComponentRelease,
     ReleaseMember,
+    SchemaAssetRelease,
 )
 from agent_runtime.registry.registry_release_compilation import (
     compile_prompt_bundle_release,
@@ -116,3 +117,61 @@ def test_prompt_bundle_body_must_equal_ordered_component_content() -> None:
                 prompt_bundles=(invalid_bundle,),
             )
         )
+
+
+def test_prompt_component_requires_exact_registered_schema_source() -> None:
+    schema = SchemaAssetRelease.build(
+        schema_asset_id="prompt_output",
+        schema_asset_version="v1",
+        release_ref="schema:prompt_output@v1",
+        schema_document={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "schema:prompt_output@v1",
+            "type": "object",
+        },
+    )
+
+    def component(schema_sha256: str) -> PromptComponentRelease:
+        return PromptComponentRelease.build(
+            prompt_component_id="schema_bound_output_constraint",
+            prompt_component_version="v1",
+            release_ref="prompt-component:schema_bound_output_constraint@v1",
+            component_kind=PromptComponentKind.OUTPUT_CONSTRAINT,
+            media_type="text/markdown",
+            formatter_id="json_schema_output_formatter",
+            formatter_version="v1",
+            source_members=(
+                ReleaseMember(
+                    member_ref=schema.release_ref,
+                    member_sha256=schema_sha256,
+                    media_type="application/schema+json",
+                ),
+            ),
+            formatted_content="Return the registered shape.\n",
+        )
+
+    with pytest.raises(KeyError, match="unknown Schema Asset"):
+        RuntimeReleaseRegistry().register_bundle(
+            RuntimeReleaseBundle(prompt_components=(component(schema.schema_sha256),))
+        )
+
+    with pytest.raises(ValueError, match="Schema Asset hash mismatch"):
+        RuntimeReleaseRegistry().register_bundle(
+            RuntimeReleaseBundle(
+                schema_assets=(schema,),
+                prompt_components=(component("f" * 64),),
+            )
+        )
+
+    registry = RuntimeReleaseRegistry()
+    exact = component(schema.schema_sha256)
+    registry.register_bundle(
+        RuntimeReleaseBundle(
+            schema_assets=(schema,),
+            prompt_components=(exact,),
+        )
+    )
+    assert registry.get_prompt_component(
+        exact.release_ref,
+        exact.release_sha256,
+    ) == exact

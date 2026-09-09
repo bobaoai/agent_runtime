@@ -18,13 +18,14 @@ from ..contracts import (
     WorkflowRuntimeRegistration,
     validate_domain_runtime_manifest,
 )
-from ..contracts.durability_execution_definition import (
+from ..contracts.durability_topology_definition import (
     BackendAdmissionState,
     BackendDescriptor,
     BackendEvaluationRole,
 )
 from .registry_release_registration import (
     RuntimeReleaseBundle,
+    RuntimeReleaseRegistrationResult,
     RuntimeReleaseRegistry,
 )
 
@@ -40,6 +41,16 @@ class WorkflowRegistrationSink(Protocol):
         registrations: tuple[WorkflowRuntimeRegistration, ...],
     ) -> None:
         """Atomically register a validated collection of workflows."""
+
+
+class RuntimeReleaseRegistrationSink(Protocol):
+    """Minimal target-model registry capability required by a Module plugin."""
+
+    def register_bundle(
+        self,
+        bundle: RuntimeReleaseBundle,
+    ) -> RuntimeReleaseRegistrationResult:
+        """Atomically register one dependency-closed target-model bundle."""
 
 
 @dataclass(frozen=True)
@@ -110,6 +121,16 @@ def register_runtime_plugin(
     registry.register_many(plugin.registrations)
 
 
+def register_runtime_module_plugin(
+    registry: RuntimeReleaseRegistrationSink,
+    plugin: RuntimeModulePlugin,
+) -> RuntimeReleaseRegistrationResult:
+    """Validate and atomically install one explicitly loaded Module plugin."""
+
+    plugin.validate()
+    return registry.register_bundle(plugin.release_bundle)
+
+
 __all__ = [
     "AgenticWorkflowConformancePackage",
     "BackendAdmissionState",
@@ -119,6 +140,7 @@ __all__ = [
     "RuntimeModulePlugin",
     "RuntimeReleaseBundle",
     "RuntimeReleaseRegistry",
+    "RuntimeReleaseRegistrationSink",
     "ModuleInputProjection",
     "ModuleInputProjectionContract",
     "ConformanceContractBinding",
@@ -129,5 +151,6 @@ __all__ = [
     "WorkflowRegistrationSink",
     "WorkflowRuntimeRegistration",
     "register_runtime_plugin",
+    "register_runtime_module_plugin",
     "validate_domain_runtime_manifest",
 ]

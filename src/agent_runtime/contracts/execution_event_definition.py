@@ -27,7 +27,7 @@ class ExternalEventExecutionSnapshot:
     """Ingress-plane read model of one durable execution at wait authorization.
 
     This record projects the canonical cursor state
-    (durability_execution_definition.ExecutionSnapshot) for external-event
+    (durability_topology_definition.ExecutionSnapshot) for external-event
     ingress and is not a second durability contract: backend_id,
     backend_execution_id, workflow_execution_id, workflow_id, graph_sha256,
     and terminal mirror the canonical snapshot, and domain_state_id mirrors

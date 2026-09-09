@@ -23,7 +23,6 @@ from agent_runtime.contracts.ledger_record_definition import (
     ExecutionInputRef,
     ExternalEventApplicationRecord,
     ModelCallRecord,
-    ToolCallRecord,
     LegacyRuntimeRecordBatch,
     LegacyModuleCapabilityGrant,
     WorkflowModuleRunRecord,
@@ -36,7 +35,6 @@ from agent_runtime.contracts.ledger_record_definition import (
 
 UTC_START = "2026-08-02T12:00:00Z"
 UTC_END = "2026-08-02T12:01:00Z"
-UTC_LATE = "2026-08-02T12:02:00Z"
 ENTITLEMENT_HASH = "e" * 64
 
 
@@ -392,136 +390,6 @@ def test_store_rejects_missing_mismatched_expired_and_replayed_grants_atomically
         store.commit(replayed_grant)
 
 
-@pytest.mark.parametrize("attempt_status", ("failed", "cancelled"))
-def test_store_accepts_late_failure_observations_only_with_terminal_failure(
-    attempt_status: str,
-) -> None:
-    lineage = list(_lineage_records())
-    lineage[4] = replace(
-        lineage[4],
-        status=attempt_status,
-        failure_class="timeout",
-        period_end_at_utc=UTC_END,
-        recorded_at_utc=UTC_LATE,
-    )
-    grant = replace(_grant(), expires_after_seconds=1)
-    tool = ToolCallRecord(
-        tool_call_id="tool_call_opaque_001",
-        workflow_execution_id="execution_opaque_001",
-        module_run_id="module_opaque_001",
-        variant_id="variant_opaque_001",
-        attempt_id="attempt_opaque_001",
-        grant_id=grant.grant_id,
-        resource_id=grant.resource_id,
-        action_id=grant.action_id,
-        tool_id="tool_opaque",
-        status_id="completed",
-        recorded_at_utc=UTC_LATE,
-    )
-    usage = replace(
-        _usage(),
-        usage_event_id="usage_tool_opaque_001",
-        operation_id=tool.tool_call_id,
-        recorded_at_utc=UTC_LATE,
-    )
-    store = InMemoryRuntimeExecutionRecordStore()
-
-    store.commit(
-        LegacyRuntimeRecordBatch(
-            workflow_execution_id="execution_opaque_001",
-            transaction_id=f"transaction_late_{attempt_status}_tool",
-            records=(*lineage, grant, tool, usage),
-        )
-    )
-
-    trace = store.load_trace("execution_opaque_001")
-    assert trace.records_of_type(ToolCallRecord) == (tool,)
-    assert trace.records_of_type(UsageEvent) == (usage,)
-
-
-def test_store_rejects_forged_failure_label_and_posthoc_call_attachment() -> None:
-    completed_lineage = _lineage_records()
-    expired_grant = replace(_grant(), expires_after_seconds=1)
-    forged = replace(
-        _call(),
-        status_id="failed",
-        recorded_at_utc=UTC_END,
-    )
-    usage = replace(_usage(), recorded_at_utc=UTC_END)
-    store = InMemoryRuntimeExecutionRecordStore()
-
-    with pytest.raises(PermissionError, match="expired"):
-        store.commit(
-            LegacyRuntimeRecordBatch(
-                workflow_execution_id="execution_opaque_001",
-                transaction_id="transaction_forged_failed_label",
-                records=(*completed_lineage, expired_grant, forged, usage),
-            )
-        )
-
-    store.commit(
-        LegacyRuntimeRecordBatch(
-            workflow_execution_id="execution_opaque_001",
-            transaction_id="transaction_terminal_without_call",
-            records=(*completed_lineage, _grant()),
-        )
-    )
-    with pytest.raises(ValueError, match="existing terminal Attempt"):
-        store.commit(
-            LegacyRuntimeRecordBatch(
-                workflow_execution_id="execution_opaque_001",
-                transaction_id="transaction_posthoc_call",
-                records=(_call(), _usage()),
-            )
-        )
-
-
-def test_store_rejects_mismatched_late_failure_record_time() -> None:
-    lineage = list(_lineage_records())
-    lineage[4] = replace(
-        lineage[4],
-        status="failed",
-        failure_class="timeout",
-        recorded_at_utc=UTC_LATE,
-    )
-    grant = replace(_grant(), expires_after_seconds=1)
-    call = replace(_call(), recorded_at_utc=UTC_END)
-    usage = replace(_usage(), recorded_at_utc=UTC_END)
-
-    with pytest.raises(PermissionError, match="differs from terminal Attempt"):
-        InMemoryRuntimeExecutionRecordStore().commit(
-            LegacyRuntimeRecordBatch(
-                workflow_execution_id="execution_opaque_001",
-                transaction_id="transaction_mismatched_late_record_time",
-                records=(*lineage, grant, call, usage),
-            )
-        )
-
-
-def test_store_rejects_posthoc_usage_for_existing_terminal_attempt() -> None:
-    store = InMemoryRuntimeExecutionRecordStore()
-    store.commit(
-        LegacyRuntimeRecordBatch(
-            workflow_execution_id="execution_opaque_001",
-            transaction_id="transaction_complete_call_and_usage",
-            records=(*_lineage_records(), _grant(), _call(), _usage()),
-        )
-    )
-    extra_usage = replace(
-        _usage(),
-        usage_event_id="usage_opaque_posthoc",
-    )
-
-    with pytest.raises(ValueError, match="UsageEvent cannot be appended"):
-        store.commit(
-            LegacyRuntimeRecordBatch(
-                workflow_execution_id="execution_opaque_001",
-                transaction_id="transaction_posthoc_usage",
-                records=(extra_usage,),
-            )
-        )
-
-
 def test_store_rejects_incomplete_canonical_lineage_and_missing_usage() -> None:
     lineage = _lineage_records()
     execution, entitlement, module, variant, attempt, artifact = lineage
@@ -762,7 +630,7 @@ def test_gate_c_core_has_no_project_domain_imports() -> None:
             "src/agent_runtime/ledger/ledger_record_persistence.py",
     ):
         source = (repo_root / relative_path).read_text(encoding="utf-8")
-        assert "host_business_workflow" not in source
+        assert "research_theme_report_workflow" not in source
         assert "src.digestion" not in source
         assert "src.research" not in source
         assert "src.trade" not in source

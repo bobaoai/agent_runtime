@@ -62,6 +62,9 @@ truth_surfaces:
   - src/agent_runtime/registry/registry_graph_projection.py
   - src/agent_runtime/contracts/registry_release_definition.py
   - src/agent_runtime/registry/registry_release_registration.py
+  - src/agent_runtime/inspection/inspection_release_rendering.py
+generated_projection_surfaces:
+  - agent_runtime.inspection.inspection_release_rendering:build_runtime_inventory
 verification_hooks:
   - public durable-contract tests
   - real Temporal two-Cell integration
@@ -108,7 +111,7 @@ services outside Temporal replay.
 The canonical backend protocol is code-owned in
 `src/agent_runtime/contracts/durability_backend_definition.py`. It reuses the
 target host commands from `execution_host_definition.py` and the backend cursor
-records from `durability_execution_definition.py`; it does not declare another
+records from `durability_topology_definition.py`; it does not declare another
 start request, execution ref, event, cancellation, or snapshot type family.
 Temporal consumes these exact type identities without renaming fields or
 adding authority.
@@ -141,7 +144,7 @@ A start request pins one exact:
 - execution authorization binding and start-admission record;
 - input package and data scope;
 - graph projection and hash;
-- injected durable execution binding;
+- Cell binding;
 - Runtime and adapter release;
 - backend namespace and task queue selected by trusted host configuration;
 - transition and dispatch safety ceiling.
@@ -415,17 +418,13 @@ the isolated shadow admission store. Production admission remains blocked on
 durable PostgreSQL Runtime trace and usage binding, production Evidence write
 binding, remaining failure-window tests, and independent engineering review.
 
-The mixed durable-backend and Workflow composition inventory formerly emitted
-by `inspection_release_rendering.py` is retired; Durability-owned contracts and
-the Workflow Registry remain unchanged.
-Durability conformance uses Durability-owned Adapter descriptors and evidence;
-the Registry Release inventory neither selects nor describes a durable
-backend.
+`inspection_release_rendering.build_runtime_inventory` produces the
+deterministic current durable-backend and Workflow composition projection.
 
 Adjacent ownership:
 
 - `agent_runtime_00` owns portable execution and recovery semantics.
-- The host platform owns product deployment topology and Cell placement.
+- `agent_runtime_02` owns product deployment topology and Cell placement.
 - `agent_runtime_03` owns authorized external-event ingress.
 - `agent_runtime_06` owns standalone lifecycle and backend-start receipt.
 - `agent_runtime_09` owns authorization binding, fencing, and invalidation.
@@ -436,6 +435,7 @@ Adjacent ownership:
 
 - [Agent Runtime](the_agent_runtime.md)
 - [Execution Charter](agent_runtime_00_execution_charter.md)
+- [Product Topology](agent_runtime_02_product_target_topology.md)
 - [Authorized External Event Ingress](agent_runtime_03_authorized_external_event_ingress.md)
 - [Standalone Lifecycle](agent_runtime_06_standalone_package_and_lifecycle_contract.md)
 - [Authorization Integration](agent_runtime_09_authorization_integration_contract.md)

@@ -927,43 +927,17 @@ class InMemoryRuntimeExecutionRecordStore:
                     raise PermissionError("LegacyModuleCapabilityGrant starts after Attempt deadline")
 
         grant_operations: dict[str, set[str]] = {}
-        existing_attempt_ids = {
-            record.attempt_id
-            for record in existing
-            if isinstance(record, WorkflowAttemptRecord)
-        }
-        existing_operation_ids = {
-            record.operation_id
-            for record in existing
-            if isinstance(record, (ModelCallRecord, ToolCallRecord))
-        }
         for operation in operations.values():
             grant = grants.get(operation.grant_id)
             if grant is None:
                 raise PermissionError("call record has no matching LegacyModuleCapabilityGrant")
-            attempt = attempts.get(operation.attempt_id)
-            if attempt is None:
-                raise ValueError("call record requires a terminal Attempt")
-            if (
-                operation.operation_id not in existing_operation_ids
-                and operation.attempt_id in existing_attempt_ids
-            ):
-                raise ValueError(
-                    "call record cannot be appended to an existing terminal Attempt"
-                )
             self._validate_grant_binding(
                 grant,
                 operation,
                 workflow_execution_id=workflow_execution_id,
                 frozen_entitlement_hash=frozen_entitlement_hash,
-                owning_attempt=attempt,
             )
-            self._validate_operation_lineage(
-                operation,
-                module_runs,
-                variants,
-                attempt,
-            )
+            self._validate_operation_lineage(operation, module_runs, variants, attempts)
             grant_operations.setdefault(grant.grant_id, set()).add(
                 operation.operation_id
             )
@@ -975,11 +949,6 @@ class InMemoryRuntimeExecutionRecordStore:
                 )
 
         operation_usage: dict[str, str] = {}
-        existing_usage_ids = {
-            record.usage_event_id
-            for record in existing
-            if isinstance(record, UsageEvent)
-        }
         for usage in usage_events.values():
             operation = operations.get(usage.operation_id)
             if operation is None:
@@ -987,22 +956,11 @@ class InMemoryRuntimeExecutionRecordStore:
             grant = grants.get(usage.grant_id)
             if grant is None:
                 raise PermissionError("UsageEvent has no matching LegacyModuleCapabilityGrant")
-            attempt = attempts.get(usage.attempt_id)
-            if attempt is None:
-                raise ValueError("UsageEvent requires a terminal Attempt")
-            if (
-                usage.usage_event_id not in existing_usage_ids
-                and usage.attempt_id in existing_attempt_ids
-            ):
-                raise ValueError(
-                    "UsageEvent cannot be appended to an existing terminal Attempt"
-                )
             self._validate_grant_binding(
                 grant,
                 usage,
                 workflow_execution_id=workflow_execution_id,
                 frozen_entitlement_hash=frozen_entitlement_hash,
-                owning_attempt=attempt,
             )
             for field in (
                 "workflow_execution_id",
@@ -1212,15 +1170,16 @@ class InMemoryRuntimeExecutionRecordStore:
         operation: ModelCallRecord | ToolCallRecord,
         module_runs: dict[str, object],
         variants: dict[str, object],
-        owning_attempt: WorkflowAttemptRecord,
+        attempts: dict[str, object],
     ) -> None:
         module = module_runs.get(operation.module_run_id)
         variant = variants.get(operation.variant_id)
-        if module is None or variant is None:
-            raise ValueError("call record lacks complete Module/Variant lineage")
+        attempt = attempts.get(operation.attempt_id)
+        if module is None or variant is None or attempt is None:
+            raise ValueError("call record lacks complete Module/Variant/Attempt lineage")
         if getattr(variant, "module_run_id") != operation.module_run_id:
             raise ValueError("call Variant does not belong to its Module Run")
-        if owning_attempt.variant_id != operation.variant_id:
+        if getattr(attempt, "variant_id") != operation.variant_id:
             raise ValueError("call Attempt does not belong to its Variant")
 
     @staticmethod
@@ -1230,7 +1189,6 @@ class InMemoryRuntimeExecutionRecordStore:
         *,
         workflow_execution_id: str,
         frozen_entitlement_hash: str | None,
-        owning_attempt: WorkflowAttemptRecord,
     ) -> None:
         for field in (
             "workflow_execution_id",
@@ -1255,14 +1213,7 @@ class InMemoryRuntimeExecutionRecordStore:
         if operation_time < _parse_utc(grant.recorded_at_utc):
             raise PermissionError("operation precedes LegacyModuleCapabilityGrant")
         if operation_time > grant.expires_at():
-            if owning_attempt.status not in {"failed", "cancelled"}:
-                raise PermissionError(
-                    "LegacyModuleCapabilityGrant expired before operation commit"
-                )
-            if operation.recorded_at_utc != owning_attempt.recorded_at_utc:
-                raise PermissionError(
-                    "late failure observation differs from terminal Attempt record time"
-                )
+            raise PermissionError("LegacyModuleCapabilityGrant expired before operation commit")
 
 
 def _parse_utc(value: str):
