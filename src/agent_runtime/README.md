@@ -145,6 +145,23 @@ when an execution requires a current decision or authorized product data.
 公开仓库不携带宿主的私有 Governance/Reviewer source。相关集成用例通过
 `AGENT_RUNTIME_REVIEWER_SOURCE_ROOT` 指向已经安装该包的宿主；未配置时明确跳过，不算审核已完成。
 
+### Reviewer interface documentation
+
+The [Reviewer API reference](docs/agent_runtime_reviewer_api.md) is generated
+from class/method docstrings, signatures, fields and error constants. Edit
+those source definitions, then run these commands in the matching source
+checkout; `--check` verifies both repository and wheel-bound documentation
+without writing:
+
+```sh
+python -B tools/build_agent_runtime_api_reference.py
+python -B tools/build_agent_runtime_api_reference.py --check
+```
+
+The wheel contains the generated reference under `agent_runtime/docs`.
+Its scope is Reviewer authoring and the registered single-node evaluation
+entry, not the complete Runtime API.
+
 ### Durable parallel groups
 
 A Workflow Release may declare an `all_required` parallel group at one control

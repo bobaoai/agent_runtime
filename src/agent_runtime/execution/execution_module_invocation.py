@@ -498,18 +498,84 @@ def run_registered_workflow_module(
     claim_token_secret: bytes,
     clock: Callable[[], str] = _utc_now,
 ) -> ModuleRunResult:
-    """Prepare one registered, single-node Workflow evaluation and record it.
+    """Execute a fixed registered Module through one-node Workflow evaluation.
 
-    Bind the environment arguments once; each call supplies the intended
-    Module, JSON input and a key unique within the record store. The staging
-    host supplies ``put_bytes``, ``artifact`` and ``resolve_artifact_ref`` as
-    provided by InMemoryCellArtifactStore. ``authorize`` supplies an existing
-    context plus exact decision, delegation and entitlement artifact refs.
-    Their meaning and all permission decisions remain with the host.
+    Use this entry after the host has configured exact registered releases,
+    compatible execution resources and authorization interfaces. Bind those
+    environment arguments once in the host integration; each invocation supplies
+    the intended module_id, JSON input_payload and an idempotency_key unique
+    within the record store. This function does not construct a ModuleReviewer,
+    load its authoring files, register releases or select a provider from the
+    input. It currently accepts one Module node in evaluation purpose, not
+    arbitrary multi-node Workflows or every possible Profile/Adapter combination.
 
-    No registration, activation, source loading or Provider configuration is
-    performed here. A committed call replays; an incomplete execution returns
-    to the existing recovery owner instead of repeating unknown effects.
+    Args:
+        module_id: Exact Module identity matching the Workflow's Module node.
+        input_payload: JSON object conforming to that registered input schema.
+            Put this invocation's task data here, according to its schema.
+            The fixed prompt is read from the Registry.
+        idempotency_key: Valid Runtime ID for this logical execution. The same
+            key with unchanged inputs/releases returns a committed result;
+            new task material requires a different key.
+        release_registry: Loaded Registry with exact Workflow, Module, Prompt,
+            Schema, Policy, Profile and Variant records. No source discovery.
+        workflow: Registered WorkflowRelease whose sole node is this Module.
+        variant_policy: Registered execution binding for that exact Workflow
+            and node, selecting one exact ExecutionProfileRelease. A standalone
+            Module Variant returned by ModuleReviewer.export is not this binding.
+        authorize: Host callback receiving the prepared WorkflowModuleExecutionRequest.
+            Return exactly (ExecutionAuthorizationContextEnvelope, decision_ref,
+            delegation_ref, entitlement_ref). The last three values are existing
+            ResolvedArtifactRef objects staged in artifact_host. Context meaning
+            and permission decisions remain with the host; Runtime verifies
+            their consistency. The callback is not called on committed replay.
+        context_client: Host interface validating execution authorization context.
+        operation_client: Host interface deciding permitted operations.
+        enforcing_gateway_id: Explicit gateway identity used for authorization.
+        environment_id: Explicit execution environment identity.
+        adapters: Registry of installed executors matching the selected Profile.
+            Actual compatibility is checked before starting the provider.
+        artifact_host: ModuleArtifactHost with put_bytes, artifact and
+            resolve_artifact_ref, as supplied by InMemoryCellArtifactStore.
+            Holds staged input, prompt and authorization evidence for recording.
+        record_store: Destination for authoritative execution and Attempt records.
+        content_store: Explicit destination for their referenced input, prompt,
+            output and diagnostic content. Persistence is determined by the
+            supplied stores; an in-memory store does not prove PostgreSQL saving.
+        claim_token_secret: Host-supplied bytes for the existing execution claim
+            mechanism. Keep secret; do not place it in the task input or prompt.
+        clock: Existing Runtime-compatible UTC clock; defaults to Runtime's clock.
+
+    Returns:
+        ModuleRunResult containing recorded Attempts, output references and
+        any Runtime resolution. A returned failed Attempt is an execution
+        failure, not a subject verdict. On success, the subject owner still
+        validates and consumes the Module output. Inspect content through the
+        configured store with the recorded execution ID and ref/hash.
+
+    Raises:
+        ValueError: Invalid target/input shape, inconsistent release or Variant
+            binding, unsupported Profile, incomplete host interfaces, or reuse
+            of an execution key with different input/releases. Correct the
+            explicit request; do not silently pick another release or Profile.
+        jsonschema.exceptions.ValidationError: Input violates its registered schema.
+        PermissionError: Inconsistent host authorization evidence. Return to
+            the authorization owner; do not manufacture replacement evidence.
+        RuntimeError: A matching execution started but has no committed result
+            available here. Use the existing Runtime recovery owner rather
+            than resubmitting under a new key to repeat unknown effects.
+        Exception: Registry, storage, authorization and downstream execution
+            failures retain their native error contracts and owners. Inspect
+            any committed facts before deciding whether a retry is safe.
+
+    Effects:
+        Stages bounded input/prompt content, records an execution start and
+        invokes the selected Adapter through Runtime. Attempts, outputs, usage
+        and diagnostics are recorded through the supplied stores. Provider
+        effects require the admitted binding and authorization. No registration,
+        activation, DDL, credential discovery or global configuration change.
+        Committed replay does not repeat the provider call. This convenience
+        entry's returned exceptions are not a separate uniform error-code enum.
     """
     from jsonschema import Draft202012Validator
 

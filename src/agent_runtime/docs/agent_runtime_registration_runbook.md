@@ -8,6 +8,13 @@ Runtime Design Contract 定义稳定语义，public Python API 定义当前可�
 release 类型、权限规则或持久化协议；当文字与 public API 不一致时，停止 registration 并报告 package
 drift。
 
+接口定义见从源码自动生成的 [Reviewer API reference](agent_runtime_reviewer_api.md)。
+先读其中的 ModuleReviewer 类说明，确定固定定义、独立执行参数和存储归属；再按本 Runbook
+完成一次注册。注册完成后的每次审核交给固定执行绑定，只提交本次输入与执行 key。
+当前单节点执行入口的参数、授权依赖、重放限制和失败处理也在该接口参考中。
+测试用途不要求复制 Reviewer；切换 Profile 是否需要新的 Module，取决于 Module 内容是否改变及
+兼容声明是否满足，具体规则以类说明和现有 Registry 合同为准。
+
 ## 1. 开始前确认
 
 调用方必须已经拥有：

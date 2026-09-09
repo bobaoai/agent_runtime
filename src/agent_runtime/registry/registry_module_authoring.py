@@ -181,7 +181,23 @@ def _validate_reviewer_output_schema(schema_document: Mapping[str, object]) -> N
 
 
 class ModuleAuthoringError(ValueError):
-    """Stable authoring failure returned before any Registry mutation."""
+    """An authoring failure with a machine-readable ``error_code``.
+
+    ``error_code`` is the stable code; the exception message adds a diagnostic.
+    ``MODULE_OPERATION_DECLARATION_INVALID`` means the source operation list
+    cannot be partitioned into model and non-model operations. Correct that
+    source through its owner. ``MODULE_EXECUTION_PROFILE_INCOMPATIBLE`` means
+    the supplied Profile conflicts with the source transport or tool boundary.
+    Supply an approved compatible Profile; changing the Module's declarations
+    is a separate source change, not a way to bypass this check.
+
+    ``EXECUTION_PROFILE_UNAVAILABLE`` is instead returned in
+    ``ModuleExport.execution_blocker_code`` when no Profile was supplied.
+    It does not prevent definition-only export. Other source, schema, policy
+    and Registry validation errors retain their own exception contracts;
+    this class does not wrap every possible failure. No Registry write or
+    provider invocation occurs during authoring.
+    """
 
     def __init__(self, error_code: str, message: str) -> None:
         super().__init__(f"{error_code}: {message}")
@@ -228,7 +244,29 @@ def _candidate(
 
 @dataclass(frozen=True)
 class ModuleExport:
-    """Dependency-closed records exported from one Module authoring source."""
+    """Compiled Reviewer definition and separately supplied execution binding.
+
+    ``source`` is the loaded, path-free authoring content; ``candidate`` is
+    the compiler input; ``compiled`` contains the immutable Module, Prompt
+    and Schema records. ``behavior_policy``, ``evaluation_policy`` and
+    ``retry_policy`` are the exact Module dependencies supplied to export.
+    ``module_release`` exposes the resulting fixed definition.
+
+    ``execution_profile`` and ``execution_variant`` are separate from that
+    definition. ``execution_variant_candidate`` is the compiler input for
+    the optional standalone binding. With no Profile, all three are None
+    and ``execution_blocker_code`` is EXECUTION_PROFILE_UNAVAILABLE. With a
+    compatible Profile the blocker is None; this is an authoring check, not
+    proof that an Adapter, provider login, storage or execution is available.
+
+    ``origin_bundle`` contains only the Module definition and its immutable
+    dependencies. A registration caller explicitly combines the required
+    Profile and Variant records with that bundle, then calls the public
+    registration API. For a Workflow, bind the Workflow's exact node positions
+    using a Workflow Variant Policy; the standalone Variant produced here
+    cannot be substituted for a Workflow binding. Exporting creates in-memory
+    records only; registration, activation and execution are separate actions.
+    """
 
     source: ModuleRegistrationSource
     candidate: AgentModuleReleaseCandidate
@@ -243,11 +281,28 @@ class ModuleExport:
 
     @property
     def module_release(self) -> ModuleRelease:
+        """Return the compiled immutable ModuleRelease without reading a store.
+
+        The ref and hash identify the fixed Reviewer definition. Profile and
+        Variant choices are excluded from this Module identity. This property
+        does not prove that the release has been registered or activated.
+        """
         return self.compiled.module
 
     @property
     def origin_bundle(self) -> RuntimeReleaseBundle:
-        """Return the fixed Module closure without Profile or Variant records."""
+        """Return the Module's dependency-closed RuntimeReleaseBundle.
+
+        Contains policy schemas, input/output schemas, Prompt Components,
+        Prompt Bundle, Behavior/Evaluation/Retry Policies and the Module.
+        Execution Profiles and Variant Policies are intentionally omitted.
+        The caller supplies them separately when forming an executable
+        registration bundle. No store write or active-pointer change occurs.
+
+        Raises RuntimeError if required Runtime-owned policy schema assets
+        cannot be resolved. Restore a consistent Runtime installation instead
+        of substituting hand-written schema records.
+        """
 
         policy_refs = {
             self.behavior_policy.policy_schema_ref,
@@ -273,7 +328,15 @@ class ModuleExport:
 
 
 class Module(ABC):
-    """Common authoring-time interface; execution consumes only ModuleRelease."""
+    """Author a fixed Module definition; execution consumes ModuleRelease.
+
+    Implementations load explicit authoring sources, export immutable records
+    and inspect registered facts. They do not constitute running Agents.
+    Register an export through the public Registry API, then invoke the
+    registered target through Execution. A new review input is a new execution
+    of a selected definition, not a reason to reload or re-register its source.
+    ModuleReviewer is the concrete implementation for Reviewer definitions.
+    """
 
     @classmethod
     @abstractmethod
@@ -284,7 +347,12 @@ class Module(ABC):
         skill_id: str,
         module_id: str,
     ) -> Self:
-        """Load one exact host registration source."""
+        """Load source under project_root for the exact skill_id and module_id.
+
+        This is explicit authoring-time file access. Return a role-specific
+        Module authoring object, without registering records or invoking a
+        provider. See the concrete subclass for source and error details.
+        """
 
     @abstractmethod
     def export(
@@ -296,7 +364,14 @@ class Module(ABC):
         retry_policy: RetryPolicyRelease,
         execution_profile: ExecutionProfileRelease | None,
     ) -> ModuleExport:
-        """Compile one immutable Module release closure."""
+        """Compile source and exact dependencies into a ModuleExport.
+
+        module_version identifies the definition being compiled. The three
+        policy arguments supply its immutable dependencies; execution_profile
+        supplies an optional, separate execution choice. Export has no
+        Registry or execution side effects. Concrete subclasses validate their
+        role's schema and compatibility requirements.
+        """
 
     @abstractmethod
     def project(
@@ -304,12 +379,72 @@ class Module(ABC):
         registry: RuntimeReleaseRegistry,
         exported: ModuleExport,
     ) -> dict[str, Any]:
-        """Return exact registered facts without writing authoring sources."""
+        """Read registry facts corresponding to exported and return a dict.
+
+        The Registry must already contain the exact export and its required
+        dependencies. This is a read-only projection, not registration,
+        activation, source repair or evidence that a provider call succeeded.
+        """
 
 
 @dataclass(frozen=True)
 class ModuleReviewer(Module):
-    """Reviewer role reusable across every subject domain."""
+    """Author and export one fixed Reviewer definition for a subject domain.
+
+    Start here when preparing an approved Reviewer source for registration.
+    ``source`` contains the exact instruction, owner contract, I/O schemas,
+    operation and transport declarations, and policy references loaded by
+    ``from_registration``. This frozen Python object is an authoring object,
+    not a running Reviewer or a database registration. ``export`` validates
+    the common Reviewer output format and compiles immutable release records;
+    ``project`` reads the corresponding facts after registration.
+
+    **Fixed definition and execution parameters**
+
+    A ModuleRelease pins the owner, Prompt Bundle, schemas, operations,
+    compatible transports, Behavior/Evaluation/Retry Policies and entry/output
+    rules. The subject owner supplies review meaning and its semantic output
+    validator. Runtime does not invent a checklist or turn a provider failure
+    into a review verdict.
+
+    Provider, model, reasoning, tools, network, workspace and timeout belong
+    to an immutable ExecutionProfileRelease. An ExecutionVariantPolicyRelease
+    binds that Profile to exact Module or Workflow positions. These two
+    releases do not enter the Module release hash. A host binds the intended
+    releases explicitly; a normal review supplies its candidate, goal, scope,
+    context and prior findings as input, not as edits to fixed instructions
+    or ad hoc provider parameters.
+
+    **When versions change**
+
+    New review material creates a new execution of the selected Module.
+    Switching an approved compatible Profile preserves the same Module ref
+    and hash when its version, source and Module dependencies are unchanged;
+    the Profile and Variant binding have their own release identities.
+    Changing instructions, schemas, policies or operation/transport
+    declarations changes the Module definition and requires a new immutable
+    Module release. In particular, adding transport compatibility is a source
+    change, not a runtime override. The installed Runtime software version is
+    separate from all of these registered definition/configuration versions.
+
+    **Storage and invocation**
+
+    The Skill Package owns editable authoring files. Compilation captures
+    their content; the deployment-selected Registry stores published Module,
+    Prompt, Schema, Policy and Profile records. Registered execution resolves
+    those records rather than rebuilding a prompt from mutable Skill files.
+    Each execution's frozen inputs, actual prompt, outputs, usage and failure
+    evidence belong to Execution's record/content stores, not this object.
+    The host supplies store locations, credentials and authorization interfaces;
+    they are not embedded in the Reviewer source or selected by this class.
+
+    Register through ``register_runtime_module_plugin`` with an explicit
+    release bundle and store. Activation is a separate decision. For the
+    existing single-node Workflow evaluation path, call
+    ``run_registered_workflow_module`` using a registered Workflow and matching
+    Variant Policy. That entry documents its actual limits and host inputs;
+    successful export alone does not establish execution readiness.
+    """
 
     source: ModuleRegistrationSource
 
@@ -321,6 +456,29 @@ class ModuleReviewer(Module):
         skill_id: str,
         module_id: str,
     ) -> Self:
+        """Load one exact Reviewer authoring source, without registration.
+
+        Args:
+            project_root: Explicit host source root. The loader reads the fixed
+                `.claude/skills/<skill_id>/runtime_modules/<module_id>` closure,
+                its Skill declaration and referenced owner Design within it.
+            skill_id: Exact canonical kebab-case Skill identity.
+            module_id: Exact canonical snake_case Reviewer Module identity.
+
+        Returns:
+            A ModuleReviewer containing validated, path-free source content.
+            Later edits to source files do not update this captured object.
+
+        Raises:
+            ValueError: Invalid identity, path, source layout, registration,
+                prompt or schema. Inspect the diagnostic and correct the exact
+                source; the loader does not search for a replacement.
+            OSError: File access failures not normalized by the source loader.
+
+        Effects:
+            Reads the explicit authoring closure only. Does not write files,
+            register, activate, discover sibling Reviewers or invoke a model.
+        """
         return cls(
             source=load_module_registration(
                 project_root,
@@ -374,6 +532,42 @@ class ModuleReviewer(Module):
         retry_policy: RetryPolicyRelease,
         execution_profile: ExecutionProfileRelease | None,
     ) -> ModuleExport:
+        """Compile this captured source and validate optional Profile compatibility.
+
+        Args:
+            module_version: Version of the fixed Module definition. Keep it
+                unchanged for unchanged Module content; a new input or Profile
+                comparison does not by itself require a new Module version.
+            behavior_policy: Exact Behavior Policy matching the source ref.
+            evaluation_policy: Exact Evaluation Policy matching the source ref.
+            retry_policy: Exact Retry Policy matching the source ref.
+            execution_profile: Approved execution configuration, or None for
+                definition-only export. The Profile stays outside Module identity.
+
+        Returns:
+            ModuleExport with compiled Module/Prompt/Schema records and the
+            supplied policies. A compatible Profile also produces a standalone
+            Variant candidate/release. None produces no Variant and sets
+            execution_blocker_code to EXECUTION_PROFILE_UNAVAILABLE. The
+            standalone helper uses its existing fixed policy name/version;
+            exported bindings are candidates, not updates to an existing store.
+            Explicitly compile and register a non-conflicting Variant version
+            when publishing a changed binding. Workflow binding is separate.
+
+        Raises:
+            ModuleAuthoringError: MODULE_OPERATION_DECLARATION_INVALID for an
+                invalid operation declaration; MODULE_EXECUTION_PROFILE_INCOMPATIBLE
+                for an undeclared transport or incompatible tool boundary.
+            ValueError: Invalid common Reviewer output schema, Profile, version,
+                policy reference or compiler input. Missing Profile is a returned
+                blocker, not this exception. JSON/schema errors retain their
+                original validation exception types.
+
+        Effects:
+            Compiles in memory. No source reload, Registry write, activation,
+            provider call or execution evidence is produced. Profile validation
+            does not prove the corresponding Adapter can run in this environment.
+        """
         _validate_reviewer_output_schema(
             json.loads(self.source.output_schema_document)
         )
@@ -459,6 +653,29 @@ class ModuleReviewer(Module):
         registry: RuntimeReleaseRegistry,
         exported: ModuleExport,
     ) -> dict[str, Any]:
+        """Read exact registered facts for an export produced from this source.
+
+        Args:
+            registry: Loaded RuntimeReleaseRegistry containing the exact Module,
+                its dependencies and any Profile/Variant included in exported.
+            exported: ModuleExport whose source equals this object's source.
+
+        Returns:
+            A dict with Skill/Module identities, exact release/dependency refs
+            and hashes, operation/transport/entry/output rules, active-pointer
+            observation, optional Profile/Variant refs and execution blocker.
+            Facts come from the supplied Registry snapshot; freshness against
+            persistent storage is the caller's responsibility.
+
+        Raises:
+            ValueError: Export/source mismatch or invalid Reviewer provenance.
+            Exception: Exact Registry lookup failures propagate from the Registry;
+                inspect their native error instead of choosing a nearby version.
+
+        Effects:
+            Read-only. Does not register, set an active pointer, reload source,
+            connect to a database itself or prove successful execution.
+        """
         if exported.source != self.source:
             raise ValueError("Module export belongs to a different source")
         module = registry.get_module(
