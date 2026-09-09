@@ -15,6 +15,179 @@ drift。
 测试用途不要求复制 Reviewer；切换 Profile 是否需要新的 Module，取决于 Module 内容是否改变及
 兼容声明是否满足，具体规则以类说明和现有 Registry 合同为准。
 
+<a id="new-reviewer"></a>
+
+## 0. 注册新的 Reviewer 并在宿主测试 / Register a new reviewer and test it
+
+本节是日常操作入口。你无需读取 Runtime 生产源码或测试 fixture；先按当前任务选择：
+
+| 当前已有的东西 | 下一步 |
+| --- | --- |
+| 只有“我需要一个新的 Reviewer”的想法 | 由该审核对象的负责人完成 Reviewer 定义与审核；注册工具不会替你编写职责、prompt 或 schema |
+| 已批准的准确 Reviewer source，尚未注册 | [准备](#prepare-reviewer)，然后[注册固定定义](#register-reviewer) |
+| 已有准确 Module release，想运行一份新材料 | 直接进入[首次或再次测试](#test-reviewer)，不重新编译或注册 |
+| 已有 execution ID，想看结果或排错 | 进入[查询](#inspect-reviewer)，不再次调用模型 |
+
+参数含义以 [ModuleReviewer](agent_runtime_reviewer_api.md#modulereviewer) 及其公开方法说明为准。
+下列示例只组合现有 public API，不创建新的 wrapper、数据库结构或测试 Reviewer。
+
+<a id="prepare-reviewer"></a>
+
+### 0.1 准备资料、固定配置和操作环境
+
+先使用当前宿主选定的 Python 确认安装来源，并打开同一安装包里的说明：
+
+```python
+from importlib.metadata import version
+from importlib.resources import files
+import agent_runtime
+
+print(version("agent-runtime-core"))
+print(agent_runtime.__file__)
+print(files("agent_runtime").joinpath("README.md"))
+print(files("agent_runtime").joinpath("docs/agent_runtime_registration_runbook.md"))
+```
+
+保存准确安装来源；相同版本字符串不证明相同源码。缺失文档或安装与目标版本不一致时，先由
+Runtime 安装维护者处理。PostgreSQL 操作需要安装包的 `postgres` 可选依赖；连接由宿主注入。
+
+以下是示例所需的输入来源表，不是新的配置文件格式。值必须由负责人提供，不能采用 fixture 中的
+ID、hash、数据库或授权替身。表中的名称是后续 Python 示例使用的变量。
+
+| 输入 | 提供方与内容 |
+| --- | --- |
+| `project_root`、`skill_id`、`module_id`、`module_version` | Source owner 提供准确、已审的 Skill/Module source 与批准版本；根目录为 Path，两个 ID 对应真实注册文件 |
+| `behavior_binding`、`evaluation_binding`、`retry_binding` | Runtime 环境维护者提供已批准 Policy 的 `(release_ref, release_sha256)` 元组；与 source 引用一致 |
+| `profile_binding` | 环境维护者提供本次固定且相容的 Profile `(release_ref, release_sha256)`，用于编译前的兼容核对 |
+| `database_url`、`registry_schema` | 宿主提供本次获准使用的 Registry 连接与 schema；凭据不写入任务材料、日志或本手册 |
+| `plugin_id`、`plugin_version` | 注册操作者提供本次明确的发布包身份；与 Reviewer 的 Module 版本分开 |
+| 已配置的宿主执行入口 | 宿主集成维护者提供对应 Module 的准确 Workflow、Variant、Profile 和授权/存储绑定，以及命令或已绑定函数 |
+| 本次审核输入、输出 validator | Source owner 按该 Reviewer 的真实输入 schema 提供；输出由该对象的 schema 与语义 validator 判断 |
+
+先确认测试入口支持本次 Profile 和操作声明，再写 Registry，可以避免注册完成后才发现无法测试。
+固定环境只需配置一次。每次新审核提交新材料和新执行 key，保持未改变的 Module release。
+缺少任何必要输入时停在对应提供方，不临时选模型、修改声明或编译样例版本。
+
+<a id="register-reviewer"></a>
+
+### 0.2 注册一次固定定义
+
+本段会写入明确提供的 Registry，仅在本次注册已授权且上表输入齐备后执行。它注册 Module 及其
+固定依赖，不生成 Workflow，不设置 active pointer，也不调用模型。具体接口见
+[加载 source](agent_runtime_reviewer_api.md#modulereviewerfrom_registration)、
+[export](agent_runtime_reviewer_api.md#modulereviewerexport) 和
+[origin_bundle](agent_runtime_reviewer_api.md#moduleexportorigin_bundle)。
+
+<!-- example:register-reviewer:start -->
+```python
+from agent_runtime import ModuleReviewer, RuntimeModulePlugin, register_runtime_module_plugin
+from agent_runtime.registry import PostgresRuntimeReleaseStore
+
+store = PostgresRuntimeReleaseStore.from_dsn(database_url, schema=registry_schema)
+if store.installed_schema_release().state != "ready":
+    raise RuntimeError("Registry schema is not ready; return to the schema owner")
+registry = store.load_release_registry()
+reviewer = ModuleReviewer.from_registration(
+    project_root, skill_id=skill_id, module_id=module_id,
+)
+exported = reviewer.export(
+    module_version=module_version,
+    behavior_policy=registry.get_behavior_policy(*behavior_binding),
+    evaluation_policy=registry.get_evaluation_policy(*evaluation_binding),
+    retry_policy=registry.get_retry_policy(*retry_binding),
+    execution_profile=registry.get_execution_profile(*profile_binding),
+)
+plugin = RuntimeModulePlugin(
+    plugin_id=plugin_id, plugin_version=plugin_version,
+    release_bundle=exported.origin_bundle,
+)
+registration = register_runtime_module_plugin(store, plugin)
+registration.validate()
+module_ref = exported.module_release.release_ref
+module_hash = exported.module_release.release_sha256
+
+# Fresh persistent read: do not use the in-memory export as readback evidence.
+reopened = PostgresRuntimeReleaseStore.from_dsn(database_url, schema=registry_schema)
+resolved = reopened.load_release_registry().get_module(module_ref, module_hash)
+if resolved != exported.module_release:
+    raise RuntimeError("Registered Module readback differs from the compiled release")
+print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
+```
+<!-- example:register-reviewer:end -->
+
+保存这组 ref/hash 以及本次 Runtime 安装来源、目标 Registry 和 source 审核依据。相同 bundle
+重复提交使用原生幂等注册；同一 ref 的内容冲突应返回发布负责人，不覆盖已有记录或临时改个版本绕过。
+数据库结构未就绪时停止，本段不会自动建表或迁移。
+
+`origin_bundle` 刻意不含 Profile 和 Variant。上段的 Profile 是读取已批准配置做兼容核对；它没有
+重新注册 Profile，也没有把 export 附带的 standalone Variant 当成 Workflow Variant。
+将 Module 用于宿主执行时，由宿主集成维护者按[Workflow 组装](#5-可选-workflow-assembly)和
+[注册操作](#8-registerresolve-与-active-pointer)固定真实 Workflow/Variant。缺少这个绑定，就仍未具备
+首次测试的条件；不能用测试夹具构造的授权对象代替。
+
+<a id="test-reviewer"></a>
+
+### 0.3 首次测试与再次调用 / Test a reviewer
+
+先进入宿主项目文档的“Reviewer 测试/运行”入口。宿主应交付已绑定的操作命令或函数及其帮助，
+而不是要求每位使用者重新组装 Runtime 的环境参数。该入口必须固定目标 Module/Workflow、
+Variant/Profile、调用授权和 Registry/Ledger，保持本次选定的 Runtime 软件来源。
+
+当前 Runtime 的公共入口是
+[run_registered_workflow_module](agent_runtime_reviewer_api.md#run_registered_workflow_module)，
+它支持已注册的单节点 Workflow evaluation，并保留明确的宿主授权接口要求；不能从这个函数存在
+推断任意宿主、任意工具或 Claude/Codex 配置已接通。已有接口参考列出了完整参数及失败限制。
+
+**找不到宿主命令或固定执行绑定时，停止在宿主集成维护者。** 本 Runbook 不提供一个尚未实现的
+通用 `reviewer test` 命令。Runtime 开发者的 live pytest sample 验证其声明的 fixture 与能力；它不能
+代替你的新 Reviewer 配置，也不能为了测试而悄悄创建另一个 Module release。
+
+调用前核对，调用后分别记录：
+
+| 时点 | 操作者要核对的事实 |
+| --- | --- |
+| 调用前 | 当前输入符合该 Reviewer 的 schema；实际固定 Module/Profile/Workflow 与批准值一致；入口支持操作声明；使用明确的新执行 key |
+| 调用后 | 保存返回的 execution ID、真实执行状态、Attempt、Module/Profile 身份和用量；调用异常时保留原始错误及已取得的执行 ID |
+| 输出判断 | 按该 Reviewer 的输出 schema 和语义 validator 判断，区分“执行完成”与文稿 verdict；合法 non_pass 可以表示被审材料需要修改 |
+| 持久性 | 使用下一节的新查询连接读取同一 execution ID；即时内存结果不能代替 PG 回读 |
+
+再次审查新材料时保持相同固定绑定，提交新的输入与 key；不重新读取 authoring source、export 或
+register。相同 key 用于同一执行重放，不能换材料。已有 started 记录但没有 committed 结果时，使用
+Runtime 原恢复入口；不要换 key 重复不明效果。是否激活或正式部署另行决定。
+
+<a id="inspect-reviewer"></a>
+
+### 0.4 查询执行结果与失败 / Inspect a review
+
+优先用宿主现成的 inspect 命令。直接使用公共查询 API 时，`execution_id` 来自刚才的真实返回；
+`database_url` 与 `execution_schema` 来自该次执行使用的 Ledger 配置。连接和查询权限由宿主提供。
+这里的 schema 是 Execution Ledger，不是上段的 Registry schema。
+
+<!-- example:inspect-reviewer:start -->
+```python
+from agent_runtime.ledger import PostgresRuntimeExecutionQueryStore
+
+query = PostgresRuntimeExecutionQueryStore.from_dsn(
+    database_url, schema=execution_schema,
+)
+trace = query.load_trace(execution_id)
+if not trace.records:
+    raise RuntimeError("No committed records; verify the execution ID and Ledger binding")
+metadata = query.list_content_metadata(execution_id)
+print({"execution_id": execution_id, "record_count": len(trace.records),
+       "content_metadata": [dict(item) for item in metadata]})
+```
+<!-- example:inspect-reviewer:end -->
+
+这一步只读取已提交事实，不重跑模型。按 trace 中的 Attempt 状态、failure 和输出引用检查结果。
+需要正文时，用实际记录的 `content_ref` 调用 `query.load_content(execution_id, content_ref)`；返回
+None 表示该引用没有可读内容，不能当成成功空输出。输出、prompt、诊断可能包含私有材料，只向
+获授权读者展示，不把凭据或原文发到共享日志。
+
+本轮注册、模型执行、输出校验、持久回读要分别有证据。注册成功不等于实际测试成功；测试环境缺件
+也不等于 Reviewer 对文稿给出 blocked。具体失败保留原生错误和所属负责人：源或 schema 问题找
+source owner，Profile/Adapter/入口不相容找宿主集成维护者，Registry/Ledger 不可用找存储维护者。
+
 ## 1. 开始前确认
 
 调用方必须已经拥有：

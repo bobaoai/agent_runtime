@@ -191,3 +191,120 @@ def test_wheel_contains_source_generated_reference_and_valid_document_links(tmp_
         assert content == render_api_reference(ROOT)
         for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", content.decode()):
             assert "agent_runtime/docs/" + target in archive.namelist()
+        for name in ("README.md", "docs/agent_runtime_registration_runbook.md"):
+            assert archive.read("agent_runtime/" + name) == (ROOT / name).read_bytes()
+
+
+def _example(name):
+    document = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text()
+    match = re.search(r"<!-- example:" + name + r":start -->\s*```python\n(.*?)\n```\s*<!-- example:" + name + r":end -->", document, re.S)
+    assert match is not None, name
+    return compile(match[1], "registration_runbook:" + name, "exec")
+
+
+def test_task_navigation_and_local_links_are_closed():
+    readme = (ROOT / "README.md").read_text()
+    runbook = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text()
+    for query in ("注册新的 Reviewer", "register a new reviewer", "test a reviewer", "inspect a review"):
+        assert query in readme
+    for target in ("new-reviewer", "prepare-reviewer", "register-reviewer", "test-reviewer", "inspect-reviewer"):
+        assert f'<a id="{target}"></a>' in runbook
+    for path in (ROOT / "README.md", ROOT / "docs/agent_runtime_registration_runbook.md"):
+        body = path.read_text()
+        # Only this task's local document links, not unrelated framework URLs.
+        for link in re.findall(r"\]\(([^)]+)\)", body):
+            if "://" in link or not ("agent_runtime_" in link or link.startswith("#")):
+                continue
+            filename, _, anchor = link.partition("#")
+            destination = path.parent / filename if filename else path
+            assert destination.is_file(), link
+            target_text = destination.read_text()
+            if anchor:
+                headings = re.findall(r"^#+ (.+)$", target_text, re.M)
+                slugs = {re.sub(r"[^\w\- ]", "", item.lower()).replace(" ", "-") for item in headings}
+                explicit = set(re.findall(r'<a id="([^"]+)"', target_text))
+                assert anchor in slugs | explicit, link
+        assert path.read_bytes() == (ROOT / "src/agent_runtime" / path.relative_to(ROOT)).read_bytes()
+
+
+def test_task_runbook_preserves_environment_and_execution_boundaries():
+    body = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text()
+    for phrase in ("不重新编译或注册", "Source owner", "profile_binding", "execution_schema",
+                   "找不到宿主命令或固定执行绑定时", "不生成 Workflow", "不会自动建表或迁移",
+                   "origin_bundle", "相同 key", "授权替身", "输出校验", "持久回读"):
+        assert phrase in body
+
+
+@pytest.mark.parametrize("ready", [True, False])
+def test_documented_registration_uses_public_api_and_explicit_inputs(tmp_path, monkeypatch, ready):
+    # Fixture supplies only test-owned inputs and persistence ports. The actual
+    # source loader, compiler, Registry and plugin registration remain real.
+    import test_agent_runtime_module_authoring as fixture
+    from agent_runtime.registry import PostgresRuntimeReleaseStore, RuntimeReleaseRegistry, RuntimeReleaseBundle, runtime_owned_policy_schema_assets
+    from types import SimpleNamespace
+    registry = RuntimeReleaseRegistry()
+    behavior, evaluation, retry = fixture._policies()
+    profile = fixture._profile()
+    registry.register_bundle(RuntimeReleaseBundle(
+        schema_assets=runtime_owned_policy_schema_assets(), behavior_policies=(behavior,),
+        evaluation_policies=(evaluation,), retry_policies=(retry,), execution_profiles=(profile,),
+    ))
+    calls = []
+    class PersistencePort:
+        def installed_schema_release(self):
+            return SimpleNamespace(state="ready" if ready else "unknown")
+        def load_release_registry(self):
+            return registry
+        def register_bundle(self, bundle):
+            calls.append("register")
+            assert not bundle.execution_profiles and not bundle.execution_variant_policies
+            return registry.register_bundle(bundle)
+    def from_dsn(database_url, *, schema):
+        assert database_url == "test-connection" and schema == "test_registry"
+        calls.append("connection")
+        return PersistencePort()
+    monkeypatch.setattr(PostgresRuntimeReleaseStore, "from_dsn", staticmethod(from_dsn))
+    project = fixture._project(tmp_path)
+    before = _files(project)
+    variables = dict(database_url="test-connection", registry_schema="test_registry",
+        project_root=project, skill_id=fixture.SKILL_ID, module_id=fixture.MODULE_ID, module_version="v1",
+        plugin_id="documented_reviewer", plugin_version="v1",
+        behavior_binding=(behavior.release_ref, behavior.release_sha256),
+        evaluation_binding=(evaluation.release_ref, evaluation.release_sha256),
+        retry_binding=(retry.release_ref, retry.release_sha256),
+        profile_binding=(profile.release_ref, profile.release_sha256))
+    if not ready:
+        with pytest.raises(RuntimeError, match="schema is not ready"):
+            exec(_example("register-reviewer"), variables)
+        assert calls == ["connection"]
+    else:
+        exec(_example("register-reviewer"), variables)
+        assert calls == ["connection", "register", "connection"]
+        assert variables["resolved"] == variables["exported"].module_release
+        assert not registry.snapshot().active_release_refs
+        snapshot = registry.snapshot()
+        exec(_example("register-reviewer"), variables)
+        assert registry.snapshot() == snapshot
+    assert _files(project) == before
+
+
+@pytest.mark.parametrize("has_records", [True, False])
+def test_documented_query_respects_actual_public_signature_and_empty_trace(monkeypatch, has_records):
+    from types import SimpleNamespace
+    from unittest.mock import create_autospec
+    from agent_runtime.ledger import PostgresRuntimeExecutionQueryStore
+    query = create_autospec(PostgresRuntimeExecutionQueryStore, instance=True)
+    query.load_trace.return_value = SimpleNamespace(records=("test-record",) if has_records else ())
+    query.list_content_metadata.return_value = ({"content_ref":"test-content"},)
+    factory = create_autospec(PostgresRuntimeExecutionQueryStore.from_dsn, return_value=query)
+    monkeypatch.setattr(PostgresRuntimeExecutionQueryStore, "from_dsn", factory)
+    variables = dict(database_url="test-connection", execution_schema="test_execution", execution_id="execution_test")
+    if has_records:
+        exec(_example("inspect-reviewer"), variables)
+        query.list_content_metadata.assert_called_once_with("execution_test")
+    else:
+        with pytest.raises(RuntimeError, match="No committed records"):
+            exec(_example("inspect-reviewer"), variables)
+        query.list_content_metadata.assert_not_called()
+    factory.assert_called_once_with("test-connection", schema="test_execution")
+    query.load_trace.assert_called_once_with("execution_test")

@@ -1,5 +1,21 @@
 # Agent Runtime
 
+## 按任务开始 / Start by task
+
+使用 Runtime 时先按任务找操作步骤，不必先知道类名或搜索生产源码。
+
+| 我想做什么 | 从哪里开始 |
+| --- | --- |
+| 注册新的 Reviewer / register a new reviewer | [准备资料与注册](docs/agent_runtime_registration_runbook.md#new-reviewer) |
+| 用宿主环境首次测试 Reviewer / test a reviewer | [固定测试配置与实际调用](docs/agent_runtime_registration_runbook.md#test-reviewer) |
+| 查询审核结果、执行日志或失败 / inspect a review | [按执行 ID 查询](docs/agent_runtime_registration_runbook.md#inspect-reviewer) |
+| 查接口参数、返回值和错误 | [自动生成的 Reviewer API reference](docs/agent_runtime_reviewer_api.md) |
+| 开发 Runtime，运行回归测试 | [开发者能力与测试样例](docs/agent_runtime_capabilities.md) |
+
+注册、测试和查询使用同一个已明确的软件版本及固定 release 绑定。宿主项目提供自己的配置和
+操作入口；例如在 Analyst Billie 中查项目的治理/运行说明，不能把测试 fixture 当作正式配置。
+本目录提供任务发现与操作导航，不证明某个宿主或 Profile 已完成集成。
+
 Agent Runtime is a reusable management and execution layer for stateful AI
 agents. It is the part of an agent framework that answers operational
 questions: Which version of the agent ran? Which prompt, tools, model profile,
