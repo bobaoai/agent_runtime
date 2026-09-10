@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Protocol
 
@@ -161,15 +161,14 @@ def register_reviewer(
 
     Runtime defaults provide isolated context, read/search/shell, read-only
     materials, private scratch, denied tool network, a 1200-second attempt
-    budget and a limit of three attempts. The independent model preset v1 is
-    claude_cli / claude-opus-5[1m] / xhigh. Registration does not schedule retries.
+    budget and a limit of three attempts. Registration never selects a model.
 
-    Repeating a definition version retains its saved capabilities and binding.
-    Explicit model/reasoning overrides create a distinct execution binding;
-    changed source needs a new approved definition version. Source transport
-    declarations are never expanded automatically. This command only reads,
-    compiles, saves and verifies registration; it does not install software,
-    connect to PG, invoke a model, activate releases or create request receipts.
+    Repeating a definition version retains its saved capabilities and policies.
+    Changed source needs a new approved definition version. Source operation
+    and transport declarations are preserved; execution preparation checks
+    compatibility with the independently selected model.
+    Registration does not install software, connect to PG, invoke a model,
+    activate releases or create request receipts.
 
     New default-aware records require upgraded catalog readers. An older
     Runtime can fail while loading a shared catalog containing even one new
@@ -178,62 +177,52 @@ def register_reviewer(
     is not a compatibility boundary. Never repair this by rewriting old records.
 
     Args:
-        root: Host destination. Creates .runtime/module/<id>/<version>.json and
-            .runtime/workflow/<id>_review/<version>.json through the existing
-            save API. Existing directories and immutable records are reused.
+        root: Host destination for .runtime/module/<id>/<version>.json and
+            .runtime/workflow/<id>_review/<version>.json. Existing files retain
+            historical bindings; those do not select new executions' models.
         skill_id: Exact kebab-case source Skill identity.
         module_id: Exact snake_case Reviewer identity declared by the source.
         module_version: Approved definition version; never generated on conflict.
-        source_root: Explicit authoring root, defaulting to root. Source files
-            are loaded through ModuleReviewer.from_registration, not executed.
-        model_id: Optional independent Claude model override. Ordinary calls
-            use Runtime's preset; repeat registration preserves saved bindings.
-        reasoning_profile: Optional independent reasoning override.
-        release_registry: Optional existing exact policy lookup. Ordinary local
-            registration restores the saved root and Runtime-owned policies.
+        source_root: Explicit authoring root, defaulting to root.
+        model_id: Retired registration parameter. Non-None is rejected before
+            IO; pass model choices to prepare_local_workflow_module instead.
+        reasoning_profile: Retired parameter, rejected like model_id.
+        release_registry: Optional exact policy lookup. Ordinary registration
+            uses saved definitions and Runtime-owned policies.
     Returns:
-        Native registration result with Module, Workflow, policies and exact
-        Workflow Profile/Variant. A fresh local read verifies both definitions.
-        No precompiled bundle or manually assembled Profile is required.
+        Native registration result containing fixed Module, Workflow, Prompt,
+        Schema and Policy/ReviewerDefaults dependencies. Submitted Profile and
+        Variant arrays are empty. A fresh read verifies both definitions.
+        Definition-only registration is complete, not blocked on a model.
     Raises:
-        ModuleAuthoringError: Source transport or tool boundary is incompatible.
-        ValueError: Source/schema/policy errors, version conflicts or ambiguous
-            saved bindings. Fix the source/configuration, never silently change
-            transport, permissions or the requested version.
-        OSError: Native source or persistence failure; inspect already saved
-            facts and repeat the same request, not a newly invented version.
+        ModuleAuthoringError: Invalid source operation declaration.
+        ValueError: Model parameters supplied to registration, invalid source,
+            schema or policies, or immutable definition/version conflicts.
+        OSError: Native source/persistence failure; inspect saved facts and
+            repeat the same request instead of inventing a new version.
     Effects:
-        Reads approved source, compiles and saves registration only. Does not
-        install software, create an environment, connect to PG, invoke a model,
-        activate releases, or create execution receipts. The host owns approval
-        of source and later execution. Defaults are frozen at first registration;
-        an explicit model change creates a distinct Profile/Variant binding.
+        Reads source, compiles and saves fixed definitions only. Does not select
+        or compile a model Profile, invoke a provider, discover credentials or
+        create an environment. Existing historical files are not cleaned up.
+        Model selection and its compatibility checks belong to execution.
     """
+    if model_id is not None or reasoning_profile is not None:
+        raise ValueError("Model parameters belong to prepare_local_workflow_module, not Reviewer registration")
+
     from .registry_local_persistence import _restore_registry, _bundle, load_runtime_registration
     from .registry_module_authoring import ModuleReviewer
     from .registry_workflow_authoring import Workflow
-    from .registry_reviewer_defaults import content_version
-    from .registry_release_compilation import (
-        ExecutionVariantPolicyReleaseCandidate, ExecutionVariantProfileBindingCandidate,
-        compile_execution_variant_policy_release, runtime_owned_policy_schema_assets,
-    )
 
     registry = _restore_registry(root)
     if release_registry is not None:
         registry.register_bundle(_bundle(release_registry.snapshot()))
     reviewer = ModuleReviewer.from_registration(
         Path(root) if source_root is None else Path(source_root), skill_id=skill_id, module_id=module_id)
-    workflow_id = module_id + "_review"
     try:
         previous = load_runtime_registration(root, "module", module_id, module_version).release
     except FileNotFoundError:
         previous = None
-    try:
-        saved_workflow = load_runtime_registration(root, "workflow", workflow_id, module_version)
-    except FileNotFoundError:
-        saved_workflow = None
-    options = {"release_registry": registry, "model_id": model_id, "reasoning_profile": reasoning_profile}
-    selection = None
+    options = {"release_registry": registry, "execution_profile": None}
     if previous is not None:
         options.update(
             behavior_policy=registry.get_behavior_policy(previous.behavior_policy_ref, previous.behavior_policy_sha256),
@@ -241,50 +230,19 @@ def register_reviewer(
             retry_policy=registry.get_retry_policy(previous.retry_policy_ref, previous.retry_policy_sha256),
             reviewer_defaults=previous.reviewer_defaults,
         )
-    if saved_workflow is not None:
-        selections = saved_workflow.registry.snapshot().execution_variant_policies
-        if len(selections) != 1 or len(selections[0].policy_document()["bindings"]) != 1:
-            raise ValueError("Saved Reviewer Workflow must have exactly one execution binding")
-        old_selection = selections[0]
-        binding = old_selection.policy_document()["bindings"][0]
-        old_profile = saved_workflow.registry.get_execution_profile(
-            binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
-        if model_id is None and reasoning_profile is None:
-            selection = old_selection
-            options["execution_profile"] = old_profile
-        else:
-            options["model_id"] = old_profile.model_id if model_id is None else model_id
-            options["reasoning_profile"] = old_profile.reasoning_profile if reasoning_profile is None else reasoning_profile
     exported = reviewer.export(module_version=module_version, **options)
     workflow_export = Workflow.for_reviewer(exported).export()
-    workflow, profile = workflow_export.workflow_release, exported.execution_profile
-    if selection is None:
-        selection = compile_execution_variant_policy_release(ExecutionVariantPolicyReleaseCandidate(
-            policy_id=workflow_id + "_variant",
-            policy_version=content_version({"workflow": workflow.release_sha256, "profile": profile.release_sha256}),
-            origin_kind="workflow", origin_release_ref=workflow.release_ref,
-            origin_release_sha256=workflow.release_sha256,
-            bindings=(ExecutionVariantProfileBindingCandidate("review", profile.release_ref, profile.release_sha256),),
-        ))
-    schemas = {record.release_ref: record for record in workflow_export.origin_bundle.schema_assets}
-    variant_schema = next((record for record in runtime_owned_policy_schema_assets()
-                           if record.release_ref == selection.policy_schema_ref
-                           and record.schema_sha256 == selection.policy_schema_sha256), None)
-    if variant_schema is None:
-        variant_schema = registry.get_schema_asset(selection.policy_schema_ref, selection.policy_schema_sha256)
-    schemas[variant_schema.release_ref] = variant_schema
-    bundle = replace(workflow_export.origin_bundle, schema_assets=tuple(schemas.values()),
-                     execution_profiles=(profile,), execution_variant_policies=(selection,))
+    # Policy lookup may include independently registered model configurations.
+    # Only fixed definitions enter this registration's submitted catalog.
     result = register_runtime_module_plugin(
-        registry, RuntimeModulePlugin(module_id + "_reviewer", module_version, bundle), root=Path(root))
-    for kind, expected in (("module", exported.module_release), ("workflow", workflow)):
+        RuntimeReleaseRegistry(),
+        RuntimeModulePlugin(module_id + "_reviewer", module_version, workflow_export.origin_bundle),
+        root=Path(root),
+    )
+    for kind, expected in (("module", exported.module_release), ("workflow", workflow_export.workflow_release)):
         saved = load_runtime_registration(root, kind, getattr(expected, kind + "_id"), module_version)
         if saved.release != expected:
             raise ValueError("Saved registration differs from compiled result")
-        if kind == "workflow":
-            if (saved.registry.get_execution_variant_policy(selection.release_ref, selection.release_sha256) != selection
-                    or saved.registry.get_execution_profile(profile.release_ref, profile.release_sha256) != profile):
-                raise ValueError("Saved execution binding differs from registered result")
     return result
 
 

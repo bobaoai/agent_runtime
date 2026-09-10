@@ -25,6 +25,7 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 - [register_reviewer](#register_reviewer)
 - [ReviewerDefaults](#reviewerdefaults)
 - [Workflow](#workflow)
+- [prepare_local_workflow_module](#prepare_local_workflow_module)
 - [run_local_workflow_module](#run_local_workflow_module)
 - [CLI commands](#cli-commands)
 - [Error constants](#error-constants)
@@ -57,19 +58,19 @@ rules. The subject owner supplies review meaning and its semantic output
 validator. Runtime does not invent a checklist or turn a provider failure
 into a review verdict.
 
-Omitting Policy/Profile arguments uses Runtime's ReviewerDefaults and its
-independent model preset. The fixed capability snapshot enters the Module
-hash; model selection remains outside it. Explicit source restrictions are
-retained. Fully explicit legacy export calls keep their original definition
-shape and do not acquire new permissions. Runtime software upgrades never
+Omitting Policy/Profile arguments uses Runtime's ReviewerDefaults without
+selecting a model. The fixed capability snapshot enters the Module hash;
+model selection happens independently during execution preparation. Explicit
+source restrictions are retained. Fully explicit legacy export calls keep
+their original definition shape and do not acquire new permissions. Runtime software upgrades never
 rewrite an already registered Module.
 
 An immutable ExecutionProfileRelease records the resolved provider, model,
 reasoning and fixed tool/network/workspace budget. An ExecutionVariantPolicyRelease
 binds that Profile to exact Module or Workflow positions. These two
-releases do not enter the Module release hash. A host binds the intended
-releases explicitly; a normal review supplies its candidate, goal, scope,
-context and prior findings as input, not as edits to fixed instructions
+releases do not enter the Module release hash. Execution preparation combines
+a model choice with the fixed capabilities; a normal review supplies its
+candidate, goal, scope, context and prior findings as input, not as edits to fixed instructions
 or ad hoc provider parameters.
 
 **When versions change**
@@ -97,7 +98,9 @@ they are not embedded in the Reviewer source or selected by this class.
 
 Ordinary source registration uses ``register_reviewer`` or the installed
 ``agent-runtime-registry register-reviewer`` CLI. It resolves defaults,
-creates the fixed one-node Workflow and saves an exact local closure.
+creates the fixed one-node Workflow and saves its definition closure without
+a Profile or Variant. Use prepare_local_workflow_module to select the model
+for a new invocation, then supply the existing host ports to the kernel.
 The lower-level ``register_runtime_module_plugin`` still accepts an explicit
 bundle and store. Activation is a separate decision. For the
 existing single-node Workflow evaluation path, call
@@ -155,7 +158,7 @@ def export(
     behavior_policy: BehaviorPolicyRelease | None=None,
     evaluation_policy: EvaluationPolicyRelease | None=None,
     retry_policy: RetryPolicyRelease | None=None,
-    execution_profile: ExecutionProfileRelease | None | Literal['runtime_default']='runtime_default',
+    execution_profile: ExecutionProfileRelease | None | Literal['runtime_default']=None,
     release_registry: RuntimeReleaseRegistry | None=None,
     reviewer_defaults: ReviewerDefaults | None=None,
     model_id: str | None=None,
@@ -176,8 +179,8 @@ Compile this captured source and validate optional Profile compatibility.
   module_candidate reference retains its candidate-only meaning.
 - `retry_policy`: Optional exact override; Runtime defaults to three
   attempts including the first. This is a limit, not a scheduler.
-- `execution_profile`: Omit for Runtime's Claude CLI model preset and
-  fixed capabilities, or use None for definition-only export.
+- `execution_profile`: Omit or use None for definition-only export.
+  Explicit runtime_default requests the legacy model-preset export.
   Fully explicit legacy calls retain their existing record shape.
 - `release_registry`: Lookup for explicit non-default policy refs.
 - `reviewer_defaults`: Previously frozen capability snapshot, normally
@@ -191,12 +194,12 @@ Compile this captured source and validate optional Profile compatibility.
 
 ModuleExport with compiled Module/Prompt/Schema records and the
 supplied policies. A compatible Profile also produces a standalone
-Variant candidate/release. None produces no Variant and sets
-execution_blocker_code to EXECUTION_PROFILE_UNAVAILABLE. The
+Variant candidate/release. Definition-only default export produces no Variant and no blocker.
+Fully explicit legacy None calls retain EXECUTION_PROFILE_UNAVAILABLE. The
 standalone helper retains v1 for fully explicit legacy calls;
 new default-aware bindings use a deterministic content version.
 Exported bindings are candidates, not updates to a store.
-Workflow binding is separate and handled by register_reviewer.
+New Workflow execution preparation is separate from source registration.
 
 **Raises**
 
@@ -204,9 +207,9 @@ Workflow binding is separate and handled by register_reviewer.
   invalid operation declaration; MODULE_EXECUTION_PROFILE_INCOMPATIBLE
   for an undeclared transport or incompatible tool boundary.
 - `ValueError`: Invalid common Reviewer output schema, Profile, version,
-  policy reference or compiler input. Missing Profile is a returned
-  blocker, not this exception. JSON/schema errors retain their
-  original validation exception types.
+  policy reference or compiler input. Definition-only export needs
+  no Profile; only the legacy explicit path retains its missing-
+  Profile blocker. JSON/schema errors retain their original types.
 
 **Effects**
 
@@ -358,15 +361,17 @@ and Schema records. ``behavior_policy``, ``evaluation_policy`` and
 
 ``execution_profile`` and ``execution_variant`` are separate from that
 definition. ``execution_variant_candidate`` is the compiler input for
-the optional standalone binding. With no Profile, all three are None
-and ``execution_blocker_code`` is EXECUTION_PROFILE_UNAVAILABLE. With a
-compatible Profile the blocker is None; this is an authoring check, not
+the optional standalone binding. With no Profile, all three are None.
+Ordinary definition-only Reviewer export also has no blocker. The fully
+explicit legacy path without a fixed default snapshot retains
+EXECUTION_PROFILE_UNAVAILABLE. With a compatible Profile the blocker is None;
+this is an authoring check, not
 proof that an Adapter, provider login, storage or execution is available.
 
 ``origin_bundle`` contains only the Module definition and its immutable
-dependencies. A registration caller explicitly combines the required
-Profile and Variant records with that bundle, then calls the public
-registration API. For a Workflow, bind the Workflow's exact node positions
+dependencies. Definition registration uses that bundle alone. The lower-level
+explicit binding path can combine separately selected Profile and Variant
+records with it. For a Workflow, bind the Workflow's exact node positions
 using a Workflow Variant Policy; the standalone Variant produced here
 cannot be substituted for a Workflow binding. Exporting creates in-memory
 records only; registration, activation and execution are separate actions.
@@ -426,9 +431,11 @@ the supplied Profile conflicts with the source transport or tool boundary.
 Supply an approved compatible Profile; changing the Module's declarations
 is a separate source change, not a way to bypass this check.
 
-``EXECUTION_PROFILE_UNAVAILABLE`` is instead returned in
-``ModuleExport.execution_blocker_code`` when no Profile was supplied.
-It does not prevent definition-only export. Other source, schema, policy
+``EXECUTION_PROFILE_UNAVAILABLE`` is returned only by fully explicit legacy
+Reviewer export without a fixed default snapshot when no Profile is supplied.
+Ordinary definition-only Reviewer export has no Profile, no Variant and
+``ModuleExport.execution_blocker_code=None``. Neither case prevents
+compilation of the fixed definition. Other source, schema, policy
 and Registry validation errors retain their own exception contracts;
 this class does not wrap every possible failure. No Registry write or
 provider invocation occurs during authoring.
@@ -659,8 +666,6 @@ No code represents a Reviewer verdict; registration does not run a model.
 | `--skill-id` | required | exact kebab-case Skill identity |
 | `--module-id` | required | exact snake_case Reviewer identity |
 | `--version` | required | approved Module/Workflow definition version |
-| `--model-id` | optional | explicit Claude model override; leaves fixed capabilities unchanged |
-| `--reasoning-profile` | optional | explicit reasoning override; leaves fixed capabilities unchanged |
 
 ### agent-runtime-registry register
 
@@ -778,15 +783,14 @@ Register approved Reviewer source and its one-node Workflow under root.
 
 Runtime defaults provide isolated context, read/search/shell, read-only
 materials, private scratch, denied tool network, a 1200-second attempt
-budget and a limit of three attempts. The independent model preset v1 is
-claude_cli / claude-opus-5[1m] / xhigh. Registration does not schedule retries.
+budget and a limit of three attempts. Registration never selects a model.
 
-Repeating a definition version retains its saved capabilities and binding.
-Explicit model/reasoning overrides create a distinct execution binding;
-changed source needs a new approved definition version. Source transport
-declarations are never expanded automatically. This command only reads,
-compiles, saves and verifies registration; it does not install software,
-connect to PG, invoke a model, activate releases or create request receipts.
+Repeating a definition version retains its saved capabilities and policies.
+Changed source needs a new approved definition version. Source operation
+and transport declarations are preserved; execution preparation checks
+compatibility with the independently selected model.
+Registration does not install software, connect to PG, invoke a model,
+activate releases or create request receipts.
 
 New default-aware records require upgraded catalog readers. An older
 Runtime can fail while loading a shared catalog containing even one new
@@ -796,39 +800,37 @@ is not a compatibility boundary. Never repair this by rewriting old records.
 
 **Args**
 
-- `root`: Host destination. Creates .runtime/module/<id>/<version>.json and
-  .runtime/workflow/<id>_review/<version>.json through the existing
-  save API. Existing directories and immutable records are reused.
+- `root`: Host destination for .runtime/module/<id>/<version>.json and
+  .runtime/workflow/<id>_review/<version>.json. Existing files retain
+  historical bindings; those do not select new executions' models.
 - `skill_id`: Exact kebab-case source Skill identity.
 - `module_id`: Exact snake_case Reviewer identity declared by the source.
 - `module_version`: Approved definition version; never generated on conflict.
-- `source_root`: Explicit authoring root, defaulting to root. Source files
-  are loaded through ModuleReviewer.from_registration, not executed.
-- `model_id`: Optional independent Claude model override. Ordinary calls
-  use Runtime's preset; repeat registration preserves saved bindings.
-- `reasoning_profile`: Optional independent reasoning override.
-- `release_registry`: Optional existing exact policy lookup. Ordinary local
-  registration restores the saved root and Runtime-owned policies.
+- `source_root`: Explicit authoring root, defaulting to root.
+- `model_id`: Retired registration parameter. Non-None is rejected before
+  IO; pass model choices to prepare_local_workflow_module instead.
+- `reasoning_profile`: Retired parameter, rejected like model_id.
+- `release_registry`: Optional exact policy lookup. Ordinary registration
+  uses saved definitions and Runtime-owned policies.
 **Returns**
 
-Native registration result with Module, Workflow, policies and exact
-Workflow Profile/Variant. A fresh local read verifies both definitions.
-No precompiled bundle or manually assembled Profile is required.
+Native registration result containing fixed Module, Workflow, Prompt,
+Schema and Policy/ReviewerDefaults dependencies. Submitted Profile and
+Variant arrays are empty. A fresh read verifies both definitions.
+Definition-only registration is complete, not blocked on a model.
 **Raises**
 
-- `ModuleAuthoringError`: Source transport or tool boundary is incompatible.
-- `ValueError`: Source/schema/policy errors, version conflicts or ambiguous
-  saved bindings. Fix the source/configuration, never silently change
-  transport, permissions or the requested version.
-- `OSError`: Native source or persistence failure; inspect already saved
-  facts and repeat the same request, not a newly invented version.
+- `ModuleAuthoringError`: Invalid source operation declaration.
+- `ValueError`: Model parameters supplied to registration, invalid source,
+  schema or policies, or immutable definition/version conflicts.
+- `OSError`: Native source/persistence failure; inspect saved facts and
+  repeat the same request instead of inventing a new version.
 **Effects**
 
-Reads approved source, compiles and saves registration only. Does not
-install software, create an environment, connect to PG, invoke a model,
-activate releases, or create execution receipts. The host owns approval
-of source and later execution. Defaults are frozen at first registration;
-an explicit model change creates a distinct Profile/Variant binding.
+Reads source, compiles and saves fixed definitions only. Does not select
+or compile a model Profile, invoke a provider, discover credentials or
+create an environment. Existing historical files are not cleaned up.
+Model selection and its compatibility checks belong to execution.
 
 ## ReviewerDefaults
 
@@ -954,6 +956,70 @@ def export(
 
 Compile the graph and merge its exact target-independent closure.
 
+## prepare_local_workflow_module
+
+Public import: `from agent_runtime import prepare_local_workflow_module`
+
+```python
+def prepare_local_workflow_module(
+    root: Path,
+    workflow_id: str,
+    *,
+    version: str | None=None,
+    transport_kind: str | None=None,
+    model_id: str | None=None,
+    reasoning_profile: str | None=None,
+    release_store=None,
+) -> tuple[LoadedRuntimeRegistration, ExecutionVariantPolicyRelease]:
+```
+
+Resolve a fixed single-node Reviewer Workflow and this invocation's model.
+
+**Args**
+
+- `root`: Registered host root. Only saved definitions are read; this is
+  neither a model choice nor permission to read the whole project.
+- `workflow_id`: Saved Workflow object ID.
+- `version`: Exact definition version, or None for the latest registered
+  new definition. Resolved once before preparing exact releases.
+- `transport_kind`: Independent model transport; None uses Runtime's model
+  preset. Currently only claude_cli is supported by this preparation.
+  Model names are never used to infer another transport or provider.
+- `model_id`: Independent model override; None uses claude-opus-5[1m].
+- `reasoning_profile`: Independent effort override; None uses xhigh.
+  Omitted model fields use the Runtime preset, never saved bindings.
+  Tools/network/workspace/budgets come from frozen ReviewerDefaults.
+- `release_store`: Optional explicit existing store providing register_bundle
+  and load_release_registry, such as PostgresRuntimeReleaseStore.
+  Its schema must already be ready. Writes and verifies exact releases
+  for durable execution, with no local-file update. Shared stores
+  require readers that understand the selected release format.
+**Returns**
+
+A pair (LoadedRuntimeRegistration, ExecutionVariantPolicyRelease).
+The first contains the fixed Workflow and the exact invocation Registry;
+the second selects this invocation's Profile at its Module node.
+Build host adapters/authorization using this Registry and Profile, then
+pass this same Workflow/Registry/Variant to run_registered_workflow_module.
+Do not reload the root or resolve the model again before invoking.
+**Raises**
+
+- `FileNotFoundError`: Missing saved Workflow/version.
+- `ValueError`: Invalid saved data, unsupported transport, missing fixed
+  Reviewer capabilities, unsupported graph or Profile/Module boundary.
+- `ModuleAuthoringError`: Native Registry compatibility failure where raised.
+- `Exception`: Store failures retain their native contract. No model has
+  run when preparation fails; prior store writes may have committed.
+**Effects**
+
+Does not load authoring source, call a provider, write .runtime, change
+defaults, create credentials/schemas or issue authorization. Existing
+saved Profile/Variant records are excluded from new model selection.
+Without release_store only the in-memory closure is prepared; this is
+not proof that exact releases were durably saved. The execution kernel
+records inputs, actual configuration, outputs and failures in its Ledger.
+History is queried by execution ID, not by this preparation function.
+
 ## run_local_workflow_module
 
 Public import: `from agent_runtime import run_local_workflow_module`
@@ -970,7 +1036,11 @@ def run_local_workflow_module(
 ):
 ```
 
-Run a saved single-node Workflow through the existing Evaluation entry.
+Legacy entry: execute a single-node Workflow's explicitly saved binding.
+
+Retains the existing saved-binding behavior for old callers. New source
+registrations are definition-only: use prepare_local_workflow_module and
+the existing run_registered_workflow_module kernel for new invocations.
 
 **Args**
 

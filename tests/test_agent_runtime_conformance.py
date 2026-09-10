@@ -229,7 +229,7 @@ def test_capability_navigation_exemption_does_not_apply_to_other_runtime_files()
 def test_runtime_role_vocabulary_is_confined_to_review_capability_owners() -> None:
     runtime_root = Path(__file__).resolve().parents[1] / "src" / "agent_runtime"
     role_source = runtime_root / "registry/registry_module_authoring.py"
-    # Registry owns the fixed Reviewer defaults; Execution enforces that snapshot.
+    # Registry owns fixed defaults; Execution prepares and enforces that snapshot.
     # This exact surface list does not admit other roles or host business meaning.
     capability_paths = {
         "__init__.py", "contracts/registry_release_definition.py",
@@ -238,6 +238,7 @@ def test_runtime_role_vocabulary_is_confined_to_review_capability_owners() -> No
         "registry/registry_workflow_authoring.py", "registry/registry_release_compilation.py",
         "registry/registry_release_registration.py", "registry/registry_architecture_registration.py",
         "execution/execution_module_invocation.py", "conformance/conformance_architecture_manifest.py",
+        "execution/execution_local_invocation.py",
     }
 
     for runtime_path in sorted(runtime_root.rglob("*.py")):

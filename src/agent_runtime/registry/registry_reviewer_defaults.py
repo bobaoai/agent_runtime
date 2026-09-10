@@ -61,7 +61,7 @@ def resolve_reviewer_policy(family, reference, supplied, registry):
     raise ValueError(f"Unresolved exact Reviewer policy: {reference}")
 
 
-def reviewer_execution_profile(defaults: ReviewerDefaults, *, model_id=None, reasoning_profile=None):
+def reviewer_execution_profile(defaults: ReviewerDefaults, *, transport_kind=None, model_id=None, reasoning_profile=None):
     """Compile the fixed capabilities with an independent Claude model selection.
 
     Model preset v1 is claude-opus-5[1m], xhigh over claude_cli. Explicit model
@@ -69,6 +69,8 @@ def reviewer_execution_profile(defaults: ReviewerDefaults, *, model_id=None, rea
     The content-derived Profile version is deterministic, not a new Module version.
     """
     defaults.validate()
+    if transport_kind is not None and transport_kind != "claude_cli":
+        raise ValueError(f"Unsupported Reviewer model transport: {transport_kind}; no automatic fallback")
     spec = ExecutionProfileReleaseSpec(
         execution_profile_id="reviewer_claude_cli",
         executor_adapter_id="claude_cli_native_tools_executor", executor_adapter_revision="v1",

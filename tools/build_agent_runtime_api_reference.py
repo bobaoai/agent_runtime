@@ -31,7 +31,9 @@ API_SOURCES = {
     "src/agent_runtime/registry/registry_plugin_registration.py": ("register_runtime_module_plugin", "register_reviewer"),
     "src/agent_runtime/contracts/registry_release_definition.py": ("ReviewerDefaults",),
     "src/agent_runtime/registry/registry_workflow_authoring.py": ("Workflow",),
-    "src/agent_runtime/execution/execution_local_invocation.py": ("run_local_workflow_module",),
+    "src/agent_runtime/execution/execution_local_invocation.py": (
+        "prepare_local_workflow_module", "run_local_workflow_module",
+    ),
 }
 ERROR_CONSTANTS = (
     "EXECUTION_PROFILE_UNAVAILABLE",

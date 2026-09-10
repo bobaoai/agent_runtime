@@ -9,7 +9,7 @@ import tarfile
 
 import pytest
 
-from agent_runtime import ModuleReviewer, ReviewerDefaults, register_reviewer, load_runtime_registration
+from agent_runtime import ModuleReviewer, ReviewerDefaults, register_reviewer, load_runtime_registration, prepare_local_workflow_module
 from agent_runtime.registry import RuntimeReleaseRegistry, RuntimeReleaseBundle, compile_execution_variant_policy_release
 from agent_runtime.contracts.registry_release_definition import ExecutionProfileRelease
 from test_agent_runtime_module_authoring import _project, _policies, _profile, SKILL_ID, MODULE_ID
@@ -39,6 +39,12 @@ def _register(root, source, version="v1", **kwargs):
                              module_version=version, **kwargs)
 
 
+
+def _prepared_bundle(root, **kwargs):
+    prepared, _ = prepare_local_workflow_module(root, MODULE_ID + "_review", **kwargs)
+    return RuntimeReleaseBundle(**{f.name: getattr(prepared.registry.snapshot(), f.name)
+                                  for f in fields(RuntimeReleaseBundle)})
+
 def _files(root):
     return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
@@ -56,18 +62,15 @@ def test_source_registration_defaults_and_exact_workflow_closure(tmp_path):
     root = tmp_path / "host"
     result = _register(root, source)
     bundle = result.submitted_bundle
-    module, workflow, profile = bundle.modules[0], bundle.workflows[0], bundle.execution_profiles[0]
+    module, workflow = bundle.modules[0], bundle.workflows[0]
     assert module.reviewer_defaults == ReviewerDefaults()
-    assert profile.model_id == "claude-opus-5[1m]" and profile.reasoning_profile == "xhigh"
-    assert profile.model_defaults_version == "v1"
-    assert profile.tool_policy == ("read", "search", "shell") and profile.network_policy == "denied"
+    assert bundle.execution_profiles == bundle.execution_variant_policies == ()
     assert bundle.evaluation_policies[0].policy_document()["evaluation_mode"] == "none"
     assert workflow.workflow_id == MODULE_ID + "_review"
     assert workflow.nodes[0].module_release_ref == module.release_ref
-    assert bundle.execution_variant_policies[0].policy_document()["origin_kind"] == "workflow"
     loaded = load_runtime_registration(root, "workflow", workflow.workflow_id)
     assert loaded.release == workflow
-    assert loaded.registry.get_execution_profile(profile.release_ref, profile.release_sha256) == profile
+    assert not loaded.registry.snapshot().execution_profiles
     assert set(_files(root)) == {
         f".runtime/module/{MODULE_ID}/v1.json", f".runtime/workflow/{MODULE_ID}_review/v1.json"}
     assert _files(source) == original
@@ -106,20 +109,20 @@ def test_same_registration_retains_frozen_defaults_and_bytes(tmp_path, monkeypat
     assert _files(root) == before
 
 
-def test_model_change_preserves_definition_and_partial_override_preserves_model(tmp_path):
+def test_model_selection_is_separate_and_partial_override_uses_runtime_preset(tmp_path):
     source, _ = _source(tmp_path / "source")
     root = tmp_path / "host"
-    first = _register(root, source).submitted_bundle
-    second = _register(root, source, model_id="another-claude-model").submitted_bundle
-    assert second.modules == first.modules and second.workflows == first.workflows
-    assert second.execution_profiles[0].release_ref != first.execution_profiles[0].release_ref
-    assert second.execution_profiles[0].tool_policy == first.execution_profiles[0].tool_policy
-    third = _register(root, source, reasoning_profile="high").submitted_bundle
-    assert third.execution_profiles[0].model_id == "another-claude-model"
-    assert third.execution_profiles[0].reasoning_profile == "high"
+    definition = _register(root, source).submitted_bundle
     before = _files(root)
-    fourth = _register(root, source).submitted_bundle
-    assert fourth.execution_profiles == third.execution_profiles
+    first = _prepared_bundle(root)
+    second = _prepared_bundle(root, model_id="another-claude-model")
+    third = _prepared_bundle(root, reasoning_profile="high")
+    assert first.modules == second.modules == definition.modules
+    assert first.workflows == second.workflows == definition.workflows
+    assert first.execution_profiles[0].release_ref != second.execution_profiles[0].release_ref
+    assert first.execution_profiles[0].tool_policy == second.execution_profiles[0].tool_policy
+    assert third.execution_profiles[0].model_id == first.execution_profiles[0].model_id
+    assert third.execution_profiles[0].reasoning_profile == "high"
     assert _files(root) == before
 
 
@@ -146,7 +149,7 @@ def test_source_cli_runs_without_precompiled_bundle_and_can_load_after_source_re
 
 
 @pytest.mark.parametrize("fault", ["transport", "operation", "tool_named_operations", "policy"])
-def test_registration_rejects_source_incompatibility_without_writes(tmp_path, fault):
+def test_registration_preserves_declarations_and_execution_checks_compatibility(tmp_path, fault):
     source, path = _source(tmp_path / "source", compatible=fault != "transport")
     document = json.loads(path.read_text())
     if fault == "operation":
@@ -159,9 +162,18 @@ def test_registration_rejects_source_incompatibility_without_writes(tmp_path, fa
     before = _files(source)
     root = tmp_path / "host"
     process = _cli(root, source)
-    assert process.returncode != 0
-    assert "INCOMPATIBLE" in process.stderr or "Unresolved exact Reviewer policy" in process.stderr
-    assert not (root / ".runtime").exists()
+    if fault == "policy":
+        assert process.returncode == 1 and "Unresolved exact Reviewer policy" in process.stderr
+        assert not (root / ".runtime").exists()
+    else:
+        assert process.returncode == 0, process.stderr
+        saved = _files(root)
+        with pytest.raises(ValueError):
+            _prepared_bundle(root)
+        assert _files(root) == saved
+        module = load_runtime_registration(root, "module", MODULE_ID).release
+        assert list(module.declared_operation_ids) == document["declared_operation_ids"]
+        assert list(module.compatible_transport_kinds) == document["compatible_transport_kinds"]
     assert _files(source) == before
 
 
@@ -188,7 +200,9 @@ def test_v2_still_requires_its_original_policy_fields(tmp_path):
 def test_frozen_capabilities_and_hash_are_checked_at_registry_and_execution(tmp_path):
     from agent_runtime.execution.execution_module_invocation import _assert_admitted_test_evaluation_profile
     source, _ = _source(tmp_path / "source")
-    bundle = _register(tmp_path / "host", source).submitted_bundle
+    root = tmp_path / "host"
+    _register(root, source)
+    bundle = _prepared_bundle(root)
     module, profile = bundle.modules[0], bundle.execution_profiles[0]
     payload = module.as_dict()
     payload["reviewer_defaults"]["timeout_seconds"] += 1
@@ -213,11 +227,11 @@ def test_help_exposes_source_cli_and_no_active_or_profile_assembly_options():
     process = subprocess.run([*CLI, "register-reviewer", "--help"],
         env={**os.environ, "PYTHONPATH": str(ROOT / "src")}, capture_output=True, text=True, check=True)
     assert "--source-root" in process.stdout and "--version" in process.stdout
-    for required in ("read/search/shell", "claude-opus-5[1m]", "1200", "three attempts",
+    for required in ("read/search/shell", "never selects a model", "1200", "three attempts",
                      "Repeating a definition version", "does not install software",
                      "invoke a model", "Exit 0", "Exit 1", "Exit 2", "Upgrade affected readers"):
         assert required in process.stdout
-    for forbidden in ("--active", "--profile", "--bundle", "--retry-policy", "--tool"):
+    for forbidden in ("--active", "--profile", "--bundle", "--retry-policy", "--tool", "--model-id", "--reasoning-profile"):
         assert forbidden not in process.stdout
 
 
@@ -237,7 +251,7 @@ def test_cli_exit_codes_and_output_channels(tmp_path):
     assert error["error_type"] == "FileNotFoundError" and error["error_code"] is None and error["detail"]
 
 
-def test_two_reviewers_share_one_default_base_and_model_profile(tmp_path):
+def test_two_reviewers_share_one_default_base_without_model_profiles(tmp_path):
     first_source, _ = _source(tmp_path / "first")
     second_source, registration = _source(tmp_path / "second")
     other_id = "another_test_reviewer"
@@ -251,7 +265,7 @@ def test_two_reviewers_share_one_default_base_and_model_profile(tmp_path):
     second = register_reviewer(root, source_root=second_source, skill_id=SKILL_ID,
                                module_id=other_id, module_version="v1").submitted_bundle
     assert first.modules[0].reviewer_defaults == second.modules[0].reviewer_defaults
-    assert first.execution_profiles == second.execution_profiles
+    assert first.execution_profiles == second.execution_profiles == ()
     assert first.modules[0].release_ref != second.modules[0].release_ref
     assert first.workflows[0].workflow_id != second.workflows[0].workflow_id
 
@@ -263,10 +277,9 @@ def test_new_and_legacy_defaults_roundtrip_through_postgres(tmp_path, postgres_r
     store.create_schema(installed_at_utc="2026-08-17T19:59:59Z")
     source, _ = _source(tmp_path / "source")
     root = tmp_path / "host"
-    first = _register(root, source).submitted_bundle
-    store.register_bundle(first)
-    changed = _register(root, source, model_id="another-claude-model").submitted_bundle
-    store.register_bundle(changed)
+    _register(root, source)
+    first = _prepared_bundle(root, release_store=store)
+    changed = _prepared_bundle(root, model_id="another-claude-model", release_store=store)
     legacy_source = _project(tmp_path / "legacy")
     behavior, evaluation, retry = _policies()
     legacy = ModuleReviewer.from_registration(legacy_source, skill_id=SKILL_ID, module_id=MODULE_ID).export(
@@ -306,9 +319,20 @@ def test_installed_console_cli_registers_source_without_checkout_import(tmp_path
         "--skill-id", SKILL_ID, "--module-id", MODULE_ID, "--version", "v1"],
         cwd=tmp_path, env=process_env, check=True, capture_output=True, text=True)
     assert json.loads(result.stdout)["readback"] == "verified"
+    assert json.loads(result.stdout)["execution_profiles"] == []
+    assert json.loads(result.stdout)["execution_variants"] == []
     loaded = subprocess.run([str(cli), "load", "--root", str(root), "--kind", "workflow", "--id", MODULE_ID + "_review"],
         cwd=tmp_path, env=process_env, check=True, capture_output=True, text=True)
     assert json.loads(loaded.stdout)["release"]["workflow_version"] == "v1"
+    fixed_bytes = _files(root)
+    prepared = subprocess.run([sys.executable, "-c",
+        "import json,sys; from pathlib import Path; from agent_runtime import prepare_local_workflow_module; "
+        "p,v=prepare_local_workflow_module(Path(sys.argv[1]),sys.argv[2],model_id='installed-model'); "
+        "print(json.dumps({'model':p.registry.snapshot().execution_profiles[0].model_id,'workflow':p.release.workflow_version}))",
+        str(root), MODULE_ID + "_review"], cwd=tmp_path, env=process_env,
+        check=True, capture_output=True, text=True)
+    assert json.loads(prepared.stdout) == {"model": "installed-model", "workflow": "v1"}
+    assert _files(root) == fixed_bytes
 
 
 @pytest.mark.parametrize("new_record", ["module_defaults", "model_source"])
@@ -360,10 +384,10 @@ print(json.dumps({"origin":agent_runtime.__file__,"modules":len(registry.snapsho
     assert healthy.returncode == 0 and facts["modules"] == 1
 
     source, _ = _source(tmp_path / "new")
-    modern = _register(tmp_path / "host", source, version="new_v1",
-                       **({"model_id": "explicit-model"} if new_record == "module_defaults" else {})).submitted_bundle
+    modern = _register(tmp_path / "host", source, version="new_v1").submitted_bundle
     if new_record == "model_source":
-        store.register_bundle(RuntimeReleaseBundle(execution_profiles=modern.execution_profiles))
+        store.register_bundle(RuntimeReleaseBundle(execution_profiles=
+            _prepared_bundle(tmp_path / "host").execution_profiles))
     else:
         store.register_bundle(modern)
     rejected, facts = read_with_old_client()

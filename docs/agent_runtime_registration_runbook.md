@@ -10,7 +10,7 @@ drift。
 
 接口定义见从源码自动生成的 [Reviewer API reference](agent_runtime_reviewer_api.md)。
 先读其中的 ModuleReviewer 类说明，确定固定定义、独立执行参数和存储归属；再按本 Runbook
-完成一次注册。注册完成后的每次审核交给固定执行绑定，只提交本次输入与执行 key。
+完成一次注册。注册只保存固定定义；每次审核独立选择模型，提交本次输入与执行 key。
 当前单节点执行入口的参数、授权依赖、重放限制和失败处理也在该接口参考中。
 测试用途不要求复制 Reviewer；切换 Profile 是否需要新的 Module，取决于 Module 内容是否改变及
 兼容声明是否满足，具体规则以类说明和现有 Registry 合同为准。
@@ -33,7 +33,7 @@ drift。
 
 <a id="prepare-reviewer"></a>
 
-### 0.1 准备资料、固定配置和操作环境
+### 0.1 通过 CLI 注册固定定义
 
 已有完整且已审的 Reviewer source 时，优先使用正式 CLI：
 
@@ -51,9 +51,11 @@ agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_r
 该命令不会安装依赖、创建环境、登录 Provider、创建 PG schema 或调用模型。
 
 新 source 的 runtime_module_registration_v3 允许省略三个 Policy 引用；v2 仍要求完整声明。
-显式引用保持原限制，未声明 claude_cli 的 source 会返回 MODULE_EXECUTION_PROFILE_INCOMPATIBLE，
-注册不会替作者补 transport。Runtime 默认值与准确错误见生成的 API，而不由本手册另定义。
-重复注册保持已保存版本的能力与绑定；显式 --model-id 或 --reasoning-profile 可改变独立模型选择。
+显式引用保持原限制，注册原样保存 operation 和 transport 声明。
+执行准备时才检查所选模型是否相容；注册不替作者补 transport，也不要求本机有模型 CLI 或登录。
+重复注册保持固定定义与默认能力，不受 Runtime 模型预设变化影响。
+register-reviewer 不接受 --model-id 或 --reasoning-profile，误传退出 2；Python 注册 API 的同名旧参数
+非 None 时在写入前明确拒绝。模型参数交给下方执行准备接口。
 切换模型后的新调用使用新执行身份；历史执行按原 execution ID 查询 Ledger，不读取当前默认来重跑。
 
 stdout 包含真实注册 records、保存路径和 readback=verified。失败返回非零退出码，stderr 返回
@@ -93,10 +95,10 @@ CLI register 使用既有内存 Registry 校验并保存结果，不自行连接
 既有 store 调用。未指定版本时选最近成功保存的新定义版本；重复保存不改变顺序，不使用文件 mtime。
 这里没有 active/latest 指针文件或激活步骤。PG 既有入口不因此改义。
 
-直接加载用 `load_runtime_registration(root, "workflow", workflow_id, version)`；单节点审核可用
-`run_local_workflow_module`，由它从文件取出 Workflow、Module 和唯一绑定，再调用原 Evaluation 内核。
-宿主继续提供原有实时授权、Adapter 和 Ledger 端口，无需重新编译或组装定义。多节点图完整保存/加载，
-执行使用其已有图入口；这不新增生产执行用途。
+直接加载用 `load_runtime_registration(root, "workflow", workflow_id, version)`；新的单节点 Reviewer
+执行从 `prepare_local_workflow_module` 取得固定定义与本次模型配置，见下方首次测试说明。
+宿主继续提供原有实时授权、Adapter 和 Ledger 端口。旧 `run_local_workflow_module` 保留执行
+已保存明确绑定的兼容行为，不用于新的 definition-only 注册流程。多节点图继续使用既有图执行入口。
 
 这些接口的实际参数、返回和错误见[源码生成的 API 手册](agent_runtime_reviewer_api.md#load_runtime_registration)。
 普通 source 注册使用上面的 CLI 和 Runtime 默认解析。下方显式 Policy/Profile 的 Python 示例
@@ -137,7 +139,7 @@ ID、hash、数据库或授权替身。表中的名称是后续 Python 示例使
 
 <a id="register-reviewer"></a>
 
-### 0.2 注册一次固定定义
+### 0.2 底层显式注册示例（兼容接口）
 
 本段会写入明确提供的 Registry，仅在本次注册已授权且上表输入齐备后执行。它注册 Module 及其
 固定依赖，不生成 Workflow，不设置 active pointer，也不调用模型。具体接口见
@@ -196,16 +198,35 @@ print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
 
 ### 0.3 首次测试与再次调用 / Test a reviewer
 
-先进入宿主项目文档的“Reviewer 测试/运行”入口。宿主应交付已绑定的操作命令或函数及其帮助，
-而不是要求每位使用者重新组装 Runtime 的环境参数。该入口必须固定目标 Module/Workflow、
-Variant/Profile、调用授权和 Registry/Ledger，保持本次选定的 Runtime 软件来源。
+先进入宿主项目文档的“Reviewer 测试/运行”入口。宿主提供安装资源、授权和存储，
+使用 Runtime 的执行准备接口解析本次固定定义与独立模型选择，不复制 Reviewer 默认工具参数：
+
+```python
+from agent_runtime import prepare_local_workflow_module
+
+prepared, selection = prepare_local_workflow_module(
+    project_root, workflow_id, version=None,
+    # 可省略模型参数；省略时使用 Runtime 模型默认，不读取旧文件的模型选择。
+    model_id=requested_model, reasoning_profile=requested_effort,
+    release_store=execution_release_store,
+)
+```
+
+prepared.release 是已经解析的准确 Workflow；prepared.registry 包含其固定依赖及本次 Profile；
+selection 是本次准确 Variant。宿主从这些结果取得 Profile 并注入既有 Adapter、授权和 Ledger，
+直接交给下方执行内核，不重新读取 root 或重新选择最新版本、模型。
+release_store 是宿主明确的现有 Registry，要求已建好 schema；准备函数自动保存本次完整闭包并回读，
+不会重注册 source 或写 .runtime。省略该参数只形成内存结果，不能声称完整配置已持久保存。
+支持范围、默认模型和原错误合同由 [prepare_local_workflow_module](agent_runtime_reviewer_api.md#prepare_local_workflow_module)
+的 docstring 自动导出；不支持的 transport 明确拒绝，不按模型名字猜 provider 或自动回落。
+旧文件附带的模型配置保持可回读，但不会成为这个新入口的默认。
 
 当前 Runtime 的公共入口是
 [run_registered_workflow_module](agent_runtime_reviewer_api.md#run_registered_workflow_module)，
 它支持已注册的单节点 Workflow evaluation，并保留明确的宿主授权接口要求；不能从这个函数存在
 推断任意宿主、任意工具或 Claude/Codex 配置已接通。已有接口参考列出了完整参数及失败限制。
 
-**找不到宿主命令或固定执行绑定时，停止在宿主集成维护者。** 本 Runbook 不提供一个尚未实现的
+**找不到宿主命令或实际授权/存储接入时，交给宿主集成维护者。** 本 Runbook 不提供一个尚未实现的
 通用 `reviewer test` 命令。Runtime 开发者的 live pytest sample 验证其声明的 fixture 与能力；它不能
 代替你的新 Reviewer 配置，也不能为了测试而悄悄创建另一个 Module release。
 
@@ -218,8 +239,9 @@ Variant/Profile、调用授权和 Registry/Ledger，保持本次选定的 Runtim
 | 输出判断 | 按该 Reviewer 的输出 schema 和语义 validator 判断，区分“执行完成”与文稿 verdict；合法 non_pass 可以表示被审材料需要修改 |
 | 持久性 | 使用下一节的新查询连接读取同一 execution ID；即时内存结果不能代替 PG 回读 |
 
-再次审查新材料时保持相同固定绑定，提交新的输入与 key；不重新读取 authoring source、export 或
-register。相同 key 用于同一执行重放，不能换材料。已有 started 记录但没有 committed 结果时，使用
+再次审查新材料时保持同一固定 Module/Workflow，独立准备本次模型，提交新的输入与 key；
+无需重新读取 authoring source 或重新注册定义。明确更换模型使用新 key；
+相同 key 用于同一准确执行重放，不能换材料、模型或配置。已有 started 记录但没有 committed 结果时，使用
 Runtime 原恢复入口；不要换 key 重复不明效果。是否激活或正式部署另行决定。
 
 <a id="inspect-reviewer"></a>

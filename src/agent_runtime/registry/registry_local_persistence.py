@@ -253,8 +253,6 @@ def build_parser() -> argparse.ArgumentParser:
     reviewer.add_argument("--skill-id", required=True, help="exact kebab-case Skill identity")
     reviewer.add_argument("--module-id", required=True, help="exact snake_case Reviewer identity")
     reviewer.add_argument("--version", required=True, help="approved Module/Workflow definition version")
-    reviewer.add_argument("--model-id", help="explicit Claude model override; leaves fixed capabilities unchanged")
-    reviewer.add_argument("--reasoning-profile", help="explicit reasoning override; leaves fixed capabilities unchanged")
     register = commands.add_parser("register", help="validate/register a bundle and save its objects")
     register.add_argument("--root", required=True)
     register.add_argument("--bundle", required=True, type=Path)
@@ -292,8 +290,7 @@ def _run_command(args) -> int:
     if args.command == "register-reviewer":
         from .registry_plugin_registration import register_reviewer
         result = register_reviewer(args.root, source_root=args.source_root, skill_id=args.skill_id,
-            module_id=args.module_id, module_version=args.version,
-            model_id=args.model_id, reasoning_profile=args.reasoning_profile)
+            module_id=args.module_id, module_version=args.version)
         bundle = result.submitted_bundle
         print(json.dumps({
             "modules": [record.as_dict() for record in bundle.modules],

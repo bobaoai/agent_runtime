@@ -193,9 +193,11 @@ class ModuleAuthoringError(ValueError):
     Supply an approved compatible Profile; changing the Module's declarations
     is a separate source change, not a way to bypass this check.
 
-    ``EXECUTION_PROFILE_UNAVAILABLE`` is instead returned in
-    ``ModuleExport.execution_blocker_code`` when no Profile was supplied.
-    It does not prevent definition-only export. Other source, schema, policy
+    ``EXECUTION_PROFILE_UNAVAILABLE`` is returned only by fully explicit legacy
+    Reviewer export without a fixed default snapshot when no Profile is supplied.
+    Ordinary definition-only Reviewer export has no Profile, no Variant and
+    ``ModuleExport.execution_blocker_code=None``. Neither case prevents
+    compilation of the fixed definition. Other source, schema, policy
     and Registry validation errors retain their own exception contracts;
     this class does not wrap every possible failure. No Registry write or
     provider invocation occurs during authoring.
@@ -256,15 +258,17 @@ class ModuleExport:
 
     ``execution_profile`` and ``execution_variant`` are separate from that
     definition. ``execution_variant_candidate`` is the compiler input for
-    the optional standalone binding. With no Profile, all three are None
-    and ``execution_blocker_code`` is EXECUTION_PROFILE_UNAVAILABLE. With a
-    compatible Profile the blocker is None; this is an authoring check, not
+    the optional standalone binding. With no Profile, all three are None.
+    Ordinary definition-only Reviewer export also has no blocker. The fully
+    explicit legacy path without a fixed default snapshot retains
+    EXECUTION_PROFILE_UNAVAILABLE. With a compatible Profile the blocker is None;
+    this is an authoring check, not
     proof that an Adapter, provider login, storage or execution is available.
 
     ``origin_bundle`` contains only the Module definition and its immutable
-    dependencies. A registration caller explicitly combines the required
-    Profile and Variant records with that bundle, then calls the public
-    registration API. For a Workflow, bind the Workflow's exact node positions
+    dependencies. Definition registration uses that bundle alone. The lower-level
+    explicit binding path can combine separately selected Profile and Variant
+    records with it. For a Workflow, bind the Workflow's exact node positions
     using a Workflow Variant Policy; the standalone Variant produced here
     cannot be substituted for a Workflow binding. Exporting creates in-memory
     records only; registration, activation and execution are separate actions.
@@ -409,19 +413,19 @@ class ModuleReviewer(Module):
     validator. Runtime does not invent a checklist or turn a provider failure
     into a review verdict.
 
-    Omitting Policy/Profile arguments uses Runtime's ReviewerDefaults and its
-    independent model preset. The fixed capability snapshot enters the Module
-    hash; model selection remains outside it. Explicit source restrictions are
-    retained. Fully explicit legacy export calls keep their original definition
-    shape and do not acquire new permissions. Runtime software upgrades never
+    Omitting Policy/Profile arguments uses Runtime's ReviewerDefaults without
+    selecting a model. The fixed capability snapshot enters the Module hash;
+    model selection happens independently during execution preparation. Explicit
+    source restrictions are retained. Fully explicit legacy export calls keep
+    their original definition shape and do not acquire new permissions. Runtime software upgrades never
     rewrite an already registered Module.
 
     An immutable ExecutionProfileRelease records the resolved provider, model,
     reasoning and fixed tool/network/workspace budget. An ExecutionVariantPolicyRelease
     binds that Profile to exact Module or Workflow positions. These two
-    releases do not enter the Module release hash. A host binds the intended
-    releases explicitly; a normal review supplies its candidate, goal, scope,
-    context and prior findings as input, not as edits to fixed instructions
+    releases do not enter the Module release hash. Execution preparation combines
+    a model choice with the fixed capabilities; a normal review supplies its
+    candidate, goal, scope, context and prior findings as input, not as edits to fixed instructions
     or ad hoc provider parameters.
 
     **When versions change**
@@ -449,7 +453,9 @@ class ModuleReviewer(Module):
 
     Ordinary source registration uses ``register_reviewer`` or the installed
     ``agent-runtime-registry register-reviewer`` CLI. It resolves defaults,
-    creates the fixed one-node Workflow and saves an exact local closure.
+    creates the fixed one-node Workflow and saves its definition closure without
+    a Profile or Variant. Use prepare_local_workflow_module to select the model
+    for a new invocation, then supply the existing host ports to the kernel.
     The lower-level ``register_runtime_module_plugin`` still accepts an explicit
     bundle and store. Activation is a separate decision. For the
     existing single-node Workflow evaluation path, call
@@ -542,7 +548,7 @@ class ModuleReviewer(Module):
         behavior_policy: BehaviorPolicyRelease | None = None,
         evaluation_policy: EvaluationPolicyRelease | None = None,
         retry_policy: RetryPolicyRelease | None = None,
-        execution_profile: ExecutionProfileRelease | None | Literal["runtime_default"] = "runtime_default",
+        execution_profile: ExecutionProfileRelease | None | Literal["runtime_default"] = None,
         release_registry: RuntimeReleaseRegistry | None = None,
         reviewer_defaults: ReviewerDefaults | None = None,
         model_id: str | None = None,
@@ -560,8 +566,8 @@ class ModuleReviewer(Module):
                 module_candidate reference retains its candidate-only meaning.
             retry_policy: Optional exact override; Runtime defaults to three
                 attempts including the first. This is a limit, not a scheduler.
-            execution_profile: Omit for Runtime's Claude CLI model preset and
-                fixed capabilities, or use None for definition-only export.
+            execution_profile: Omit or use None for definition-only export.
+                Explicit runtime_default requests the legacy model-preset export.
                 Fully explicit legacy calls retain their existing record shape.
             release_registry: Lookup for explicit non-default policy refs.
             reviewer_defaults: Previously frozen capability snapshot, normally
@@ -574,21 +580,21 @@ class ModuleReviewer(Module):
         Returns:
             ModuleExport with compiled Module/Prompt/Schema records and the
             supplied policies. A compatible Profile also produces a standalone
-            Variant candidate/release. None produces no Variant and sets
-            execution_blocker_code to EXECUTION_PROFILE_UNAVAILABLE. The
+            Variant candidate/release. Definition-only default export produces no Variant and no blocker.
+            Fully explicit legacy None calls retain EXECUTION_PROFILE_UNAVAILABLE. The
             standalone helper retains v1 for fully explicit legacy calls;
             new default-aware bindings use a deterministic content version.
             Exported bindings are candidates, not updates to a store.
-            Workflow binding is separate and handled by register_reviewer.
+            New Workflow execution preparation is separate from source registration.
 
         Raises:
             ModuleAuthoringError: MODULE_OPERATION_DECLARATION_INVALID for an
                 invalid operation declaration; MODULE_EXECUTION_PROFILE_INCOMPATIBLE
                 for an undeclared transport or incompatible tool boundary.
             ValueError: Invalid common Reviewer output schema, Profile, version,
-                policy reference or compiler input. Missing Profile is a returned
-                blocker, not this exception. JSON/schema errors retain their
-                original validation exception types.
+                policy reference or compiler input. Definition-only export needs
+                no Profile; only the legacy explicit path retains its missing-
+                Profile blocker. JSON/schema errors retain their original types.
 
         Effects:
             Compiles in memory. No source reload, Registry write, activation,
@@ -615,6 +621,8 @@ class ModuleReviewer(Module):
         if execution_profile is not None and type(execution_profile) is not ExecutionProfileRelease:
             raise ValueError("execution_profile must be a Profile, None or runtime_default")
         blocker = self._profile_blocker(self.source, execution_profile)
+        if defaults is not None and execution_profile is None:
+            blocker = None  # A complete fixed definition does not require a model.
         if defaults is not None and execution_profile is not None:
             _, protected_operations = partition_module_operation_ids(self.source.declared_operation_ids)
             if protected_operations:
