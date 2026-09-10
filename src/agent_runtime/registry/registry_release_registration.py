@@ -81,6 +81,22 @@ class RuntimeReleaseBundle:
     modules: tuple[ModuleRelease, ...] = ()
     workflows: tuple[WorkflowRelease, ...] = ()
 
+    def as_dict(self) -> dict[str, Any]:
+        """Serialize existing release records without source files or host state."""
+        return {name: [record.as_dict() for record in getattr(self, name)]
+                for name, _ in _RELEASE_BUNDLE_FIELD_TYPES}
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> RuntimeReleaseBundle:
+        """Decode release records; Registry still validates their full closure."""
+        names = {name for name, _ in _RELEASE_BUNDLE_FIELD_TYPES}
+        if type(payload) is not dict or set(payload) - names:
+            raise ValueError("invalid Runtime release bundle fields")
+        if any(type(value) is not list for value in payload.values()):
+            raise ValueError("release bundle fields must be arrays")
+        return cls(**{name: tuple(kind.from_dict(row) for row in payload.get(name, []))
+                      for name, kind in _RELEASE_BUNDLE_FIELD_TYPES})
+
     def is_empty(self) -> bool:
         """Return whether the bundle carries no immutable release records."""
 

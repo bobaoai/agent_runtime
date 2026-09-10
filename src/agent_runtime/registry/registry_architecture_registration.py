@@ -353,6 +353,10 @@ def _source(
 
 
 RUNTIME_SOURCE_FILE_REGISTRATIONS = (
+    _source("registry", "local", "persistence",
+            "designDoc/agent_runtime_01_module_contract_and_assembly.md"),
+    _source("execution", "local", "invocation",
+            "designDoc/agent_runtime_00_execution_charter.md"),
     _source(
         "registry",
         "architecture",

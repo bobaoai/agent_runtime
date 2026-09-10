@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import ClassVar, Protocol
 
 from ..contracts import (
@@ -124,11 +125,25 @@ def register_runtime_plugin(
 def register_runtime_module_plugin(
     registry: RuntimeReleaseRegistrationSink,
     plugin: RuntimeModulePlugin,
+    *,
+    root: Path | None = None,
 ) -> RuntimeReleaseRegistrationResult:
-    """Validate and atomically install one explicitly loaded Module plugin."""
+    """Register a plugin, optionally saving its reusable definitions under root.
+
+    The existing Registry performs registration first. When root is supplied,
+    save_runtime_registration writes the successful result to .runtime/module
+    and .runtime/workflow. File errors propagate without rolling back a prior
+    Registry commit; retrying the original bundle is safe. Omit root to retain
+    the original store-only behavior. No active pointer or host configuration
+    is selected or changed.
+    """
 
     plugin.validate()
-    return registry.register_bundle(plugin.release_bundle)
+    result = registry.register_bundle(plugin.release_bundle)
+    if root is not None:
+        from .registry_local_persistence import save_runtime_registration
+        save_runtime_registration(root, result)
+    return result
 
 
 __all__ = [

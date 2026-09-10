@@ -35,6 +35,39 @@ drift。
 
 ### 0.1 准备资料、固定配置和操作环境
 
+本地保存、版本加载和 CLI 验证：
+
+宿主已有注册调用可传入 `root`：
+
+```python
+registration = register_runtime_module_plugin(store, plugin, root=project_root)
+```
+
+注册成功后，Module 保存到 `.runtime/module/<module_id>/<version>.json`，Workflow 保存到
+`.runtime/workflow/<workflow_id>/<version>.json`。单节点 Workflow 同样在 workflow 中。
+保存内容包含该对象的固定依赖，旧 Workflow 不会因其他 Module 文件更新而被重新拼装。
+
+也可直接从已编译的完整 bundle JSON 通过安装的 CLI 注册、加载：
+
+```sh
+agent-runtime-registry register --root /path/to/host --bundle bundle.json --plugin-id review_package --plugin-version v1
+agent-runtime-registry load --root /path/to/host --kind workflow --id review_workflow
+agent-runtime-registry load --root /path/to/host --kind workflow --id review_workflow --version v1
+```
+
+CLI register 使用既有内存 Registry 校验并保存结果，不自行连接 PG；宿主要同时登记 PG 时使用上面的
+既有 store 调用。未指定版本时选最近成功保存的新定义版本；重复保存不改变顺序，不使用文件 mtime。
+这里没有 active/latest 指针文件或激活步骤。PG 既有入口不因此改义。
+
+直接加载用 `load_runtime_registration(root, "workflow", workflow_id, version)`；单节点审核可用
+`run_local_workflow_module`，由它从文件取出 Workflow、Module 和唯一绑定，再调用原 Evaluation 内核。
+宿主继续提供原有实时授权、Adapter 和 Ledger 端口，无需重新编译或组装定义。多节点图完整保存/加载，
+执行使用其已有图入口；这不新增生产执行用途。
+
+这些接口的实际参数、返回和错误见[源码生成的 API 手册](agent_runtime_reviewer_api.md#load_runtime_registration)。
+本批没有 RuntimeEnvironment、资源 Session、凭据管理或配置 CAS。旧的 ModuleReviewer 默认参数迁移
+仍是单独工作；下面既有 authoring 示例的显式 Policy/Profile 输入保持其现行含义。
+
 先使用当前宿主选定的 Python 确认安装来源，并打开同一安装包里的说明：
 
 ```python

@@ -4,7 +4,7 @@
 
 Runtime package version: `0.2.0.dev0`.
 
-Scope: Reviewer authoring/export and the existing registered single-node evaluation entry.
+Scope: Reviewer authoring/export, local versioned registration/loading and single-node evaluation.
 Other Runtime APIs are outside this reference. Signatures, fields, descriptions and error
 constant values below come directly from this source tree; no Runtime modules are executed.
 
@@ -17,6 +17,12 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 - [ModuleExport](#moduleexport)
 - [ModuleAuthoringError](#moduleauthoringerror)
 - [run_registered_workflow_module](#run_registered_workflow_module)
+- [LoadedRuntimeRegistration](#loadedruntimeregistration)
+- [save_runtime_registration](#save_runtime_registration)
+- [load_runtime_registration](#load_runtime_registration)
+- [RuntimeReleaseBundle](#runtimereleasebundle)
+- [register_runtime_module_plugin](#register_runtime_module_plugin)
+- [run_local_workflow_module](#run_local_workflow_module)
 - [Error constants](#error-constants)
 
 ## ModuleReviewer
@@ -507,6 +513,220 @@ effects require the admitted binding and authorization. No registration,
 activation, DDL, credential discovery or global configuration change.
 Committed replay does not repeat the provider call. This convenience
 entry's returned exceptions are not a separate uniform error-code enum.
+
+## LoadedRuntimeRegistration
+
+Public import: `from agent_runtime import LoadedRuntimeRegistration`
+
+```python
+@dataclass(frozen=True)
+class LoadedRuntimeRegistration:
+    release: ModuleRelease | WorkflowRelease
+    registry: RuntimeReleaseRegistry
+```
+
+An exact saved definition and its usable in-memory release closure.
+
+This contains no live host resources or new registration authority. Pass
+its records to the existing execution APIs; loading does not compile source
+or mutate any persistent Registry. Runtime validates the saved ref/hash and
+dependencies while restoring the in-memory lookup structure.
+
+## save_runtime_registration
+
+Public import: `from agent_runtime import save_runtime_registration`
+
+```python
+def save_runtime_registration(
+    root: Path,
+    registration: RuntimeReleaseRegistrationResult,
+) -> tuple[Path, ...]:
+```
+
+Save the actual registered Module/Workflow results under root/.runtime.
+
+**Args**
+
+- `root`: Host-provided root. Missing module/workflow/id directories are
+  created; existing directories are used directly. No host config,
+  credential, active pointer or resource session is managed here.
+- `registration`: Successful result returned by the existing Registry.
+  Saves only submitted objects and their exact dependency closures,
+  including registered execution bindings. A one-node Workflow is
+  always saved under workflow, independently of its Module records.
+**Returns**
+
+Version file paths. Each object has its own folder and each version its
+own JSON file. Workflow snapshots include fixed Module dependencies.
+**Raises**
+
+- `ValueError`: Existing definition/version conflicts, or original Registry
+  validation failure. OSError: Native directory/file errors. A file
+  failure does not roll back an already committed PG registration;
+  retry the same registration rather than inventing another version.
+**Effects**
+
+Writes registered data only. The host serializes registration of the
+same object; no distributed file-lock service is provided. New versions
+receive a local increasing registration_order; repeated definitions
+retain their order. Explicitly registered binding updates do not change
+definition identity or make an old definition the latest version.
+
+## load_runtime_registration
+
+Public import: `from agent_runtime import load_runtime_registration`
+
+```python
+def load_runtime_registration(
+    root: Path,
+    kind: str,
+    subject_id: str,
+    version: str | None=None,
+) -> LoadedRuntimeRegistration:
+```
+
+Load a specified version, or the most recently registered new version.
+
+**Args**
+
+- `root`: The same host root used for registration.
+- `kind`: module or workflow; node count never changes this classification.
+- `subject_id`: Registered object ID.
+- `version`: Exact existing version label; None selects maximum stored
+  registration_order, not file mtime and not an active/latest pointer.
+**Returns**
+
+The exact release and validated dependency Registry. No source files,
+model choice, policy construction or persistent re-registration needed.
+**Raises**
+
+- `FileNotFoundError`: No saved object or requested version. ValueError:
+  Bad JSON/identity/hash/dependencies/order. OSError: Native I/O error.
+    Errors are reported, never hidden by choosing another version or root.
+**Effects**
+
+Reads local files only; latest is resolved once before exact execution.
+
+## RuntimeReleaseBundle
+
+Public import: `from agent_runtime import RuntimeReleaseBundle`
+
+```python
+@dataclass(frozen=True)
+class RuntimeReleaseBundle:
+    record_type: ClassVar[str] = 'runtime_release_bundle'
+    schema_assets: tuple[SchemaAssetRelease, ...] = ()
+    prompt_components: tuple[PromptComponentRelease, ...] = ()
+    prompt_bundles: tuple[PromptBundleRelease, ...] = ()
+    behavior_policies: tuple[BehaviorPolicyRelease, ...] = ()
+    evaluation_policies: tuple[EvaluationPolicyRelease, ...] = ()
+    retry_policies: tuple[RetryPolicyRelease, ...] = ()
+    execution_variant_policies: tuple[ExecutionVariantPolicyRelease, ...] = ()
+    execution_profiles: tuple[ExecutionProfileRelease, ...] = ()
+    modules: tuple[ModuleRelease, ...] = ()
+    workflows: tuple[WorkflowRelease, ...] = ()
+```
+
+One atomic registration batch across all dependency-ordered release kinds.
+
+### RuntimeReleaseBundle.as_dict
+
+```python
+def as_dict(
+    self,
+) -> dict[str, Any]:
+```
+
+Serialize existing release records without source files or host state.
+
+### RuntimeReleaseBundle.from_dict
+
+```python
+@classmethod
+def from_dict(
+    cls,
+    payload: Mapping[str, Any],
+) -> RuntimeReleaseBundle:
+```
+
+Decode release records; Registry still validates their full closure.
+
+### RuntimeReleaseBundle.is_empty
+
+```python
+def is_empty(
+    self,
+) -> bool:
+```
+
+Return whether the bundle carries no immutable release records.
+
+## register_runtime_module_plugin
+
+Public import: `from agent_runtime import register_runtime_module_plugin`
+
+```python
+def register_runtime_module_plugin(
+    registry: RuntimeReleaseRegistrationSink,
+    plugin: RuntimeModulePlugin,
+    *,
+    root: Path | None=None,
+) -> RuntimeReleaseRegistrationResult:
+```
+
+Register a plugin, optionally saving its reusable definitions under root.
+
+The existing Registry performs registration first. When root is supplied,
+save_runtime_registration writes the successful result to .runtime/module
+and .runtime/workflow. File errors propagate without rolling back a prior
+Registry commit; retrying the original bundle is safe. Omit root to retain
+the original store-only behavior. No active pointer or host configuration
+is selected or changed.
+
+## run_local_workflow_module
+
+Public import: `from agent_runtime import run_local_workflow_module`
+
+```python
+def run_local_workflow_module(
+    root: Path,
+    workflow_id: str,
+    *,
+    version: str | None=None,
+    input_payload: dict,
+    idempotency_key: str,
+    **host,
+):
+```
+
+Run a saved single-node Workflow through the existing Evaluation entry.
+
+**Args**
+
+- `root`: Host root containing the registered workflow folder.
+- `workflow_id`: Workflow object ID, including for a one-Module graph.
+- `version`: Exact saved version, or None for the latest registered version.
+- `input_payload`: This invocation's input, checked by its registered schema.
+- `idempotency_key`: The host's logical request key for the existing replay rule.
+- `host`: Existing run_registered_workflow_module live keyword ports: adapters,
+  artifact_host, authorize, context_client, operation_client,
+  enforcing_gateway_id, environment_id, record_store, content_store,
+  claim_token_secret and optional clock. These are host resources,
+  not serialized definitions or a new environment configuration service.
+**Returns**
+
+The original ModuleRunResult with its execution/output evidence.
+**Raises**
+
+- `FileNotFoundError`: Requested saved definition is absent. ValueError:
+  Invalid saved data, not a single-node graph, or no unique saved
+  Workflow Variant. Other execution/authorization errors are unchanged.
+**Effects**
+
+Loads exact saved Workflow, Module and binding; never recompiles source,
+re-registers persistent data, changes active or creates host credentials.
+Provider calls and recording use the original Runtime execution kernel.
+Multi-node graphs can be saved/loaded, but use their existing graph runner.
 
 ## Error constants
 

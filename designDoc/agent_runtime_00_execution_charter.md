@@ -29,6 +29,7 @@ scope:
   - immutable Module and Workflow release identity and active-pointer selection
   - Workflow Execution, Module Run, Variant, Attempt, Outcome, and Resolution lifecycle
   - provider-neutral execution and host integration boundary
+  - Runtime-owned Reviewer defaults separated from model selection and host resources
   - Runtime-hosted self-test independence and explicit test-resource boundaries
   - Runtime-owned release and execution evidence
 non_goals:
@@ -121,9 +122,10 @@ Runtime 维护者也可以独立验证已注册 capability，无需为普通自�
 - Runtime Maintainer 和 Host Integrator 能区分自测资源准入、外部生产访问与 provider 登录，
   并判断测试证据何时仅在本地保留、何时可以写入明确提供的外部存储。
 
-§9 的 delegation matrix 是能力到 responsibility、T2 family、public boundary 和 failure owner 的完整
-解析表；§1 和 §5 固定 dependency direction。任何能力未能唯一落入该矩阵时，必须返回 T1 owner，
-不能由实现者选择附近 T2。
+§9 的 delegation matrix 是能力到 responsibility、当前 Design 承接者、public boundary 和 failure owner
+的解析表；§1 和 §5 固定 dependency direction。Execution 的领域级意图由本 T1 直接承接，具体接口
+由其 code-owned contract 和 docstring 定义。其他能力按对应 T2 承接；归属不明确时返回 T1 owner，
+不能由实现者选择附近文档或恢复归档合同。
 
 ## 4. Domain Outcome and Owned Objects
 
@@ -160,6 +162,17 @@ release。它们约束执行机制，不表达 Product Authorization policy、�
 依赖方向固定为 Registry 向 Execution 提供 registered release 与 active pointer；Execution 调度 Invocation，与 Durability
 交换 durable command/state，并向 Ledger 提交事实；Inspection 只读取 Registry 与 Ledger。其他方向必须由
 具名 public interface 证明，不能由 source import 或当前技术反向推断。
+
+Reviewer 的共同运行底座由 Runtime 提供，业务审核定义由 Module owner 提供。Registry 冻结能力和
+默认规则依赖；独立模型配置选择执行该定义的模型；Invocation 映射并执行能力。宿主提供安装资源、
+存储和适用授权，Skill 说明其使用入口。环境名称不决定 Reviewer 默认能力，模型选择不改变工具权限。
+ModuleReviewer 是通用 Module authoring 的特化，不增加同层 Runtime responsibility，也不将 Reviewer
+默认能力传播给其他角色。具体定义和兼容边界由 Registry 与 Invocation T2 共同闭合。
+
+宿主入口可以接受一个明确的项目 root，据此定位已准备的运行资源和连接配置，并允许显式指定
+凭据位置。该 root 是配置定位，不是模型可读范围，也不决定默认模型或工具能力。凭据只交给相应
+可信存储或授权接口，模型仅获得本次允许的材料和隔离工作区。配置目录、临时运行目录和数据库
+自身的存储分别管理；提供项目 root 不自动授权创建数据库或向模型开放项目全集。
 
 ## 6. Inherited T0 Constraints
 
@@ -202,6 +215,25 @@ execution，但不能创建第二个 logical run，也不能扩大原资源范�
 Parent T0 所称 Runtime release admission 在本层没有第三种 state：成功 registration 证明 release 可按
 exact ref 使用；active pointer 只决定 Workflow/Standalone 的默认可解析目标。
 
+### 7.1 逻辑请求、尝试与技术重试
+
+一次逻辑请求保持同一冻结定义、输入和执行身份。宿主调用入口在首次效果发生前保存可恢复的请求
+身份与准确注册结果，并在响应丢失、调用者重启或重发时继续传递它；不能每次重发都生成新身份。
+Runtime 验证该身份与定义、输入及调用者范围一致。成功提交后的重放只返回原结果，改变输入或
+定义的同身份请求拒绝；新材料或明确的新审核形成新的逻辑请求。
+
+Execution 拥有该请求内的 Attempt 及技术重试决定。Retry Policy 给出包含首次尝试的确定上限，
+Invocation 报告可重试性，Durability 只协调已授权的新尝试或已有尝试的恢复。达到上限、不可重试
+失败和未解决的效果不确定性都会停止，不把未知状态当作没有执行过。新的 Attempt 使用独立工作区，
+继续固定原模型、能力和任务，保留失败与重试关系。
+
+CLI 内部工具调用失败不自动创建 Runtime Attempt。Reviewer 对内容返回有效 non_pass 或 blocked
+是已取得的审核判断；作者修改材料后再审属于新请求，不通过技术重试追求通过结论。候选用途准入、
+运行后输出 Evaluation 和业务质量标准各有原责任，不能因共享 evaluation 一词而合并。
+
+只有次数检查不能证明自动重试已实现；只有 Runtime 相同 key 的单元测试不能证明宿主重发安全。
+相应完成条件要求实际调用链保存、传递和恢复同一身份，并证明不重复已提交的 Provider 效果。
+
 ## 8. Public Boundaries and Quality Rules
 
 Runtime public boundary 接受以下 request/input classes：
@@ -226,7 +258,8 @@ target、hash、dependency closure 和 current-pointer precondition，并只产�
 
 对应稳定结果是 immutable release/active-pointer fact、durable execution receipt/snapshot、external-event
 acknowledgement、durable control result、terminal result 和 authorized inspection projection。每一类
-request/result 的 exact interface 继续由 §9 对应 T2 定义。
+request/result 由 §9 对应 Design owner 承接；Execution 的接口语义遵守本 T1，准确类型、默认值、
+错误和副作用由其公开代码合同及 docstring 定义，不再依赖归档 Execution T2。
 
 Execution 在创建 run 前，使用 Workflow/Standalone request 的 target subject kind/id 查询 Registry active
 pointer；使用 Test/Evaluation/Replay request 的 exact registered release ref/hash 直接解析目标，不查询 active
@@ -241,12 +274,18 @@ execution-invalid failure；Registry 不执行 run，也不把 pointer failure �
 4. wait、retry、replay 和 recovery 不重复已提交 effect。
 5. Ledger 是 execution fact authority；Inspection 只投影。
 6. Module 可独立运行测试；Workflow 只组合 exact Module releases。
-7. Runtime 不读取宿主 editable authoring tree；host adapter 提交 repository-independent candidate content。
+7. Registry 的公开 authoring loader 只读取调用者明确给出的项目 root 和 source closure，返回 path-free
+   candidate。编译消费已捕获内容，注册和生产执行解析已冻结定义；不进行环境发现或在执行时重读
+   宿主的可变 authoring tree。宿主也可直接提交等价的 repository-independent candidate content。
 8. 测试用途不会放宽 exact identity、declared operation、Profile/Adapter compatibility、workspace、network
    或 output validation；资源越界在相应效果发生前拒绝。
+9. Reviewer 的默认能力与模型选择分别确定并冻结；参数可以省略，但其来源与生效值不可缺失。
+10. 已交付宿主入口消费完整注册结果。采用单节点 Workflow 时，必须形成准确的 Workflow 与节点 Variant；
+    standalone Variant 不可替代。宿主只组合公开接口，不重新实现默认底座或 Provider 启动器。
 
-本 T1 不声明 owner-local public operation。Public interfaces 与 caller-visible failure 全部按 §9
-逐项委派；T2 必须进一步定义 exact input、success output、effect、stable error code 和 caller action。
+本 T1 直接拥有 Execution 的启动、推进、用途、尝试及结果意图；其公开接口和 caller-visible failure
+由 Execution code-owned contract 在这些边界内落实。其他 capability 按 §9 委派给对应 T2。每项
+接口都须在所属公开代码和 docstring 中说明准确输入、输出、默认、effect、error 和 caller action。
 
 ### 8.1 Runtime-hosted self-test
 
@@ -276,7 +315,10 @@ Invocation 执行资源边界，Ledger 保存执行事实；Agent Capability Ver
 
 ## 9. T2 Partition and Dependencies
 
-| T2 family | Primary responsibility | Public boundary delegated by this T1 | Failure family and true owner |
+本表列明 T2 委派及由本 T1 直接承接的 Execution。标题保留既有文档结构，不将 Execution 重新
+交给归档 T2，也不改变其同层逻辑职责。
+
+| Design family | Primary responsibility | Public boundary and Design owner | Failure family and true owner |
 | --- | --- | --- | --- |
 | 01 Registry | Registry | compile、register、set/clear active pointer、resolve immutable release | release invalid / conflict / active-pointer invalid，Registry owns |
 | 02 Source Architecture | T1-delegated cross-cutting conformance | validate source ownership、import direction、public surface 与 naming | architecture conformance failed，Source Architecture owns |
@@ -287,12 +329,13 @@ Invocation 执行资源边界，Ledger 保存执行事实；Agent Capability Ver
 | 07 Durability | Durability | wait、timer、retry、replay、recovery、cancel 与 backend coordination | durability unavailable / recovery conflict，Durability owns |
 | 08 Invocation | Invocation | prepare Context and invoke Execution Profile-selected code-owned provider/tool adapter binding；在自测中同样执行声明的 capability 与资源限制，隔离 provider 登录和产品授权 | adapter binding unavailable / invocation failed / output invalid，Invocation owns |
 | 09 External Authority Integration | Execution boundary integration | 区分自测资源边界与外部受保护效果；仅对需要外部决定的效果 validate and carry authorization context、protected-operation intent 与 data-access handoff；普通自测不要求生产批准 | external denial retains its actual external authority；database permission retains Product Authorization or Data Governance/domain owner；Runtime owns only invalid ref、fence and late-result quarantine |
-| 10 Execution | Execution | resolve target by execution_purpose；start、advance、evaluate、select、resolve and terminate Workflow/Module execution | execution purpose/target invalid / terminal failure，Execution owns |
+| Execution；本 T1 直接承接 | Execution | resolve target by execution_purpose；start、advance、evaluate、select、resolve and terminate Workflow/Module execution；接口与错误由 Execution code-owned contract 落实 | execution purpose/target invalid / terminal failure，Execution owns；不交给归档 T2 |
 | 11 Agent Capability Verification | T1-delegated cross-cutting conformance | consume owner-qualified peer capability evidence，verify complete inventory、canonical Example/runbook 与 required environment-gate closure；验证自测独立性、临时资源策略与显式外部保存边界，不接管 peer 的存储或执行语义 | verification case failed / environment unavailable / coverage incomplete，Agent Capability Verification owns；peer capability failure retains its peer owner |
 
-每个 T2 只拥有表中一个 bounded capability。T2 之间只能通过公开 interface 和 stable facts 依赖，不能读取
-sibling private implementation。当前文件 identity、implementation binding 和 migration status 来自
-code-owned Design registration 与 generated inspection，不由本表维护。
+每个 T2 只拥有表中一个 bounded capability；Execution 保持六项同层 responsibility 之一，不因本 T1
+直接承接其意图而成为其他职责的私有实现。各职责只能通过公开 interface 和 stable facts 依赖，不能
+读取 sibling private implementation。当前文件 identity、implementation binding 和 migration status
+来自 code-owned Design registration 与 generated inspection，不由本表维护。
 
 02 和 05 的 cross-cutting authority 只来自本 T1 对 source/package conformance 的明确委派。它们可以
 拒绝不符合已批准 responsibility contract 的 representation 或 release unit，但不能重新定义 Registry、
@@ -315,10 +358,11 @@ Agent Runtime domain 在以下结果同时成立时完成最低产品闭包：
 Runtime-owned failure family 与 §9 一一对应：01 release invalid/conflict/active-pointer invalid；02 architecture conformance
 failed；03 event invalid/stale；04 ledger commit failed；05 release conformance failed；06 inspection query
 invalid/unavailable；07 durability unavailable/recovery conflict；08 adapter binding unavailable/invocation failed/output invalid；
-09 external-authority context invalid、invalidation fence 与 late-result quarantine；10 execution
+09 external-authority context invalid、invalidation fence 与 late-result quarantine；Execution 的
 invalid/terminal failure；11 capability test failed/environment unavailable/coverage incomplete。Product Authorization 的 denial 与 Data Governance/domain Gateway 的
 data-access denial 是 peer decision；Runtime 09 只验证引用、执行 fence 并保留原 owner identity。
-具体 error code、retryability、caller action 与 rollback 由 §9 对应 T2 定义。T1 不把 peer denial 或一个
+具体 error code、retryability、caller action 与 rollback 由 §9 对应 Design owner 的公开代码合同定义；
+Execution 消费本 T1 的意图，其他职责同时遵守对应 T2。T1 不把 peer denial 或一个
 T2 failure 重写成另一个 owner 的 failure。Host 对任一 Runtime public operation caller 的 denial 都在进入
 Runtime interface 前结束并保留 host owner；Runtime 不把该 denial 改写成 Registry、Execution、Event、
 Durability、Inspection 或其他 T2 failure。

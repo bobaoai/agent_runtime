@@ -30,6 +30,7 @@ scope:
   - complete Agent-facing capability inventory
   - one canonical Example Workflow covering Module, Workflow, Profile, tools, workspace, retry, parallelism, wait, recovery, Ledger and Inspection
   - deterministic local test set
+  - Reviewer default capability, model independence, and registration-to-host execution closure
   - Runtime-hosted self-test independence and explicit temporary-resource lifecycle
   - focused case evidence versus complete Runtime verification
   - explicit persistent-store, durable-backend and live-provider environment-gate classes
@@ -114,7 +115,8 @@ flowchart LR
 ```
 
 本 Flow 只拥有 verification。Module、Workflow、Profile、tool、workspace、authorization、Durability、
-Ledger 与 Inspection 的产品语义继续由各自 T2 owner 定义。本 T2 只要求这些能力有完整、可重复、
+Ledger 与 Inspection 的产品语义继续由各自 Design owner 定义，Execution 按父级约定由 Runtime T1
+直接承接，其余能力遵守对应 T2。本 T2 只要求这些能力有完整、可重复、
 不会产生 false green 的证明。
 
 ## 2. User Intent
@@ -158,7 +160,7 @@ Profile/Adapter compatibility、declared operation、资源隔离与 canonical o
 | Prompt closure | Prompt Component source members、Schema members 与 Prompt Bundle ref/hash 完整闭合 | 01 Registry | subject-bound executable case |
 | Policy closure | Behavior、Evaluation、Retry 与 Execution Variant Policy 使用 exact registered ref/hash | 01 Registry | subject-bound executable case |
 | Profile independence | Module/Workflow release identity 不因 provider、model 或 Profile 改变 | 01 Registry | subject-bound executable case |
-| Generic Profile compatibility | tool-free 与 tool-enabled Module 使用同一 operation classification；Profile 不得增删 Module tool capability | 01 Registry，08 Invocation owns Adapter admission | subject-bound executable case |
+| Generic Profile compatibility | 生效 Profile 的工具可追溯到 Module 固定能力及默认规则；模型选择不改变权限；显式操作边界不被原生工具绕过 | 01 Registry，08 Invocation owns Adapter admission | subject-bound executable case |
 
 ### 4.2 Agent invocation capabilities
 
@@ -169,7 +171,7 @@ Profile/Adapter compatibility、declared operation、资源隔离与 canonical o
 | Tool-free execution | tools empty、workspace none、network denied | 08 Invocation | subject-bound executable case |
 | Runtime-hosted self-test | 真实 model call 使用可信测试资源 boundary，不构造生产 context、decision 或 grant；伪造 purpose 和资源越界仍拒绝 | 08 Invocation；09 owns boundary validation | subject-bound executable case |
 | Authorized Gateway read | 只有 Module 声明且 Profile 允许的 Gateway tools 可进入 callable | 08 Invocation；09 owns external authorization handoff | subject-bound executable case |
-| Attempt workspace | Agent 只读写自己的 draft workspace；其他 Attempt 与 ambient repository 不可见 | 08 Invocation | subject-bound executable case |
+| Attempt workspace | 私有草稿与显式项目工作区按所选 Profile 限制读写；其他 Attempt、秘密与未授权材料不可见 | 08 Invocation | subject-bound executable case |
 | Context isolation | sibling Variant、Attempt 与 Module Run 不共享 provider context 或 workspace | 08 Invocation | subject-bound executable case |
 | Network enforcement | `denied` 与 `gateway_only` 由 Adapter 能力机械执行 | 08 Invocation | subject-bound executable case |
 | Provider failure normalization | auth、quota、timeout、tool、policy 与 output failure 进入 bounded Runtime failure taxonomy | 08 Invocation | subject-bound executable case |
@@ -178,11 +180,11 @@ Profile/Adapter compatibility、declared operation、资源隔离与 canonical o
 
 | capability | Required result | Owning Design | Verification evidence |
 | --- | --- | --- | --- |
-| Module Run | exact Module、input closure、Profile 与适用的 execution boundary 形成一个 Module Run | 10 Execution | subject-bound executable case |
-| Multiple Variants | 同一个 Module release 可用不同 Profile 独立执行 | 10 Execution | subject-bound executable case |
-| Evaluation and selection | evaluated candidate set 完整后才能形成 Selection 与 output resolution | 10 Execution | subject-bound executable case |
-| Retry budget | Retry Policy 是 `max_attempts` 唯一 authority；每个 Attempt 具有 parent lineage | 10 Execution，07 owns durable retry coordination | subject-bound executable case |
-| Idempotent replay | exact request 重放返回同一 committed result，不重复产生 side effect | 10 Execution，07 owns durable replay | subject-bound executable case |
+| Module Run | exact Module、input closure、Profile 与适用的 execution boundary 形成一个 Module Run | Execution；Runtime T1 | subject-bound executable case |
+| Multiple Variants | 同一个 Module release 可用不同 Profile 独立执行 | Execution；Runtime T1 | subject-bound executable case |
+| Evaluation and selection | evaluated candidate set 完整后才能形成 Selection 与 output resolution | Execution；Runtime T1 | subject-bound executable case |
+| Retry budget | Retry Policy 是 `max_attempts` 唯一 authority；每个 Attempt 具有 parent lineage | Execution；Runtime T1，07 owns durable retry coordination | subject-bound executable case |
+| Idempotent replay | exact request 重放返回同一 committed result；宿主首次保存并在重发时继续传递同一身份，不重复产生 side effect | Execution；Runtime T1，07 owns durable replay | subject-bound executable case |
 | Operation boundary enforcement | 自测操作在进入 callable 前满足测试资源约束；外部受保护操作满足所属 owner 的真实前置决定；效果后观察不能成为同次调用的前置 | 09 External Authority Integration；08 owns callback/result delivery | subject-bound executable case |
 | Cancellation | cancellation request 只改变指定 execution，并产生可检查 terminal fact | 07 Durability，10 owns terminal execution result | subject-bound executable case |
 
@@ -191,9 +193,9 @@ Profile/Adapter compatibility、declared operation、资源隔离与 canonical o
 | capability | Required result | Owning Design | Verification evidence |
 | --- | --- | --- | --- |
 | Graph authoring | `Workflow` 由 exact Module release nodes、edges、mappings 与 terminal edges 构成 | 01 Registry | subject-bound executable case |
-| Sequential and branch routing | node outcome 只能进入 graph 声明的 target 或 terminal | 10 Execution | subject-bound executable case |
-| Parallel fan-out and join | branch Attempt 相互隔离；join 只消费完整 required branch set | 10 Execution，07 owns durable coordination | subject-bound executable case |
-| Revision loop | revision outcome 返回已声明 predecessor node，并保留新的 Attempt lineage | 10 Execution，07 owns durable loop | subject-bound executable case |
+| Sequential and branch routing | node outcome 只能进入 graph 声明的 target 或 terminal | Execution；Runtime T1 | subject-bound executable case |
+| Parallel fan-out and join | branch Attempt 相互隔离；join 只消费完整 required branch set | Execution；Runtime T1，07 owns durable coordination | subject-bound executable case |
+| Revision loop | revision outcome 返回已声明 predecessor node，并保留新的 Attempt lineage | Execution；Runtime T1，07 owns durable loop | subject-bound executable case |
 | Wait and external event | acknowledged wait 只由 matching external event 恢复 | 07 Durability；03 owns event ingress | subject-bound executable case |
 | Crash recovery | recovery 从 committed Runtime facts 继续，不重跑已成功 sibling | 07 Durability | subject-bound executable case |
 | Portable Workflow registration | 同一 target-independent origin bundle 可注册进多个独立 Registry | 01 Registry | subject-bound executable case |
@@ -226,6 +228,10 @@ Profile/Adapter compatibility、declared operation、资源隔离与 canonical o
 Runtime subject ref/hash、case 所用的 dependency/configuration closure，以及 Owning Design 的 exact document
 ref/hash。Case 失败时，产品 failure 继续保留 Owning Design 的 error/owner；只有 harness 自己失败时才使用
 `AGENT_CAPABILITY_TEST_FAILED`。
+
+Execution 的案例依据必须绑定当前 `designDoc/agent_runtime_00_execution_charter.md` 的准确 ref/hash，
+不能继续解析归档 Execution T2。Owning Design 和失败 owner 的校验接受这项 T1 承接，不将所有
+capability 的设计依据强制限定为 T2；这不改变 Execution 的逻辑职责或减少验证要求。
 
 §4.6 的 integration 行由 code-owned integration runner 使用 `environment_gate` case；环境不可用时为
 `not_run`，只有 Software Delivery required set 中的 gate 为 `passed` 才能完成 aggregate verification。
@@ -289,6 +295,62 @@ owner；未满足 Module 完整性交付要求的输入不能算通过。
 Adapter 不支持。只有 exact、合法的前置闭包已成立，且 Adapter 在 provider 进入前明确拒绝一项
 不能表达或强制执行的 capability，才形成 unsupported evidence。环境或 credential 前置缺失为
 not_run；它与代码已声明但无法执行的 capability 不同。
+
+### 4.9 已解析能力的原生工具验证
+
+本节细化 §4.1 至 §4.6 的已有 capability，以及 §7 的测试/runbook 同源要求；不新建 capability ID、
+case 类型或证据对象。Code-owned inventory 把要求并入对应 case；归属见下表。
+
+| 已有 capability 与位置 | 证据来源及归属 | 本项必须证明的结果 |
+| --- | --- | --- |
+| Generic Profile compatibility、Tool-free execution（§4.1、§4.2） | executable_owner_case；01 Registry、08 Invocation | Module 能力、默认来源、生效工具与参数映射一致；空清单不暴露工具，未知选择在 Provider 前拒绝；旧配置不能隐式获得新默认权限 |
+| Attempt workspace、Context isolation、Network enforcement（§4.2） | executable_owner_case；08 Invocation | 项目入口、Skill 发现和读写范围分别生效；安装依赖不扩大模型权限 |
+| Registered Module transport（§4.6） | 静态 closure 使用 executable_owner_case；真实调用使用对应 transport 的 environment_gate；08 Invocation，01 保留注册职责 | 通过 Runtime 启动真实 Provider，验证原生工具可读输入、运行 Python、写指定目标，越界读和源码写被拒绝；不能只以参数探针证明支持 |
+| Persistent Registry、Persistent Ledger、Persistent Inspection（§4.6） | 对应 persistent-store environment_gate；01、04、06 各保留原行职责 | 使用新连接回读本次 Profile、输入、Attempt、输出或失败和公开事件；工具网络关闭不妨碍可信 Runtime 按安装绑定记账 |
+| Sequential and branch routing、Cancellation、Attempt and Workflow Ledger（§4.3 至 §4.5） | executable_owner_case；Execution；Runtime T1、07 Durability、04 Ledger | 验证 §7.2 的成功、失败、取消和证据接续；实际模型节点的执行另由 Registered Module transport environment_gate 证明 |
+| 测试/runbook 同源要求（§7）与 code-owned Example package（§10） | executable_owner_case；本 T2 的 case inventory 绑定该生成与调用一致性检查 | 验证 sample、runbook 与包内公共 API 使用同一配置转换，安装后不需要另写启动或日志脚本；05 的 package result 只证明其既有 wheel/exports/bundle 范围，不替代本项 |
+
+本地 case 可使用替身验证参数、边界与接续；这不替代所列真实 Provider 或持久 store 的
+environment_gate。§7.2 的两个 Agent 接续是已有顺序/分支 case 的有界 fixture；声明该样例已能
+真实运行时，transport gate 必须证明两个模型节点都经过 Runtime。证据分类与完成判定使用 §7.1
+和 §9.3，不在本节另设 passed 或 not_run 规则。
+
+本地参数探针、直接 CLI smoke、Runtime 实际调用及完整实验 Workflow 分别记录。
+证明只读文件权限的用例不证明 exact command 白名单；证明 Reviewer transport 的用例也不直接证明
+被测 Agent 完成任务。不可取得的轨迹或结果标明缺失，不能由 Agent 的自述补成事实。
+
+### 4.10 Reviewer 默认与宿主完整路径
+
+默认能力的确定性验证至少覆盖：只有模型操作声明的 Reviewer，以及另有明确 repository read、
+search、sandbox command 等非模型操作声明的 Reviewer。两类都要有默认解析和兼容正例，并对
+未知操作、缺少授权、材料越界和命令约束旁路做拒绝验证。不能使用两个只有 prompt 不同的
+model-only Module 代替，也不能删除非模型声明或只证明后一类被拒绝后声称兼容。
+
+模型选择独立性须比较固定能力、材料读写、工具网络和默认版本。真实 provider 支持状态分别报告，
+未被接纳的执行器即使通过拒绝负例也不产生 supported evidence。默认预设更新不能改变已有 Module、
+已发出请求或正在执行的 Attempt；显式旧策略继续按原版本解释。
+
+注册到宿主调用的正向验证使用一个没有作者聊天背景的 Agent。它通过已交付 Skill 找到入口，消费
+准确已审 source，自行调用公共注册接口并新连接回读，再把原注册结果直接交给宿主入口完成真实
+审核。使用 Workflow 路径时同时回读准确 Module、Workflow、节点 Variant 和依赖。完整 schema、
+subject validator、实际工具证据及 Ledger 回读必须来自这一条链，不拼接独立注册和 Adapter 样例。
+
+新增 transport 的 source 修订在该测试之前完成审核并冻结新 Module。执行 Agent 不临时修改声明、
+prompt 或 schema。使用哪些 source、transport、宿主和正常配置保护范围由所选 case 声明；更广的
+Reviewer 迁移或其他 provider 支持不由本例传播通过。
+
+宿主幂等验证通过真实交付入口进行：在首次发送前取得可恢复 key，模拟 Runtime 提交成功但宿主
+响应丢失，重启调用者后从原回执重发，核对相同 execution、定义和输出，并证明 Provider 调用次数
+没有增加。同 key 改输入或绑定必须冲突；新材料或明确新逻辑请求使用新身份。运行中重发先查询或
+恢复，不触发并行重复调用。只有直接调用 Runtime 的相同 key 测试不足以覆盖该要求。
+
+故障恢复可用受控注入获得可重复证据，真实正向路径仍须有对应 provider/store gate。输出 non_pass
+不导致改测试输入或重跑直到 passed；业务结论与执行成功继续按 §4.8 分开。
+
+Execution Profile 注册/准备入口另须验证：只提供合法环境 root 时按公开默认规则定位本地配置及
+运行目录；显式凭据位置可被可信 adapter 消费且模型不可读取；已有配置冲突被明确处理；不因
+初始化本地目录自动创建数据库。CLI 帮助、docstring、运行副作用和实际错误一致，不能仅在 Skill
+中描述默认路径而没有对应入口行为。
 
 ## 5. Canonical Example Workflow
 
@@ -361,7 +423,7 @@ code-owned case definition；README、网页或命令示例只投影它，不能
 | --- | --- |
 | `case_id` | stable test/runbook identity |
 | `capability_ids` | 本 case 证明的第 4 节 capability 集合 |
-| `owning_design_refs` | capability failure 保留的 owner-qualified T2 refs |
+| `owning_design_refs` | capability failure 保留的 owner-qualified Design refs；Execution 绑定 Runtime T1，其余按对应 T2 |
 | `evidence_contract_refs` | case 所验证的 exact Owning Design/interface refs；仅既有 peer result 可作为 result ref |
 | `evidence_source_kind` | `executable_owner_case`、`environment_gate` 或 `referenced_peer_result`；由 capability inventory 固定，§4.1 至 §4.5 使用 `executable_owner_case` |
 | `subject_requirements` | exact commit/release、Module、Workflow、Profile、Policy 与 fixture requirements |
@@ -400,6 +462,22 @@ Registered Module transport gate 在上述三态 case result 之外携带
 
 Case definition 不保存 credential、DSN secret、provider token 或 host private path。它只声明需要的 environment
 binding identity；credential resolution 由宿主 Adapter 完成。
+
+### 7.2 配置样例与测试评价接续
+
+随包样例列明审核 source、Runtime 默认能力、独立模型选择、本机资源和每次请求的区别。接口说明
+从真实 docstring 导出默认值及来源、返回、错误与副作用；Skill 提供发现和操作入口，不补写底座配置。
+实际工具、CLI 参数和验证命令来自相同代码定义；runbook 不手抄第二套实现。注册结果的消费、首次
+请求 key 的保存以及响应丢失后的重发必须可由使用者按入口说明完成。
+
+测试与评价的样例 Workflow 使用 Runtime 分别启动被测 Agent 和独立评价 Agent，中间以固定代码
+整理本次证据。被测 Agent 的正常完成或失败均可进入评价；用户取消整个 Workflow 则保存记录并停止。
+评价 Agent 消费预先声明的标准和本次真实证据，不继承被测 Agent 会话。任务内 Reviewer 必须由
+被测 Agent 按任务方法自行调用，外层代码不代做。具体图执行由 Execution 与 Durability 负责，
+本 T2 只验证接续和证据是否符合样例；实验任务与评分规则仍由实验 owner 提供。
+
+该样例按 §4.9 映射回已有顺序/分支、取消、Ledger 和 transport 用例。替身接续通过只说明代码
+路径成立；真实两个 Agent 都运行并有对应证据，才能报告真实样例完成。
 
 ## 8. Public Interface and Effects
 
@@ -443,10 +521,17 @@ completed 仅表示 runner 已结束，不表示所有 case 或完整产品验�
 ### 9.3 Completion conditions
 
 Focused run 的选定 case、所需环境、清理与证据交付均满足时，只完成该范围的验证；full Runtime
-completion 必须保持未声明通过。一个 exact Runtime candidate 只有在 complete scope 下满足以下全部
+completion 必须保持未声明通过。Focused 若选择原生工具真实调用、持久回读或双 Agent 真实样例，
+相应 environment gate 的 not_run、failed 或 unsupported 均不能算完成；只选本地 case 时不强加
+未选的模型或 PG 门，也不宣称这些真实能力已经验证。
+
+当 complete 的验证目标包含原生工作区或 §7.2 的真实样例时，Software Delivery 的 required set
+必须纳入对应 Registered Module transport gate；该目标要求持久回读时，还须纳入对应 store gate。
+缺少这些要求或证据时，coverage 未闭合；不能跳过后宣称该范围完整通过。其他未选环境仍按
+下列条件 5 处理。一个 exact Runtime candidate 只有满足以下全部
 条件，才完成本 T2 的完整 verification：
 
-1. 第 4 节每项 required capability 都解析到固定 evidence source：§4.1 至 §4.5 具有 subject-bound exact case result；§4.6 具有该行声明的 environment result，Public package 具有 exact 05 peer result；
+1. 第 4 节每项 required capability 都解析到固定 evidence source：§4.1 至 §4.5 具有 subject-bound exact case result；§4.6 具有该行声明的 environment result，Public package 具有 exact 05 peer result；对应 case/gate 必须覆盖 §4.9 的细化要求及 §7.2 的样例要求；
 2. canonical Example graph 的 Module、Workflow、Profile、tool、workspace、parallel、loop、wait、terminal 与
    multi-Runtime registration 路径均有 positive 和必要 negative test；
 3. 所有 local deterministic tests 是 `passed`；
