@@ -26,8 +26,10 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 - [ReviewerDefaults](#reviewerdefaults)
 - [Workflow](#workflow)
 - [prepare_local_workflow_module](#prepare_local_workflow_module)
+- [evaluate_local_workflow_module](#evaluate_local_workflow_module)
 - [run_local_workflow_module](#run_local_workflow_module)
 - [CLI commands](#cli-commands)
+- [Evaluation CLI](#evaluation-cli)
 - [Error constants](#error-constants)
 
 ## ModuleReviewer
@@ -1020,6 +1022,68 @@ not proof that exact releases were durably saved. The execution kernel
 records inputs, actual configuration, outputs and failures in its Ledger.
 History is queried by execution ID, not by this preparation function.
 
+## evaluate_local_workflow_module
+
+Public import: `from agent_runtime import evaluate_local_workflow_module`
+
+```python
+def evaluate_local_workflow_module(
+    root: Path,
+    workflow_id: str,
+    *,
+    input_payload: dict,
+    version: str | None=None,
+    transport_kind: str | None=None,
+    model_id: str | None=None,
+    reasoning_profile: str | None=None,
+    cli_path: Path | str | None=None,
+) -> dict:
+```
+
+Evaluate a registered single-node Workflow using temporary test resources.
+
+**Args**
+
+- `root`: Root containing .runtime definitions; never a model/tool read root.
+- `workflow_id`: Workflow to load, including single-Module Workflows.
+- `input_payload`: Exact JSON input validated against the registered schema.
+- `version`: Exact version; None resolves the latest new definition once.
+- `transport_kind`: Independent execution transport; None uses Runtime's
+  default. This self-test currently admits claude_cli native tools.
+- `model_id`: Independent concrete model ID; None uses Runtime's default.
+  The Adapter verifies observed model identity, allowing the known
+  CLI [1m] selector. It does not infer model families from aliases.
+- `reasoning_profile`: Independent effort; None uses Runtime's default.
+- `cli_path`: Explicit installed provider executable, or resolve claude from
+  the host PATH. No login, installation or fallback provider is run.
+**Returns**
+
+JSON-compatible execution facts and output. provider_trace retains the
+observed response models and diagnostics. persistence is not_requested;
+execution_trace is the actual in-memory Run/Variant/Attempt result, not
+a durable Workflow Ledger. The subject owner still validates its verdict.
+Each call is a new test; there is no cross-process replay/history promise.
+Failed Attempts retain failure_detail.failure_code: model mismatch or
+missing model evidence uses claude_cli_model_identity_mismatch or
+claude_cli_model_identity_unavailable; closed resources use
+self_test_resources_unavailable. Executable/dependency faults retain
+ADAPTER_BINDING_UNAVAILABLE rather than pretending resources expired.
+**Raises**
+
+- `FileNotFoundError`: Missing registration, version or provider executable.
+- `ValueError`: Unsupported graph/Profile, input or resource configuration.
+- `jsonschema.exceptions.ValidationError`: Input violates its registered schema.
+- `PermissionError`: The requested operation is outside bounded test resources.
+- `Exception`: Existing provider/environment errors retain their contracts.
+**Effects**
+
+Reads fixed definitions, stages input in memory, calls the admitted
+Adapter through the existing Workflow Module kernel, and returns facts.
+Does not access PostgreSQL, discover storage credentials, write .runtime,
+manufacture production authorization, or persist a request receipt.
+Its private temporary workspace is removed on exit. The caller may
+explicitly save the returned result; Runtime does not save it by default.
+
 ## run_local_workflow_module
 
 Public import: `from agent_runtime import run_local_workflow_module`
@@ -1068,6 +1132,34 @@ Loads exact saved Workflow, Module and binding; never recompiles source,
 re-registers persistent data, changes active or creates host credentials.
 Provider calls and recording use the original Runtime execution kernel.
 Multi-node graphs can be saved/loaded, but use their existing graph runner.
+
+## Evaluation CLI
+
+Generated from the installed parser's argument declarations.
+
+Evaluate once and emit execution JSON on stdout without saving to PG.
+
+Exit 0: completed execution with schema-valid output, including a valid
+non_pass verdict. The subject owner applies its own semantic validator.
+Exit 1: input, execution or environment failure; stderr preserves the error
+type and available native error_code. Failed Attempts remain in stdout JSON.
+Exit 2: invalid arguments, including unsupported persistence options; no model
+is called. Exit 130: user interruption; no subject verdict is manufactured.
+Each invocation is a new temporary test. No cross-process recovery or stored
+history is promised. Explicit stdout capture belongs to the calling operator.
+
+### agent-runtime-evaluate
+
+| Argument | Required | Help |
+| --- | --- | --- |
+| `--root` | required | Root containing .runtime definitions; not a model read root. |
+| `--workflow` | required | Registered single-node Workflow ID. |
+| `--version` | optional | Exact version; omit for the latest registered new definition. |
+| `--input` | required | JSON input prepared under the Module's input schema. |
+| `--transport` | optional | Independent transport; omit for Runtime default. Currently claude_cli only. |
+| `--model` | optional | Independent concrete model ID, verified against the response; omit for Runtime default. |
+| `--effort` | optional | Independent reasoning effort; omit for Runtime default. |
+| `--cli-path` | optional | Installed provider executable; omit to resolve claude from PATH. |
 
 ## Error constants
 

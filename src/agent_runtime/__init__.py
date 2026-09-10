@@ -137,7 +137,7 @@ from .registry.registry_module_authoring import (
     ModuleReviewer,
 )
 from .registry.registry_local_persistence import LoadedRuntimeRegistration, load_runtime_registration, save_runtime_registration
-from .execution.execution_local_invocation import prepare_local_workflow_module, run_local_workflow_module
+from .execution.execution_local_invocation import evaluate_local_workflow_module, prepare_local_workflow_module, run_local_workflow_module
 from .registry.registry_workflow_authoring import (
     WORKFLOW_MODULE_CLOSURE_INVALID,
     Workflow,
@@ -276,6 +276,7 @@ __all__ = [
     "save_runtime_registration",
     "run_local_workflow_module",
     "prepare_local_workflow_module",
+    "evaluate_local_workflow_module",
     "ModuleAuthoringError",
     "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
     "MODULE_OPERATION_DECLARATION_INVALID",

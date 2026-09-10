@@ -553,17 +553,26 @@ class AgentExecutionResult:
         return asdict(self)
 
 
+class SelfTestResourceUnavailableError(PermissionError):
+    """The trusted host refused a closed or mismatched temporary test boundary.
+
+    This is not an OS executable permission, provider login, or file dependency
+    failure. Adapters retain those failures under their own environment codes.
+    """
+
+
 @dataclass(frozen=True)
 class AuthorizedAgentExecutionRequest:
-    """Canonical AR09 request bound to Product decision and Runtime claim evidence.
+    """Canonical invocation bound to external authority or live self-test resources.
 
     Authorization evidence fields resolve to the Stack-A authority records of
     ``agent_runtime_09``: the execution authorization context binding, the
     protected-operation intent, the Product operation decision, and the Gateway
     authorization observation binding decision to intent. Each evidence group
-    is present completely or not at all; empty evidence is admissible only for
-    the operation-free ``in_process`` Test/Evaluation conjunction defined in
-    ``agent_runtime_08``.
+    is present completely or not at all. A trusted self-test host instead binds
+    self_test_binding_ref/sha256; Invocation resolves them against live bounded
+    resources, not a caller assertion. The two evidence kinds are exclusive.
+    Without either kind, only operation-free in_process evaluation is admitted.
     """
 
     workflow_execution_id: str | None
@@ -600,10 +609,16 @@ class AuthorizedAgentExecutionRequest:
     authorized_inputs: tuple[AuthorizedExecutionInput, ...]
     request_sha256: str
     idempotency_key: str
+    self_test_binding_ref: str | None = None
+    self_test_binding_sha256: str | None = None
 
     def _identity_payload(self) -> dict[str, Any]:
         payload = asdict(self)
         payload.pop("request_sha256")
+        if self.self_test_binding_ref is None and self.self_test_binding_sha256 is None:
+            # Old external-authority request identities must not be rehashed.
+            payload.pop("self_test_binding_ref")
+            payload.pop("self_test_binding_sha256")
         payload["authorized_inputs"] = [asdict(item) for item in self.authorized_inputs]
         return payload
 
@@ -757,6 +772,19 @@ class AuthorizedAgentExecutionRequest:
                 "authorization binding"
             )
 
+        has_self_test = _validate_ref_hash_group(
+            "self-test binding",
+            (("self_test_binding_ref", self.self_test_binding_ref),
+             ("self_test_binding_sha256", self.self_test_binding_sha256)),
+            ref_labels=frozenset({"self_test_binding_ref"}),
+        )
+        if has_self_test and (has_binding or has_operation or has_grant):
+            raise ValueError("self-test and external authorization evidence cannot be mixed")
+        if has_self_test and self.data_use_purpose_id not in {
+            "module_test_execution", "module_evaluation_execution",
+        }:
+            raise ValueError("self-test evidence requires Test or Evaluation purpose")
+
         validate_exact_record_tuple(
             "authorized_inputs",
             self.authorized_inputs,
@@ -807,7 +835,7 @@ class AuthorizedAgentExecutionRequest:
 
 @runtime_checkable
 class AuthorizedAgentExecutionHost(Protocol):
-    """Canonical host after Product decision resolution; it cannot mint authority."""
+    """Canonical host enforcing admitted external authority or test resources."""
 
     def read_authorized_input(self, local_handle: str) -> bytes:
         """Read through a request-bound lookup key, never a filesystem path."""

@@ -198,7 +198,27 @@ print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
 
 ### 0.3 首次测试与再次调用 / Test a reviewer
 
-先进入宿主项目文档的“Reviewer 测试/运行”入口。宿主提供安装资源、授权和存储，
+普通自测可以直接使用安装包中的正式命令，不需要 PG 或生产授权：
+
+```sh
+agent-runtime-evaluate --root /path/to/host --workflow example_reviewer_review \
+  --input /path/to/prepared_input.json --transport claude_cli
+```
+
+输入由该 Reviewer 所属工具按注册 schema 准备。root 只定位已保存定义，不向模型开放整个项目。
+省略 --version 使用最近注册的新定义；--model/--effort 是本次选择，省略时使用 Runtime 默认，
+不读取旧文件保存的模型绑定。支持范围和参数来自
+[Evaluation CLI](agent_runtime_reviewer_api.md#evaluation-cli) 与
+[evaluate_local_workflow_module](agent_runtime_reviewer_api.md#evaluate_local_workflow_module)。
+
+命令用临时资源执行已有单节点 Workflow，stdout 返回结果及内存执行事实，标注
+persistence=not_requested；不会写 PG、.runtime 或持久请求回执。测试资源退出时清理，不能用本次
+execution ID 查询持久历史，也不提供跨进程重放。操作者可以明确保存 stdout 作为测试证据，
+但该文件不是持久 Runtime Ledger。当前此命令不接 PG；保存类参数会被拒绝，不自动忽略。
+已完成并通过注册输出 schema 的执行退出 0（包括有效 non_pass），技术失败退出 1，
+用法错误退出 2，中断退出 130。所属语义 validator 仍由宿主调用，不能将 schema 通过当作审核通过。
+
+需要外部授权和持久记录时，使用已有宿主项目文档的“Reviewer 测试/运行”入口。宿主提供授权和存储，
 使用 Runtime 的执行准备接口解析本次固定定义与独立模型选择，不复制 Reviewer 默认工具参数：
 
 ```python
@@ -221,16 +241,16 @@ release_store 是宿主明确的现有 Registry，要求已建好 schema；准�
 的 docstring 自动导出；不支持的 transport 明确拒绝，不按模型名字猜 provider 或自动回落。
 旧文件附带的模型配置保持可回读，但不会成为这个新入口的默认。
 
-当前 Runtime 的公共入口是
+外部授权持久执行的公共入口是
 [run_registered_workflow_module](agent_runtime_reviewer_api.md#run_registered_workflow_module)，
 它支持已注册的单节点 Workflow evaluation，并保留明确的宿主授权接口要求；不能从这个函数存在
 推断任意宿主、任意工具或 Claude/Codex 配置已接通。已有接口参考列出了完整参数及失败限制。
 
-**找不到宿主命令或实际授权/存储接入时，交给宿主集成维护者。** 本 Runbook 不提供一个尚未实现的
-通用 `reviewer test` 命令。Runtime 开发者的 live pytest sample 验证其声明的 fixture 与能力；它不能
+**要求持久执行却找不到实际授权/存储接入时，交给宿主集成维护者。** 不把该缺口转成普通自测的
+前置条件。Runtime 开发者的 live pytest sample 验证其声明的 fixture 与能力；它不能
 代替你的新 Reviewer 配置，也不能为了测试而悄悄创建另一个 Module release。
 
-调用前核对，调用后分别记录：
+下表仅用于已明确选择外部授权持久执行的调用：
 
 | 时点 | 操作者要核对的事实 |
 | --- | --- |

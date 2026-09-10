@@ -123,6 +123,7 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
                  "pytest>=8", "setuptools>=77", "temporalio>=1.31"],
     }
     assert configuration["project"]["scripts"] == {
+        "agent-runtime-evaluate": "agent_runtime.testing.execution_local_evaluation:main",
         "agent-runtime-registry": "agent_runtime.registry.registry_local_persistence:main",
         "agent-runtime-inspect": "agent_runtime.inspection.inspection_snapshot_exporting:main",
         "agent-runtime-live-inspect": "agent_runtime.inspection.inspection_http_serving:main",

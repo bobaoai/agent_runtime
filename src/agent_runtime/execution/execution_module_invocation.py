@@ -1,11 +1,9 @@
 """Authorization-enforcing Test and Evaluation execution kernel.
 
-One canonical adapter contract carries every Module invocation. A Module that
-declares a model operation requires committed AR09 authorization evidence
-resolved before the provider transport is entered; the committed
-execution-authorization fence is re-read inside the same atomic commit that
-makes outputs authoritative. Production purposes still fail closed before any
-adapter resolution.
+One canonical adapter contract carries every Module invocation. Model calls
+require either external AR09 authority or explicit live self-test resources.
+Their respective boundaries are checked before dispatch and terminal commit.
+Absence of production authority never implicitly selects the self-test path.
 """
 
 from __future__ import annotations
@@ -50,6 +48,7 @@ from ..contracts.invocation_adapter_definition import (
     AuthorizedOperationReceipt,
     OutputSubmission,
     ProviderOperationIntent,
+    SelfTestResourceUnavailableError,
     isolated_execution_scope_id,
 )
 from ..contracts.registry_release_definition import (
@@ -97,6 +96,7 @@ from .execution_authorization_resolution import (
     ProductAuthorizationContextClient,
     ProductOperationAuthorizationClient,
 )
+from .execution_self_test_binding import ModuleSelfTestResources
 
 
 def _canonical_sha256(payload: Mapping[str, Any] | list[Any]) -> str:
@@ -215,6 +215,7 @@ class _AttemptExecutionHost:
         authority: ModuleExecutionAuthority | None,
         workflow_ledger: WorkflowModuleLedgerRecorder | None,
         clock: Callable[[], str],
+        self_test: ModuleSelfTestResources | None = None,
     ) -> None:
         self._request = request
         self._artifact_host = artifact_host
@@ -224,6 +225,7 @@ class _AttemptExecutionHost:
         self._authority = authority
         self._workflow_ledger = workflow_ledger
         self._clock = clock
+        self._self_test = self_test
         self._inputs_by_handle = {
             item.local_handle: item for item in request.authorized_inputs
         }
@@ -232,21 +234,23 @@ class _AttemptExecutionHost:
         self._dynamic_authorization_refused = False
 
     def read_authorized_input(self, local_handle: str) -> bytes:
-        entry = self._inputs_by_handle.get(local_handle)
-        if entry is None:
-            raise PermissionError(
-                f"input handle is outside the authorized request table: {local_handle}"
-            )
-        content = self._artifact_host.read_bytes(entry.input_ref, entry.input_sha256)
-        if hashlib.sha256(content).hexdigest() != entry.input_sha256:
-            raise ValueError("authorized input content hash mismatch")
-        return content
+        def read():
+            entry = self._inputs_by_handle.get(local_handle)
+            if entry is None:
+                raise PermissionError(f"input handle is outside the authorized request table: {local_handle}")
+            content = self._artifact_host.read_bytes(entry.input_ref, entry.input_sha256)
+            if hashlib.sha256(content).hexdigest() != entry.input_sha256:
+                raise ValueError("authorized input content hash mismatch")
+            return content
+        return self._self_test.guarded(read) if self._self_test is not None else read()
 
     def stage_output_bytes(
         self,
         submission: OutputSubmission,
         content: bytes,
     ) -> None:
+        if self._self_test is not None:
+            self._self_test.require_active()
         if type(submission) is not OutputSubmission:
             raise ValueError("submission must be an exact OutputSubmission")
         submission.validate()
@@ -257,6 +261,23 @@ class _AttemptExecutionHost:
                 f"output slot already staged: {submission.output_slot_id}"
             )
         self._staged[submission.output_slot_id] = (submission, content)
+
+    def validate_self_test_binding(self, request, *, adapter, artifact_host, workspace_root):
+        """Resolve self-test evidence against the actual live host resources."""
+        if self._self_test is None or request != self._request:
+            raise SelfTestResourceUnavailableError("self-test request has no matching trusted host")
+        self._self_test.check_invocation(request, adapter=adapter,
+            artifact_host=artifact_host, workspace_root=workspace_root)
+
+    def guard_self_test_launch(self, request, launch, *, adapter, artifact_host, workspace_root):
+        """Order actual process creation with closing this request's resources."""
+        if self._self_test is None:
+            raise SelfTestResourceUnavailableError("self-test launch has no trusted resources")
+        def guarded():
+            self.validate_self_test_binding(request, adapter=adapter,
+                artifact_host=artifact_host, workspace_root=workspace_root)
+            return launch()
+        return self._self_test.guarded(guarded)
 
     def authorize_operation(
         self,
@@ -471,6 +492,94 @@ class _AttemptExecutionHost:
         return usage, trace, tuple(calls)
 
 
+def _prepare_registered_workflow_module(
+    *, module_id, input_payload, idempotency_key, release_registry, workflow,
+    variant_policy, adapters, artifact_host,
+):
+    """Freeze the same validated request for persistent and temporary executions."""
+    from jsonschema import Draft202012Validator
+
+    validate_id("module_id", module_id)
+    validate_id("idempotency_key", idempotency_key)
+    if type(input_payload) is not dict:
+        raise ValueError("input_payload must be one JSON object")
+    if type(workflow) is not WorkflowRelease or type(variant_policy) is not ExecutionVariantPolicyRelease:
+        raise ValueError("execution requires exact Workflow and Variant Policy releases")
+    if release_registry.get_workflow(workflow.release_ref, workflow.release_sha256) != workflow:
+        raise ValueError("Workflow differs from the registered release")
+    if release_registry.get_execution_variant_policy(variant_policy.release_ref, variant_policy.release_sha256) != variant_policy:
+        raise ValueError("Variant Policy differs from the registered release")
+    release_registry.assert_workflow_execution_allowed(workflow, ModuleExecutionPurpose.EVALUATION)
+    if len(workflow.nodes) != 1 or workflow.nodes[0].node_kind is not WorkflowNodeKind.MODULE:
+        raise ValueError("entry requires one registered Module node")
+    node = workflow.nodes[0]
+    if workflow.initial_node_id != node.node_id:
+        raise ValueError("the Module node must be the Workflow entry")
+    module = release_registry.get_module(node.module_release_ref, node.module_release_sha256)
+    if module.module_id != module_id:
+        raise ValueError("Workflow Module differs from the requested target")
+    release_registry.assert_module_execution_allowed(module, ModuleExecutionPurpose.EVALUATION)
+    selection = variant_policy.policy_document()
+    if (
+        selection["origin_kind"] != "workflow"
+        or selection["origin_release_ref"] != workflow.release_ref
+        or selection["origin_release_sha256"] != workflow.release_sha256
+        or len(selection["bindings"]) != 1
+        or selection["bindings"][0]["position_id"] != node.node_id
+    ):
+        raise ValueError("Variant Policy must select the exact Workflow Module node")
+    selected = selection["bindings"][0]
+    profile = release_registry.get_execution_profile(
+        selected["execution_profile_release_ref"], selected["execution_profile_release_sha256"]
+    )
+    try:
+        _assert_admitted_test_evaluation_profile(module, profile)
+    except NotImplementedError as exc:
+        raise ValueError(str(exc)) from exc
+    adapter = adapters.resolve(profile.executor_adapter_id, profile.executor_adapter_revision)
+    _assert_descriptor_covers_profile(adapter.descriptor, profile)
+    for method in ("put_bytes", "artifact", "resolve_artifact_ref"):
+        if not callable(getattr(artifact_host, method, None)):
+            raise ValueError(f"artifact_host must implement {method}")
+    schema = release_registry.get_schema_asset(module.input_schema_ref, module.input_schema_sha256)
+    input_bytes = json.dumps(input_payload, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":"), allow_nan=False).encode("utf-8")
+    Draft202012Validator(schema.schema_document()).validate(json.loads(input_bytes))
+    execution_id = _stable_id("execution", idempotency_key)
+    put_bytes = getattr(artifact_host, "put_bytes")
+    task = put_bytes(
+        artifact_kind_id="module_input", schema_version=module.input_schema_ref.rsplit("@", 1)[-1],
+        schema_ref=module.input_schema_ref, schema_sha256=module.input_schema_sha256,
+        media_type="application/json", content=input_bytes,
+        idempotency_key=execution_id + "_task", logical_name="task_input",
+    )
+    input_binding = ModuleInputBinding("task_input", task.artifact_ref, task.artifact_sha256,
+                                      module.input_schema_ref, module.input_schema_sha256, "application/json")
+    bundle = release_registry.get_prompt_bundle(module.prompt_bundle_ref, module.prompt_bundle_sha256)
+    prompt = build_inline_provider_prompt(
+        compiled_static_body=bundle.compiled_static_body, execution_specific_instructions="",
+        inputs=((input_binding, input_bytes),), output_constraint_mode=profile.output_constraint_mode,
+    )
+    prompt_ref = put_bytes(
+        artifact_kind_id="prompt_envelope", schema_version="v1",
+        schema_ref="schema:prompt_envelope@v1", schema_sha256=_canonical_sha256({"type": "string"}),
+        media_type="text/plain", content=prompt.encode("utf-8"),
+        idempotency_key=execution_id + "_prompt", logical_name="prompt_envelope",
+    )
+    request = WorkflowModuleExecutionRequest.build(
+        request_id=_stable_id("request", execution_id), purpose=ModuleExecutionPurpose.EVALUATION,
+        workflow_execution_id=execution_id, dispatch_id=_stable_id("dispatch", execution_id),
+        workflow_node_id=node.node_id, module_run_id=_stable_id("module_run", execution_id),
+        module_release_ref=module.release_ref, module_release_sha256=module.release_sha256,
+        input_package_ref=task.artifact_ref, input_package_sha256=task.artifact_sha256,
+        inputs=(input_binding,), variants=(ModuleVariantRequest(
+            "default", 0, profile.release_ref, profile.release_sha256,
+            prompt_ref.artifact_ref, prompt_ref.artifact_sha256,
+        ),), idempotency_key=idempotency_key,
+    )
+    return request, module, profile, task, prompt_ref
+
+
 def run_registered_workflow_module(
     *,
     module_id: str,
@@ -574,52 +683,8 @@ def run_registered_workflow_module(
         Committed replay does not repeat the provider call. This convenience
         entry's returned exceptions are not a separate uniform error-code enum.
     """
-    from jsonschema import Draft202012Validator
-
-    validate_id("module_id", module_id)
-    validate_id("idempotency_key", idempotency_key)
     validate_id("enforcing_gateway_id", enforcing_gateway_id)
     validate_id("environment_id", environment_id)
-    if type(input_payload) is not dict:
-        raise ValueError("input_payload must be one JSON object")
-    if type(workflow) is not WorkflowRelease or type(variant_policy) is not ExecutionVariantPolicyRelease:
-        raise ValueError("execution requires exact Workflow and Variant Policy releases")
-    if release_registry.get_workflow(workflow.release_ref, workflow.release_sha256) != workflow:
-        raise ValueError("Workflow differs from the registered release")
-    if release_registry.get_execution_variant_policy(variant_policy.release_ref, variant_policy.release_sha256) != variant_policy:
-        raise ValueError("Variant Policy differs from the registered release")
-    release_registry.assert_workflow_execution_allowed(workflow, ModuleExecutionPurpose.EVALUATION)
-    if len(workflow.nodes) != 1 or workflow.nodes[0].node_kind is not WorkflowNodeKind.MODULE:
-        raise ValueError("entry requires one registered Module node")
-    node = workflow.nodes[0]
-    if workflow.initial_node_id != node.node_id:
-        raise ValueError("the Module node must be the Workflow entry")
-    module = release_registry.get_module(node.module_release_ref, node.module_release_sha256)
-    if module.module_id != module_id:
-        raise ValueError("Workflow Module differs from the requested target")
-    release_registry.assert_module_execution_allowed(module, ModuleExecutionPurpose.EVALUATION)
-    selection = variant_policy.policy_document()
-    if (
-        selection["origin_kind"] != "workflow"
-        or selection["origin_release_ref"] != workflow.release_ref
-        or selection["origin_release_sha256"] != workflow.release_sha256
-        or len(selection["bindings"]) != 1
-        or selection["bindings"][0]["position_id"] != node.node_id
-    ):
-        raise ValueError("Variant Policy must select the exact Workflow Module node")
-    selected = selection["bindings"][0]
-    profile = release_registry.get_execution_profile(
-        selected["execution_profile_release_ref"], selected["execution_profile_release_sha256"]
-    )
-    try:
-        _assert_admitted_test_evaluation_profile(module, profile)
-    except NotImplementedError as exc:
-        raise ValueError(str(exc)) from exc
-    adapter = adapters.resolve(profile.executor_adapter_id, profile.executor_adapter_revision)
-    _assert_descriptor_covers_profile(adapter.descriptor, profile)
-    for method in ("put_bytes", "artifact", "resolve_artifact_ref"):
-        if not callable(getattr(artifact_host, method, None)):
-            raise ValueError(f"artifact_host must implement {method}")
     if not callable(authorize):
         raise ValueError("host authorize callback is required")
     if content_store is None:
@@ -627,42 +692,12 @@ def run_registered_workflow_module(
     workflow_binding = WorkflowExecutionLedgerBinding(record_store, artifact_host, content_store)
     workflow_binding.validate()
     WorkflowModuleLedgerBinding(record_store, "0" * 64, claim_token_secret, content_store).validate()
-    schema = release_registry.get_schema_asset(module.input_schema_ref, module.input_schema_sha256)
-    input_bytes = json.dumps(input_payload, ensure_ascii=False, sort_keys=True,
-                             separators=(",", ":"), allow_nan=False).encode("utf-8")
-    Draft202012Validator(schema.schema_document()).validate(json.loads(input_bytes))
-    execution_id = _stable_id("execution", idempotency_key)
-    put_bytes = getattr(artifact_host, "put_bytes")
-    task = put_bytes(
-        artifact_kind_id="module_input", schema_version=module.input_schema_ref.rsplit("@", 1)[-1],
-        schema_ref=module.input_schema_ref, schema_sha256=module.input_schema_sha256,
-        media_type="application/json", content=input_bytes,
-        idempotency_key=execution_id + "_task", logical_name="task_input",
+    request, module, profile, task, prompt_ref = _prepare_registered_workflow_module(
+        module_id=module_id, input_payload=input_payload, idempotency_key=idempotency_key,
+        release_registry=release_registry, workflow=workflow, variant_policy=variant_policy,
+        adapters=adapters, artifact_host=artifact_host,
     )
-    input_binding = ModuleInputBinding("task_input", task.artifact_ref, task.artifact_sha256,
-                                      module.input_schema_ref, module.input_schema_sha256, "application/json")
-    bundle = release_registry.get_prompt_bundle(module.prompt_bundle_ref, module.prompt_bundle_sha256)
-    prompt = build_inline_provider_prompt(
-        compiled_static_body=bundle.compiled_static_body, execution_specific_instructions="",
-        inputs=((input_binding, input_bytes),), output_constraint_mode=profile.output_constraint_mode,
-    )
-    prompt_ref = put_bytes(
-        artifact_kind_id="prompt_envelope", schema_version="v1",
-        schema_ref="schema:prompt_envelope@v1", schema_sha256=_canonical_sha256({"type": "string"}),
-        media_type="text/plain", content=prompt.encode("utf-8"),
-        idempotency_key=execution_id + "_prompt", logical_name="prompt_envelope",
-    )
-    request = WorkflowModuleExecutionRequest.build(
-        request_id=_stable_id("request", execution_id), purpose=ModuleExecutionPurpose.EVALUATION,
-        workflow_execution_id=execution_id, dispatch_id=_stable_id("dispatch", execution_id),
-        workflow_node_id=node.node_id, module_run_id=_stable_id("module_run", execution_id),
-        module_release_ref=module.release_ref, module_release_sha256=module.release_sha256,
-        input_package_ref=task.artifact_ref, input_package_sha256=task.artifact_sha256,
-        inputs=(input_binding,), variants=(ModuleVariantRequest(
-            "default", 0, profile.release_ref, profile.release_sha256,
-            prompt_ref.artifact_ref, prompt_ref.artifact_sha256,
-        ),), idempotency_key=idempotency_key,
-    )
+    execution_id = request.workflow_execution_id
     trace = record_store.load_trace(execution_id)
     starts = trace.records_of_type(WorkflowExecutionRecord)
     if starts:
@@ -812,16 +847,20 @@ def run_workflow_module(
     adapters: AgentExecutionAdapterRegistry,
     artifact_host: ModuleArtifactHost,
     ledger: ModuleExecutionLedger,
-    workflow_ledger: WorkflowModuleLedgerRecorder,
+    workflow_ledger: WorkflowModuleLedgerRecorder | None = None,
     authority: ModuleExecutionAuthority | None = None,
     clock: Callable[[], str] = _utc_now,
+    self_test: ModuleSelfTestResources | None = None,
 ) -> ModuleRunResult:
-    """Run one Module under an admitted Workflow Execution authority.
+    """Run one Module under an admitted Workflow Execution boundary.
 
     The request carries the durable dispatch, Workflow node, and Module Run
     IDs. The recorder commits start/authorization facts before provider entry,
     atomically commits the result, and replays an already committed invocation
     without calling the provider again.
+    For non-persistent self-tests only, self_test supplies an exact live
+    ModuleSelfTestResources and workflow_ledger is omitted. That path uses the
+    supplied memory Ledger and has no durable replay or production authority.
     """
 
     if type(request) is not WorkflowModuleExecutionRequest:
@@ -838,9 +877,17 @@ def run_workflow_module(
         request.module_release_ref,
         request.module_release_sha256,
     )
-    replay = workflow_ledger.replay_result(request=request, module=module)
-    if replay is not None:
-        return replay
+    if self_test is not None:
+        if type(self_test) is not ModuleSelfTestResources or workflow_ledger is not None or authority is not None:
+            raise PermissionError("self-test resources cannot be mixed with external execution ports")
+        self_test.check_scope(request=request, registry=release_registry, adapters=adapters,
+                              artifact_host=artifact_host, ledger=ledger)
+    elif workflow_ledger is None:
+        raise ValueError("Workflow execution requires a durable Ledger or explicit self-test resources")
+    else:
+        replay = workflow_ledger.replay_result(request=request, module=module)
+        if replay is not None:
+            return replay
     return _run_module(
         request,
         release_registry=release_registry,
@@ -850,6 +897,7 @@ def run_workflow_module(
         authority=authority,
         workflow_ledger=workflow_ledger,
         clock=clock,
+        self_test=self_test,
     )
 
 
@@ -863,6 +911,7 @@ def _run_module(
     authority: ModuleExecutionAuthority | None,
     workflow_ledger: WorkflowModuleLedgerRecorder | None,
     clock: Callable[[], str],
+    self_test: ModuleSelfTestResources | None = None,
 ) -> ModuleRunResult:
     """Shared kernel after isolated or Workflow-bound request admission."""
 
@@ -922,13 +971,14 @@ def _run_module(
             "the model-backed slice admits exactly one declared model operation"
         )
     if module.declared_operation_ids:
-        if authority is None:
+        if authority is None and self_test is None:
             raise PermissionError(
                 "a Module that declares a model operation requires a "
                 "module execution authority"
             )
-        authority.validate()
-        _assert_authority_binding_closure(authority.binding, request)
+        if authority is not None:
+            authority.validate()
+            _assert_authority_binding_closure(authority.binding, request)
     elif authority is not None:
         raise ValueError(
             "a module execution authority was supplied for an operation-free "
@@ -1103,6 +1153,7 @@ def _run_module(
             ledger=ledger,
             clock=clock,
             release_registry=release_registry,
+            self_test=self_test,
         )
         attempts.append(attempt)
         outputs.extend(attempt_outputs)
@@ -1157,6 +1208,7 @@ def _execute_attempt(
     ledger: ModuleExecutionLedger,
     clock: Callable[[], str],
     release_registry: RuntimeReleaseRegistry,
+    self_test: ModuleSelfTestResources | None = None,
 ) -> tuple[ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]]:
     """Authorize, invoke, and atomically finalize one Attempt."""
 
@@ -1279,6 +1331,7 @@ def _execute_attempt(
         attempt_start=attempt_start,
         evidence=evidence,
         authority=authority,
+        self_test=self_test,
     )
     host = _AttemptExecutionHost(
         request=canonical_request,
@@ -1289,6 +1342,7 @@ def _execute_attempt(
         authority=authority,
         workflow_ledger=workflow_ledger,
         clock=clock,
+        self_test=self_test,
     )
 
     staged: tuple[tuple[OutputSubmission, bytes], ...] = ()
@@ -1334,7 +1388,8 @@ def _execute_attempt(
             usage=reported_usage,
             ended_at_utc=clock(),
             payload={
-                "disposition": ("dynamic_operation_authorization_refused" if authorization_failure
+                "disposition": ("self_test_resources_unavailable" if authorization_failure and self_test is not None
+                                else "dynamic_operation_authorization_refused" if authorization_failure
                                 else "adapter_conformance_failure"),
                 "exception_type": type(exc).__name__,
                 "message": str(exc),
@@ -1505,6 +1560,19 @@ def _execute_attempt(
             authority.binding.binding_ref,
             finalize,
         )
+    if self_test is not None:
+        try:
+            return self_test.guarded(lambda: finalize(None))
+        except PermissionError as exc:
+            return _record_failed_attempt(
+                variant=variant, attempt_start=attempt_start, failure_class="authorization",
+                usage=usage, ended_at_utc=ended_at_utc,
+                payload={"disposition": "self_test_resources_unavailable", "reason": str(exc)},
+                artifact_host=artifact_host, ledger=ledger, workflow_ledger=None,
+                workflow_request=run_request, module=module, profile=profile,
+                tool_calls=result.tool_observations,
+                provider_trace=(result.cell_local_trace_ref, result.cell_local_trace_sha256),
+            )
     return finalize(None)
 
 
@@ -1597,6 +1665,7 @@ def _build_canonical_request(
     attempt_start: ModuleAttemptStartedRecord,
     evidence: _AttemptAuthorizationEvidence | None,
     authority: ModuleExecutionAuthority | None,
+    self_test: ModuleSelfTestResources | None = None,
 ) -> AuthorizedAgentExecutionRequest:
     """Freeze one canonical adapter request from committed kernel facts."""
 
@@ -1677,6 +1746,8 @@ def _build_canonical_request(
         data_use_purpose_id=_data_use_purpose_id(run_request.purpose),
         authorized_inputs=authorized_inputs,
         idempotency_key=attempt_start.attempt_id,
+        self_test_binding_ref=self_test.binding_ref if self_test is not None else None,
+        self_test_binding_sha256=self_test.binding_sha256 if self_test is not None else None,
     )
 
 

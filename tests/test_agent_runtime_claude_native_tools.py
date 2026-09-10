@@ -4,6 +4,7 @@ import os
 import subprocess
 from dataclasses import fields
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -55,6 +56,7 @@ def _fake_cli(tmp_path):
 
 def _result(**extra):
     return {"type": "result", "subtype": "success", "is_error": False,
+            "modelUsage": {"claude-opus-5[1m]": {"canonicalModel": "claude-opus-5", "outputTokens": 3}},
             "usage": {"input_tokens": 7, "output_tokens": 3, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
             "structured_output": {"value": "checked"}, **extra}
 
@@ -92,8 +94,13 @@ def _run(env, tmp_path, event_factory):
     )
     adapters = AgentExecutionAdapterRegistry()
     adapters.register(adapter)
-    run = run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
-                     ledger=InMemoryModuleExecutionLedger(), authority=authority, clock=lambda: _TEST_TIME)
+    # The fake transport needs no system temporary directory. Keep its owned
+    # artifacts inside pytest's writable fixture under independent review.
+    temporary_directory = claude.tempfile.TemporaryDirectory
+    with patch.object(claude.tempfile, "TemporaryDirectory", lambda *args, **kw:
+                      temporary_directory(*args, **{**kw, "dir": tmp_path})):
+        run = run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
+                         ledger=InMemoryModuleExecutionLedger(), authority=authority, clock=lambda: _TEST_TIME)
     return run, cell
 
 
@@ -213,12 +220,29 @@ def test_profile_drives_one_cli_command_builder(tmp_path, model, effort, tools):
         assert call["environment"]["GIT_CONFIG_NOSYSTEM"] == "1"
         assert "--system-prompt" not in argv and call["prompt"] not in argv
         assert json.loads(argv[argv.index("--mcp-config")+1]) == {"mcpServers": {}}
-        yield _init(expected)
-        yield _result()
+        yield {**_init(expected), "model": model}
+        yield _result(modelUsage={model: {"canonicalModel": model.removesuffix("[1m]"), "outputTokens": 3}})
     run, cell = _run(env, tmp_path, events)
     assert _assert_completed_provider_run(run, cell) == {"value": "checked"}
     profile = env[0].execution_profile
     assert ExecutionProfileRelease.from_dict(profile.as_dict()).as_dict() == profile.as_dict()
+
+
+@pytest.mark.parametrize("fault", ["initialization", "response", "missing"])
+def test_actual_model_must_match_the_profile(tmp_path, fault):
+    def events(call):
+        yield {**_init(), **({"model":"claude-sonnet-4-6"} if fault == "initialization" else {})}
+        if fault == "response":
+            yield {"type":"assistant", "message":{"model":"claude-sonnet-4-6", "content":[]}}
+        yield _result(**({"modelUsage":{}} if fault == "missing" else {}))
+    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    attempt = run.attempts[0]
+    assert attempt.status == "failed" and attempt.usage.input_tokens == 7
+    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+    assert detail["failure_code"] == ("claude_cli_model_identity_unavailable" if fault == "missing"
+                                      else "claude_cli_model_identity_mismatch")
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert trace["result"]["structured_output"] == {"value":"checked"}
 
 
 def test_actual_cli_settings_keep_resource_boundaries(tmp_path):

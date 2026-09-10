@@ -10,6 +10,29 @@ from agent_runtime.invocation.invocation_process_execution import run_cli_proces
 from agent_runtime.invocation import invocation_process_execution as cli_process
 
 
+def test_launch_guard_orders_actual_popen_not_the_whole_invocation(tmp_path, monkeypatch):
+    observed = []
+    popen = cli_process.subprocess.Popen
+    def launch(*args, **kwargs):
+        observed.append("popen")
+        return popen(*args, **kwargs)
+    monkeypatch.setattr(cli_process.subprocess, "Popen", launch)
+    def guard(create):
+        observed.append("admitted")
+        process = create()
+        observed.append("guard_released")
+        return process
+    result = run_cli_process(argv=[sys.executable, "-c", "print('done')"], prompt="", cwd=tmp_path,
+        timeout_seconds=5, environment=dict(os.environ), launch_guard=guard)
+    assert result.returncode == 0 and observed == ["admitted", "popen", "guard_released"]
+    def refuse(create):
+        raise PermissionError("resources closed")
+    with pytest.raises(PermissionError):
+        run_cli_process(argv=[sys.executable, "-c", "print('must not run')"], prompt="", cwd=tmp_path,
+            timeout_seconds=5, environment=dict(os.environ), launch_guard=refuse)
+    assert observed.count("popen") == 1
+
+
 def test_process_captures_both_streams_past_diagnostic_size(tmp_path):
     result = run_cli_process(
         argv=[sys.executable, "-c", "import sys; print('x'*100000); print('y'*100000,file=sys.stderr)"],

@@ -36,6 +36,11 @@ class InMemoryModuleExecutionLedger:
         self._attempts: dict[str, ModuleAttemptRecord] = {}
         self._results: dict[str, ModuleRunResult] = {}
 
+    def guarded(self, operation):
+        """Serialize a test-resource check/close with terminal record commits."""
+        with self._lock:
+            return operation()
+
     def existing_result(
         self, request: ModuleExecutionRequest | WorkflowModuleExecutionRequest
     ) -> ModuleRunResult | None:

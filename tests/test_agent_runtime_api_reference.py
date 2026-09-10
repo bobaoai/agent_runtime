@@ -230,9 +230,10 @@ def test_task_navigation_and_local_links_are_closed():
 def test_task_runbook_preserves_environment_and_execution_boundaries():
     body = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text()
     for phrase in ("不重新编译或注册", "Source owner", "profile_binding", "execution_schema",
-                   "找不到宿主命令或实际授权/存储接入时", "不生成 Workflow", "不会自动建表或迁移",
+                   "要求持久执行却找不到实际授权/存储接入时", "不生成 Workflow", "不会自动建表或迁移",
                    "origin_bundle", "相同 key", "授权替身", "输出校验", "持久回读"):
         assert phrase in body
+    assert "persistence=not_requested" in body and "agent-runtime-evaluate --root" in body
     for phrase in ("prepare_local_workflow_module", "误传退出 2", "不读取旧文件的模型选择",
                    "不会成为这个新入口的默认", "明确更换模型使用新 key"):
         assert phrase in body

@@ -333,6 +333,7 @@ RUNTIME_PUBLIC_SURFACE_MANIFEST = MappingProxyType(
             "save_runtime_registration",
             "run_local_workflow_module",
             "prepare_local_workflow_module",
+            "evaluate_local_workflow_module",
             "ModuleAuthoringError",
             "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
             "MODULE_OPERATION_DECLARATION_INVALID",

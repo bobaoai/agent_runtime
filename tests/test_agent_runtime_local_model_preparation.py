@@ -124,7 +124,8 @@ def _invoke(preparation, tmp_path, calls, *, key, verdict="passed", records=None
     def process(**kwargs):
         calls.append(kwargs)
         init = {**_init(), "model": profile.model_id}
-        terminal = _result(structured_output=output, is_error=verdict == "provider_failure")
+        terminal = _result(structured_output=output, is_error=verdict == "provider_failure",
+            modelUsage={profile.model_id: {"canonicalModel": profile.model_id.removesuffix("[1m]"), "outputTokens": 3}})
         for event in (init, terminal):
             assert kwargs["on_stdout_line"](json.dumps(event))
         return subprocess.CompletedProcess(kwargs["argv"], 0, "", "")

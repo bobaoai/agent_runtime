@@ -1,7 +1,12 @@
 """Prepare saved definitions for an independently selected model execution."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
+import importlib.metadata
+import json
 from pathlib import Path
+import shutil
+import tempfile
+import uuid
 
 from ..contracts.registry_release_definition import (
     ExecutionVariantPolicyRelease, ModuleExecutionPurpose, WorkflowNodeKind,
@@ -16,8 +21,12 @@ from ..registry.registry_release_compilation import (
 )
 from ..registry.registry_reviewer_defaults import content_version, reviewer_execution_profile
 from .execution_module_invocation import (
-    _assert_admitted_test_evaluation_profile, run_registered_workflow_module,
+    _assert_admitted_test_evaluation_profile, _prepare_registered_workflow_module,
+    AgentExecutionAdapterRegistry, run_registered_workflow_module, run_workflow_module,
 )
+from .execution_content_staging import InMemoryCellArtifactStore
+from .execution_self_test_binding import ModuleSelfTestResources
+from ..ledger.ledger_lineage_recording import InMemoryModuleExecutionLedger
 
 
 def prepare_local_workflow_module(
@@ -116,6 +125,106 @@ def prepare_local_workflow_module(
         registry = RuntimeReleaseRegistry()
         registry.register_bundle(actual)
     return LoadedRuntimeRegistration(workflow, registry), variant
+
+
+def evaluate_local_workflow_module(
+    root: Path, workflow_id: str, *, input_payload: dict, version: str | None = None,
+    transport_kind: str | None = None, model_id: str | None = None,
+    reasoning_profile: str | None = None, cli_path: Path | str | None = None,
+) -> dict:
+    """Evaluate a registered single-node Workflow using temporary test resources.
+
+    Args:
+        root: Root containing .runtime definitions; never a model/tool read root.
+        workflow_id: Workflow to load, including single-Module Workflows.
+        input_payload: Exact JSON input validated against the registered schema.
+        version: Exact version; None resolves the latest new definition once.
+        transport_kind: Independent execution transport; None uses Runtime's
+            default. This self-test currently admits claude_cli native tools.
+        model_id: Independent concrete model ID; None uses Runtime's default.
+            The Adapter verifies observed model identity, allowing the known
+            CLI [1m] selector. It does not infer model families from aliases.
+        reasoning_profile: Independent effort; None uses Runtime's default.
+        cli_path: Explicit installed provider executable, or resolve claude from
+            the host PATH. No login, installation or fallback provider is run.
+    Returns:
+        JSON-compatible execution facts and output. provider_trace retains the
+        observed response models and diagnostics. persistence is not_requested;
+        execution_trace is the actual in-memory Run/Variant/Attempt result, not
+        a durable Workflow Ledger. The subject owner still validates its verdict.
+        Each call is a new test; there is no cross-process replay/history promise.
+        Failed Attempts retain failure_detail.failure_code: model mismatch or
+        missing model evidence uses claude_cli_model_identity_mismatch or
+        claude_cli_model_identity_unavailable; closed resources use
+        self_test_resources_unavailable. Executable/dependency faults retain
+        ADAPTER_BINDING_UNAVAILABLE rather than pretending resources expired.
+    Raises:
+        FileNotFoundError: Missing registration, version or provider executable.
+        ValueError: Unsupported graph/Profile, input or resource configuration.
+        jsonschema.exceptions.ValidationError: Input violates its registered schema.
+        PermissionError: The requested operation is outside bounded test resources.
+        Exception: Existing provider/environment errors retain their contracts.
+    Effects:
+        Reads fixed definitions, stages input in memory, calls the admitted
+        Adapter through the existing Workflow Module kernel, and returns facts.
+        Does not access PostgreSQL, discover storage credentials, write .runtime,
+        manufacture production authorization, or persist a request receipt.
+        Its private temporary workspace is removed on exit. The caller may
+        explicitly save the returned result; Runtime does not save it by default.
+    """
+    from ..invocation.invocation_claude_cli_execution import ClaudeCliNativeToolsModuleExecutor
+
+    saved, selection = prepare_local_workflow_module(root, workflow_id, version=version,
+        transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile)
+    executable = cli_path if cli_path is not None else shutil.which("claude")
+    if executable is None:
+        raise FileNotFoundError("Claude CLI executable is unavailable; provide cli_path or host PATH")
+    workflow = saved.release
+    node = workflow.nodes[0]
+    module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
+    artifacts = InMemoryCellArtifactStore()
+    ledger = InMemoryModuleExecutionLedger()
+    with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:
+        workspace = Path(directory).resolve()
+        adapter = ClaudeCliNativeToolsModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
+            workspace_root=workspace, cli_path=executable)
+        adapters = AgentExecutionAdapterRegistry()
+        adapters.register(adapter)
+        request, module, profile, _, _ = _prepare_registered_workflow_module(
+            module_id=module.module_id, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
+            release_registry=saved.registry, workflow=workflow, variant_policy=selection,
+            adapters=adapters, artifact_host=artifacts)
+        resources = ModuleSelfTestResources(request=request, workflow=workflow, variant=selection,
+            registry=saved.registry, adapter=adapter, artifact_host=artifacts, ledger=ledger, workspace_root=workspace)
+        try:
+            result = run_workflow_module(request, release_registry=saved.registry, adapters=adapters,
+                artifact_host=artifacts, ledger=ledger, self_test=resources)
+            attempt = result.attempts[-1]
+            def content(ref, digest):
+                return json.loads(artifacts.read_bytes(ref, digest))
+            output = None
+            if attempt.status == "completed":
+                if len(result.outputs) != 1:
+                    raise ValueError("Reviewer evaluation requires one schema-valid output")
+                item = result.outputs[0]
+                output = content(item.output_ref, item.output_sha256)
+            return {"module_release_ref": module.release_ref, "module_release_sha256": module.release_sha256,
+                "workflow_release_ref": workflow.release_ref, "workflow_release_sha256": workflow.release_sha256,
+                "execution_profile_ref": profile.release_ref, "execution_profile_sha256": profile.release_sha256,
+                "execution_variant_ref": selection.release_ref, "execution_variant_sha256": selection.release_sha256,
+                "workflow_execution_id": request.workflow_execution_id, "module_run_id": result.module_run.module_run_id,
+                "attempt_id": attempt.attempt_id, "model": profile.model_id, "effort": profile.reasoning_profile,
+                "runtime_version": importlib.metadata.version("agent-runtime-core"),
+                "execution": "run_workflow_module", "managed_runtime": True, "persistence": "not_requested",
+                "status": attempt.status, "output": output, "failure_class": attempt.failure_class,
+                "failure_detail": content(attempt.failure_detail_ref, attempt.failure_detail_sha256)
+                    if attempt.failure_detail_ref is not None else None,
+                "usage": attempt.usage.as_dict(), "execution_trace": asdict(result),
+                "self_test_binding": json.loads(resources._body),
+                "provider_trace": content(attempt.provider_trace_ref, attempt.provider_trace_sha256)
+                    if attempt.provider_trace_ref is not None else None}
+        finally:
+            resources.close()
 
 
 def run_local_workflow_module(root: Path, workflow_id: str, *, version: str | None = None,

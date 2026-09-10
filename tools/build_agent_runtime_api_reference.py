@@ -32,8 +32,9 @@ API_SOURCES = {
     "src/agent_runtime/contracts/registry_release_definition.py": ("ReviewerDefaults",),
     "src/agent_runtime/registry/registry_workflow_authoring.py": ("Workflow",),
     "src/agent_runtime/execution/execution_local_invocation.py": (
-        "prepare_local_workflow_module", "run_local_workflow_module",
+        "prepare_local_workflow_module", "evaluate_local_workflow_module", "run_local_workflow_module",
     ),
+    "src/agent_runtime/testing/execution_local_evaluation.py": (),
 }
 ERROR_CONSTANTS = (
     "EXECUTION_PROFILE_UNAVAILABLE",
@@ -115,10 +116,12 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> lis
     return lines
 
 
-def _cli_sections(tree: ast.Module) -> list[str]:
+def _cli_sections(tree: ast.Module, standalone: str | None = None) -> list[str]:
     """Read literal argument/help declarations from the real CLI parser AST."""
     parser = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "build_parser")
     commands: dict[str, tuple[str, list[tuple[str, str, str]]]] = {}
+    if standalone is not None:
+        commands["parser"] = (standalone, [])
     for statement in parser.body:
         if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call):
             call = statement.value
@@ -134,10 +137,11 @@ def _cli_sections(tree: ast.Module) -> list[str]:
                 commands[call.func.value.id][1].append((", ".join(ast.literal_eval(arg) for arg in call.args),
                                                        "required" if required else "optional", help_text))
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
-    result = ["## CLI commands", "", "Generated from the installed parser's argument declarations.", "",
+    result = ["## Evaluation CLI" if standalone else "## CLI commands", "", "Generated from the installed parser's argument declarations.", "",
               _doc(main, "CLI main"), ""]
     for command, arguments in commands.values():
-        result.extend([f"### agent-runtime-registry {command}", "", "| Argument | Required | Help |", "| --- | --- | --- |"])
+        title = command if standalone else "agent-runtime-registry " + command
+        result.extend([f"### {title}", "", "| Argument | Required | Help |", "| --- | --- | --- |"])
         result.extend(f"| `{flag}` | {required} | {help_text} |" for flag, required, help_text in arguments)
         result.append("")
     return result
@@ -158,7 +162,7 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
     ]
     symbols = [name for names in API_SOURCES.values() for name in names]
     lines.extend(f"- [{name}](#{name.lower()})" for name in symbols)
-    lines.extend(["- [CLI commands](#cli-commands)", "- [Error constants](#error-constants)", ""])
+    lines.extend(["- [CLI commands](#cli-commands)", "- [Evaluation CLI](#evaluation-cli)", "- [Error constants](#error-constants)", ""])
     constants: dict[str, str] = {}
     for source, selected in API_SOURCES.items():
         tree = ast.parse((project_root / source).read_text(encoding="utf-8"), filename=source)
@@ -170,6 +174,8 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
             lines.extend(_section(definitions[name]))
         if source.endswith("registry_local_persistence.py"):
             lines.extend(_cli_sections(tree))
+        elif source.endswith("execution_local_evaluation.py"):
+            lines.extend(_cli_sections(tree, standalone="agent-runtime-evaluate"))
         for node in tree.body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:

@@ -15,6 +15,7 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from ..contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionHost, AuthorizedAgentExecutionRequest, AgentExecutionResult, OutputSubmission,
+    SelfTestResourceUnavailableError,
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_context_preparation import InvocationExecutionExpectation, prepare_registered_invocation_context
@@ -34,8 +35,24 @@ from .invocation_workspace_preparation import (
 NATIVE_TOOLS = {"read": "Read", "search": "Grep", "shell": "Bash"}
 
 
+def _model_identity(value):
+    """Accept exact model IDs and the known CLI context-window selector only.
+
+    The response stream reports claude-opus-5 for claude-opus-5[1m]. Do not infer
+    a model family from aliases, prefixes, or unrelated auxiliary model usage.
+    """
+    return value.removesuffix("[1m]") if isinstance(value, str) else None
+
+
 class ClaudeCliNativeToolsModuleExecutor:
-    """Use one command builder for Runtime execution and command inspection."""
+    """Use one command builder and verify the observed response model.
+
+    Concrete model IDs and the CLI [1m] selector are supported. Initialization
+    and response-model evidence must agree with the Profile; terminal usage for
+    that exact model may supply evidence when assistant messages are absent.
+    Auxiliary CLI models never stand in for the requested response model.
+    Unresolved aliases, missing evidence and mismatches cannot report success.
+    """
 
     executor_adapter_id = "claude_cli_native_tools_executor"
     executor_adapter_revision = "v1"
@@ -72,6 +89,11 @@ class ClaudeCliNativeToolsModuleExecutor:
 
     def execute(self, request: AuthorizedAgentExecutionRequest,
                 host: AuthorizedAgentExecutionHost) -> AgentExecutionResult:
+        def validate_self_test(value):
+            validator = getattr(host, "validate_self_test_binding", None)
+            if not callable(validator) or self._dependencies:
+                raise PermissionError("self-test requires bounded Runtime resources without extra read roots")
+            validator(value, adapter=self, artifact_host=self._artifacts, workspace_root=self._workspace_root)
         prepared = prepare_registered_invocation_context(
             request=request, release_registry=self._registry, artifact_host=self._artifacts,
             expectation=InvocationExecutionExpectation(
@@ -79,6 +101,7 @@ class ClaudeCliNativeToolsModuleExecutor:
                 transport_kind="claude_cli", execution_mode="agent", semantic_input_delivery_mode="inline",
                 attempt_workspace_policy="own_draft_read_write", network_policy="denied", tool_policy=None,
             ),
+            self_test_validator=validate_self_test,
         )
         try:
             return self._execute(request, host, prepared)
@@ -186,6 +209,9 @@ class ClaudeCliNativeToolsModuleExecutor:
                 "prompt_envelope_sha256": request.prompt_envelope_sha256,
                 "execution_authorization_binding_ref": request.execution_authorization_binding_ref,
                 "execution_authorization_binding_sha256": request.execution_authorization_binding_sha256,
+                **({"self_test_binding_ref": request.self_test_binding_ref,
+                    "self_test_binding_sha256": request.self_test_binding_sha256}
+                   if request.self_test_binding_ref is not None else {}),
             })
             with lease_attempt_workspace(attempt), tempfile.TemporaryDirectory(prefix="crt-", dir="/tmp") as temporary:
                 work = attempt / "work"
@@ -255,8 +281,14 @@ class ClaudeCliNativeToolsModuleExecutor:
                              actual_prompt=prompt, material_sha256=material_hashes, timeout_seconds=profile.timeout_seconds)
                 stage = "provider_invocation"
                 try:
+                    launch_options = {}
+                    if request.self_test_binding_ref is not None:
+                        launch_options["launch_guard"] = lambda launch: host.guard_self_test_launch(
+                            request, launch, adapter=self, artifact_host=self._artifacts,
+                            workspace_root=self._workspace_root)
                     process = self._run(argv=argv, prompt=prompt, cwd=work, environment=environment,
-                                        timeout_seconds=profile.timeout_seconds, on_stdout_line=observe)
+                                        timeout_seconds=profile.timeout_seconds, on_stdout_line=observe,
+                                        **launch_options)
                     trace.update(exit_code=process.returncode, stdout=process.stdout, stderr=process.stderr,
                                  process_output_complete=True)
                 finally:
@@ -285,6 +317,8 @@ class ClaudeCliNativeToolsModuleExecutor:
                     trace["stream_error"] = exc.stream_error
             if event_error:
                 trace["event_error"] = event_error
+            if isinstance(exc, SelfTestResourceUnavailableError):
+                fail("authorization", "self_test_resources_unavailable", str(exc), cause=exc)
             if policy_refusal:
                 trace["policy_refusal_reason"] = policy_refusal
                 fail("policy_violation", "ADAPTER_POLICY_VIOLATION", policy_refusal, cause=exc)
@@ -318,6 +352,24 @@ class ClaudeCliNativeToolsModuleExecutor:
         usage, invalid_usage = usage_fields()
         if invalid_usage:
             fail("schema", "ADAPTER_OUTPUT_INVALID", "Claude CLI returned invalid usage metadata")
+        expected_model = _model_identity(profile.model_id)
+        observed_models = trace.get("response_models", [])
+        if not observed_models:
+            # Some structured-output streams omit assistant messages. Only the
+            # exact requested model's terminal usage can supply that evidence;
+            # CLI housekeeping models are not the review's response model.
+            reported = result.get("modelUsage", {})
+            reported = reported.get(profile.model_id) if isinstance(reported, dict) else None
+            if (isinstance(reported, dict) and type(reported.get("outputTokens")) is int
+                    and reported["outputTokens"] > 0 and isinstance(reported.get("canonicalModel"), str)):
+                observed_models = [reported["canonicalModel"]]
+        trace["observed_response_models"] = observed_models
+        if not observed_models:
+            fail("provider", "claude_cli_model_identity_unavailable", "CLI returned no verifiable response model")
+        if (_model_identity(trace["initialization"].get("model")) != expected_model
+                or any(_model_identity(model) != expected_model for model in observed_models)):
+            fail("provider", "claude_cli_model_identity_mismatch",
+                 "Observed CLI model differs from the requested Profile")
         try:
             payload = result.get("structured_output")
             if payload is None:
@@ -329,7 +381,13 @@ class ClaudeCliNativeToolsModuleExecutor:
         except (ValueError, TypeError, ValidationError) as exc:
             fail("schema", "ADAPTER_OUTPUT_INVALID", str(exc), cause=exc)
         submission = OutputSubmission(output_slot_id="result", local_handle="output/result.json")
-        host.stage_output_bytes(submission, canonical)
+        try:
+            host.stage_output_bytes(submission, canonical)
+        except PermissionError as exc:
+            # Usage and trace have already been observed. Retain them even when
+            # the resource boundary prevents the output becoming consumable.
+            fail("authorization", "self_test_resources_unavailable" if request.self_test_binding_ref is not None
+                 else "output_authorization_refused", str(exc), cause=exc)
         trace_ref, trace_sha256 = commit_attempt_trace_json(self._artifacts, request, trace)
         return completed_adapter_result(profile=profile, request=request, outputs=(submission,),
             tool_operation_ref_ids=(), trace_ref=trace_ref, trace_sha256=trace_sha256,

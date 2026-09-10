@@ -51,6 +51,7 @@ def prepare_registered_invocation_context(
     release_registry: RuntimeReleaseRegistry,
     artifact_host: ModuleArtifactHost,
     expectation: InvocationExecutionExpectation,
+    self_test_validator=None,
 ) -> PreparedInvocationContext:
     """Validate shared release closure and load one exact Prompt Envelope."""
 
@@ -69,7 +70,11 @@ def prepare_registered_invocation_context(
     profile.validate()
     if module.module_kind is not ModuleKind.AGENT:
         raise ValueError("Agent Executor accepts only Agent Modules")
-    if not request.has_operation_evidence:
+    if request.self_test_binding_ref is not None:
+        if not callable(self_test_validator):
+            raise PermissionError("self-test evidence requires a live trusted host")
+        self_test_validator(request)
+    elif not request.has_operation_evidence:
         # A provider adapter is a model invocation by construction; it must
         # refuse every request without committed operation authorization
         # evidence regardless of how the Module declared its operations.

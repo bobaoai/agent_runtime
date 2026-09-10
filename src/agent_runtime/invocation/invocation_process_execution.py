@@ -67,20 +67,25 @@ def run_cli_process(
     *, argv: list[str], prompt: str, cwd: Path, timeout_seconds: int,
     environment: dict[str, str], max_output_bytes: int = DEFAULT_PROCESS_OUTPUT_BYTES,
     on_stdout_line: Callable[[str], bool] | None = None,
+    launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Drain both streams, stop the group on failure, preserve bounded output.
 
     The size bound is shared by both streams. Reaching it fails execution;
-    the captured prefix is never reported as a complete transcript.
+    the captured prefix is never reported as a complete transcript. An optional
+    host launch_guard orders the actual Popen with resource invalidation; it
+    releases before stream processing so in-flight calls can still be fenced.
     """
     if type(max_output_bytes) is not int or max_output_bytes < 1:
         raise ValueError("CLI process output limit must be positive")
     if type(timeout_seconds) is not int or timeout_seconds < 1:
         raise ValueError("CLI process timeout must be positive")
-    process = subprocess.Popen(
-        argv, cwd=cwd, env=environment, stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
-    )
+    def launch():
+        return subprocess.Popen(
+            argv, cwd=cwd, env=environment, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        )
+    process = launch_guard(launch) if launch_guard is not None else launch()
     from threading import Lock
     lock = Lock()
     exhausted = Event()

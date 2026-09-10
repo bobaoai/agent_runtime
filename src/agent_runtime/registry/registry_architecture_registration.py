@@ -353,6 +353,10 @@ def _source(
 
 
 RUNTIME_SOURCE_FILE_REGISTRATIONS = (
+    _source("execution", "self_test", "binding",
+            "designDoc/agent_runtime_09_authorization_integration_contract.md"),
+    _source("execution", "local", "evaluation",
+            "designDoc/agent_runtime_00_execution_charter.md", source_directory_id="testing"),
     _source("registry", "reviewer", "defaults",
             "designDoc/agent_runtime_01_module_contract_and_assembly.md"),
     _source("registry", "local", "persistence",
