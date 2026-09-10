@@ -35,6 +35,40 @@ drift。
 
 ### 0.1 准备资料、固定配置和操作环境
 
+已有完整且已审的 Reviewer source 时，优先使用正式 CLI：
+
+```sh
+agent-runtime-registry register-reviewer --help
+agent-runtime-registry register-reviewer --root /path/to/host --source-root /path/to/source \
+  --skill-id reviewed-skill --module-id reviewed_reviewer --version v1
+agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_reviewer_review
+agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_reviewer_review --version v1
+```
+
+示例中的身份与版本应替换为准确已审 source 的值。source-root 省略时使用 root。
+命令直接读取 source，自动解析 Runtime 默认、编译固定单节点 Workflow 并保存、回读；不需要
+先手写 Policy、Profile 或 bundle。软件安装使用宿主明确的标准安装命令，与注册分开。
+该命令不会安装依赖、创建环境、登录 Provider、创建 PG schema 或调用模型。
+
+新 source 的 runtime_module_registration_v3 允许省略三个 Policy 引用；v2 仍要求完整声明。
+显式引用保持原限制，未声明 claude_cli 的 source 会返回 MODULE_EXECUTION_PROFILE_INCOMPATIBLE，
+注册不会替作者补 transport。Runtime 默认值与准确错误见生成的 API，而不由本手册另定义。
+重复注册保持已保存版本的能力与绑定；显式 --model-id 或 --reasoning-profile 可改变独立模型选择。
+切换模型后的新调用使用新执行身份；历史执行按原 execution ID 查询 Ledger，不读取当前默认来重跑。
+
+stdout 包含真实注册 records、保存路径和 readback=verified。失败返回非零退出码，stderr 返回
+error_type、原生 error_code（若存在）和 detail；保留错误，不随机换版本或换模型继续。
+
+**客户端兼容与升级顺序。** 新默认记录包含参与 hash 的 reviewer_defaults 或
+model_defaults_version。不认识这些字段的旧 Runtime 会因 hash 不匹配而拒绝读取。
+PostgreSQL 的 load_release_registry 会解码整个 catalog，所以即使调用者仍选旧 Module、
+未切换 active pointer，共享 catalog 中的一条新记录也可能使旧客户端无法加载。
+本地 register 同样需要恢复已有 catalog；单个旧版本文件可读，不证明整个混合目录可读。
+向共享 store 注册前，先升级所有受影响读取者并核对实际构建身份；相同 dev 版本字符串不足以判断。
+可以在独立测试目标验证兼容，不自动更改生产连接或迁移 schema。
+旧记录内容保持不变。新记录写入后，恢复可用性应恢复支持新格式的客户端；仅降级软件并保留
+混合 catalog 不能恢复读取，也不应通过删改历史记录或增加 DDL 绕过内容校验。
+
 本地保存、版本加载和 CLI 验证：
 
 宿主已有注册调用可传入 `root`：
@@ -65,8 +99,8 @@ CLI register 使用既有内存 Registry 校验并保存结果，不自行连接
 执行使用其已有图入口；这不新增生产执行用途。
 
 这些接口的实际参数、返回和错误见[源码生成的 API 手册](agent_runtime_reviewer_api.md#load_runtime_registration)。
-本批没有 RuntimeEnvironment、资源 Session、凭据管理或配置 CAS。旧的 ModuleReviewer 默认参数迁移
-仍是单独工作；下面既有 authoring 示例的显式 Policy/Profile 输入保持其现行含义。
+普通 source 注册使用上面的 CLI 和 Runtime 默认解析。下方显式 Policy/Profile 的 Python 示例
+保留为底层接口和既有宿主的兼容说明；调用新 CLI 时无需手工执行这些组装步骤。
 
 先使用当前宿主选定的 Python 确认安装来源，并打开同一安装包里的说明：
 

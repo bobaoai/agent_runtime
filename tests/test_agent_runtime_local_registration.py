@@ -237,7 +237,7 @@ def test_cold_registration_rejects_conflicting_existing_profile(tmp_path, workfl
     before = {p: p.read_bytes() for p in root.rglob("*.json")}
     path = tmp_path / "conflicting_bundle.json"
     path.write_text(json.dumps(changed.as_dict()))
-    code = "from agent_runtime.registry.registry_local_persistence import main; main()" if entry == "cli" else (
+    code = "from agent_runtime.registry.registry_local_persistence import main; raise SystemExit(main())" if entry == "cli" else (
         "import json,sys; from pathlib import Path; "
         "from agent_runtime import RuntimeModulePlugin,register_runtime_module_plugin; "
         "from agent_runtime.registry import RuntimeReleaseBundle,RuntimeReleaseRegistry; "
@@ -254,7 +254,7 @@ def test_cold_registration_rejects_conflicting_existing_profile(tmp_path, workfl
     assert {p: p.read_bytes() for p in root.rglob("*.json")} == before
     # Rejection must leave the local catalog usable by the next fresh CLI.
     path.write_text(json.dumps(first.as_dict()))
-    subprocess.run([sys.executable, "-c", "from agent_runtime.registry.registry_local_persistence import main; main()",
+    subprocess.run([sys.executable, "-c", "from agent_runtime.registry.registry_local_persistence import main; raise SystemExit(main())",
         "register", "--root", str(root), "--bundle", str(path), "--plugin-id", "local_sample", "--plugin-version", "v1"],
         cwd=tmp_path, env=process_env, capture_output=True, text=True, check=True)
     assert {p: p.read_bytes() for p in root.rglob("*.json")} == before

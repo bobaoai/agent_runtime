@@ -25,6 +25,7 @@ from ..contracts.registry_release_definition import (
     PromptBundleRelease,
     ReleaseMember,
     RetryPolicyRelease,
+    ReviewerDefaults,
     ModuleRelease,
     SchemaAssetRelease,
     WorkflowEdge,
@@ -75,6 +76,7 @@ class AgentModuleReleaseCandidate:
     output_resolution_policy: OutputResolutionPolicy = (
         OutputResolutionPolicy.EVALUATED_SINGLE
     )
+    reviewer_defaults: ReviewerDefaults | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +146,7 @@ class ExecutionProfileReleaseSpec:
     network_policy: str
     timeout_seconds: int
     release_version: str = "candidate_v1"
+    model_defaults_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -665,6 +668,7 @@ def compile_execution_profile_release(
         tool_policy=spec.tool_policy,
         network_policy=spec.network_policy,
         timeout_seconds=spec.timeout_seconds,
+        model_defaults_version=spec.model_defaults_version,
     )
 
 
@@ -791,6 +795,7 @@ def compile_agent_module_release(
             f"runtime-module:{candidate.module_id}@{candidate.module_version}"
         ),
         module_kind=ModuleKind.AGENT,
+        reviewer_defaults=candidate.reviewer_defaults,
         owner_contract_ref=candidate.owner_contract_ref,
         owner_contract_sha256=sha256_text(candidate.owner_contract_content),
         executable_ref=None,

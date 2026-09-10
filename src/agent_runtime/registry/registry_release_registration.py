@@ -839,13 +839,15 @@ class RuntimeReleaseRegistry:
                 "Execution Variant Policy requires at least one profile binding"
             )
         origin_kind = document["origin_kind"]
+        origin_module = None
+        origin_workflow = None
         if origin_kind == "workflow":
-            self.get_workflow(
+            origin_workflow = self.get_workflow(
                 document["origin_release_ref"],
                 document["origin_release_sha256"],
             )
         elif origin_kind == "standalone_module":
-            self.get_module(
+            origin_module = self.get_module(
                 document["origin_release_ref"],
                 document["origin_release_sha256"],
             )
@@ -859,10 +861,19 @@ class RuntimeReleaseRegistry:
                     "Execution Variant position_id values must be unique"
                 )
             positions.add(position_id)
-            self.get_execution_profile(
+            profile = self.get_execution_profile(
                 binding["execution_profile_release_ref"],
                 binding["execution_profile_release_sha256"],
             )
+            target = origin_module
+            if origin_workflow is not None:
+                node = next((node for node in origin_workflow.nodes if node.node_id == position_id), None)
+                if node is not None and node.module_release_ref is not None:
+                    target = self.get_module(node.module_release_ref, node.module_release_sha256)
+            if target is not None and target.reviewer_defaults is not None:
+                target.reviewer_defaults.assert_profile(profile)
+                if profile.transport_kind not in target.compatible_transport_kinds:
+                    raise ValueError("Profile transport is absent from Reviewer compatibility")
 
     def _validate_module_closure(self, module: ModuleRelease) -> None:
         module.validate()
@@ -873,7 +884,7 @@ class RuntimeReleaseRegistry:
                 module.prompt_bundle_ref,
                 module.prompt_bundle_sha256,
             )
-        self.get_behavior_policy(
+        behavior = self.get_behavior_policy(
             module.behavior_policy_ref,
             module.behavior_policy_sha256,
         )
@@ -881,10 +892,14 @@ class RuntimeReleaseRegistry:
             module.evaluation_policy_ref,
             module.evaluation_policy_sha256,
         )
-        self.get_retry_policy(
+        retry = self.get_retry_policy(
             module.retry_policy_ref,
             module.retry_policy_sha256,
         )
+        if module.reviewer_defaults is not None:
+            if (module.reviewer_defaults.context_isolation != behavior.policy_document()["context_isolation"]
+                    or module.reviewer_defaults.max_attempts != retry.policy_document()["max_attempts"]):
+                raise ValueError("Reviewer defaults differ from the exact Module policies")
         self.get_schema_asset(
             module.input_schema_ref,
             module.input_schema_sha256,

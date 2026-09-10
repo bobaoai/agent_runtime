@@ -185,9 +185,11 @@ def _role_check_text(runtime_path: Path, source: str) -> str:
     return ast.unparse(tree).lower()
 
 
-def _assert_generic_role_vocabulary(runtime_path: Path, source: str) -> None:
+def _assert_generic_role_vocabulary(runtime_path: Path, source: str, *, reviewer_capability: bool = False) -> None:
     checked = _role_check_text(runtime_path, source)
     for role in ("theme", "writer", "verifier", "reviewer", "debater", "pm"):
+        if role == "reviewer" and reviewer_capability:
+            continue
         assert re.search(rf"(?<![a-z]){role}(?![a-z])", checked) is None, runtime_path
 
 
@@ -224,9 +226,19 @@ def test_capability_navigation_exemption_does_not_apply_to_other_runtime_files()
             _assert_generic_role_vocabulary(Path(path), '_CASE_LABELS = {"case": "Reviewer 文档"}')
 
 
-def test_runtime_role_vocabulary_is_confined_to_module_authoring() -> None:
+def test_runtime_role_vocabulary_is_confined_to_review_capability_owners() -> None:
     runtime_root = Path(__file__).resolve().parents[1] / "src" / "agent_runtime"
     role_source = runtime_root / "registry/registry_module_authoring.py"
+    # Registry owns the fixed Reviewer defaults; Execution enforces that snapshot.
+    # This exact surface list does not admit other roles or host business meaning.
+    capability_paths = {
+        "__init__.py", "contracts/registry_release_definition.py",
+        "registry/registry_reviewer_defaults.py", "registry/registry_plugin_registration.py",
+        "registry/registry_local_persistence.py", "registry/registry_module_loading.py",
+        "registry/registry_workflow_authoring.py", "registry/registry_release_compilation.py",
+        "registry/registry_release_registration.py", "registry/registry_architecture_registration.py",
+        "execution/execution_module_invocation.py", "conformance/conformance_architecture_manifest.py",
+    }
 
     for runtime_path in sorted(runtime_root.rglob("*.py")):
         source = runtime_path.read_text(encoding="utf-8")
@@ -237,7 +249,16 @@ def test_runtime_role_vocabulary_is_confined_to_module_authoring() -> None:
                     source.lower(),
                 ) is None, runtime_path
             continue
-        _assert_generic_role_vocabulary(runtime_path.relative_to(runtime_root), source)
+        relative = runtime_path.relative_to(runtime_root)
+        _assert_generic_role_vocabulary(relative, source, reviewer_capability=relative.as_posix() in capability_paths)
+
+
+def test_reviewer_defaults_do_not_admit_other_roles_or_unrelated_surfaces():
+    for word in ("theme", "writer", "verifier", "debater", "pm"):
+        with pytest.raises(AssertionError):
+            _assert_generic_role_vocabulary(Path("contracts/registry_release_definition.py"), word, reviewer_capability=True)
+    with pytest.raises(AssertionError):
+        _assert_generic_role_vocabulary(Path("execution/unrelated.py"), "reviewer")
 
 
 def test_fixture_rejects_an_invalid_backend_identity() -> None:

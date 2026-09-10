@@ -775,9 +775,10 @@ class ExecutionProfileRelease:
     network_policy: str
     timeout_seconds: int
     release_sha256: str
+    model_defaults_version: str | None = None
 
     def _payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "execution_profile_id": self.execution_profile_id,
             "execution_profile_version": self.execution_profile_version,
             "release_ref": self.release_ref,
@@ -796,6 +797,9 @@ class ExecutionProfileRelease:
             "network_policy": self.network_policy,
             "timeout_seconds": self.timeout_seconds,
         }
+        if self.model_defaults_version is not None:
+            payload["model_defaults_version"] = self.model_defaults_version
+        return payload
 
     def validate(self) -> None:
         """Validate Executor configuration and behavior-complete release hash."""
@@ -804,6 +808,8 @@ class ExecutionProfileRelease:
             "execution_profile_id", self.execution_profile_id
         )
         _validate_token("execution_profile_version", self.execution_profile_version)
+        if self.model_defaults_version is not None:
+            _validate_token("model_defaults_version", self.model_defaults_version)
         validate_opaque_ref("release_ref", self.release_ref)
         validate_snake_case_name("executor_adapter_id", self.executor_adapter_id)
         _validate_token("executor_adapter_revision", self.executor_adapter_revision)
@@ -963,7 +969,74 @@ class ExecutionProfileRelease:
             network_policy=payload["network_policy"],
             timeout_seconds=payload["timeout_seconds"],
             release_sha256=payload["release_sha256"],
+            model_defaults_version=payload.get("model_defaults_version"),
         )
+
+
+@dataclass(frozen=True)
+class ReviewerDefaults:
+    """Runtime's fixed Reviewer capabilities, frozen into each new definition.
+
+    Version v1 supplies isolated context, read/search/shell, denied tool network,
+    private scratch, a 1200-second attempt budget and at most three attempts
+    including the first. Model selection and host resources are independent.
+    max_attempts records a limit; it does not implement retry scheduling.
+    """
+
+    record_type: ClassVar[str] = "reviewer_defaults"
+    version: str = "v1"
+    context_isolation: str = "workflow_execution_isolated"
+    tool_policy: tuple[str, ...] = ("read", "search", "shell")
+    network_policy: str = "denied"
+    attempt_workspace_policy: str = "own_draft_read_write"
+    timeout_seconds: int = 1200
+    max_attempts: int = 3
+
+    def validate(self) -> None:
+        """Validate the frozen logical capability and attempt-limit snapshot."""
+        _validate_token("Reviewer defaults version", self.version)
+        if self.context_isolation != "workflow_execution_isolated":
+            raise ValueError("Reviewer context must remain isolated")
+        if (type(self.tool_policy) is not tuple or not self.tool_policy
+                or tuple(sorted(set(self.tool_policy))) != self.tool_policy
+                or not set(self.tool_policy) <= {"read", "search", "shell"}):
+            raise ValueError("Reviewer capabilities require known logical tools")
+        if self.network_policy != "denied" or self.attempt_workspace_policy != "own_draft_read_write":
+            raise ValueError("Reviewer requires denied tool network and private scratch")
+        if type(self.timeout_seconds) is not int or self.timeout_seconds < 1:
+            raise ValueError("Reviewer timeout_seconds must be positive")
+        if type(self.max_attempts) is not int or not 1 <= self.max_attempts <= 100:
+            raise ValueError("Reviewer max_attempts must be between 1 and 100")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the JSON-compatible capability snapshot included in Module hash."""
+        self.validate()
+        return {"version": self.version, "context_isolation": self.context_isolation,
+                "tool_policy": list(self.tool_policy), "network_policy": self.network_policy,
+                "attempt_workspace_policy": self.attempt_workspace_policy,
+                "timeout_seconds": self.timeout_seconds, "max_attempts": self.max_attempts}
+
+    def assert_profile(self, profile: ExecutionProfileRelease) -> None:
+        """Reject any model binding that changes the frozen capability budget."""
+        self.validate()
+        profile.validate()
+        if (profile.tool_policy != self.tool_policy or profile.network_policy != self.network_policy
+                or profile.attempt_workspace_policy != self.attempt_workspace_policy
+                or profile.timeout_seconds != self.timeout_seconds or profile.execution_mode != "agent"
+                or profile.semantic_input_delivery_mode != "inline" or profile.gateway_access_reasons
+                or profile.output_constraint_mode != "native_structured_output"):
+            raise ValueError("Profile differs from fixed Reviewer capabilities")
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ReviewerDefaults":
+        """Restore and validate a complete saved snapshot without filling omissions."""
+        if not isinstance(payload, Mapping) or set(payload) != set(cls().as_dict()):
+            raise ValueError("Reviewer defaults snapshot has an invalid shape")
+        if type(payload["tool_policy"]) is not list:
+            raise ValueError("Reviewer defaults tool_policy must be a JSON array")
+        result = cls(**{**payload, "tool_policy": tuple(payload["tool_policy"])})
+        result.validate()
+        return result
 
 
 @dataclass(frozen=True)
@@ -997,9 +1070,10 @@ class ModuleRelease:
     entry_policy: ModuleEntryPolicy
     output_resolution_policy: OutputResolutionPolicy
     release_sha256: str
+    reviewer_defaults: ReviewerDefaults | None = None
 
     def _payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "module_id": self.module_id,
             "module_version": self.module_version,
             "release_ref": self.release_ref,
@@ -1025,6 +1099,9 @@ class ModuleRelease:
             "entry_policy": self.entry_policy.value,
             "output_resolution_policy": self.output_resolution_policy.value,
         }
+        if self.reviewer_defaults is not None:
+            payload["reviewer_defaults"] = self.reviewer_defaults.as_dict()
+        return payload
 
     def validate(self) -> None:
         """Validate Module contracts, executable closure, and release hash."""
@@ -1034,6 +1111,10 @@ class ModuleRelease:
         validate_opaque_ref("release_ref", self.release_ref)
         if type(self.module_kind) is not ModuleKind:
             raise ValueError("module_kind must be a ModuleKind")
+        if self.reviewer_defaults is not None:
+            if self.module_kind is not ModuleKind.AGENT or type(self.reviewer_defaults) is not ReviewerDefaults:
+                raise ValueError("Reviewer defaults require an Agent Module and a typed snapshot")
+            self.reviewer_defaults.validate()
         validate_opaque_ref("owner_contract_ref", self.owner_contract_ref)
         validate_sha256("owner_contract_sha256", self.owner_contract_sha256)
         prompt_binding = (self.prompt_bundle_ref, self.prompt_bundle_sha256)
@@ -1140,6 +1221,8 @@ class ModuleRelease:
                 payload["output_resolution_policy"]
             ),
             release_sha256=payload["release_sha256"],
+            reviewer_defaults=(ReviewerDefaults.from_dict(payload["reviewer_defaults"])
+                               if payload.get("reviewer_defaults") is not None else None),
         )
 
 

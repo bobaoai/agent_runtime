@@ -32,6 +32,7 @@ from .contracts import (
     ReleaseSubjectKind,
     RetryPolicyRelease,
     ModuleRelease,
+    ReviewerDefaults,
     SchemaAssetRelease,
     WorkflowEdge,
     WorkflowNodeBinding,
@@ -159,6 +160,7 @@ from .registry.registry_plugin_registration import (
     DomainRuntimePlugin,
     RuntimeModulePlugin,
     register_runtime_module_plugin,
+    register_reviewer,
     register_runtime_plugin,
 )
 from .registry.registry_release_registration import (
@@ -267,6 +269,7 @@ __all__ = [
     "RuntimeModulePlugin",
     "ModuleReleaseClient",
     "ModuleRelease",
+    "ReviewerDefaults",
     "ModuleReviewer",
     "LoadedRuntimeRegistration",
     "load_runtime_registration",
@@ -311,6 +314,7 @@ __all__ = [
     "isolated_execution_scope_id",
     "register_runtime_plugin",
     "register_runtime_module_plugin",
+    "register_reviewer",
     "run_module",
     "run_registered_workflow_module",
     "run_workflow_module",

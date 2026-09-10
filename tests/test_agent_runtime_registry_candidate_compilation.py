@@ -136,6 +136,7 @@ def test_execution_profile_has_only_provider_and_execution_configuration() -> No
         "network_policy",
         "timeout_seconds",
         "release_version",
+        "model_defaults_version",
     }
     assert set(profile.as_dict()) == {
         "execution_profile_id",

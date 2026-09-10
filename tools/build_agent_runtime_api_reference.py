@@ -28,7 +28,9 @@ API_SOURCES = {
         "LoadedRuntimeRegistration", "save_runtime_registration", "load_runtime_registration",
     ),
     "src/agent_runtime/registry/registry_release_registration.py": ("RuntimeReleaseBundle",),
-    "src/agent_runtime/registry/registry_plugin_registration.py": ("register_runtime_module_plugin",),
+    "src/agent_runtime/registry/registry_plugin_registration.py": ("register_runtime_module_plugin", "register_reviewer"),
+    "src/agent_runtime/contracts/registry_release_definition.py": ("ReviewerDefaults",),
+    "src/agent_runtime/registry/registry_workflow_authoring.py": ("Workflow",),
     "src/agent_runtime/execution/execution_local_invocation.py": ("run_local_workflow_module",),
 }
 ERROR_CONSTANTS = (
@@ -111,6 +113,34 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> lis
     return lines
 
 
+def _cli_sections(tree: ast.Module) -> list[str]:
+    """Read literal argument/help declarations from the real CLI parser AST."""
+    parser = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "build_parser")
+    commands: dict[str, tuple[str, list[tuple[str, str, str]]]] = {}
+    for statement in parser.body:
+        if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call):
+            call = statement.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == "add_parser":
+                commands[statement.targets[0].id] = (ast.literal_eval(call.args[0]), [])
+        elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+            call = statement.value
+            if (isinstance(call.func, ast.Attribute) and call.func.attr == "add_argument"
+                    and isinstance(call.func.value, ast.Name) and call.func.value.id in commands):
+                options = {item.arg: item.value for item in call.keywords}
+                required = ast.literal_eval(options["required"]) if "required" in options else False
+                help_text = ast.literal_eval(options["help"]) if "help" in options else ""
+                commands[call.func.value.id][1].append((", ".join(ast.literal_eval(arg) for arg in call.args),
+                                                       "required" if required else "optional", help_text))
+    main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+    result = ["## CLI commands", "", "Generated from the installed parser's argument declarations.", "",
+              _doc(main, "CLI main"), ""]
+    for command, arguments in commands.values():
+        result.extend([f"### agent-runtime-registry {command}", "", "| Argument | Required | Help |", "| --- | --- | --- |"])
+        result.extend(f"| `{flag}` | {required} | {help_text} |" for flag, required, help_text in arguments)
+        result.append("")
+    return result
+
+
 def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
     """Read selected sources and return deterministic Markdown; perform no writes."""
     version = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
@@ -126,7 +156,7 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
     ]
     symbols = [name for names in API_SOURCES.values() for name in names]
     lines.extend(f"- [{name}](#{name.lower()})" for name in symbols)
-    lines.extend(["- [Error constants](#error-constants)", ""])
+    lines.extend(["- [CLI commands](#cli-commands)", "- [Error constants](#error-constants)", ""])
     constants: dict[str, str] = {}
     for source, selected in API_SOURCES.items():
         tree = ast.parse((project_root / source).read_text(encoding="utf-8"), filename=source)
@@ -136,6 +166,8 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
             if name not in definitions:
                 raise ValueError(f"missing public API symbol: {source}:{name}")
             lines.extend(_section(definitions[name]))
+        if source.endswith("registry_local_persistence.py"):
+            lines.extend(_cli_sections(tree))
         for node in tree.body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from collections.abc import Mapping
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from ..contracts.registry_release_definition import (
     BehaviorPolicyRelease,
@@ -17,6 +17,7 @@ from ..contracts.registry_release_definition import (
     ModuleRelease,
     PromptComponentKind,
     RetryPolicyRelease,
+    ReviewerDefaults,
     partition_module_operation_ids,
 )
 from .registry_module_loading import (
@@ -33,6 +34,7 @@ from .registry_release_compilation import (
     runtime_owned_policy_schema_assets,
 )
 from .registry_release_registration import RuntimeReleaseBundle, RuntimeReleaseRegistry
+from .registry_reviewer_defaults import content_version, resolve_reviewer_policy, reviewer_execution_profile
 
 
 EXECUTION_PROFILE_UNAVAILABLE = "MODULE_EXECUTION_PROFILE_UNAVAILABLE"
@@ -212,11 +214,11 @@ def _candidate(
     evaluation_policy: EvaluationPolicyRelease,
     retry_policy: RetryPolicyRelease,
 ) -> AgentModuleReleaseCandidate:
-    if source.behavior_policy_ref != behavior_policy.release_ref:
+    if source.behavior_policy_ref is not None and source.behavior_policy_ref != behavior_policy.release_ref:
         raise ValueError("Module behavior_policy_ref differs from supplied release")
-    if source.evaluation_policy_ref != evaluation_policy.release_ref:
+    if source.evaluation_policy_ref is not None and source.evaluation_policy_ref != evaluation_policy.release_ref:
         raise ValueError("Module evaluation_policy_ref differs from supplied release")
-    if source.retry_policy_ref != retry_policy.release_ref:
+    if source.retry_policy_ref is not None and source.retry_policy_ref != retry_policy.release_ref:
         raise ValueError("Module retry_policy_ref differs from supplied release")
     return AgentModuleReleaseCandidate(
         module_id=source.module_id,
@@ -407,8 +409,15 @@ class ModuleReviewer(Module):
     validator. Runtime does not invent a checklist or turn a provider failure
     into a review verdict.
 
-    Provider, model, reasoning, tools, network, workspace and timeout belong
-    to an immutable ExecutionProfileRelease. An ExecutionVariantPolicyRelease
+    Omitting Policy/Profile arguments uses Runtime's ReviewerDefaults and its
+    independent model preset. The fixed capability snapshot enters the Module
+    hash; model selection remains outside it. Explicit source restrictions are
+    retained. Fully explicit legacy export calls keep their original definition
+    shape and do not acquire new permissions. Runtime software upgrades never
+    rewrite an already registered Module.
+
+    An immutable ExecutionProfileRelease records the resolved provider, model,
+    reasoning and fixed tool/network/workspace budget. An ExecutionVariantPolicyRelease
     binds that Profile to exact Module or Workflow positions. These two
     releases do not enter the Module release hash. A host binds the intended
     releases explicitly; a normal review supplies its candidate, goal, scope,
@@ -438,8 +447,11 @@ class ModuleReviewer(Module):
     The host supplies store locations, credentials and authorization interfaces;
     they are not embedded in the Reviewer source or selected by this class.
 
-    Register through ``register_runtime_module_plugin`` with an explicit
-    release bundle and store. Activation is a separate decision. For the
+    Ordinary source registration uses ``register_reviewer`` or the installed
+    ``agent-runtime-registry register-reviewer`` CLI. It resolves defaults,
+    creates the fixed one-node Workflow and saves an exact local closure.
+    The lower-level ``register_runtime_module_plugin`` still accepts an explicit
+    bundle and store. Activation is a separate decision. For the
     existing single-node Workflow evaluation path, call
     ``run_registered_workflow_module`` using a registered Workflow and matching
     Variant Policy. That entry documents its actual limits and host inputs;
@@ -527,10 +539,14 @@ class ModuleReviewer(Module):
         self,
         *,
         module_version: str,
-        behavior_policy: BehaviorPolicyRelease,
-        evaluation_policy: EvaluationPolicyRelease,
-        retry_policy: RetryPolicyRelease,
-        execution_profile: ExecutionProfileRelease | None,
+        behavior_policy: BehaviorPolicyRelease | None = None,
+        evaluation_policy: EvaluationPolicyRelease | None = None,
+        retry_policy: RetryPolicyRelease | None = None,
+        execution_profile: ExecutionProfileRelease | None | Literal["runtime_default"] = "runtime_default",
+        release_registry: RuntimeReleaseRegistry | None = None,
+        reviewer_defaults: ReviewerDefaults | None = None,
+        model_id: str | None = None,
+        reasoning_profile: str | None = None,
     ) -> ModuleExport:
         """Compile this captured source and validate optional Profile compatibility.
 
@@ -538,21 +554,32 @@ class ModuleReviewer(Module):
             module_version: Version of the fixed Module definition. Keep it
                 unchanged for unchanged Module content; a new input or Profile
                 comparison does not by itself require a new Module version.
-            behavior_policy: Exact Behavior Policy matching the source ref.
-            evaluation_policy: Exact Evaluation Policy matching the source ref.
-            retry_policy: Exact Retry Policy matching the source ref.
-            execution_profile: Approved execution configuration, or None for
-                definition-only export. The Profile stays outside Module identity.
+            behavior_policy: Optional exact override matching the source ref.
+            evaluation_policy: Optional exact override. New v3 source omissions
+                use entry-policy admission (evaluation_mode=none); an explicit
+                module_candidate reference retains its candidate-only meaning.
+            retry_policy: Optional exact override; Runtime defaults to three
+                attempts including the first. This is a limit, not a scheduler.
+            execution_profile: Omit for Runtime's Claude CLI model preset and
+                fixed capabilities, or use None for definition-only export.
+                Fully explicit legacy calls retain their existing record shape.
+            release_registry: Lookup for explicit non-default policy refs.
+            reviewer_defaults: Previously frozen capability snapshot, normally
+                supplied internally when registering the same version again.
+            model_id: Independent model override for the default Claude path.
+            reasoning_profile: Independent reasoning override; neither changes
+                the Module capabilities. Explicit Profile and model overrides
+                cannot be combined.
 
         Returns:
             ModuleExport with compiled Module/Prompt/Schema records and the
             supplied policies. A compatible Profile also produces a standalone
             Variant candidate/release. None produces no Variant and sets
             execution_blocker_code to EXECUTION_PROFILE_UNAVAILABLE. The
-            standalone helper uses its existing fixed policy name/version;
-            exported bindings are candidates, not updates to an existing store.
-            Explicitly compile and register a non-conflicting Variant version
-            when publishing a changed binding. Workflow binding is separate.
+            standalone helper retains v1 for fully explicit legacy calls;
+            new default-aware bindings use a deterministic content version.
+            Exported bindings are candidates, not updates to a store.
+            Workflow binding is separate and handled by register_reviewer.
 
         Raises:
             ModuleAuthoringError: MODULE_OPERATION_DECLARATION_INVALID for an
@@ -571,7 +598,33 @@ class ModuleReviewer(Module):
         _validate_reviewer_output_schema(
             json.loads(self.source.output_schema_document)
         )
+        use_defaults = (execution_profile == "runtime_default" or reviewer_defaults is not None
+                        or any(policy is None for policy in (behavior_policy, evaluation_policy, retry_policy)))
+        if execution_profile != "runtime_default" and (model_id is not None or reasoning_profile is not None):
+            raise ValueError("model overrides require the Runtime default Profile path")
+        behavior_policy = resolve_reviewer_policy("behavior_policies", self.source.behavior_policy_ref, behavior_policy, release_registry)
+        evaluation_policy = resolve_reviewer_policy("evaluation_policies", self.source.evaluation_policy_ref, evaluation_policy, release_registry)
+        retry_policy = resolve_reviewer_policy("retry_policies", self.source.retry_policy_ref, retry_policy, release_registry)
+        defaults = reviewer_defaults or (ReviewerDefaults() if use_defaults else None)
+        if defaults is not None:
+            defaults = replace(defaults, context_isolation=behavior_policy.policy_document()["context_isolation"],
+                               max_attempts=retry_policy.policy_document()["max_attempts"])
+            defaults.validate()
+        if execution_profile == "runtime_default":
+            execution_profile = reviewer_execution_profile(defaults, model_id=model_id, reasoning_profile=reasoning_profile)
+        if execution_profile is not None and type(execution_profile) is not ExecutionProfileRelease:
+            raise ValueError("execution_profile must be a Profile, None or runtime_default")
         blocker = self._profile_blocker(self.source, execution_profile)
+        if defaults is not None and execution_profile is not None:
+            _, protected_operations = partition_module_operation_ids(self.source.declared_operation_ids)
+            if protected_operations:
+                raise ModuleAuthoringError(MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
+                    "Default native Reviewer requires exactly one model operation; "
+                    "additional protected operations need a supported binding, not matching tool names")
+            try:
+                defaults.assert_profile(execution_profile)
+            except ValueError as exc:
+                raise ModuleAuthoringError(MODULE_EXECUTION_PROFILE_INCOMPATIBLE, str(exc)) from exc
         candidate = _candidate(
             self.source,
             module_version=module_version,
@@ -579,13 +632,15 @@ class ModuleReviewer(Module):
             evaluation_policy=evaluation_policy,
             retry_policy=retry_policy,
         )
+        candidate = replace(candidate, reviewer_defaults=defaults)
         compiled = compile_agent_module_release(candidate)
         variant_candidate: ExecutionVariantPolicyReleaseCandidate | None = None
         variant: ExecutionVariantPolicyRelease | None = None
         if execution_profile is not None:
             variant_candidate = ExecutionVariantPolicyReleaseCandidate(
                 policy_id=f"{self.source.module_id}_standalone_variant",
-                policy_version="v1",
+                policy_version=("v1" if defaults is None else content_version({
+                    "module": compiled.module.release_sha256, "profile": execution_profile.release_sha256})),
                 origin_kind="standalone_module",
                 origin_release_ref=compiled.module.release_ref,
                 origin_release_sha256=compiled.module.release_sha256,

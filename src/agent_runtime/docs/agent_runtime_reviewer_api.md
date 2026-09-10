@@ -22,7 +22,11 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 - [load_runtime_registration](#load_runtime_registration)
 - [RuntimeReleaseBundle](#runtimereleasebundle)
 - [register_runtime_module_plugin](#register_runtime_module_plugin)
+- [register_reviewer](#register_reviewer)
+- [ReviewerDefaults](#reviewerdefaults)
+- [Workflow](#workflow)
 - [run_local_workflow_module](#run_local_workflow_module)
+- [CLI commands](#cli-commands)
 - [Error constants](#error-constants)
 
 ## ModuleReviewer
@@ -53,8 +57,15 @@ rules. The subject owner supplies review meaning and its semantic output
 validator. Runtime does not invent a checklist or turn a provider failure
 into a review verdict.
 
-Provider, model, reasoning, tools, network, workspace and timeout belong
-to an immutable ExecutionProfileRelease. An ExecutionVariantPolicyRelease
+Omitting Policy/Profile arguments uses Runtime's ReviewerDefaults and its
+independent model preset. The fixed capability snapshot enters the Module
+hash; model selection remains outside it. Explicit source restrictions are
+retained. Fully explicit legacy export calls keep their original definition
+shape and do not acquire new permissions. Runtime software upgrades never
+rewrite an already registered Module.
+
+An immutable ExecutionProfileRelease records the resolved provider, model,
+reasoning and fixed tool/network/workspace budget. An ExecutionVariantPolicyRelease
 binds that Profile to exact Module or Workflow positions. These two
 releases do not enter the Module release hash. A host binds the intended
 releases explicitly; a normal review supplies its candidate, goal, scope,
@@ -84,8 +95,11 @@ evidence belong to Execution's record/content stores, not this object.
 The host supplies store locations, credentials and authorization interfaces;
 they are not embedded in the Reviewer source or selected by this class.
 
-Register through ``register_runtime_module_plugin`` with an explicit
-release bundle and store. Activation is a separate decision. For the
+Ordinary source registration uses ``register_reviewer`` or the installed
+``agent-runtime-registry register-reviewer`` CLI. It resolves defaults,
+creates the fixed one-node Workflow and saves an exact local closure.
+The lower-level ``register_runtime_module_plugin`` still accepts an explicit
+bundle and store. Activation is a separate decision. For the
 existing single-node Workflow evaluation path, call
 ``run_registered_workflow_module`` using a registered Workflow and matching
 Variant Policy. That entry documents its actual limits and host inputs;
@@ -138,10 +152,14 @@ def export(
     self,
     *,
     module_version: str,
-    behavior_policy: BehaviorPolicyRelease,
-    evaluation_policy: EvaluationPolicyRelease,
-    retry_policy: RetryPolicyRelease,
-    execution_profile: ExecutionProfileRelease | None,
+    behavior_policy: BehaviorPolicyRelease | None=None,
+    evaluation_policy: EvaluationPolicyRelease | None=None,
+    retry_policy: RetryPolicyRelease | None=None,
+    execution_profile: ExecutionProfileRelease | None | Literal['runtime_default']='runtime_default',
+    release_registry: RuntimeReleaseRegistry | None=None,
+    reviewer_defaults: ReviewerDefaults | None=None,
+    model_id: str | None=None,
+    reasoning_profile: str | None=None,
 ) -> ModuleExport:
 ```
 
@@ -152,11 +170,22 @@ Compile this captured source and validate optional Profile compatibility.
 - `module_version`: Version of the fixed Module definition. Keep it
   unchanged for unchanged Module content; a new input or Profile
   comparison does not by itself require a new Module version.
-- `behavior_policy`: Exact Behavior Policy matching the source ref.
-- `evaluation_policy`: Exact Evaluation Policy matching the source ref.
-- `retry_policy`: Exact Retry Policy matching the source ref.
-- `execution_profile`: Approved execution configuration, or None for
-  definition-only export. The Profile stays outside Module identity.
+- `behavior_policy`: Optional exact override matching the source ref.
+- `evaluation_policy`: Optional exact override. New v3 source omissions
+  use entry-policy admission (evaluation_mode=none); an explicit
+  module_candidate reference retains its candidate-only meaning.
+- `retry_policy`: Optional exact override; Runtime defaults to three
+  attempts including the first. This is a limit, not a scheduler.
+- `execution_profile`: Omit for Runtime's Claude CLI model preset and
+  fixed capabilities, or use None for definition-only export.
+  Fully explicit legacy calls retain their existing record shape.
+- `release_registry`: Lookup for explicit non-default policy refs.
+- `reviewer_defaults`: Previously frozen capability snapshot, normally
+  supplied internally when registering the same version again.
+- `model_id`: Independent model override for the default Claude path.
+- `reasoning_profile`: Independent reasoning override; neither changes
+  the Module capabilities. Explicit Profile and model overrides
+  cannot be combined.
 
 **Returns**
 
@@ -164,10 +193,10 @@ ModuleExport with compiled Module/Prompt/Schema records and the
 supplied policies. A compatible Profile also produces a standalone
 Variant candidate/release. None produces no Variant and sets
 execution_blocker_code to EXECUTION_PROFILE_UNAVAILABLE. The
-standalone helper uses its existing fixed policy name/version;
-exported bindings are candidates, not updates to an existing store.
-Explicitly compile and register a non-conflicting Variant version
-when publishing a changed binding. Workflow binding is separate.
+standalone helper retains v1 for fully explicit legacy calls;
+new default-aware bindings use a deterministic content version.
+Exported bindings are candidates, not updates to a store.
+Workflow binding is separate and handled by register_reviewer.
 
 **Raises**
 
@@ -607,6 +636,50 @@ model choice, policy construction or persistent re-registration needed.
 
 Reads local files only; latest is resolved once before exact execution.
 
+## CLI commands
+
+Generated from the installed parser's argument declarations.
+
+Register or load through the public APIs with stable CLI exit codes.
+
+Exit 0 means the requested operation completed; register-reviewer includes
+saved-result readback. Exit 1 means operation failure, with error_type,
+optional native error_code and detail on stderr. Exit 2 is argparse's
+command/argument usage error and includes usage on stderr. Success JSON
+goes to stdout. Failure does not imply that no writes occurred: inspect
+saved facts before repeating the same registration after an I/O failure.
+No code represents a Reviewer verdict; registration does not run a model.
+
+### agent-runtime-registry register-reviewer
+
+| Argument | Required | Help |
+| --- | --- | --- |
+| `--root` | required | host root; writes .runtime/module and .runtime/workflow |
+| `--source-root` | optional | explicit source root; defaults to --root |
+| `--skill-id` | required | exact kebab-case Skill identity |
+| `--module-id` | required | exact snake_case Reviewer identity |
+| `--version` | required | approved Module/Workflow definition version |
+| `--model-id` | optional | explicit Claude model override; leaves fixed capabilities unchanged |
+| `--reasoning-profile` | optional | explicit reasoning override; leaves fixed capabilities unchanged |
+
+### agent-runtime-registry register
+
+| Argument | Required | Help |
+| --- | --- | --- |
+| `--root` | required |  |
+| `--bundle` | required |  |
+| `--plugin-id` | required |  |
+| `--plugin-version` | required |  |
+
+### agent-runtime-registry load
+
+| Argument | Required | Help |
+| --- | --- | --- |
+| `--root` | required | host root containing .runtime |
+| `--kind` | required |  |
+| `--id` | required |  |
+| `--version` | optional | exact version; omitted means latest successfully registered new version |
+
 ## RuntimeReleaseBundle
 
 Public import: `from agent_runtime import RuntimeReleaseBundle`
@@ -682,6 +755,204 @@ and .runtime/workflow. File errors propagate without rolling back a prior
 Registry commit; retrying the original bundle is safe. Omit root to retain
 the original store-only behavior. No active pointer or host configuration
 is selected or changed.
+
+## register_reviewer
+
+Public import: `from agent_runtime import register_reviewer`
+
+```python
+def register_reviewer(
+    root: Path,
+    *,
+    skill_id: str,
+    module_id: str,
+    module_version: str,
+    source_root: Path | None=None,
+    model_id: str | None=None,
+    reasoning_profile: str | None=None,
+    release_registry: RuntimeReleaseRegistry | None=None,
+) -> RuntimeReleaseRegistrationResult:
+```
+
+Register approved Reviewer source and its one-node Workflow under root.
+
+Runtime defaults provide isolated context, read/search/shell, read-only
+materials, private scratch, denied tool network, a 1200-second attempt
+budget and a limit of three attempts. The independent model preset v1 is
+claude_cli / claude-opus-5[1m] / xhigh. Registration does not schedule retries.
+
+Repeating a definition version retains its saved capabilities and binding.
+Explicit model/reasoning overrides create a distinct execution binding;
+changed source needs a new approved definition version. Source transport
+declarations are never expanded automatically. This command only reads,
+compiles, saves and verifies registration; it does not install software,
+connect to PG, invoke a model, activate releases or create request receipts.
+
+New default-aware records require upgraded catalog readers. An older
+Runtime can fail while loading a shared catalog containing even one new
+record, regardless of its active selection. Upgrade affected readers before
+registering such records in a shared store; retaining an old active pointer
+is not a compatibility boundary. Never repair this by rewriting old records.
+
+**Args**
+
+- `root`: Host destination. Creates .runtime/module/<id>/<version>.json and
+  .runtime/workflow/<id>_review/<version>.json through the existing
+  save API. Existing directories and immutable records are reused.
+- `skill_id`: Exact kebab-case source Skill identity.
+- `module_id`: Exact snake_case Reviewer identity declared by the source.
+- `module_version`: Approved definition version; never generated on conflict.
+- `source_root`: Explicit authoring root, defaulting to root. Source files
+  are loaded through ModuleReviewer.from_registration, not executed.
+- `model_id`: Optional independent Claude model override. Ordinary calls
+  use Runtime's preset; repeat registration preserves saved bindings.
+- `reasoning_profile`: Optional independent reasoning override.
+- `release_registry`: Optional existing exact policy lookup. Ordinary local
+  registration restores the saved root and Runtime-owned policies.
+**Returns**
+
+Native registration result with Module, Workflow, policies and exact
+Workflow Profile/Variant. A fresh local read verifies both definitions.
+No precompiled bundle or manually assembled Profile is required.
+**Raises**
+
+- `ModuleAuthoringError`: Source transport or tool boundary is incompatible.
+- `ValueError`: Source/schema/policy errors, version conflicts or ambiguous
+  saved bindings. Fix the source/configuration, never silently change
+  transport, permissions or the requested version.
+- `OSError`: Native source or persistence failure; inspect already saved
+  facts and repeat the same request, not a newly invented version.
+**Effects**
+
+Reads approved source, compiles and saves registration only. Does not
+install software, create an environment, connect to PG, invoke a model,
+activate releases, or create execution receipts. The host owns approval
+of source and later execution. Defaults are frozen at first registration;
+an explicit model change creates a distinct Profile/Variant binding.
+
+## ReviewerDefaults
+
+Public import: `from agent_runtime import ReviewerDefaults`
+
+```python
+@dataclass(frozen=True)
+class ReviewerDefaults:
+    record_type: ClassVar[str] = 'reviewer_defaults'
+    version: str = 'v1'
+    context_isolation: str = 'workflow_execution_isolated'
+    tool_policy: tuple[str, ...] = ('read', 'search', 'shell')
+    network_policy: str = 'denied'
+    attempt_workspace_policy: str = 'own_draft_read_write'
+    timeout_seconds: int = 1200
+    max_attempts: int = 3
+```
+
+Runtime's fixed Reviewer capabilities, frozen into each new definition.
+
+Version v1 supplies isolated context, read/search/shell, denied tool network,
+private scratch, a 1200-second attempt budget and at most three attempts
+including the first. Model selection and host resources are independent.
+max_attempts records a limit; it does not implement retry scheduling.
+
+### ReviewerDefaults.validate
+
+```python
+def validate(
+    self,
+) -> None:
+```
+
+Validate the frozen logical capability and attempt-limit snapshot.
+
+### ReviewerDefaults.as_dict
+
+```python
+def as_dict(
+    self,
+) -> dict[str, Any]:
+```
+
+Return the JSON-compatible capability snapshot included in Module hash.
+
+### ReviewerDefaults.assert_profile
+
+```python
+def assert_profile(
+    self,
+    profile: ExecutionProfileRelease,
+) -> None:
+```
+
+Reject any model binding that changes the frozen capability budget.
+
+### ReviewerDefaults.from_dict
+
+```python
+@classmethod
+def from_dict(
+    cls,
+    payload: Mapping[str, Any],
+) -> 'ReviewerDefaults':
+```
+
+Restore and validate a complete saved snapshot without filling omissions.
+
+## Workflow
+
+Public import: `from agent_runtime import Workflow`
+
+```python
+@dataclass(frozen=True)
+class Workflow:
+    candidate: WorkflowReleaseCandidate
+    module_exports: tuple[ModuleExport, ...]
+```
+
+Graph-backed authoring facade over the existing Workflow compiler.
+
+### Workflow.for_reviewer
+
+```python
+@classmethod
+def for_reviewer(
+    cls,
+    exported: ModuleExport,
+) -> Self:
+```
+
+Compose the fixed one-node review graph from an exact Module export.
+
+Workflow ID is <module_id>_review, its version is the Module version,
+and its sole node is review. The owner and operation declarations come
+from the Module source. No live authorization or model execution occurs.
+The result is a Workflow regardless of its node count.
+
+### Workflow.from_graph
+
+```python
+@classmethod
+def from_graph(
+    cls,
+    candidate: WorkflowReleaseCandidate,
+    *,
+    module_exports: tuple[ModuleExport, ...],
+) -> Self:
+```
+
+Capture an explicit graph candidate and its exact Module exports.
+
+Compilation and dependency matching occur in export. This constructor
+does not infer a business graph or register/execute any node.
+
+### Workflow.export
+
+```python
+def export(
+    self,
+) -> WorkflowExport:
+```
+
+Compile the graph and merge its exact target-independent closure.
 
 ## run_local_workflow_module
 

@@ -8,9 +8,11 @@ inputs. Local loading never selects or changes an active pointer.
 from __future__ import annotations
 
 import argparse
+import inspect
 from dataclasses import dataclass, fields
 import json
 from pathlib import Path
+import sys
 import tempfile
 from urllib.parse import quote
 
@@ -238,22 +240,73 @@ def load_runtime_registration(root: Path, kind: str, subject_id: str,
     return LoadedRuntimeRegistration(row[1], row[2])
 
 
-def main(argv=None) -> int:
-    """CLI registration and version loading through the same public APIs."""
+def build_parser() -> argparse.ArgumentParser:
+    """Return the installed CLI parser; help is also used by the API renderer."""
+    from .registry_plugin_registration import register_reviewer
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    reviewer = commands.add_parser("register-reviewer", help="register approved source using Runtime Reviewer defaults",
+        description=inspect.getdoc(register_reviewer).split("\n\nArgs:")[0],
+        epilog=inspect.getdoc(main), formatter_class=argparse.RawDescriptionHelpFormatter)
+    reviewer.add_argument("--root", required=True, type=Path, help="host root; writes .runtime/module and .runtime/workflow")
+    reviewer.add_argument("--source-root", type=Path, help="explicit source root; defaults to --root")
+    reviewer.add_argument("--skill-id", required=True, help="exact kebab-case Skill identity")
+    reviewer.add_argument("--module-id", required=True, help="exact snake_case Reviewer identity")
+    reviewer.add_argument("--version", required=True, help="approved Module/Workflow definition version")
+    reviewer.add_argument("--model-id", help="explicit Claude model override; leaves fixed capabilities unchanged")
+    reviewer.add_argument("--reasoning-profile", help="explicit reasoning override; leaves fixed capabilities unchanged")
     register = commands.add_parser("register", help="validate/register a bundle and save its objects")
     register.add_argument("--root", required=True)
     register.add_argument("--bundle", required=True, type=Path)
     register.add_argument("--plugin-id", required=True)
     register.add_argument("--plugin-version", required=True)
     load = commands.add_parser("load", help="load exact version or latest registered version")
-    load.add_argument("--root", required=True)
+    load.add_argument("--root", required=True, help="host root containing .runtime")
     load.add_argument("--kind", choices=("module", "workflow"), required=True)
     load.add_argument("--id", required=True)
-    load.add_argument("--version")
-    args = parser.parse_args(argv)
-    if args.command == "register":
+    load.add_argument("--version", help="exact version; omitted means latest successfully registered new version")
+    return parser
+
+
+def main(argv=None) -> int:
+    """Register or load through the public APIs with stable CLI exit codes.
+
+    Exit 0 means the requested operation completed; register-reviewer includes
+    saved-result readback. Exit 1 means operation failure, with error_type,
+    optional native error_code and detail on stderr. Exit 2 is argparse's
+    command/argument usage error and includes usage on stderr. Success JSON
+    goes to stdout. Failure does not imply that no writes occurred: inspect
+    saved facts before repeating the same registration after an I/O failure.
+    No code represents a Reviewer verdict; registration does not run a model.
+    """
+    args = build_parser().parse_args(argv)
+    try:
+        return _run_command(args)
+    except (ValueError, OSError, KeyError) as exc:
+        print(json.dumps({"error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", None),
+                          "detail": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 1
+
+
+def _run_command(args) -> int:
+    if args.command == "register-reviewer":
+        from .registry_plugin_registration import register_reviewer
+        result = register_reviewer(args.root, source_root=args.source_root, skill_id=args.skill_id,
+            module_id=args.module_id, module_version=args.version,
+            model_id=args.model_id, reasoning_profile=args.reasoning_profile)
+        bundle = result.submitted_bundle
+        print(json.dumps({
+            "modules": [record.as_dict() for record in bundle.modules],
+            "workflows": [record.as_dict() for record in bundle.workflows],
+            "execution_profiles": [record.as_dict() for record in bundle.execution_profiles],
+            "execution_variants": [record.as_dict() for record in bundle.execution_variant_policies],
+            "root": str(args.root.resolve()), "readback": "verified",
+            "files": [str((_directory(args.root, kind, getattr(record, kind + "_id")) /
+                           (quote(getattr(record, kind + "_version"), safe="") + ".json")).resolve())
+                      for kind, records in (("module", bundle.modules), ("workflow", bundle.workflows))
+                      for record in records],
+        }, ensure_ascii=False, sort_keys=True))
+    elif args.command == "register":
         from .registry_plugin_registration import RuntimeModulePlugin, register_runtime_module_plugin
         bundle = RuntimeReleaseBundle.from_dict(json.loads(args.bundle.read_text(encoding="utf-8")))
         registry = _restore_registry(args.root)

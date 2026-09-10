@@ -16,6 +16,8 @@ from ..contracts.registry_release_definition import (
 
 
 MODULE_REGISTRATION_SCHEMA_VERSION = "runtime_module_registration_v2"
+_DEFAULTS_REGISTRATION_SCHEMA_VERSION = "runtime_module_registration_v3"
+_POLICY_REFERENCE_KEYS = frozenset({"behavior_policy_ref", "evaluation_policy_ref", "retry_policy_ref"})
 MODULE_REGISTRATION_FILENAME = "module_registration.json"
 MODULE_PROMPT_FILENAME = "prompt.md"
 MODULE_INPUT_SCHEMA_PATH = PurePosixPath("schemas/input.schema.json")
@@ -155,9 +157,9 @@ class ModuleRegistrationSource:
     instruction_text: str
     declared_operation_ids: tuple[str, ...]
     compatible_transport_kinds: tuple[str, ...]
-    behavior_policy_ref: str
-    evaluation_policy_ref: str
-    retry_policy_ref: str
+    behavior_policy_ref: str | None
+    evaluation_policy_ref: str | None
+    retry_policy_ref: str | None
     entry_policy: ModuleEntryPolicy
     output_resolution_policy: OutputResolutionPolicy
 
@@ -172,7 +174,13 @@ def load_module_registration(
     skill_id: str,
     module_id: str,
 ) -> ModuleRegistrationSource:
-    """Read one fixed `.claude/skills/<skill>/runtime_modules/<module>` source."""
+    """Read one fixed `.claude/skills/<skill>/runtime_modules/<module>` source.
+
+    v2 requires every policy reference as before. v3 permits the three policy
+    references to be omitted; ModuleReviewer resolves those omissions from
+    Runtime defaults. Present references remain exact, never overwritten.
+    Other source, identity, schema, operation and transport rules are unchanged.
+    """
 
     project_root = project_root.resolve()
     if type(skill_id) is not str or _SKILL_ID_PATTERN.fullmatch(skill_id) is None:
@@ -242,18 +250,21 @@ def load_module_registration(
         payload = json.loads(registration_path.read_text(encoding="utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Module registration must be UTF-8 JSON") from exc
-    if type(payload) is not dict or set(payload) != _MANIFEST_KEYS:
+    schema_version = payload.get("schema_version") if type(payload) is dict else None
+    required_keys = (_MANIFEST_KEYS - _POLICY_REFERENCE_KEYS
+                     if schema_version == _DEFAULTS_REGISTRATION_SCHEMA_VERSION else _MANIFEST_KEYS)
+    if type(payload) is not dict or not required_keys <= set(payload) or set(payload) - _MANIFEST_KEYS:
         missing = sorted(
-            _MANIFEST_KEYS - set(payload)
+            required_keys - set(payload)
             if isinstance(payload, dict)
-            else _MANIFEST_KEYS
+            else required_keys
         )
         extra = sorted(set(payload) - _MANIFEST_KEYS) if isinstance(payload, dict) else []
         raise ValueError(
             "Module registration has an invalid v2 shape: "
             f"missing={missing}, extra={extra}"
         )
-    if payload["schema_version"] != MODULE_REGISTRATION_SCHEMA_VERSION:
+    if schema_version not in {MODULE_REGISTRATION_SCHEMA_VERSION, _DEFAULTS_REGISTRATION_SCHEMA_VERSION}:
         raise ValueError("unsupported Module registration schema_version")
     if payload["skill_id"] != skill_id:
         raise ValueError("registration skill_id differs from its Skill directory")
@@ -341,15 +352,12 @@ def load_module_registration(
         compatible_transport_kinds=_sorted_unique_strings(
             "compatible_transport_kinds", payload["compatible_transport_kinds"]
         ),
-        behavior_policy_ref=_non_empty_string(
-            "behavior_policy_ref", payload["behavior_policy_ref"]
-        ),
-        evaluation_policy_ref=_non_empty_string(
-            "evaluation_policy_ref", payload["evaluation_policy_ref"]
-        ),
-        retry_policy_ref=_non_empty_string(
-            "retry_policy_ref", payload["retry_policy_ref"]
-        ),
+        behavior_policy_ref=(_non_empty_string("behavior_policy_ref", payload["behavior_policy_ref"])
+                             if "behavior_policy_ref" in payload else None),
+        evaluation_policy_ref=(_non_empty_string("evaluation_policy_ref", payload["evaluation_policy_ref"])
+                               if "evaluation_policy_ref" in payload else None),
+        retry_policy_ref=(_non_empty_string("retry_policy_ref", payload["retry_policy_ref"])
+                         if "retry_policy_ref" in payload else None),
         entry_policy=entry_policy,
         output_resolution_policy=output_policy,
     )

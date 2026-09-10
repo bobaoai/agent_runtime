@@ -1961,6 +1961,8 @@ def _assert_admitted_test_evaluation_profile(
     hybrid cannot become executable by accident.
     """
 
+    if module.reviewer_defaults is not None:
+        module.reviewer_defaults.assert_profile(profile)
     _, non_model_operations = partition_module_operation_ids(
         module.declared_operation_ids
     )
