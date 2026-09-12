@@ -20,7 +20,7 @@ from ..contracts.invocation_adapter_definition import (
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_context_preparation import InvocationExecutionExpectation, prepare_registered_invocation_context
-from .invocation_process_execution import run_cli_process, CliProcessInterrupted
+from .invocation_process_execution import run_cli_process, CliProcessInterrupted, _capture_cli_interrupts
 from .invocation_cli_logging import captured_cli_streams, parse_cli_log, decode_cli_event
 from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
 from .invocation_result_assembly import (
@@ -54,6 +54,12 @@ class ClaudeCliNativeToolsModuleExecutor:
     that exact model may supply evidence when assistant messages are absent.
     Auxiliary CLI models never stand in for the requested response model.
     Unresolved aliases, missing evidence and mismatches cannot report success.
+
+    Default SIGINT capture spans provider execution, output validation and log
+    preparation. Cancellation observed before trace finalization returns the
+    captured Attempt as cancelled. Once finalization starts, its selected result
+    and trace are delivered even if a late signal arrives; logs are not replaced
+    by a bare interruption error. Custom signal handlers are not overridden.
     """
 
     executor_adapter_id = "claude_cli_native_tools_executor"
@@ -112,6 +118,7 @@ class ClaudeCliNativeToolsModuleExecutor:
                 return failure.result
 
     def _execute(self, request, host, prepared, cleanup) -> AgentExecutionResult:
+        interrupted = cleanup.enter_context(_capture_cli_interrupts())
         profile = prepared.profile
         if not profile.tool_policy or set(profile.tool_policy) - NATIVE_TOOLS.keys():
             raise ValueError("Claude Profile requests unsupported native tools")
@@ -150,6 +157,10 @@ class ClaudeCliNativeToolsModuleExecutor:
                     "issues": ["normalization_failed:" + type(exc).__name__], "tool_calls": None, "events": []}
 
         def fail(failure_class, failure_code, message, *, retry="retry_denied", cause=None, terminal_status="failed"):
+            if interrupted.requested:
+                failure_class, failure_code, message = "cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user"
+                retry, terminal_status = "retry_denied", "cancelled"
+                trace["stop_reason"] = "cancelled"
             usage, _ = usage_fields()
             retain_tool_log()
             raise_terminal_failure(
@@ -408,6 +419,10 @@ class ClaudeCliNativeToolsModuleExecutor:
             fail("authorization", "self_test_resources_unavailable" if request.self_test_binding_ref is not None
                  else "output_authorization_refused", str(exc), cause=exc)
         retain_tool_log()
+        if interrupted.requested:
+            fail("cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user", terminal_status="cancelled")
+        # Finalize one result with the captured trace. A late signal cannot turn
+        # an already selected result into a bare KeyboardInterrupt that loses it.
         trace_ref, trace_sha256 = commit_attempt_trace_json(self._artifacts, request, trace)
         return completed_adapter_result(profile=profile, request=request, outputs=(submission,),
             tool_operation_ref_ids=(), trace_ref=trace_ref, trace_sha256=trace_sha256,

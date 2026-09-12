@@ -233,6 +233,62 @@ def test_deep_final_result_keeps_exact_streams_tool_history_and_usage(tmp_path, 
     assert attempt["tool_calls"][0]["response"]["tool_result"] == events[2]["message"]["content"][0]
 
 
+@pytest.mark.parametrize("phase", ["output_validation", "normalization", "trace_finalization"])
+def test_default_sigint_after_capture_still_delivers_the_complete_attempt(tmp_path, phase):
+    driver = """
+import json,os,signal,sys
+from pathlib import Path
+import pytest
+from agent_runtime import read_execution_log
+from agent_runtime.invocation import invocation_claude_cli_execution as claude
+from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+from test_agent_runtime_execution_logging import native,use,reply,_run_real_native_streams
+previous=signal.getsignal(signal.SIGINT)
+assert previous is signal.default_int_handler
+events=[native._init(),use('before_interrupt','Read',file_path='material.txt'),reply('before_interrupt'),native._result()]
+raw=b'\\n'.join(json.dumps(event).encode() for event in events)+b'\\n'
+stderr=b'actual captured stderr\\n'
+phase=sys.argv[1]
+sent=[]
+def send_once():
+    if not sent:
+        sent.append(True)
+        os.kill(os.getpid(),signal.SIGINT)
+with pytest.MonkeyPatch.context() as patch:
+    if phase=='output_validation':
+        original=claude.Draft202012Validator
+        class InterruptingValidator:
+            def __init__(self,*args,**kwargs): self.delegate=original(*args,**kwargs)
+            def validate(self,value):
+                send_once()
+                return self.delegate.validate(value)
+        patch.setattr(claude,'Draft202012Validator',InterruptingValidator)
+    else:
+        name='parse_cli_log' if phase=='normalization' else 'commit_attempt_trace_json'
+        original=getattr(claude,name)
+        def interrupt(*args,**kwargs):
+            send_once()
+            return original(*args,**kwargs)
+        patch.setattr(claude,name,interrupt)
+    run,cell=_run_real_native_streams(Path.cwd(),patch,raw,stderr)
+log=read_execution_log(run.module_run,attempts=run.attempts,read_content=cell.read_bytes,include_private_content=True)
+attempt=log['attempts'][0]
+assert sent and log['complete']
+assert cli_stream_bytes(attempt['provider_log'],'stdout')==raw
+assert cli_stream_bytes(attempt['provider_log'],'stderr')==stderr
+assert attempt['provider_log']['result']['usage']==events[-1]['usage']
+assert attempt['tool_calls'][0]['tool_call_id']=='before_interrupt'
+assert signal.getsignal(signal.SIGINT) is previous
+print(json.dumps({'status':attempt['status'],'complete':log['complete'],'restored':True}))
+"""
+    project = Path(__file__).resolve().parents[1]
+    process = subprocess.run([sys.executable, "-c", driver, phase], cwd=tmp_path, capture_output=True, text=True,
+        timeout=15, env={**os.environ, "PYTHONPATH": os.pathsep.join((str(project / "src"), str(project / "tests")))})
+    assert process.returncode == 0, process.stderr
+    expected = "completed" if phase == "trace_finalization" else "cancelled"
+    assert json.loads(process.stdout) == {"status": expected, "complete": True, "restored": True}
+
+
 @pytest.mark.parametrize("outcome", ["success", "timeout"])
 def test_unexpected_normalizer_failure_preserves_original_trace(tmp_path, monkeypatch, outcome):
     def broken_parser(trace):
