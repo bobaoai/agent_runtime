@@ -8,10 +8,13 @@ from typing import Any, Mapping
 
 def decode_cli_event(line: str) -> dict:
     """Decode one JSON object that remains serializable as strict UTF-8 JSON."""
-    event = json.loads(line)
-    if not isinstance(event, dict):
-        raise ValueError("CLI event must be an object")
-    json.dumps(event, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    try:
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError("CLI event must be an object")
+        json.dumps(event, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except RecursionError as exc:
+        raise ValueError("CLI event exceeds supported JSON nesting") from exc
     return event
 
 
@@ -159,7 +162,7 @@ def parse_cli_log(trace: Mapping[str, Any]) -> dict:
                                 decoded = json.loads(block["text"])
                                 json.dumps(decoded, ensure_ascii=False, allow_nan=False).encode("utf-8")
                                 body = decoded
-                            except (TypeError, ValueError, KeyError):
+                            except (TypeError, ValueError, KeyError, UnicodeError, RecursionError):
                                 pass
                 if item.get("error") is not None:
                     body = {"result": raw, "error": item["error"]}

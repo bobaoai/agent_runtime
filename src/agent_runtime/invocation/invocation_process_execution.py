@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
-from threading import Event, Thread
+from threading import Event, Thread, current_thread, main_thread
 from typing import Callable
 
 
@@ -85,11 +85,12 @@ def _stop_process_group(process: subprocess.Popen) -> None:
         raise RuntimeError("CLI process did not stop after cleanup") from exc
 
 
-def run_cli_process(
+def _run_cli_process(
     *, argv: list[str], prompt: str, cwd: Path, timeout_seconds: int,
     environment: dict[str, str], max_output_bytes: int = DEFAULT_PROCESS_OUTPUT_BYTES,
     on_stdout_line: Callable[[str], bool] | None = None,
     launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
+    interrupted: list[bool],
 ) -> subprocess.CompletedProcess[str]:
     """Drain both streams, stop the group on failure, preserve exact captured bytes.
 
@@ -180,6 +181,9 @@ def run_cli_process(
     cleanup_errors: list[str] = []
     try:
         while process.poll() is None:
+            if interrupted[0]:
+                mark_failure("cancelled")
+                break
             if failure is not None:
                 break
             if time.monotonic() >= deadline:
@@ -187,16 +191,27 @@ def run_cli_process(
                 break
             exhausted.wait(0.02)
     except KeyboardInterrupt:
+        interrupted[0] = True
         mark_failure("cancelled")
     finally:
         # Descendants must not outlive the one-shot invocation, even if the
         # CLI parent exits before a descendant closes an inherited output pipe.
         try:
             _stop_process_group(process)
+        except KeyboardInterrupt:
+            interrupted[0] = True
+            try:
+                _stop_process_group(process)
+            except (Exception, KeyboardInterrupt) as exc:
+                cleanup_errors.append("Interrupted process cleanup: " + str(exc))
         except Exception as exc:
             cleanup_errors.append(str(exc))
         for worker in workers:
-            worker.join(timeout=1)
+            try:
+                worker.join(timeout=1)
+            except KeyboardInterrupt:
+                interrupted[0] = True
+                cleanup_errors.append("Interrupted output-worker join")
     if any(worker.is_alive() for worker in workers):
         cleanup_errors.append("CLI output pipe did not close after group cleanup")
     cleanup_error = "; ".join(cleanup_errors) or None
@@ -206,7 +221,7 @@ def run_cli_process(
     with lock:
         stdout_bytes, stderr_bytes = map(bytes, captured)
     stdout, stderr = (value.decode("utf-8", errors="replace") for value in (stdout_bytes, stderr_bytes))
-    if failure == "cancelled":
+    if interrupted[0] or failure == "cancelled":
         raise CliProcessInterrupted(returncode=process.returncode, output=stdout, stderr=stderr,
             stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes,
             cleanup_error=cleanup_error, stream_error=stream_error)
@@ -229,6 +244,36 @@ def run_cli_process(
     result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     result.stdout_bytes, result.stderr_bytes = stdout_bytes, stderr_bytes
     return result
+
+
+def run_cli_process(
+    *, argv: list[str], prompt: str, cwd: Path, timeout_seconds: int,
+    environment: dict[str, str], max_output_bytes: int = DEFAULT_PROCESS_OUTPUT_BYTES,
+    on_stdout_line: Callable[[str], bool] | None = None,
+    launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Capture bounded exact streams through process shutdown and output handoff.
+
+    Results and capture failures retain stdout_bytes/stderr_bytes alongside the
+    original display strings. Exceeding the shared byte budget reports incomplete
+    output. On the main thread, the default SIGINT behavior is deferred until
+    cleanup and captured-byte handoff; the previous handler is always restored.
+    Custom handlers and non-main-thread signal policy are not replaced.
+    """
+    interrupted = [False]
+    previous = signal.getsignal(signal.SIGINT) if current_thread() is main_thread() else None
+    installed = previous is signal.default_int_handler
+    def note_interrupt(signum, frame):
+        interrupted[0] = True
+    if installed:
+        signal.signal(signal.SIGINT, note_interrupt)
+    try:
+        return _run_cli_process(argv=argv, prompt=prompt, cwd=cwd, timeout_seconds=timeout_seconds,
+            environment=environment, max_output_bytes=max_output_bytes, on_stdout_line=on_stdout_line,
+            launch_guard=launch_guard, interrupted=interrupted)
+    finally:
+        if installed:
+            signal.signal(signal.SIGINT, previous)
 
 
 __all__ = ["CliProcessError", "CliProcessTimeout", "CliProcessInterrupted", "run_cli_process"]

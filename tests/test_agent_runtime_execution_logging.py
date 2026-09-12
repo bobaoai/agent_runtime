@@ -102,6 +102,17 @@ def test_codex_mcp_logs_preserve_real_command_results():
     assert not parse_cli_log(trace(unsupported, transport="codex_cli"))["complete"]
 
 
+@pytest.mark.parametrize("text", ['{"nested":' + '[' * 10000 + '0' + ']' * 10000 + '}', '{"text":"\\ud800"}'])
+def test_codex_uninterpretable_result_text_remains_the_actual_response(text):
+    item = {"id": "c", "type": "mcp_tool_call", "tool": "repository_read", "arguments": {"path": "file"}}
+    raw_result = {"content": [{"type": "text", "text": text}]}
+    events = [{"type": "item.started", "item": item}, {"type": "item.completed",
+              "item": {**item, "status": "completed", "error": None, "result": raw_result}},
+              {"type": "turn.completed"}]
+    log = parse_cli_log(trace(events, transport="codex_cli"))
+    assert log["complete"] and log["tool_calls"][0]["response"] == raw_result
+
+
 def test_real_process_keeps_non_utf8_and_large_streams(tmp_path):
     stdout, stderr = b"a" * 100000 + b"\xff", b"b" * 100000 + b"\xfe"
     process = run_cli_process(argv=[sys.executable, "-c",
@@ -132,6 +143,87 @@ except CliProcessInterrupted as exc:
     result = json.loads(process.stdout)
     assert result["raw"] == "before interrupt\n" and result["stop"] == "cancelled"
     assert result["returncode"] != 0
+
+
+@pytest.mark.parametrize("phase", ["cleanup", "join"])
+def test_first_real_interrupt_during_shutdown_preserves_bytes_and_restores_handler(tmp_path, phase):
+    driver = """
+import json,os,signal,sys
+from pathlib import Path
+from agent_runtime.invocation import invocation_process_execution as capture
+previous=signal.getsignal(signal.SIGINT)
+phase=sys.argv[1]
+original=capture._stop_process_group if phase=='cleanup' else capture.Thread.join
+sent=[]
+def interrupt(*args,**kwargs):
+    if not sent:
+        sent.append(True)
+        os.kill(os.getpid(),signal.SIGINT)
+    return original(*args,**kwargs)
+if phase=='cleanup': capture._stop_process_group=interrupt
+else: capture.Thread.join=interrupt
+try:
+    capture.run_cli_process(argv=[sys.executable,'-u','-c',
+        "import os;os.write(1,b'before shutdown\\\\n');os.write(2,b'actual stderr')"],
+        prompt='',cwd=Path.cwd(),environment=dict(os.environ),timeout_seconds=5)
+except capture.CliProcessInterrupted as exc:
+    print(json.dumps({'raw':exc.stdout_bytes.decode(),'stderr':exc.stderr_bytes.decode(),
+        'stop':exc.stop_reason,'returncode':exc.returncode,
+        'restored':signal.getsignal(signal.SIGINT) is previous,'cleanup_error':exc.cleanup_error}))
+"""
+    process = subprocess.run([sys.executable, "-c", driver, phase], cwd=tmp_path, capture_output=True, text=True,
+        timeout=15, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")})
+    assert process.returncode == 0, process.stderr
+    result = json.loads(process.stdout)
+    assert result == {"raw": "before shutdown\n", "stderr": "actual stderr", "stop": "cancelled",
+                      "returncode": 0, "restored": True, "cleanup_error": None}
+
+
+def test_deep_event_from_real_process_cannot_prevent_adapter_trace_commit(tmp_path, monkeypatch):
+    env = native._environment(tmp_path)
+    _, registry, cell, request, authority = env
+    # CPython's C JSON decoder can have a higher nesting limit than Python
+    # frames; exceed both in supported interpreters, without changing either.
+    depth = max(10000, sys.getrecursionlimit() * 10)
+    raw = json.dumps(native._init()).encode() + b'\n{"nested":' + b'[' * depth + b'0' + b']' * depth + b'}\n'
+    def actual_process(**kwargs):
+        return run_cli_process(**{**kwargs, "argv": [sys.executable, "-c", f"import os;os.write(1,{raw!r})"]})
+    adapter = native.claude.ClaudeCliNativeToolsModuleExecutor(
+        release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
+        cli_path=native._fake_cli(tmp_path), process_runner=actual_process)
+    adapters = native.AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    temporary_directory = native.claude.tempfile.TemporaryDirectory
+    monkeypatch.setattr(native.claude.tempfile, "TemporaryDirectory", lambda *args, **kw:
+                        temporary_directory(*args, **{**kw, "dir": tmp_path}))
+    run = native.run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
+                           ledger=native.InMemoryModuleExecutionLedger(), authority=authority,
+                           clock=lambda: native._TEST_TIME)
+    assert run.attempts[0].status == "failed"
+    log = read_execution_log(run.module_run, attempts=run.attempts, read_content=cell.read_bytes,
+                             include_private_content=True)
+    attempt = log["attempts"][0]
+    assert cli_stream_bytes(attempt["provider_log"], "stdout") == raw
+    assert not attempt["complete"] and "invalid_event:1" in attempt["issues"]
+
+
+@pytest.mark.parametrize("outcome", ["success", "timeout"])
+def test_unexpected_normalizer_failure_preserves_original_trace(tmp_path, monkeypatch, outcome):
+    def broken_parser(trace):
+        raise RuntimeError("unexpected parser failure")
+    monkeypatch.setattr(native.claude, "parse_cli_log", broken_parser)
+    def events(call):
+        yield native._init()
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired("fixture", 1)
+        yield native._result()
+    run, cell = native._run(native._environment(tmp_path), tmp_path, events)
+    log = read_execution_log(run.module_run, attempts=run.attempts, read_content=cell.read_bytes,
+                             include_private_content=True)
+    attempt = log["attempts"][0]
+    assert attempt["status"] == ("completed" if outcome == "success" else "failed")
+    assert not attempt["complete"] and "normalization_failed:RuntimeError" in attempt["issues"]
+    assert json.loads(cli_stream_bytes(attempt["provider_log"], "stdout").splitlines()[0]) == native._init()
 
 
 def test_runtime_reader_is_private_by_default_and_does_not_create_grants(tmp_path):

@@ -140,9 +140,18 @@ class ClaudeCliNativeToolsModuleExecutor:
             return {"input_tokens": total, "output_tokens": outgoing,
                     "cache_read_tokens": read, "cache_creation_tokens": created}, invalid
 
+        def retain_tool_log():
+            try:
+                trace["tool_log"] = parse_cli_log(trace)
+            except Exception as exc:
+                # A failed derived view must never prevent the original streams
+                # from reaching the existing private trace commit.
+                trace["tool_log"] = {"schema_version": "runtime_cli_log_v1", "complete": False,
+                    "issues": ["normalization_failed:" + type(exc).__name__], "tool_calls": None, "events": []}
+
         def fail(failure_class, failure_code, message, *, retry="retry_denied", cause=None, terminal_status="failed"):
             usage, _ = usage_fields()
-            trace["tool_log"] = parse_cli_log(trace)
+            retain_tool_log()
             raise_terminal_failure(
                 artifact_host=self._artifacts, request=request, profile=profile,
                 failure_class=failure_class, failure_code=failure_code, message=message,
@@ -398,7 +407,7 @@ class ClaudeCliNativeToolsModuleExecutor:
             # the resource boundary prevents the output becoming consumable.
             fail("authorization", "self_test_resources_unavailable" if request.self_test_binding_ref is not None
                  else "output_authorization_refused", str(exc), cause=exc)
-        trace["tool_log"] = parse_cli_log(trace)
+        retain_tool_log()
         trace_ref, trace_sha256 = commit_attempt_trace_json(self._artifacts, request, trace)
         return completed_adapter_result(profile=profile, request=request, outputs=(submission,),
             tool_operation_ref_ids=(), trace_ref=trace_ref, trace_sha256=trace_sha256,
