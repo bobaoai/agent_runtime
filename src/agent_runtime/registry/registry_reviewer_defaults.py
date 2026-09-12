@@ -73,7 +73,7 @@ def reviewer_execution_profile(defaults: ReviewerDefaults, *, transport_kind=Non
         raise ValueError(f"Unsupported Reviewer model transport: {transport_kind}; no automatic fallback")
     spec = ExecutionProfileReleaseSpec(
         execution_profile_id="reviewer_claude_cli",
-        executor_adapter_id="claude_cli_native_tools_executor", executor_adapter_revision="v1",
+        executor_adapter_id="claude_cli_native_tools_executor", executor_adapter_revision="v2",
         transport_kind="claude_cli", provider_id="anthropic",
         model_id="claude-opus-5[1m]" if model_id is None else model_id,
         reasoning_profile="xhigh" if reasoning_profile is None else reasoning_profile,

@@ -160,6 +160,19 @@ Inspection 只展示 Ledger 已提交 facts。Provider session、Temporal histor
 不能替代缺失 Ledger record。尚未 committed 的 effect 不能投影为完成；source conflict 返回失败而不是猜测
 顺序。
 
+工具日志视图按准确 Module Run、Variant 和 Attempt 展示实际调用，逐次提供工具身份、完整参数、实际
+结果、可观察状态及对应原始事件位置。原始 CLI 返回日志通过同一受控读取入口取得；展示分页或摘要
+不替代已保存正文。失败、拒绝、超时、中断与后续重试均可区分，不只展示最后一次成功结果。
+
+视图分别标明 Gateway 授权操作和 Provider 原生调用。日志只是执行事实，不能把原生事件提升为 grant
+或外部批准。Provider 格式由 Invocation 解析，Inspection 使用 Runtime 提供的统一结果；Portable 只
+定义其审核所需的事实与接受规则，宿主不另行转换工具日志。
+
+普通自测读取 Runtime 的当次内存 Ledger 和私有内容，沿用相同的日志投影，明确无持久化的保存边界；
+持久查询读取已经提交的对应 Ledger 和内容存储。日志不完整、正文缺失、格式不受支持、hash 不符或
+未获私有内容读取许可，都须明确返回，不能以空工具列表或猜测结果掩盖。原文仅按 §8 的查询范围和
+披露规则返回，日志读取不增加执行或存储权限。
+
 ## 8. Query Scope and Redaction
 
 Host public API access gate 在 query 进入 Runtime 前决定 caller eligibility；host denial 保留 host owner，

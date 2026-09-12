@@ -1083,6 +1083,13 @@ def test_workflow_module_retry_executes_two_attempts_under_one_variant(
     assert [attempt.attempt_ordinal for attempt in attempts] == [1, 2]
     assert [attempt.status for attempt in attempts] == ["failed", "completed"]
     assert attempts[1].parent_attempt_id == attempts[0].attempt_id
+    from agent_runtime import read_execution_log
+    full_log = read_execution_log(trace, read_content=artifact_host.read_bytes, include_private_content=True)
+    assert [row["attempt_id"] for row in full_log["attempts"]] == [row.attempt_id for row in attempts]
+    assert [row["status"] for row in full_log["attempts"]] == ["failed", "completed"]
+    assert all(row["provider_log"] is not None for row in full_log["attempts"])
+    assert all(row["provider_trace_sha256"] == attempt.provider_trace_sha256
+               for row, attempt in zip(full_log["attempts"], attempts, strict=True))
     assert len(trace.records_of_type(ModelCallRecord)) == 2
     usage = trace.records_of_type(UsageEvent)
     assert [(row.input_tokens, row.output_tokens) for row in usage] == [

@@ -195,9 +195,13 @@ def raise_terminal_failure(
     tool_operation_ref_ids: tuple[str, ...] = (),
     tool_observations: tuple[ModuleToolCallObservation, ...] = (),
     transport_exit_code: int | None = None,
-    cause: Exception | None = None,
+    cause: BaseException | None = None,
+    terminal_status: str = "failed",
 ) -> NoReturn:
     """Commit detail and trace, then raise the typed failed provider result."""
+
+    if terminal_status not in {"failed", "cancelled"}:
+        raise ValueError("terminal failure must be failed or cancelled")
 
     detail = artifact_host.commit_failure_detail(
         module_run_id=request.module_run_id,
@@ -221,7 +225,7 @@ def raise_terminal_failure(
         artifact_host, request, trace
     )
     failed = AgentExecutionResult(
-        terminal_status="failed",
+        terminal_status=terminal_status,
         provider_id=profile.provider_id,
         model_id=profile.model_id,
         runtime_version=runtime_package_version(),

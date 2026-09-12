@@ -29,7 +29,8 @@ def main(argv=None):
     Exit 1: input, execution or environment failure; stderr preserves the error
     type and available native error_code. Failed Attempts remain in stdout JSON.
     Exit 2: invalid arguments, including unsupported persistence options; no model
-    is called. Exit 130: user interruption; no subject verdict is manufactured.
+    is called. Exit 130: user interruption; captured Attempt logs remain in the
+    returned execution JSON when invocation had started. No verdict is manufactured.
     Each invocation is a new temporary test. No cross-process recovery or stored
     history is promised. Explicit stdout capture belongs to the calling operator.
     Before evaluation, lightweight Runtime setup fills missing setup metadata
@@ -45,7 +46,7 @@ def main(argv=None):
             version=args.version, transport_kind=args.transport, model_id=args.model,
             reasoning_profile=args.effort, cli_path=args.cli_path)
         print(json.dumps(record, ensure_ascii=False, allow_nan=False))
-        return 0 if record["status"] == "completed" else 1
+        return 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
     except KeyboardInterrupt:
         print(json.dumps({"error_type": "KeyboardInterrupt", "detail": "Evaluation interrupted"}), file=sys.stderr)
         return 130

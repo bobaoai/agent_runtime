@@ -611,6 +611,10 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "assembly",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
+    _source("invocation", "cli", "logging",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("ledger", "execution", "logging",
+            "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md"),
     _source(
         "invocation",
         "schema",

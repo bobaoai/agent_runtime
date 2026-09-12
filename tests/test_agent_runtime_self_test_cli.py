@@ -42,11 +42,16 @@ def environment(tmp_path, monkeypatch):
         if "during_provider" in controls:
             controls["during_provider"]()
         argv = kwargs["argv"]
+        lines = []
         for event in ({**_init(), "model": argv[argv.index("--model")+1]},
                       {"type":"assistant", "message":{"model":controls.get("response_model", argv[argv.index("--model")+1].removesuffix("[1m]")), "content":[]}},
                       _result(structured_output=output, **controls.get("result", {}))):
-            assert kwargs["on_stdout_line"](json.dumps(event))
-        return subprocess.CompletedProcess(argv, 0, "", "")
+            line = json.dumps(event)
+            lines.append(line)
+            assert kwargs["on_stdout_line"](line)
+        result = subprocess.CompletedProcess(argv, 0, "\n".join(lines), "")
+        result.stdout_bytes, result.stderr_bytes = result.stdout.encode(), b""
+        return result
     def make_adapter(**kw):
         adapter = adapter_type(**kw, process_runner=process)
         execute = adapter.execute
@@ -90,6 +95,10 @@ def test_self_test_runs_without_pg_or_product_authorization(environment):
     assert "entitlement" not in json.dumps(record)
     resources = handles[0][0]
     assert not resources._workspace.exists()
+    assert record["execution_log"]["schema_version"] == "runtime_execution_log_v1"
+    assert len(record["execution_log"]["attempts"]) == len(record["execution_trace"]["attempts"])
+    assert record["execution_log"]["attempts"][-1]["provider_log"] == record["provider_trace"]
+    assert record["execution_log"]["complete"]
     with pytest.raises(PermissionError, match="closed"):
         resources.require_active()
 

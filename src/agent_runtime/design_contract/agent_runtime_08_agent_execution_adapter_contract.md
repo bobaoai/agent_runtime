@@ -649,6 +649,20 @@ Adapter revision 验证；一份可用样例不能证明其他模型、工具组
 Runtime code 生成 Attempt、call、tool、Context、source usage、search、boundary 和 failure records。
 模型不写这些记录；Adapter 也不创建 rate、charge、invoice 或 billing authority。
 
+Adapter 采集该次 CLI 实际返回的 stdout、stderr 和全部可观察公开事件，保留原始字节及其所属 Attempt。
+解析后的工具记录与原始日志同时可回读，解析结果不替代原文。工具请求和结果按 Provider 调用 ID 对应，
+保留真实参数、返回内容和错误，以及原始事件位置；并行、乱序返回和失败后的新 Attempt 不互相覆盖。
+Provider 没有返回的退出码、时间或结果保持未知，不从模型描述补造。
+
+正常完成、解析失败、工具拒绝、超时和用户中断，都须在临时资源清理前交出已经采集的日志。
+记录上限、流读取或保存失败、缺失事件及脱敏造成的差异必须显式说明，不能把部分内容标作完整日志。
+字节已经丢失或从未收到时，恢复不生成虚构内容；无持久存储的进程退出或机器故障不承诺跨进程恢复。
+一次工具失败与日志不完整分别记录，保持原有 Attempt 接受和权限规则。
+
+原生工具事件是调用事实，Gateway 记录还具有各自真实授权依据。统一日志读取可以展示两者，但必须
+区分来源；原生调用不获得伪造 grant，也不因为名称相同就成为 canonical Gateway ToolCallRecord。
+日志格式、Provider 解析和读取实现随 Runtime 发布，宿主及 Portable 消费接口而不维护另一套转换规则。
+
 共享记录只包含 identities、refs/hashes、bounded classes、durations 和可得的 provider quantities。
 Prompt/response、tool arguments/results、stdout/stderr、exception detail、assistant excerpts、
 private input 与 session transcript 均保留在请求绑定的私有存储中。普通自测的私有存储由 Runtime

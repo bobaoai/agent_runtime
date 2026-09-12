@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -19,7 +20,8 @@ from ..contracts.invocation_adapter_definition import (
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_context_preparation import InvocationExecutionExpectation, prepare_registered_invocation_context
-from .invocation_process_execution import run_cli_process
+from .invocation_process_execution import run_cli_process, CliProcessInterrupted
+from .invocation_cli_logging import captured_cli_streams, parse_cli_log, decode_cli_event
 from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
 from .invocation_result_assembly import (
     TerminalAdapterFailure, commit_attempt_trace_json, completed_adapter_result,
@@ -55,7 +57,7 @@ class ClaudeCliNativeToolsModuleExecutor:
     """
 
     executor_adapter_id = "claude_cli_native_tools_executor"
-    executor_adapter_revision = "v1"
+    executor_adapter_revision = "v2"
 
     def __init__(self, *, release_registry: RuntimeReleaseRegistry, artifact_host: ModuleArtifactHost,
                  workspace_root: Path, cli_path: Path | str, read_only_dependencies: tuple[Path, ...] = (),
@@ -103,19 +105,22 @@ class ClaudeCliNativeToolsModuleExecutor:
             ),
             self_test_validator=validate_self_test,
         )
-        try:
-            return self._execute(request, host, prepared)
-        except TerminalAdapterFailure as failure:
-            return failure.result
+        with ExitStack() as cleanup:
+            try:
+                return self._execute(request, host, prepared, cleanup)
+            except TerminalAdapterFailure as failure:
+                return failure.result
 
-    def _execute(self, request, host, prepared) -> AgentExecutionResult:
+    def _execute(self, request, host, prepared, cleanup) -> AgentExecutionResult:
         profile = prepared.profile
         if not profile.tool_policy or set(profile.tool_policy) - NATIVE_TOOLS.keys():
             raise ValueError("Claude Profile requests unsupported native tools")
         tools = [NATIVE_TOOLS[name] for name in profile.tool_policy]
         result: dict = {}
         trace: dict = {"transport": "claude_cli", "native_tool_events": [], "public_events": [],
-                       "model": profile.model_id, "effort": profile.reasoning_profile}
+                       "model": profile.model_id, "effort": profile.reasoning_profile,
+                       "module_run_id": request.module_run_id, "variant_id": request.variant_id,
+                       "attempt_id": request.attempt_id}
         policy_refusal: str | None = None
         event_error: str | None = None
 
@@ -135,14 +140,16 @@ class ClaudeCliNativeToolsModuleExecutor:
             return {"input_tokens": total, "output_tokens": outgoing,
                     "cache_read_tokens": read, "cache_creation_tokens": created}, invalid
 
-        def fail(failure_class, failure_code, message, *, retry="retry_denied", cause=None):
+        def fail(failure_class, failure_code, message, *, retry="retry_denied", cause=None, terminal_status="failed"):
             usage, _ = usage_fields()
+            trace["tool_log"] = parse_cli_log(trace)
             raise_terminal_failure(
                 artifact_host=self._artifacts, request=request, profile=profile,
                 failure_class=failure_class, failure_code=failure_code, message=message,
                 provider_response=str(result.get("result", "")), retry_disposition_id=retry,
                 trace=trace, cause=cause, **usage,
                 transport_exit_code=trace.get("exit_code"),
+                terminal_status=terminal_status,
             )
 
         try:
@@ -157,9 +164,7 @@ class ClaudeCliNativeToolsModuleExecutor:
             if not line.strip():
                 return True
             try:
-                event = json.loads(line)
-                if not isinstance(event, dict):
-                    raise ValueError("CLI event must be an object")
+                event = decode_cli_event(line)
             except ValueError as exc:
                 event_error = str(exc)
                 return False
@@ -213,7 +218,8 @@ class ClaudeCliNativeToolsModuleExecutor:
                     "self_test_binding_sha256": request.self_test_binding_sha256}
                    if request.self_test_binding_ref is not None else {}),
             })
-            with lease_attempt_workspace(attempt), tempfile.TemporaryDirectory(prefix="crt-", dir="/tmp") as temporary:
+            with lease_attempt_workspace(attempt):
+                temporary = cleanup.enter_context(tempfile.TemporaryDirectory(prefix="crt-", dir="/tmp"))
                 work = attempt / "work"
                 materials = work / "materials"
                 scratch = work / "scratch"
@@ -290,7 +296,7 @@ class ClaudeCliNativeToolsModuleExecutor:
                                         timeout_seconds=profile.timeout_seconds, on_stdout_line=observe,
                                         **launch_options)
                     trace.update(exit_code=process.returncode, stdout=process.stdout, stderr=process.stderr,
-                                 process_output_complete=True)
+                                 process_output_complete=True, **captured_cli_streams(process))
                 finally:
                     for name, digest in material_hashes.items():
                         target = Path(name)
@@ -301,9 +307,10 @@ class ClaudeCliNativeToolsModuleExecutor:
                             intact = False
                         if not intact:
                             policy_refusal = "read-only material changed or unavailable"
-        except Exception as exc:
+        except (Exception, CliProcessInterrupted) as exc:
             trace.update(stage=stage, error=str(exc))
-            if isinstance(exc, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
+            if isinstance(exc, (subprocess.CalledProcessError, subprocess.TimeoutExpired, CliProcessInterrupted)):
+                trace.update(captured_cli_streams(exc))
                 for stream in ("stdout", "stderr"):
                     value = getattr(exc, stream) or ""
                     trace[stream] = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
@@ -327,6 +334,9 @@ class ClaudeCliNativeToolsModuleExecutor:
             if stage != "provider_invocation":
                 cls = "schema" if stage == "material_preparation" and isinstance(exc, ValueError) else "dependency_unavailable"
                 fail(cls, "ADAPTER_REQUEST_INVALID" if cls == "schema" else "ADAPTER_BINDING_UNAVAILABLE", str(exc), cause=exc)
+            if isinstance(exc, CliProcessInterrupted):
+                fail("cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user",
+                     terminal_status="cancelled", cause=exc)
             if isinstance(exc, subprocess.TimeoutExpired):
                 fail("timeout", "claude_cli_timeout", "Claude CLI exceeded the configured timeout", retry="retry_allowed", cause=exc)
             if event_error and trace.get("stop_reason") in (None, "observer_stopped"):
@@ -388,6 +398,7 @@ class ClaudeCliNativeToolsModuleExecutor:
             # the resource boundary prevents the output becoming consumable.
             fail("authorization", "self_test_resources_unavailable" if request.self_test_binding_ref is not None
                  else "output_authorization_refused", str(exc), cause=exc)
+        trace["tool_log"] = parse_cli_log(trace)
         trace_ref, trace_sha256 = commit_attempt_trace_json(self._artifacts, request, trace)
         return completed_adapter_result(profile=profile, request=request, outputs=(submission,),
             tool_operation_ref_ids=(), trace_ref=trace_ref, trace_sha256=trace_sha256,

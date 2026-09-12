@@ -18,12 +18,15 @@ class CliProcessError(subprocess.CalledProcessError):
 
     def __init__(self, returncode: int | None, cmd, *, stop_reason: str, message: str,
                  output: str, stderr: str, cleanup_error: str | None = None,
-                 stream_error: str | None = None) -> None:
+                 stream_error: str | None = None, stdout_bytes: bytes | None = None,
+                 stderr_bytes: bytes | None = None) -> None:
         super().__init__(returncode, cmd, output=output, stderr=stderr)
         self.stop_reason = stop_reason
         self.cleanup_error = cleanup_error
         self.stream_error = stream_error
         self.message = message
+        self.stdout_bytes = stdout_bytes
+        self.stderr_bytes = stderr_bytes
 
     def __str__(self) -> str:
         return f"{self.message} (process exit code: {self.returncode})"
@@ -33,12 +36,15 @@ class CliProcessTimeout(subprocess.TimeoutExpired):
     """Keep the timeout interface while retaining observed cleanup/exit facts."""
 
     def __init__(self, cmd, timeout, *, returncode: int | None, output: str, stderr: str,
-                 cleanup_error: str | None = None, stream_error: str | None = None) -> None:
+                 cleanup_error: str | None = None, stream_error: str | None = None,
+                 stdout_bytes: bytes | None = None, stderr_bytes: bytes | None = None) -> None:
         super().__init__(cmd, timeout, output=output, stderr=stderr)
         self.returncode = returncode
         self.stop_reason = "timeout"
         self.cleanup_error = cleanup_error
         self.stream_error = stream_error
+        self.stdout_bytes = stdout_bytes
+        self.stderr_bytes = stderr_bytes
 
     def __str__(self) -> str:
         message = super().__str__()
@@ -47,6 +53,22 @@ class CliProcessTimeout(subprocess.TimeoutExpired):
         if self.cleanup_error:
             message += "; cleanup: " + self.cleanup_error
         return message
+
+
+class CliProcessInterrupted(KeyboardInterrupt):
+    """A user interruption with the actual captured streams after group cleanup."""
+
+    def __init__(self, *, returncode, output, stderr, stdout_bytes, stderr_bytes,
+                 cleanup_error=None, stream_error=None):
+        super().__init__("CLI process interrupted")
+        self.returncode = returncode
+        self.output = self.stdout = output
+        self.stderr = stderr
+        self.stdout_bytes = stdout_bytes
+        self.stderr_bytes = stderr_bytes
+        self.cleanup_error = cleanup_error
+        self.stream_error = stream_error
+        self.stop_reason = "cancelled"
 
 
 def _stop_process_group(process: subprocess.Popen) -> None:
@@ -69,12 +91,16 @@ def run_cli_process(
     on_stdout_line: Callable[[str], bool] | None = None,
     launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Drain both streams, stop the group on failure, preserve bounded output.
+    """Drain both streams, stop the group on failure, preserve exact captured bytes.
 
     The size bound is shared by both streams. Reaching it fails execution;
     the captured prefix is never reported as a complete transcript. An optional
     host launch_guard orders the actual Popen with resource invalidation; it
     releases before stream processing so in-flight calls can still be fenced.
+    CompletedProcess and capture exceptions expose stdout_bytes/stderr_bytes;
+    the original string attributes remain display-compatible. Decode replacement
+    characters never replace the raw bytes. User interruption raises
+    CliProcessInterrupted after cleanup, retaining the same observed prefix.
     """
     if type(max_output_bytes) is not int or max_output_bytes < 1:
         raise ValueError("CLI process output limit must be positive")
@@ -160,6 +186,8 @@ def run_cli_process(
                 mark_failure("timeout")
                 break
             exhausted.wait(0.02)
+    except KeyboardInterrupt:
+        mark_failure("cancelled")
     finally:
         # Descendants must not outlive the one-shot invocation, even if the
         # CLI parent exits before a descendant closes an inherited output pipe.
@@ -176,10 +204,16 @@ def run_cli_process(
     if cleanup_error:
         mark_failure("cleanup_error")
     with lock:
-        stdout, stderr = (bytes(value).decode("utf-8", errors="replace") for value in captured)
+        stdout_bytes, stderr_bytes = map(bytes, captured)
+    stdout, stderr = (value.decode("utf-8", errors="replace") for value in (stdout_bytes, stderr_bytes))
+    if failure == "cancelled":
+        raise CliProcessInterrupted(returncode=process.returncode, output=stdout, stderr=stderr,
+            stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes,
+            cleanup_error=cleanup_error, stream_error=stream_error)
     if failure == "timeout":
         raise CliProcessTimeout(argv, timeout_seconds, returncode=process.returncode,
-                                output=stdout, stderr=stderr, cleanup_error=cleanup_error, stream_error=stream_error)
+                                output=stdout, stderr=stderr, cleanup_error=cleanup_error, stream_error=stream_error,
+                                stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes)
     if failure is not None:
         message = {"observer_stopped": "Runtime stopped the CLI event stream",
                    "stream_error": "CLI stream processing failed",
@@ -190,8 +224,11 @@ def run_cli_process(
         if cleanup_error:
             message += "; " + cleanup_error
         raise CliProcessError(process.returncode, argv, stop_reason=failure, message=message,
-                              output=stdout, stderr=stderr, cleanup_error=cleanup_error, stream_error=stream_error)
-    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+                              output=stdout, stderr=stderr, cleanup_error=cleanup_error, stream_error=stream_error,
+                              stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes)
+    result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+    result.stdout_bytes, result.stderr_bytes = stdout_bytes, stderr_bytes
+    return result
 
 
-__all__ = ["CliProcessError", "CliProcessTimeout", "run_cli_process"]
+__all__ = ["CliProcessError", "CliProcessTimeout", "CliProcessInterrupted", "run_cli_process"]

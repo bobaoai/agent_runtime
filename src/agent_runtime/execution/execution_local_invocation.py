@@ -150,6 +150,10 @@ def evaluate_local_workflow_module(
     Returns:
         JSON-compatible execution facts and output. provider_trace retains the
         observed response models and diagnostics. persistence is not_requested;
+        execution_log contains every Attempt's full private provider trace,
+        original encoded streams, per-call view and explicit completeness issues,
+        assembled by read_execution_log before temporary resources are cleared.
+        Missing or unpaired events never become a successful empty tool list.
         execution_trace is the actual in-memory Run/Variant/Attempt result, not
         a durable Workflow Ledger. The subject owner still validates its verdict.
         Each call is a new test; there is no cross-process replay/history promise.
@@ -173,6 +177,7 @@ def evaluate_local_workflow_module(
         explicitly save the returned result; Runtime does not save it by default.
     """
     from ..invocation.invocation_claude_cli_execution import ClaudeCliNativeToolsModuleExecutor
+    from ..ledger.ledger_execution_logging import read_execution_log
 
     saved, selection = prepare_local_workflow_module(root, workflow_id, version=version,
         transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile)
@@ -220,6 +225,8 @@ def evaluate_local_workflow_module(
                 "failure_detail": content(attempt.failure_detail_ref, attempt.failure_detail_sha256)
                     if attempt.failure_detail_ref is not None else None,
                 "usage": attempt.usage.as_dict(), "execution_trace": asdict(result),
+                "execution_log": read_execution_log(result.module_run, attempts=result.attempts, read_content=artifacts.read_bytes,
+                                                     include_private_content=True),
                 "self_test_binding": json.loads(resources._body),
                 "provider_trace": content(attempt.provider_trace_ref, attempt.provider_trace_sha256)
                     if attempt.provider_trace_ref is not None else None}

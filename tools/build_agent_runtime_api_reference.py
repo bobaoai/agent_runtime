@@ -36,6 +36,9 @@ API_SOURCES = {
     ),
     "src/agent_runtime/testing/execution_local_evaluation.py": (),
     "src/agent_runtime/foundation/foundation_environment_setup.py": ("setup_runtime",),
+    "src/agent_runtime/ledger/ledger_execution_logging.py": ("read_execution_log",),
+    "src/agent_runtime/invocation/invocation_cli_logging.py": ("parse_cli_log",),
+    "src/agent_runtime/inspection/inspection_postgres_querying.py": ("PostgresWorkflowInspectionRepository",),
 }
 ERROR_CONSTANTS = (
     "EXECUTION_PROFILE_UNAVAILABLE",
@@ -99,7 +102,8 @@ def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
 
 def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
     name = node.name
-    lines = [f'## {name}', "", f"Public import: `from agent_runtime import {name}`", ""]
+    module = "agent_runtime.inspection" if name == "PostgresWorkflowInspectionRepository" else "agent_runtime"
+    lines = [f'## {name}', "", f"Public import: `from {module} import {name}`", ""]
     if isinstance(node, ast.ClassDef):
         bases = ", ".join(ast.unparse(base) for base in node.bases)
         decorators = ["@" + ast.unparse(value) for value in node.decorator_list]

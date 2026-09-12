@@ -152,10 +152,13 @@ def test_symlink_output_is_rejected_without_writing_other_target(source, tmp_pat
 
 def test_reference_public_imports_resolve():
     import agent_runtime
+    import importlib
     from agent_runtime.registry import registry_module_authoring
-    for names in API_SOURCES.values():
-        for name in names:
-            assert getattr(agent_runtime, name) is not None
+    imports = re.findall(r"Public import: `from ([\w.]+) import (\w+)`", render_api_reference(ROOT).decode())
+    assert {name for _, name in imports} == {name for names in API_SOURCES.values() for name in names}
+    for module_name, name in imports:
+        module = importlib.import_module(module_name)
+        assert name in module.__all__ and getattr(module, name) is not None
     for name in ERROR_CONSTANTS:
         assert getattr(agent_runtime, name) == getattr(registry_module_authoring, name)
 

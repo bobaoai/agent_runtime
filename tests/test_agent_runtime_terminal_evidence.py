@@ -135,6 +135,20 @@ def test_postgres_attempt_clock_excludes_run_preparation(tmp_path, monkeypatch, 
     assert len(env.calls) == 1
 
 
+def test_postgres_execution_log_uses_the_same_reader(tmp_path, pg_stores):
+    from agent_runtime import read_execution_log
+    from agent_runtime.inspection import PostgresWorkflowInspectionRepository
+    env = _environment(tmp_path, pg=pg_stores)
+    result = _run(env)
+    execution_id = result.module_run.workflow_execution_id
+    repository = PostgresWorkflowInspectionRepository(env.query())
+    stored = repository.read_execution_log(execution_id, include_private_content=True)
+    in_memory = read_execution_log(result.module_run, attempts=result.attempts,
+                                  read_content=env.cell.read_bytes, include_private_content=True)
+    assert stored == in_memory
+    assert repository.read_execution_log(execution_id)["attempts"][0]["provider_log"] is None
+
+
 @pytest.mark.parametrize("resume_after_seconds", [5, 120])
 def test_postgres_existing_attempt_start_never_refreshes_budget(tmp_path, monkeypatch, pg_stores, resume_after_seconds):
     import test_agent_runtime_native_structured_output as native

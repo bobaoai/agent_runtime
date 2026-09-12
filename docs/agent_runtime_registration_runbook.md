@@ -316,6 +316,30 @@ print({"execution_id": execution_id, "record_count": len(trace.records),
 None 表示该引用没有可读内容，不能当成成功空输出。输出、prompt、诊断可能包含私有材料，只向
 获授权读者展示，不把凭据或原文发到共享日志。
 
+完整工具日志由 Runtime 提供。普通 `agent-runtime-evaluate` 返回的 `execution_log` 包含全部 Attempt，
+每项带实际工具请求、结果、原始事件位置和完整性信息；`provider_log.raw_streams` 保存原始 stdout/stderr
+的 base64 字节。它在临时资源清理前生成，调用者可保存完整 stdout JSON；无需 PG 或新的日志命令。
+`complete=false` 和 `issues` 表示日志存在缺口，不能将部分记录或空列表当成已确认没有工具调用。
+
+持久执行使用同一个日志读取实现，凭据仍由已有查询配置提供：
+
+```python
+from agent_runtime.inspection import PostgresWorkflowInspectionRepository
+
+repository = PostgresWorkflowInspectionRepository(query)
+log = repository.read_execution_log(execution_id, include_private_content=True)
+```
+
+省略 `include_private_content` 时只返回元数据，不读取正文。内存调用者可用
+[read_execution_log](agent_runtime_reviewer_api.md#read_execution_log) 读取真实 `ModuleRunRecord` 及其 Attempts；
+该接口与持久查询共用同一实现。权限、缺失内容和 hash 不符保留原错误，不扫描目录寻找替代日志。
+历史 trace 未记录新日志格式时明确不完整，不补造数据。Provider 原生调用与 Gateway 授权操作分开展示。
+
+Runtime `0.2.0.dev1` 的 Claude 原生工具 Adapter revision 为 `v2`。新的执行准备生成相应 Profile/Variant；
+已注册 Module/Workflow 不改变。旧 Profile 可以查询，但不能把 v1 精确绑定静默替换成 v2。
+独立 CLI 审核的助引日志可由 Runtime 的 [parse_cli_log](agent_runtime_reviewer_api.md#parse_cli_log) 解释，
+其来源仍是独立 CLI，不因此成为 managed Runtime execution。业务接受规则由 Portable validator 判断。
+
 本轮注册、模型执行、输出校验、持久回读要分别有证据。注册成功不等于实际测试成功；测试环境缺件
 也不等于 Reviewer 对文稿给出 blocked。具体失败保留原生错误和所属负责人：源或 schema 问题找
 source owner，Profile/Adapter/入口不相容找宿主集成维护者，Registry/Ledger 不可用找存储维护者。

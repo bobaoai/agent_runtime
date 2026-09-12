@@ -179,7 +179,12 @@ from .ledger.ledger_workflow_execution_recording import (
     WorkflowExecutionLedgerRecorder,
 )
 
+from .ledger.ledger_execution_logging import read_execution_log
+from .invocation.invocation_cli_logging import parse_cli_log
+
 __all__ = [
+    "read_execution_log",
+    "parse_cli_log",
     "AgenticWorkflowConformancePackage",
     "AgentExecutionAdapterDescriptor",
     "AgentExecutionAdapterRegistry",

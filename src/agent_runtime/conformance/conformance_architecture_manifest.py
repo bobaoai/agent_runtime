@@ -236,6 +236,8 @@ RUNTIME_DEPENDENCY_DEBT_HIGH_WATER = frozenset(
 RUNTIME_PUBLIC_SURFACE_MANIFEST = MappingProxyType(
     {
         "agent_runtime": (
+            "read_execution_log",
+            "parse_cli_log",
             "AgenticWorkflowConformancePackage",
             "AgentExecutionAdapterDescriptor",
             "AgentExecutionAdapterRegistry",

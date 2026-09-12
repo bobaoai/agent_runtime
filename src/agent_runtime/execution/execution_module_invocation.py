@@ -2057,7 +2057,7 @@ def _assert_admitted_test_evaluation_profile(
         and not non_model_operations
         and profile.executor_adapter_id
         == "claude_cli_native_tools_executor"
-        and profile.executor_adapter_revision == "v1"
+        and profile.executor_adapter_revision == "v2"
         and profile.transport_kind == "claude_cli"
         and profile.provider_id == "anthropic"
     ):

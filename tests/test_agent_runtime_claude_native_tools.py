@@ -26,7 +26,7 @@ def _environment(tmp_path, *, tools=("read", "search", "shell"), model="claude-o
     compiled = _compile_native_module(
         tmp_path, output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="claude_native_tools", executor_adapter_id="claude_cli_native_tools_executor",
-        executor_adapter_revision="v1", transport_kind="claude_cli", provider_id="anthropic",
+        executor_adapter_revision="v2", transport_kind="claude_cli", provider_id="anthropic",
         model_id=model, reasoning_profile=effort, execution_mode="agent",
         attempt_workspace_policy="own_draft_read_write", tool_policy=tools,
     )
@@ -84,10 +84,14 @@ def _run(env, tmp_path, event_factory):
                 exc.output = "\n".join(lines)
             if exc.stderr is None:
                 exc.stderr = ""
+            exc.stdout_bytes = exc.stdout.encode("utf-8") if isinstance(exc.stdout, str) else exc.stdout
+            exc.stderr_bytes = exc.stderr.encode("utf-8") if isinstance(exc.stderr, str) else exc.stderr
             raise
         finally:
             events.close()
-        return subprocess.CompletedProcess(kwargs["argv"], 0, "\n".join(lines), "")
+        result = subprocess.CompletedProcess(kwargs["argv"], 0, "\n".join(lines), "")
+        result.stdout_bytes, result.stderr_bytes = result.stdout.encode(), b""
+        return result
     adapter = claude.ClaudeCliNativeToolsModuleExecutor(
         release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
         cli_path=_fake_cli(tmp_path), process_runner=process,
@@ -109,9 +113,9 @@ def test_attempt_workspace_binds_exact_authorization_boundary(tmp_path, monkeypa
     captured = []
     entered = []
     execute = claude.ClaudeCliNativeToolsModuleExecutor._execute
-    def capture(adapter, request, host, prepared):
+    def capture(adapter, request, host, prepared, cleanup):
         captured.append((adapter, request, host))
-        return execute(adapter, request, host, prepared)
+        return execute(adapter, request, host, prepared, cleanup)
     def events(call):
         entered.append(True)
         yield _init()
@@ -763,7 +767,7 @@ def test_live_ab_registered_design_reviewer_and_postgres(tmp_path):
     original_module = registry.get_module(config["module_release_ref"], config["module_release_sha256"])
     profile = compile_execution_profile_release(ExecutionProfileReleaseSpec(
         execution_profile_id="claude_cli_reviewer_sample", release_version="v1",
-        executor_adapter_id="claude_cli_native_tools_executor", executor_adapter_revision="v1",
+        executor_adapter_id="claude_cli_native_tools_executor", executor_adapter_revision="v2",
         transport_kind="claude_cli", provider_id="anthropic", model_id="claude-opus-5[1m]",
         reasoning_profile="xhigh", execution_mode="agent", semantic_input_delivery_mode="inline",
         attempt_workspace_policy="own_draft_read_write", gateway_access_reasons=(),
