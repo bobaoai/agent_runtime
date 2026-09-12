@@ -392,12 +392,12 @@ class ClaudeCliNativeToolsModuleExecutor:
         try:
             payload = result.get("structured_output")
             if payload is None:
-                payload = json.loads(result.get("result", ""))
+                payload = decode_cli_event(result.get("result", ""))
             if not isinstance(payload, dict):
                 raise ValueError("Claude final output must be a JSON object")
             Draft202012Validator(prepared.registered_output_schema).validate(payload)
             canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        except (ValueError, TypeError, ValidationError) as exc:
+        except (ValueError, TypeError, ValidationError, RecursionError) as exc:
             fail("schema", "ADAPTER_OUTPUT_INVALID", str(exc), cause=exc)
         submission = OutputSubmission(output_slot_id="result", local_handle="output/result.json")
         try:

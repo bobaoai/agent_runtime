@@ -179,15 +179,12 @@ except capture.CliProcessInterrupted as exc:
                       "returncode": 0, "restored": True, "cleanup_error": None}
 
 
-def test_deep_event_from_real_process_cannot_prevent_adapter_trace_commit(tmp_path, monkeypatch):
+def _run_real_native_streams(tmp_path, monkeypatch, raw, stderr=b""):
     env = native._environment(tmp_path)
     _, registry, cell, request, authority = env
-    # CPython's C JSON decoder can have a higher nesting limit than Python
-    # frames; exceed both in supported interpreters, without changing either.
-    depth = max(10000, sys.getrecursionlimit() * 10)
-    raw = json.dumps(native._init()).encode() + b'\n{"nested":' + b'[' * depth + b'0' + b']' * depth + b'}\n'
     def actual_process(**kwargs):
-        return run_cli_process(**{**kwargs, "argv": [sys.executable, "-c", f"import os;os.write(1,{raw!r})"]})
+        return run_cli_process(**{**kwargs, "argv": [sys.executable, "-c",
+            f"import os;os.write(2,{stderr!r});os.write(1,{raw!r})"]})
     adapter = native.claude.ClaudeCliNativeToolsModuleExecutor(
         release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
         cli_path=native._fake_cli(tmp_path), process_runner=actual_process)
@@ -199,12 +196,41 @@ def test_deep_event_from_real_process_cannot_prevent_adapter_trace_commit(tmp_pa
     run = native.run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
                            ledger=native.InMemoryModuleExecutionLedger(), authority=authority,
                            clock=lambda: native._TEST_TIME)
+    return run, cell
+
+
+def test_deep_event_from_real_process_cannot_prevent_adapter_trace_commit(tmp_path, monkeypatch):
+    # CPython's C JSON decoder can have a higher nesting limit than Python
+    # frames; exceed both in supported interpreters, without changing either.
+    depth = max(10000, sys.getrecursionlimit() * 10)
+    raw = json.dumps(native._init()).encode() + b'\n{"nested":' + b'[' * depth + b'0' + b']' * depth + b'}\n'
+    run, cell = _run_real_native_streams(tmp_path, monkeypatch, raw)
     assert run.attempts[0].status == "failed"
     log = read_execution_log(run.module_run, attempts=run.attempts, read_content=cell.read_bytes,
                              include_private_content=True)
     attempt = log["attempts"][0]
     assert cli_stream_bytes(attempt["provider_log"], "stdout") == raw
     assert not attempt["complete"] and "invalid_event:1" in attempt["issues"]
+
+
+def test_deep_final_result_keeps_exact_streams_tool_history_and_usage(tmp_path, monkeypatch):
+    depth = max(10000, sys.getrecursionlimit() * 10)
+    nested = '{"nested":' + '[' * depth + '0' + ']' * depth + '}'
+    events = [native._init(), use("before_bad_result", "Read", file_path="material.txt"),
+              reply("before_bad_result"), native._result(structured_output=None, result=nested)]
+    raw = b"\n".join(json.dumps(event).encode() for event in events) + b"\n"
+    stderr = b"actual diagnostics before invalid final output\n"
+    run, cell = _run_real_native_streams(tmp_path, monkeypatch, raw, stderr)
+    assert run.attempts[0].status == "failed" and run.attempts[0].failure_class == "schema"
+    log = read_execution_log(run.module_run, attempts=run.attempts, read_content=cell.read_bytes,
+                             include_private_content=True)
+    attempt = log["attempts"][0]
+    assert log["complete"]  # Complete captured log; invalid model output is separate.
+    assert cli_stream_bytes(attempt["provider_log"], "stdout") == raw
+    assert cli_stream_bytes(attempt["provider_log"], "stderr") == stderr
+    assert attempt["provider_log"]["result"]["usage"] == events[-1]["usage"]
+    assert [c["tool_call_id"] for c in attempt["tool_calls"]] == ["before_bad_result"]
+    assert attempt["tool_calls"][0]["response"]["tool_result"] == events[2]["message"]["content"][0]
 
 
 @pytest.mark.parametrize("outcome", ["success", "timeout"])
