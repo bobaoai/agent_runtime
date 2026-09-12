@@ -176,6 +176,49 @@ print(json.dumps({'provider_processes':start.call_count,'cancelled':True}))
     assert json.loads(process.stdout) == {"provider_processes": 0, "cancelled": True}
 
 
+def test_default_sigint_during_adapter_preflight_prevents_provider_launch(tmp_path):
+    driver = """
+import json,os,signal,sys
+from pathlib import Path
+import pytest
+from agent_runtime import read_execution_log
+from agent_runtime.invocation import invocation_claude_cli_execution as claude
+from agent_runtime.invocation import invocation_process_execution as capture
+from test_agent_runtime_execution_logging import native,_run_real_native_streams
+previous=signal.getsignal(signal.SIGINT)
+actual_run=claude.subprocess.run
+actual_start=capture.subprocess.Popen
+starts=[]
+signals=[]
+def preflight(argv,*args,**kwargs):
+    result=actual_run(argv,*args,**kwargs)
+    if argv[1]=='--help':
+        signals.append(True)
+        os.kill(os.getpid(),signal.SIGINT)
+    return result
+def start(argv,*args,**kwargs):
+    if argv[0]==sys.executable:
+        starts.append(True)
+        raise AssertionError('provider process must not start after preflight cancellation')
+    return actual_start(argv,*args,**kwargs)
+with pytest.MonkeyPatch.context() as patch:
+    patch.setattr(claude.subprocess,'run',preflight)
+    patch.setattr(capture.subprocess,'Popen',start)
+    run,cell=_run_real_native_streams(Path.cwd(),patch,b'')
+log=read_execution_log(run.module_run,attempts=run.attempts,read_content=cell.read_bytes,include_private_content=True)
+assert signals and not starts
+assert log['attempts'][0]['status']=='cancelled'
+assert log['attempts'][0]['failure_detail']['failure_code']=='claude_cli_interrupted'
+assert signal.getsignal(signal.SIGINT) is previous
+print(json.dumps({'provider_processes':0,'cancelled':True,'preflight_signal':True}))
+"""
+    project = Path(__file__).resolve().parents[1]
+    process = subprocess.run([sys.executable, "-c", driver], cwd=tmp_path, capture_output=True, text=True,
+        timeout=15, env={**os.environ, "PYTHONPATH": os.pathsep.join((str(project / "src"), str(project / "tests")))})
+    assert process.returncode == 0, process.stderr
+    assert json.loads(process.stdout) == {"provider_processes": 0, "cancelled": True, "preflight_signal": True}
+
+
 @pytest.mark.parametrize("phase", ["cleanup", "join"])
 @pytest.mark.parametrize("outcome", ["completed", "timeout", "output_limit"])
 def test_first_real_interrupt_during_shutdown_preserves_bytes_and_restores_handler(tmp_path, phase, outcome):
