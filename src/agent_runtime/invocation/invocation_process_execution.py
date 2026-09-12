@@ -147,6 +147,9 @@ def _run_cli_process(
     if type(timeout_seconds) is not int or timeout_seconds < 1:
         raise ValueError("CLI process timeout must be positive")
     def launch():
+        if interrupted.requested:
+            raise CliProcessInterrupted(returncode=None, output="", stderr="",
+                                        stdout_bytes=b"", stderr_bytes=b"")
         return subprocess.Popen(
             argv, cwd=cwd, env=environment, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,

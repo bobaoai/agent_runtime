@@ -145,6 +145,37 @@ except CliProcessInterrupted as exc:
     assert result["returncode"] != 0
 
 
+@pytest.mark.parametrize("phase", ["before_call", "launch_guard"])
+def test_pending_default_sigint_does_not_start_a_new_cli(tmp_path, phase):
+    driver = """
+import json,os,signal,sys
+from pathlib import Path
+from unittest.mock import patch
+from agent_runtime.invocation import invocation_process_execution as capture
+previous=signal.getsignal(signal.SIGINT)
+def guard(launch):
+    os.kill(os.getpid(),signal.SIGINT)
+    return launch()
+with patch.object(capture.subprocess,'Popen',side_effect=AssertionError('cancelled CLI must not launch')) as start:
+    try:
+        with capture._capture_cli_interrupts():
+            if sys.argv[1]=='before_call': os.kill(os.getpid(),signal.SIGINT)
+            capture.run_cli_process(argv=[sys.executable,'-c','pass'],prompt='',cwd=Path.cwd(),
+                environment=dict(os.environ),timeout_seconds=1,
+                launch_guard=guard if sys.argv[1]=='launch_guard' else None)
+    except capture.CliProcessInterrupted as exc:
+        assert exc.stdout_bytes==exc.stderr_bytes==b'' and exc.returncode is None
+        assert start.call_count==0
+    else: raise AssertionError('expected interruption')
+assert signal.getsignal(signal.SIGINT) is previous
+print(json.dumps({'provider_processes':start.call_count,'cancelled':True}))
+"""
+    process = subprocess.run([sys.executable, "-c", driver, phase], cwd=tmp_path, capture_output=True, text=True,
+        timeout=10, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")})
+    assert process.returncode == 0, process.stderr
+    assert json.loads(process.stdout) == {"provider_processes": 0, "cancelled": True}
+
+
 @pytest.mark.parametrize("phase", ["cleanup", "join"])
 @pytest.mark.parametrize("outcome", ["completed", "timeout", "output_limit"])
 def test_first_real_interrupt_during_shutdown_preserves_bytes_and_restores_handler(tmp_path, phase, outcome):
