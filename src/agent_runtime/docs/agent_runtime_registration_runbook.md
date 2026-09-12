@@ -322,7 +322,8 @@ None 表示该引用没有可读内容，不能当成成功空输出。输出、
 `complete=false` 和 `issues` 表示日志存在缺口，不能将部分记录或空列表当成已确认没有工具调用。
 日志完整不等于执行成功。每个 Attempt 的 `failure_detail` 返回最终失败或取消原因；
 `claude_cli_cleanup_failed` 表示临时资源清理失败，`claude_cli_interrupted` 表示取消且禁止重试。
-取消前已观察到的超时或输出上限保留在 `provider_log.prior_stop_reason`，不被取消状态覆盖。
+进程收尾时取消，先前超时或输出上限保留在 `provider_log.prior_stop_reason`；
+失败已交到 Adapter 后才取消，原失败保留在 `provider_log.adapter_failure`，不被取消状态覆盖。
 
 持久执行使用同一个日志读取实现，凭据仍由已有查询配置提供：
 

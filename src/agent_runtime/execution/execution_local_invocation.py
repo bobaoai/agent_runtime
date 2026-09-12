@@ -164,7 +164,8 @@ def evaluate_local_workflow_module(
         ADAPTER_BINDING_UNAVAILABLE rather than pretending resources expired.
         Temporary-resource cleanup failure uses claude_cli_cleanup_failed while
         preserving the received trace. User cancellation uses claude_cli_interrupted
-        and denies retry; a prior process stop remains in provider_log.prior_stop_reason.
+        and denies retry. Interrupted capture retains prior_stop_reason; a failure
+        already received by the Adapter remains in provider_log.adapter_failure.
         Each execution_log Attempt includes its final private failure_detail.
     Raises:
         FileNotFoundError: Missing registration, version or provider executable.
