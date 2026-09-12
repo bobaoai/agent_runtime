@@ -146,13 +146,14 @@ except CliProcessInterrupted as exc:
 
 
 @pytest.mark.parametrize("phase", ["cleanup", "join"])
-def test_first_real_interrupt_during_shutdown_preserves_bytes_and_restores_handler(tmp_path, phase):
+@pytest.mark.parametrize("outcome", ["completed", "timeout", "output_limit"])
+def test_first_real_interrupt_during_shutdown_preserves_bytes_and_restores_handler(tmp_path, phase, outcome):
     driver = """
 import json,os,signal,sys
 from pathlib import Path
 from agent_runtime.invocation import invocation_process_execution as capture
 previous=signal.getsignal(signal.SIGINT)
-phase=sys.argv[1]
+phase,outcome=sys.argv[1:]
 original=capture._stop_process_group if phase=='cleanup' else capture.Thread.join
 sent=[]
 def interrupt(*args,**kwargs):
@@ -163,20 +164,31 @@ def interrupt(*args,**kwargs):
 if phase=='cleanup': capture._stop_process_group=interrupt
 else: capture.Thread.join=interrupt
 try:
+    child="import os,time;os.write(1,b'before shutdown\\\\n');os.write(2,b'actual stderr')"
+    options={}
+    if outcome=='timeout': child+=';time.sleep(10)'
+    if outcome=='output_limit':
+        child="import os;os.write(1,b'a'*10000)"
+        options['max_output_bytes']=64
     capture.run_cli_process(argv=[sys.executable,'-u','-c',
-        "import os;os.write(1,b'before shutdown\\\\n');os.write(2,b'actual stderr')"],
-        prompt='',cwd=Path.cwd(),environment=dict(os.environ),timeout_seconds=5)
+        child],prompt='',cwd=Path.cwd(),environment=dict(os.environ),timeout_seconds=1,**options)
 except capture.CliProcessInterrupted as exc:
     print(json.dumps({'raw':exc.stdout_bytes.decode(),'stderr':exc.stderr_bytes.decode(),
         'stop':exc.stop_reason,'returncode':exc.returncode,
-        'restored':signal.getsignal(signal.SIGINT) is previous,'cleanup_error':exc.cleanup_error}))
+        'restored':signal.getsignal(signal.SIGINT) is previous,'cleanup_error':exc.cleanup_error,
+        'prior':exc.prior_stop_reason}))
 """
-    process = subprocess.run([sys.executable, "-c", driver, phase], cwd=tmp_path, capture_output=True, text=True,
+    process = subprocess.run([sys.executable, "-c", driver, phase, outcome], cwd=tmp_path, capture_output=True, text=True,
         timeout=15, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")})
     assert process.returncode == 0, process.stderr
     result = json.loads(process.stdout)
-    assert result == {"raw": "before shutdown\n", "stderr": "actual stderr", "stop": "cancelled",
-                      "returncode": 0, "restored": True, "cleanup_error": None}
+    assert result["stop"] == "cancelled" and result["restored"] and result["cleanup_error"] is None
+    assert result["prior"] == (None if outcome == "completed" else outcome)
+    assert result["raw"] == ("a" * 64 if outcome == "output_limit" else "before shutdown\n")
+    assert result["stderr"] == ("" if outcome == "output_limit" else "actual stderr")
+    assert result["returncode"] is not None
+    if outcome == "completed":
+        assert result["returncode"] == 0
 
 
 def _run_real_native_streams(tmp_path, monkeypatch, raw, stderr=b"", *, timeout=False):
@@ -240,6 +252,7 @@ def test_deep_final_result_keeps_exact_streams_tool_history_and_usage(tmp_path, 
     ("success", "output_validation"), ("success", "normalization"), ("success", "trace_finalization"),
     ("success", "cleanup"), ("timeout", "normalization"), ("timeout", "failure_detail"),
     ("timeout", "trace_finalization"), ("timeout", "cleanup"),
+    ("timeout", "process_cleanup"),
 ])
 def test_default_sigint_after_capture_still_delivers_the_complete_attempt(tmp_path, outcome, phase):
     driver = """
@@ -248,6 +261,7 @@ from pathlib import Path
 import pytest
 from agent_runtime import read_execution_log
 from agent_runtime.invocation import invocation_claude_cli_execution as claude
+from agent_runtime.invocation import invocation_process_execution as capture
 from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
 from test_agent_runtime_execution_logging import native,use,reply,_run_real_native_streams
 previous=signal.getsignal(signal.SIGINT)
@@ -285,8 +299,10 @@ with pytest.MonkeyPatch.context() as patch:
             return original(*args,**kwargs)
         patch.setattr(claude,name,interrupt)
     else:
-        owner=claude.tempfile.TemporaryDirectory if phase=='cleanup' else native.InMemoryCellArtifactStore
-        name={'cleanup':'cleanup','failure_detail':'commit_failure_detail','trace_finalization':'commit_attempt_trace'}[phase]
+        owner=(capture if phase=='process_cleanup' else claude.tempfile.TemporaryDirectory
+               if phase=='cleanup' else native.InMemoryCellArtifactStore)
+        name={'cleanup':'cleanup','failure_detail':'commit_failure_detail','trace_finalization':'commit_attempt_trace',
+              'process_cleanup':'_stop_process_group'}[phase]
         original=getattr(owner,name)
         def interrupt(*args,**kwargs):
             send_once()
@@ -304,11 +320,16 @@ assert cli_stream_bytes(attempt['provider_log'],'stderr')==stderr
 assert attempt['provider_log']['result']['usage']==events[-1]['usage']
 assert attempt['tool_calls'][0]['tool_call_id']=='before_interrupt'
 detail=json.loads(cell.read_bytes(run.attempts[0].failure_detail_ref,run.attempts[0].failure_detail_sha256))
+assert detail==attempt['failure_detail']
 assert detail['failure_class']=='cancelled' and detail['retryable'] is False
 if outcome=='timeout':
-    assert attempt['provider_log']['stop_reason']=='timeout'
-    assert attempt['provider_log']['adapter_failure']['failure_class']=='timeout'
-    assert attempt['provider_log']['adapter_failure']['retry_disposition_id']=='retry_allowed'
+    if phase=='process_cleanup':
+        assert attempt['provider_log']['stop_reason']=='cancelled'
+        assert attempt['provider_log']['prior_stop_reason']=='timeout'
+    else:
+        assert attempt['provider_log']['stop_reason']=='timeout'
+        assert attempt['provider_log']['adapter_failure']['failure_class']=='timeout'
+        assert attempt['provider_log']['adapter_failure']['retry_disposition_id']=='retry_allowed'
 assert signal.getsignal(signal.SIGINT) is previous
 print(json.dumps({'status':attempt['status'],'complete':log['complete'],'restored':True}))
 """
@@ -336,6 +357,53 @@ def test_unexpected_normalizer_failure_preserves_original_trace(tmp_path, monkey
     assert attempt["status"] == ("completed" if outcome == "success" else "failed")
     assert not attempt["complete"] and "normalization_failed:RuntimeError" in attempt["issues"]
     assert json.loads(cli_stream_bytes(attempt["provider_log"], "stdout").splitlines()[0]) == native._init()
+
+
+@pytest.mark.parametrize("outcome", ["success", "timeout", "schema"])
+@pytest.mark.parametrize("cancel", [False, True])
+def test_cleanup_oserror_delivers_existing_trace_usage_and_failure(tmp_path, outcome, cancel):
+    driver = """
+import json,os,signal,sys
+from pathlib import Path
+import pytest
+from agent_runtime import read_execution_log
+from agent_runtime.invocation import invocation_claude_cli_execution as claude
+from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+from test_agent_runtime_execution_logging import native,use,reply,_run_real_native_streams
+outcome,cancel=sys.argv[1:]
+events=[native._init(),use('before_cleanup','Read',file_path='material.txt'),reply('before_cleanup'),
+        native._result(**({'structured_output':{}} if outcome=='schema' else {}))]
+raw=b'\\n'.join(json.dumps(event).encode() for event in events)+b'\\n'
+stderr=b'actual diagnostic stream\\n'
+original=claude.tempfile.TemporaryDirectory.cleanup
+def fail_cleanup(instance):
+    original(instance)
+    if cancel=='yes': os.kill(os.getpid(),signal.SIGINT)
+    raise OSError('fixture cleanup failure')
+with pytest.MonkeyPatch.context() as patch:
+    patch.setattr(claude.tempfile.TemporaryDirectory,'cleanup',fail_cleanup)
+    run,cell=_run_real_native_streams(Path.cwd(),patch,raw,stderr,timeout=outcome=='timeout')
+log=read_execution_log(run.module_run,attempts=run.attempts,read_content=cell.read_bytes,include_private_content=True)
+attempt=log['attempts'][0]
+assert attempt['status']==('cancelled' if cancel=='yes' else 'failed')
+assert cli_stream_bytes(attempt['provider_log'],'stdout')==raw
+assert cli_stream_bytes(attempt['provider_log'],'stderr')==stderr
+assert attempt['provider_log']['result']['usage']==events[-1]['usage']
+assert attempt['tool_calls'][0]['tool_call_id']=='before_cleanup'
+detail=json.loads(cell.read_bytes(run.attempts[0].failure_detail_ref,run.attempts[0].failure_detail_sha256))
+assert detail==attempt['failure_detail']
+assert detail['failure_code']==('claude_cli_interrupted' if cancel=='yes' else 'claude_cli_cleanup_failed')
+assert 'fixture cleanup failure' in detail['provider_error_message'] and detail['retryable'] is False
+if outcome!='success': assert attempt['provider_log']['adapter_failure']['failure_class']==outcome
+assert run.attempts[0].usage.input_tokens==7
+print(json.dumps({'status':attempt['status'],'trace_preserved':True,'cleanup_failure_recorded':True}))
+"""
+    project = Path(__file__).resolve().parents[1]
+    process = subprocess.run([sys.executable, "-c", driver, outcome, "yes" if cancel else "no"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(project / "src"), str(project / "tests")))})
+    assert process.returncode == 0, process.stderr
+    assert json.loads(process.stdout)["trace_preserved"] is True
 
 
 def test_runtime_reader_is_private_by_default_and_does_not_create_grants(tmp_path):

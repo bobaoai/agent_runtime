@@ -1309,6 +1309,9 @@ Read one authorized Runtime result/trace without executing or writing.
 runtime_execution_log_v1 with workflow_execution_id, all attempts and
 complete. Each attempt retains its Module/Variant/Attempt identity,
 terminal status, private provider_log, tool_calls, issues and complete.
+failure_class and failure-detail ref/hash remain metadata; failure_detail
+includes the actual saved diagnostic only when private content is enabled.
+This preserves final cancellation/cleanup facts alongside the Provider log.
 Native calls retain original event indices and never acquire a grant;
 Gateway calls retain their exact request/response refs and bytes.
 Missing/legacy logs are explicitly incomplete, not proof of zero calls.

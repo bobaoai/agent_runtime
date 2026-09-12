@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from typing import Any, Mapping, NoReturn
+from typing import Any, Callable, Mapping, NoReturn
 
 from ..contracts.invocation_adapter_definition import (
     AdapterContextResult,
@@ -37,9 +37,10 @@ TRACE_SECTION_MAX_BYTES = 64 * 1024
 class TerminalAdapterFailure(Exception):
     """Internal control flow carrying one typed failed provider result."""
 
-    def __init__(self, result: AgentExecutionResult) -> None:
+    def __init__(self, result: AgentExecutionResult, *, pending_failure_detail: bytes | None = None) -> None:
         super().__init__(result.failure.failure_class if result.failure else "")
         self.result = result
+        self.pending_failure_detail = pending_failure_detail
 
 
 def bounded_trace_text(text: str) -> str:
@@ -178,31 +179,52 @@ def completed_adapter_result(
     return completed
 
 
-def cancel_adapter_result(*, artifact_host: ModuleArtifactHost,
-                          request: AuthorizedAgentExecutionRequest,
-                          result: AgentExecutionResult,
-                          failure_code: str, message: str) -> AgentExecutionResult:
-    """Cancel a finalized result without rewriting its already captured trace.
+def finalize_adapter_result(*, artifact_host: ModuleArtifactHost,
+                            request: AuthorizedAgentExecutionRequest, result: AgentExecutionResult,
+                            pending_failure_detail: bytes | None, interruption_requested: Callable[[], bool],
+                            cleanup_error: Exception | None, interruption_code: str,
+                            cleanup_failure_code: str) -> AgentExecutionResult:
+    """Deliver a trace-bound result after cleanup with the final failure facts.
 
-    The Adapter retains preceding transport/failure facts in that trace. This
-    records cancellation through the existing failure-detail store, preserves
-    usage/context/tool observations, removes consumable outputs and denies retry.
-    It works for both completed and failed results, including a signal received
-    during their original diagnostic commits or temporary-resource cleanup.
+    Use with raise_terminal_failure(defer_failure_detail=True). The original
+    failure facts already belong to the immutable trace; this function decides
+    the final status after cleanup and cancellation without replacing that trace.
+    Both cleanup failure and cancellation deny retry and suppress output. A
+    simultaneous cleanup failure remains explicit in the cancellation diagnostic.
+    The interruption flag is monotonic. A signal during diagnostic commit adds
+    a cancellation diagnostic without overwriting the preceding failure or trace;
+    this bounded second pass never retries the model or resource cleanup.
     """
-    if result.terminal_status == "cancelled":
-        return result
-    detail = artifact_host.commit_failure_detail(
-        module_run_id=request.module_run_id, variant_id=request.variant_id, attempt_id=request.attempt_id,
-        failure_class="cancelled", content=build_provider_failure_detail(
-            failure_class="cancelled", failure_code=failure_code, message=message,
-            provider_response="", provider_error_message=None, transport_exit_code=None, retryable=False),
-        media_type="application/json")
-    cancelled = replace(result, terminal_status="cancelled", outputs=(),
-        failure=AgentExecutionFailure(failure_class="cancelled", retry_disposition_id="retry_denied",
-            failure_scope_id="attempt_only", detail_ref=detail.detail_ref, detail_sha256=detail.detail_sha256))
-    cancelled.validate()
-    return cancelled
+    if result.failure is not None and result.failure.detail_ref is not None:
+        raise ValueError("finalization requires a deferred failure detail")
+    for _ in range(2):
+        status, failure = result.terminal_status, result.failure
+        content = pending_failure_detail
+        interrupted = interruption_requested()
+        if interrupted or status == "cancelled" or cleanup_error is not None:
+            cancelled = interrupted or status == "cancelled"
+            status = "cancelled" if cancelled else "failed"
+            failure = AgentExecutionFailure(failure_class="cancelled" if cancelled else "transport",
+                retry_disposition_id="retry_denied", failure_scope_id="attempt_only")
+            content = build_provider_failure_detail(failure_class=failure.failure_class,
+                failure_code=interruption_code if cancelled else cleanup_failure_code,
+                message=("Adapter interrupted" if cancelled else "Adapter resource cleanup failed")
+                        + "; preceding execution facts remain in the provider trace",
+                provider_response="", provider_error_message=None if cleanup_error is None else str(cleanup_error),
+                transport_exit_code=None, retryable=False)
+        finalized = result
+        if failure is not None:
+            if content is None:
+                raise ValueError("failed result requires its actual diagnostic content")
+            detail = artifact_host.commit_failure_detail(module_run_id=request.module_run_id,
+                variant_id=request.variant_id, attempt_id=request.attempt_id, failure_class=failure.failure_class,
+                content=content, media_type="application/json")
+            finalized = replace(result, terminal_status=status, outputs=(), failure=replace(failure,
+                detail_ref=detail.detail_ref, detail_sha256=detail.detail_sha256))
+            finalized.validate()
+        if status == "cancelled" or not interruption_requested():
+            return finalized
+    raise AssertionError("interruption flag must be monotonic")
 
 
 def raise_terminal_failure(
@@ -225,28 +247,28 @@ def raise_terminal_failure(
     transport_exit_code: int | None = None,
     cause: BaseException | None = None,
     terminal_status: str = "failed",
+    defer_failure_detail: bool = False,
 ) -> NoReturn:
-    """Commit detail and trace, then raise the typed failed provider result."""
+    """Commit trace and raise a typed result; optionally defer the final detail.
+
+    Deferral is internal to an Adapter that calls finalize_adapter_result after
+    resource cleanup. The provisional result must not be returned to the kernel.
+    Other Adapters retain the original immediate diagnostic commit behavior.
+    """
 
     if terminal_status not in {"failed", "cancelled"}:
         raise ValueError("terminal failure must be failed or cancelled")
 
-    detail = artifact_host.commit_failure_detail(
+    content = build_provider_failure_detail(
+        failure_class=failure_class, failure_code=failure_code, message=message,
+        provider_response=provider_response, provider_error_message=str(cause) if cause is not None else None,
+        transport_exit_code=transport_exit_code, retryable=retry_disposition_id == "retry_allowed")
+    detail = None if defer_failure_detail else artifact_host.commit_failure_detail(
         module_run_id=request.module_run_id,
         variant_id=request.variant_id,
         attempt_id=request.attempt_id,
         failure_class=failure_class,
-        content=build_provider_failure_detail(
-            failure_class=failure_class,
-            failure_code=failure_code,
-            message=message,
-            provider_response=provider_response,
-            provider_error_message=(
-                str(cause) if cause is not None else None
-            ),
-            transport_exit_code=transport_exit_code,
-            retryable=retry_disposition_id == "retry_allowed",
-        ),
+        content=content,
         media_type="application/json",
     )
     trace_ref, trace_sha256 = commit_attempt_trace_json(
@@ -272,15 +294,15 @@ def raise_terminal_failure(
             retry_disposition_id=retry_disposition_id,
             failure_scope_id="attempt_only",
             retry_after_seconds=None,
-            detail_ref=detail.detail_ref,
-            detail_sha256=detail.detail_sha256,
+            detail_ref=detail.detail_ref if detail is not None else None,
+            detail_sha256=detail.detail_sha256 if detail is not None else None,
         ),
         cell_local_trace_ref=trace_ref,
         cell_local_trace_sha256=trace_sha256,
         tool_observations=tool_observations,
     )
     failed.validate()
-    raise TerminalAdapterFailure(failed)
+    raise TerminalAdapterFailure(failed, pending_failure_detail=content if defer_failure_detail else None)
 
 
 __all__ = [
@@ -289,7 +311,7 @@ __all__ = [
     "bounded_trace_text",
     "commit_attempt_trace_json",
     "completed_adapter_result",
-    "cancel_adapter_result",
+    "finalize_adapter_result",
     "provider_adapter_descriptor",
     "raise_terminal_failure",
     "stateless_context_result",

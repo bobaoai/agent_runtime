@@ -36,6 +36,9 @@ def read_execution_log(
         runtime_execution_log_v1 with workflow_execution_id, all attempts and
         complete. Each attempt retains its Module/Variant/Attempt identity,
         terminal status, private provider_log, tool_calls, issues and complete.
+        failure_class and failure-detail ref/hash remain metadata; failure_detail
+        includes the actual saved diagnostic only when private content is enabled.
+        This preserves final cancellation/cleanup facts alongside the Provider log.
         Native calls retain original event indices and never acquire a grant;
         Gateway calls retain their exact request/response refs and bytes.
         Missing/legacy logs are explicitly incomplete, not proof of zero calls.
@@ -100,10 +103,16 @@ def read_execution_log(
             "attempt_id": attempt.attempt_id, "status": attempt.status,
             "provider_trace_ref": attempt.provider_trace_ref,
             "provider_trace_sha256": attempt.provider_trace_sha256,
+            "failure_class": attempt.failure_class,
+            "failure_detail_ref": attempt.failure_detail_ref,
+            "failure_detail_sha256": attempt.failure_detail_sha256,
+            "failure_detail": None,
             "provider_log": None, "tool_calls": None,
             "complete": None, "issues": ["private_content_not_requested"]}
         if include_private_content:
             row.update(tool_calls=[], complete=False, issues=[])
+            if attempt.failure_detail_ref is not None:
+                row["failure_detail"] = value(content(attempt.failure_detail_ref, attempt.failure_detail_sha256))
             if attempt.provider_trace_ref is None:
                 row["issues"].append("provider_log_not_recorded")
             else:

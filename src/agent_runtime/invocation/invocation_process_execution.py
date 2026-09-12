@@ -93,7 +93,7 @@ class CliProcessInterrupted(KeyboardInterrupt):
     """A user interruption with the actual captured streams after group cleanup."""
 
     def __init__(self, *, returncode, output, stderr, stdout_bytes, stderr_bytes,
-                 cleanup_error=None, stream_error=None):
+                 cleanup_error=None, stream_error=None, prior_stop_reason=None):
         super().__init__("CLI process interrupted")
         self.returncode = returncode
         self.output = self.stdout = output
@@ -103,6 +103,7 @@ class CliProcessInterrupted(KeyboardInterrupt):
         self.cleanup_error = cleanup_error
         self.stream_error = stream_error
         self.stop_reason = "cancelled"
+        self.prior_stop_reason = prior_stop_reason
 
 
 def _stop_process_group(process: subprocess.Popen) -> None:
@@ -258,7 +259,8 @@ def _run_cli_process(
     if interrupted.requested or failure == "cancelled":
         raise CliProcessInterrupted(returncode=process.returncode, output=stdout, stderr=stderr,
             stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes,
-            cleanup_error=cleanup_error, stream_error=stream_error)
+            cleanup_error=cleanup_error, stream_error=stream_error,
+            prior_stop_reason=failure if failure != "cancelled" else None)
     if failure == "timeout":
         raise CliProcessTimeout(argv, timeout_seconds, returncode=process.returncode,
                                 output=stdout, stderr=stderr, cleanup_error=cleanup_error, stream_error=stream_error,

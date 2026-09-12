@@ -25,7 +25,7 @@ from .invocation_cli_logging import captured_cli_streams, parse_cli_log, decode_
 from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
 from .invocation_result_assembly import (
     TerminalAdapterFailure, commit_attempt_trace_json, completed_adapter_result,
-    provider_adapter_descriptor, raise_terminal_failure, cancel_adapter_result,
+    provider_adapter_descriptor, raise_terminal_failure, finalize_adapter_result,
 )
 from .invocation_schema_projection import NativeOutputSchemaProjectionError, claude_native_output_schema
 from .invocation_tool_definition import ModuleArtifactHost
@@ -112,17 +112,23 @@ class ClaudeCliNativeToolsModuleExecutor:
             self_test_validator=validate_self_test,
         )
         with _capture_cli_interrupts() as interrupted:
-            with ExitStack() as cleanup:
-                try:
-                    result = self._execute(request, host, prepared, cleanup)
-                except TerminalAdapterFailure as failure:
-                    result = failure.result
+            result, pending_detail, cleanup_error = None, None, None
+            try:
+                with ExitStack() as cleanup:
+                    try:
+                        result = self._execute(request, host, prepared, cleanup)
+                    except TerminalAdapterFailure as failure:
+                        result, pending_detail = failure.result, failure.pending_failure_detail
+            except Exception as exc:
+                if result is None:
+                    raise
+                cleanup_error = exc
             # One handoff for both success and failure, after their trace commits
             # and resource cleanup. An interrupted timeout must not allow retry.
-            if interrupted.requested:
-                return cancel_adapter_result(artifact_host=self._artifacts, request=request, result=result,
-                    failure_code="claude_cli_interrupted", message="Claude CLI interrupted by user; preceding facts remain in the provider trace")
-            return result
+            return finalize_adapter_result(artifact_host=self._artifacts, request=request, result=result,
+                pending_failure_detail=pending_detail, interruption_requested=lambda: interrupted.requested,
+                cleanup_error=cleanup_error, interruption_code="claude_cli_interrupted",
+                cleanup_failure_code="claude_cli_cleanup_failed")
 
     def _execute(self, request, host, prepared, cleanup) -> AgentExecutionResult:
         profile = prepared.profile
@@ -174,6 +180,7 @@ class ClaudeCliNativeToolsModuleExecutor:
                 trace=trace, cause=cause, **usage,
                 transport_exit_code=trace.get("exit_code"),
                 terminal_status=terminal_status,
+                defer_failure_detail=True,
             )
 
         try:
@@ -342,6 +349,8 @@ class ClaudeCliNativeToolsModuleExecutor:
                 trace["exit_code"] = getattr(exc, "returncode", None)
                 if getattr(exc, "stop_reason", None) is not None:
                     trace["stop_reason"] = exc.stop_reason
+                if getattr(exc, "prior_stop_reason", None) is not None:
+                    trace["prior_stop_reason"] = exc.prior_stop_reason
                 if getattr(exc, "cleanup_error", None) is not None:
                     trace["cleanup_error"] = exc.cleanup_error
                 if getattr(exc, "stream_error", None) is not None:
