@@ -10,6 +10,7 @@ from agent_runtime import (
     WORKFLOW_MODULE_CLOSURE_INVALID,
     Module,
     ModuleReviewer,
+    ModuleExecutionRequirements,
     Workflow,
     WorkflowAuthoringError,
 )
@@ -134,23 +135,17 @@ def _module_export():
         output_schema_ref=f"schema:{module_id}_output@v1",
         output_schema_document=_reviewer_output_schema(f"schema:{module_id}_output@v1"),
         instruction_text="Return one exact result.\n",
-        declared_operation_ids=("model_execute",),
-        compatible_transport_kinds=("claude_agent_sdk",),
-        behavior_policy_ref="behavior-policy:workflow_execution_isolated@v1",
-        evaluation_policy_ref="evaluation-policy:module_candidate@v1",
-        retry_policy_ref="retry-policy:bounded_candidate@v1",
-        entry_policy=ModuleEntryPolicy.WORKFLOW_BOUND,
-        output_resolution_policy=OutputResolutionPolicy.EVALUATED_SINGLE,
+        schema_version="runtime_module_registration_v4",
     )
-    behavior, evaluation, retry = _policies()
-    exported = ModuleReviewer(source=source).export(
-        module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=None,
+    requirements = ModuleExecutionRequirements(
+        context_isolation="workflow_execution_isolated", execution_mode="tool_free",
+        semantic_input_delivery_mode="inline", attempt_workspace_policy="none",
+        tool_policy=(), gateway_access_reasons=(), network_policy="denied",
+        output_constraint_mode="native_structured_output",
+        timeout_seconds=900, max_attempts=3,
     )
-    return exported
+    return Module(source, execution_requirements=requirements,
+                  entry_policy=ModuleEntryPolicy.WORKFLOW_BOUND).export(module_version="v1")
 
 
 def _workflow_candidate(module_release_ref: str, module_release_sha256: str):
@@ -222,40 +217,23 @@ def _workflow_export():
 
 def test_plain_module_and_reviewer_inherit_one_exact_export_constructor(monkeypatch):
     from agent_runtime.registry import registry_module_authoring as authoring
-    from agent_runtime.registry import compile_agent_module_release
+    from agent_runtime.registry import registry_reviewer_defaults
 
     seed = _module_export()
     source = replace(seed.source, module_id="plain_writer",
                      output_schema_document=_schema(seed.source.output_schema_ref))
-    candidate = authoring._candidate(source, module_version="v1",
-        behavior_policy=seed.behavior_policy, evaluation_policy=seed.evaluation_policy,
-        retry_policy=seed.retry_policy)
-    exported = replace(seed, source=source, candidate=candidate,
-                       compiled=compile_agent_module_release(candidate))
-
-    class PlainModule(Module):
-        @classmethod
-        def from_registration(cls, *args, **kwargs):
-            pytest.fail("conversion must not load source")
-
-        def export(self, **kwargs):
-            return exported
-
-        def project(self, *args, **kwargs):
-            pytest.fail("conversion must not inspect a Registry")
-
-    plain = PlainModule()
-    fixed = plain.export()
+    plain = Module(source, execution_requirements=seed.module_release.execution_requirements)
+    fixed = plain.export(module_version="v1")
     before = fixed.origin_bundle
 
     def forbidden(*args, **kwargs):
         pytest.fail("conversion must only consume the exact Module export")
 
     with monkeypatch.context() as patch:
-        for name in ("load_module_registration", "compile_agent_module_release",
-                     "resolve_reviewer_policy", "reviewer_execution_profile", "_validate_reviewer_output_schema"):
+        for name in ("load_module_registration", "compile_agent_module_release"):
             patch.setattr(authoring, name, forbidden)
-        patch.setattr(PlainModule, "export", forbidden)
+        patch.setattr(registry_reviewer_defaults, "_validate_reviewer_output_schema", forbidden)
+        patch.setattr(Module, "export", forbidden)
         patch.setattr(RuntimeReleaseRegistry, "register_bundle", forbidden)
         workflow = plain.to_workflow(fixed)
     result = workflow.export()

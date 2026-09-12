@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from dataclasses import fields, replace
 import json
+import hashlib
 
-from agent_runtime.contracts.registry_release_definition import ModuleKind
+import pytest
+
+from agent_runtime.contracts.registry_release_definition import (
+    ModuleKind, ModuleRelease, ModuleExecutionRequirements, ReviewerDefaults,
+)
 from agent_runtime.registry.registry_release_compilation import (
     AgentModuleReleaseCandidate,
     BehaviorPolicyReleaseCandidate,
@@ -80,6 +85,113 @@ def _agent_candidate() -> AgentModuleReleaseCandidate:
         retry_policy_ref=retry.release_ref,
         retry_policy_sha256=retry.release_sha256,
     )
+
+
+def _execution_requirements():
+    return ModuleExecutionRequirements(
+        context_isolation="workflow_execution_isolated", execution_mode="agent",
+        semantic_input_delivery_mode="inline", attempt_workspace_policy="own_draft_read_write",
+        tool_policy=("read", "search", "shell"), gateway_access_reasons=(),
+        network_policy="denied", output_constraint_mode="native_structured_output",
+        timeout_seconds=1200, max_attempts=3,
+    )
+
+
+@pytest.mark.parametrize("snapshot_version", [None, "v1", "v2"])
+def test_legacy_module_codec_and_requirements_view_preserve_exact_payload(snapshot_version):
+    snapshot = None if snapshot_version is None else ReviewerDefaults(version=snapshot_version)
+    candidate = replace(_agent_candidate(), reviewer_defaults=snapshot)
+    module = compile_agent_module_release(candidate).module
+    payload = module.as_dict()
+    before = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert "execution_requirements" not in payload
+    assert payload["compatible_transport_kinds"] == ["claude_agent_sdk", "codex_cli"]
+    if snapshot_version is None:
+        assert "reviewer_defaults" not in payload
+    else:
+        assert payload["reviewer_defaults"]["version"] == snapshot_version
+        ReviewerDefaults.from_dict(payload["reviewer_defaults"]).validate()
+    restored = ModuleRelease.from_dict(json.loads(before))
+    restored.validate()
+    # Produced by this unchanged _agent_candidate fixture and the original
+    # compiler in a cold process at commit 5218e06801109ef1b2e4469d7b0584488431d27a.
+    # A second cold process using the new reader independently confirmed them.
+    golden_hashes = {
+        None: "2df9170175d4ee371162bc5f8b5dc13dd6de529e4bc87be41c59b6526b2dd29c",
+        "v1": "0bf719e11e3d74d1f8618af545d46034cfce86adcc2838e7c46fe5be19043e3f",
+        "v2": "653832288991bdd72ac0d80262a1aa5d87bfbc0d8a14c893cc229b5d1210c264",
+    }
+    assert restored.release_sha256 == golden_hashes[snapshot_version]
+    requirements = restored.get_execution_requirements()
+    assert requirements == (None if snapshot is None else _execution_requirements())
+    assert json.dumps(restored.as_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")) == before
+    assert restored.release_ref == module.release_ref
+    assert restored.release_sha256 == module.release_sha256
+    expected_hash = hashlib.sha256(json.dumps(
+        {k: v for k, v in payload.items() if k != "release_sha256"},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    assert restored.release_sha256 == expected_hash
+
+
+def test_new_requirements_codec_excludes_legacy_keys_and_rejects_mixed_payloads():
+    from agent_runtime.registry import RuntimeReleaseBundle
+    candidate = replace(_agent_candidate(), module_version="requirements_v1", compatible_transport_kinds=(),
+                        execution_requirements=_execution_requirements())
+    module = compile_agent_module_release(candidate).module
+    payload = module.as_dict()
+    assert "reviewer_defaults" not in payload
+    assert "compatible_transport_kinds" not in payload
+    assert payload["execution_requirements"] == _execution_requirements().as_dict()
+    assert ModuleRelease.from_dict(payload) == module
+    assert module.get_execution_requirements() == _execution_requirements()
+    old_plain = compile_agent_module_release(_agent_candidate()).module
+    old_snapshot = compile_agent_module_release(replace(
+        _agent_candidate(), module_version="old_snapshot",
+        reviewer_defaults=ReviewerDefaults(version="v2"))).module
+    bundle = RuntimeReleaseBundle(modules=(old_plain, old_snapshot, module))
+    assert RuntimeReleaseBundle.from_dict(bundle.as_dict()).as_dict() == bundle.as_dict()
+    for name, value in (("reviewer_defaults", None), ("compatible_transport_kinds", [])):
+        with pytest.raises(ValueError, match="shape"):
+            ModuleRelease.from_dict({**payload, name: value})
+    altered = {**payload, "execution_requirements": {
+        **payload["execution_requirements"], "timeout_seconds": 1000}}
+    with pytest.raises(ValueError, match="hash mismatch"):
+        ModuleRelease.from_dict(altered).validate()
+
+
+@pytest.mark.parametrize("field", ModuleExecutionRequirements._fields)
+def test_requirement_decoder_does_not_fill_missing_fields(field):
+    payload = _execution_requirements().as_dict()
+    payload.pop(field)
+    with pytest.raises(ValueError, match="shape"):
+        ModuleExecutionRequirements.from_dict(payload)
+
+
+@pytest.mark.parametrize("value", [None, [], {}, {"version": "v1"}])
+def test_invalid_or_unknown_requirement_shape_is_rejected(value):
+    with pytest.raises(ValueError):
+        ModuleExecutionRequirements.from_dict(value)
+
+
+def test_compiler_rejects_mixed_new_and_legacy_capabilities():
+    for changes in (
+        {"compatible_transport_kinds": ("claude_cli",)},
+        {"reviewer_defaults": ReviewerDefaults()},
+    ):
+        candidate = replace(_agent_candidate(), compatible_transport_kinds=(),
+                            execution_requirements=_execution_requirements())
+        with pytest.raises(ValueError, match="cannot mix"):
+            compile_agent_module_release(replace(candidate, **changes))
+
+
+def test_legacy_timeout_is_not_clamped_by_requirements_mapping():
+    module = compile_agent_module_release(replace(
+        _agent_candidate(), reviewer_defaults=ReviewerDefaults(timeout_seconds=86401))).module
+    before = module.as_dict()
+    with pytest.raises(ValueError):
+        module.get_execution_requirements()
+    assert module.as_dict() == before
 
 
 def _profile(profile_id: str, model_id: str):

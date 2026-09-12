@@ -33,6 +33,7 @@ from .contracts import (
     RetryPolicyRelease,
     ModuleRelease,
     ReviewerDefaults,
+    ModuleExecutionRequirements,
     SchemaAssetRelease,
     WorkflowEdge,
     WorkflowNodeBinding,
@@ -136,6 +137,7 @@ from .registry.registry_module_authoring import (
     ModuleExport,
     ModuleReviewer,
 )
+from .registry.registry_module_loading import load_reviewer_registration
 from .registry.registry_local_persistence import LoadedRuntimeRegistration, load_runtime_registration, save_runtime_registration
 from .foundation.foundation_environment_setup import setup_runtime
 from .execution.execution_local_invocation import evaluate_local_workflow_module, prepare_local_workflow_module, run_local_workflow_module
@@ -276,8 +278,10 @@ __all__ = [
     "ModuleReleaseClient",
     "ModuleRelease",
     "ReviewerDefaults",
+    "ModuleExecutionRequirements",
     "ModuleReviewer",
     "LoadedRuntimeRegistration",
+    "load_reviewer_registration",
     "load_runtime_registration",
     "setup_runtime",
     "save_runtime_registration",

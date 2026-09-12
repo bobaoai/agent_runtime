@@ -26,6 +26,7 @@ from ..contracts.registry_release_definition import (
     ReleaseMember,
     RetryPolicyRelease,
     ReviewerDefaults,
+    ModuleExecutionRequirements,
     ModuleRelease,
     SchemaAssetRelease,
     WorkflowEdge,
@@ -42,6 +43,13 @@ from ..foundation import (
 
 
 WORKFLOW_EXECUTION_BINDING_INVALID = "WORKFLOW_EXECUTION_BINDING_INVALID"
+
+
+def content_version(document) -> str:
+    """Deterministic version for compiler-owned execution bindings."""
+    encoded = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return "sha256_" + hashlib.sha256(encoded.encode()).hexdigest()
+
 
 
 def sha256_text(value: str) -> str:
@@ -77,6 +85,7 @@ class AgentModuleReleaseCandidate:
         OutputResolutionPolicy.EVALUATED_SINGLE
     )
     reviewer_defaults: ReviewerDefaults | None = None
+    execution_requirements: ModuleExecutionRequirements | None = None
 
 
 @dataclass(frozen=True)
@@ -574,6 +583,26 @@ def compile_retry_policy_release(
     )
 
 
+def _compile_module_policies(
+    requirements: ModuleExecutionRequirements,
+) -> tuple[BehaviorPolicyRelease, EvaluationPolicyRelease, RetryPolicyRelease]:
+    """Derive existing technical Policy records from one requirements value."""
+    requirements.validate()
+    behavior = compile_behavior_policy_release(BehaviorPolicyReleaseCandidate(
+        "workflow_execution_isolated", "v1", requirements.context_isolation,
+    ))
+    evaluation = compile_evaluation_policy_release(EvaluationPolicyReleaseCandidate(
+        "module_entry", "v1", "none",
+    ))
+    document = {"max_attempts": requirements.max_attempts}
+    retry = compile_retry_policy_release(RetryPolicyReleaseCandidate(
+        "bounded_candidate",
+        "v1" if requirements.max_attempts == 3 else content_version(document),
+        requirements.max_attempts,
+    ))
+    return behavior, evaluation, retry
+
+
 def compile_execution_variant_policy_release(
     candidate: ExecutionVariantPolicyReleaseCandidate,
 ) -> ExecutionVariantPolicyRelease:
@@ -796,6 +825,7 @@ def compile_agent_module_release(
         ),
         module_kind=ModuleKind.AGENT,
         reviewer_defaults=candidate.reviewer_defaults,
+        execution_requirements=candidate.execution_requirements,
         owner_contract_ref=candidate.owner_contract_ref,
         owner_contract_sha256=sha256_text(candidate.owner_contract_content),
         executable_ref=None,

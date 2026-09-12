@@ -41,8 +41,8 @@ def test_checked_in_documents_equal_source():
     build_api_reference(project_root=ROOT, check=True)
     body = render_api_reference(ROOT).decode()
     for fragment in (
-        "not a running Reviewer", "same Module ref", "adding transport compatibility",
-        "intentionally omitted", "execution_blocker_code", "idempotency_key",
+        "ModuleExecutionRequirements", "fixed environment", "load_reviewer_registration",
+        "intentionally omitted", "no Profile, Variant", "idempotency_key",
         "single-node", "authorize", "PermissionError", "origin_bundle",
         "Module.to_workflow", "@staticmethod", "--workflow-id",
     ):
@@ -87,8 +87,8 @@ def test_check_rejects_missing_or_stale_without_writing(source, target):
 
 
 @pytest.mark.parametrize("before,after,expected", [
-    ("module_version: str,", "module_version: str = 'probe_version',", "module_version: str='probe_version'"),
-    ("Author and export one fixed Reviewer definition", "Author and export a documented probe definition", "documented probe definition"),
+    ("module_version: str)", "module_version: str = 'probe_version')", "module_version: str='probe_version'"),
+    ("Supply a fixed environment and inherit Module authoring unchanged", "Supply a documented probe environment", "documented probe environment"),
     ('"MODULE_EXECUTION_PROFILE_UNAVAILABLE"', '"PROBE_PROFILE_UNAVAILABLE"', "PROBE_PROFILE_UNAVAILABLE"),
 ])
 def test_source_changes_are_exported_and_invalidate_old_docs(source, before, after, expected):
@@ -119,7 +119,8 @@ def test_incomplete_source_fails_before_any_write(source, change, expected):
     elif change == "docstring":
         reviewer.body.pop(0)
     elif change == "method_docstring":
-        next(node for node in reviewer.body if isinstance(node, ast.FunctionDef) and node.name == "export").body.pop(0)
+        base = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Module")
+        next(node for node in base.body if isinstance(node, ast.FunctionDef) and node.name == "export").body.pop(0)
     else:
         tree.body = [node for node in tree.body if not (
             isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == ERROR_CONSTANTS[0] for t in node.targets))]

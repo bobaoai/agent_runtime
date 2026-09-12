@@ -16,6 +16,8 @@ reader_persona:
 
 # Agent Runtime Release Registry
 
+本文规定 Registry 的目标职责与交接。实际已支持的接口、source 格式和执行组合以发布代码、测试与随包文档为准；定义编译成功不证明后续注册、执行或部署已经完成。
+
 ## 0. Intent Capsule
 
 ```yaml
@@ -27,7 +29,7 @@ owned_system_object: Runtime Release Registry
 scope:
   - explicit authoring-time Module source loading from a caller-supplied project root
   - path-free Runtime release candidate compilation
-  - Runtime-owned Reviewer defaults and independent model configuration resolution
+  - shared Module authoring and Runtime-owned Reviewer default environment
   - immutable Schema, Prompt, Policy, Profile, Module, and Workflow releases
   - dependency-closed atomic registration
   - one optional active pointer per Module or Workflow subject
@@ -74,11 +76,14 @@ verification_hooks:
 
 ```mermaid
 flowchart LR
-    S["Explicit project root<br/>+ Skill/Module identity"] -->|"runtime_module_source_load"| C["Path-free typed candidate"]
-    C["Path-free typed candidate"] -->|"runtime_release_compile"| K["Compile canonical release closure"]
+    S["显式 source root<br/>+ Skill/Module identity"] -->|"runtime_module_source_load"| C["Module 共用加载与定义导出<br/>任务内容和通用运行要求"]
+    RS["Reviewer source"] --> RC["Runtime 专用源检查<br/>复用加载并校验共同结果格式"]
+    RC --> C
+    C -->|"runtime_release_compile"| K["纯编译不可变 release 及依赖"]
     K -->|"runtime_release_register"| R["Register immutable records atomically"]
-    RD["Runtime Reviewer defaults<br/>fixed capabilities and runtime policies"] --> C
-    MC["Independent model configuration<br/>explicit choice or Runtime model default"] --> K
+    RD["ModuleReviewer<br/>提供固定默认环境"] --> C
+    MC["Runtime 公共调用的执行准备<br/>独立解析模型、Adapter 与本次资源"] -->|"已解析的 Profile / Variant candidate"| K
+    O --> MC
     T["Set or clear active pointer"] -->|"runtime_release_set_active_pointer"| P["Active pointer"]
     R -->|"runtime_release_resolve"| O["Exact release ref + hash"]
     P -->|"runtime_release_resolve_active"| H["Active release ref + hash"]
@@ -97,14 +102,15 @@ Runtime Release Registry 让任何宿主以 repository-independent content 注�
 同时保证 Prompt、Schema、Policy、Profile 和 dependency identity 在执行前已经固定。Registry 只决定
 “什么 release 存在并可被引用”，不决定业务 owner、产品资格或一次执行是否被授权。
 
-Reviewer author 提供审核指令和相关契约文件即可使用 Runtime 的标准 Reviewer 底座，不必逐个组装
-Policy、工具或执行器参数。宿主提供明确存储和本机资源，不决定 Reviewer 的默认能力。
+普通 Module author 明确任务内容及运行要求，使用共用加载、导出、投影和构图能力。Reviewer author
+提供审核指令和相关契约文件；ModuleReviewer 在上游提供固定默认环境，其余行为继承 Module。
+Portable source 不声明运行配置；宿主提供明确存储和本机资源，Runtime 公共调用负责执行准备。
 
 ## 3. Reader Gain
 
 - Module Author 能判断哪些 bytes 和 dependencies 决定一个 Module release identity。
 - Workflow Designer 能用 exact Module refs 组装 Workflow，不创建第二个 Step/Component Registry。
-- Host Integrator 能从 editable source 生成 path-free candidate，并在注册后停止读取 authoring tree。
+- Host Integrator 能通过共用入口生成 path-free candidate，并区分定义注册与一次调用所需的执行准备。
 - Reviewer Author 能区分必须提供的审核定义、Runtime 自动提供的默认能力和独立的模型选择。
 - Runtime Maintainer 能判断 compilation、registration、active pointer 和 resolution 的边界。
 - Engineering Reviewer 能为每条 ref/hash edge 找到 canonical hash domain 和 false-green test。
@@ -121,6 +127,9 @@ capability：
 3. 原子注册 closure 中的全部 records；
 4. 按 exact ref 和 SHA-256 解析任意 registered release；
 5. 只对 Module/Workflow subject 设置、清除和解析 active pointer。
+
+Module 共用加载、导出、投影和单节点构图行为；特化只提供默认环境。定义导出返回任务与运行要求的
+固定内容及依赖，不选择模型或 Adapter，不调用 Provider、不访问存储，也不判断本机能否执行。
 
 `Module.from_registration(...)` 与 `ModuleReviewer.from_registration(...)` 是 Runtime 发布的显式
 authoring-time API。它们只在 caller 传入 project root 和 exact identities 时读取固定 source，
@@ -144,7 +153,7 @@ Registry 管理以下 release families：
 | Retry Policy | 有界技术尝试规则；默认上限及失败处理来自同一版本化 Runtime 规则 |
 | Execution Variant Policy | Module/Workflow position 到 exact Execution Profile 的 binding |
 | Execution Profile | 独立模型选择与 Module 固定能力解析后的不可变执行配置；保存完整生效值及来源，不成为 Reviewer 工具权限的定义者 |
-| Runtime Module | executable contract、owner、I/O Schema、Prompt/Policy refs、固定能力与 Runtime 默认底座依赖、entry 与 output-resolution policy |
+| Runtime Module | executable contract、owner、I/O Schema、Prompt/Policy refs、通用运行要求、entry 与 output-resolution policy |
 | Workflow | workflow-local node/edge graph 和 exact Module release refs |
 
 每个 release 的 `release_ref` 与 `release_sha256` 绑定同一个 canonical payload。Timestamp、active pointer、
@@ -161,8 +170,8 @@ Agent Module release 绑定：
 - input/output Schema refs/hashes；
 - one Prompt Bundle ref/hash；
 - Behavior、Evaluation 和 Retry Policy refs/hashes；
-- declared operation IDs 与 compatible transport kinds；
-- 适用的固定执行能力与 Runtime 默认规则的准确依赖；
+- 模型调用与真实领域 operation 的声明；
+- 适用的通用运行要求及其技术 Policy 依赖；
 - `workflow_bound` 或 `standalone_allowed` entry policy；
 - `direct_single`、`evaluated_single` 或 `selected` output-resolution policy。
 
@@ -173,7 +182,8 @@ Prompt authoring source 在 compilation 时成为 immutable Prompt Component/Bun
 release identity。
 
 模型选择和完整 Execution Profile 与 Execution Variant Policy 都不进入 Module release hash。
-Module 自身的固定能力及默认规则依赖进入其定义闭包；改变模型不会改变这组能力。
+Module 自身的通用运行要求及派生 Policy 进入其定义闭包；改变模型不会改变这组要求。默认环境由特化
+在构造时提供，之后以同一通用定义被消费，不成为下游额外要求的 Reviewer 身份。
 Execution Variant Policy 是
 独立 immutable release：它绑定一个 exact Workflow 或 standalone Module origin release，并把该 origin 的
 exact positions 绑定到 exact Execution Profile releases。同一个 Module/Workflow 可拥有多份 Variant Policy，
@@ -181,94 +191,92 @@ exact positions 绑定到 exact Execution Profile releases。同一个 Module/Wo
 Variant Policy release；Module/Workflow content 未变时不制造新的 origin release。Behavior、Evaluation、
 Retry 和 Variant Policy 都是 Runtime execution mechanics，不表达 Product Authorization 或业务规则。
 
-完整执行配置显式保存生效工具和约束，并能追溯到 Module 能力及所用默认规则。省略 authoring
-参数表示由 Runtime 解析默认，不表示在执行时隐含开工具。工具、资源与参数映射由 T2 08 执行；
-Registry 验证定义、默认来源与模型选择的闭包，不导入 Provider SDK 或宿主配置。
+完整执行配置显式保存生效工具和约束，并能追溯到 Module 的通用运行要求。普通 Module 明确其所需
+能力，Reviewer 由固定预设提供要求；没有要求依据时不能隐含开工具。Runtime 的公共调用负责解析
+本次模型、Adapter 和资源，Registry 只编译并保存已经明确的内容。工具、资源与参数映射由 T2 08
+执行；Registry 不导入 Provider SDK 或宿主配置来作选择。
 
 Registry 在 Variant Policy registration 时验证 exact origin release 与全部 exact Profile bindings 已注册且
 hash 匹配。Execution T2 在运行时选择一份 exact registered Variant Policy，并负责确认其 origin ref/hash
 等于本次解析出的 Module/Workflow target；不匹配是 Execution target failure，不是新的 Registry operation。
 
-### 6.1 Module 与 Reviewer 默认底座
+### 6.1 Module 共用行为与 Reviewer 默认环境
 
-通用 Module 保存任务含义和显式执行契约。ModuleReviewer 是该 authoring 契约的 Reviewer 特化，
-不是另一个 Runtime 子系统。它自动使用 Runtime 发布的标准 Reviewer 底座；其他角色不会因为共用
-Module 基类而获得 Reviewer 的工具或策略。
+Module 拥有通用任务定义与运行契约，其加载、导出、投影和构图行为由基类提供。ModuleReviewer
+只提供 Runtime 发布的一套固定默认环境，继承共用行为。普通 Module 可以明确要求相同能力，
+也可以使用无工具配置；下游 Registry、Execution 和 Invocation 都消费通用定义，不检查 Reviewer
+类名、Module 名称或专用默认字段来决定执行资格。
 
-由准确 Module 定义构造单节点 Workflow 是通用 Module authoring 能力。Reviewer 特化通过继承取得
-该能力，共用同一套图构造与编译规则；构造过程保留传入定义及其依赖，不重新加载 source 或解析默认值。
+单节点 Workflow 从同一份准确 Module 定义构造，保留定义和依赖，不重读 source 或重新解析默认值。
+定义导出与只读投影只回答任务和依赖是什么；本次模型、执行配置与可执行性由公共调用的执行准备回答。
 
-默认底座包含独立上下文、读取、搜索、受限 Shell、审核材料只读、私有 scratch、关闭工具网络和
-有界技术重试。通用审核结果格式由既有 Review Contract 提供；业务 prompt、checklist、完整输入输出
-schema 和结果含义继续属于 subject owner。Runtime 不替作者补写审核内容。
+标准 Reviewer 环境提供独立上下文、读取、搜索、受限 Shell、审核材料只读、私有 scratch、关闭工具
+网络和有界尝试预算。具体默认值、调用参数和编码由发布代码及其文档定义。默认环境在构造时成为
+通用运行要求，后续升级不补写已注册内容。重试次数包含首次尝试；次数上限本身不承诺自动调度。
 
-默认能力与策略由 Runtime 随软件发布并版本化。不同 Reviewer 可以引用同一底座的准确版本，
-不按宿主或 Reviewer 名称复制一套配置。第一次编译时解析并冻结这些依赖；之后的默认升级不改变
-已注册定义或进行中的执行。源码里显式的有效限制继续生效，不能以使用默认底座为理由删除。
+Runtime 拥有 Reviewer 共同结果格式及机械检查。该角色检查在专用 Reviewer source 检查入口执行，
+使用同一次加载取得的准确 schema；正式 Reviewer 注册入口负责消费这个保证。继承的通用加载和
+导出不暗含 Reviewer 格式审查，普通 Module、通用 compiler 与 Registry 不强制采用审核输出结构。
+通用路径仍校验声明的完整 JSON Schema。业务 prompt、checklist、具体输入输出和结果判定继续属于
+subject owner；共同格式检查不会代替其语义审核，也不另建一套 checker 框架。
 
-标准 Reviewer 的重试上限沿用既有有界规则，首次尝试包含在上限中。具体数值、默认参数和可查询
-引用由发布代码及其 docstring 给出，并有测试保证，不由 Skill、宿主或 SDK 临时填值。修改该规则
-需要新默认规则版本及受影响 Module 的新定义；注册调用者不负责逐项组装 Policy records。
+### 6.2 定义编译与本次执行选择
 
-### 6.2 模型配置与默认能力分离
+Module 定义导出只固定任务内容、通用运行要求及依赖。模型、transport、Adapter、Profile 和 Variant
+选择在 Runtime 统一公共调用的执行准备中完成，定义编译不承担这一选择。已经解析的 Profile/Variant
+内容继续使用 Registry 的共用纯编译、注册和读取接口，不产生第二套 Registry。
 
-独立模型配置只表达 provider、transport、model、推理及与模型执行相关的参数。调用者省略模型选择时，
-使用 Runtime 随包提供并经过验证的标准 Reviewer 模型预设；模型预设的具体值及版本由代码公开。
-已明确选择的其他模型不会因该缺省规则被替换。宿主名、active pointer 或相邻项目配置不能决定此默认。
+省略模型选择时，Runtime 使用随包公开的当前模型预设；显式选择不会被自动替换。宿主名称、
+active pointer 或相邻项目配置不决定模型默认。实际程序和运行资源由宿主明确提供。
 
-编译器将固定 Module 能力与独立模型配置合成为精确 Execution Profile，再形成所需位置的 Variant。
-即使现有 Profile record 同时保存模型和工具字段，也必须区分两者的来源：更换模型只改变模型选择及
-相应执行配置，不能重新定义权限。超时等共同执行预算来自固定规则；模型配置不得突破该预算。
-Adapter 无法满足所需能力时返回不相容，不降级成无工具、不扩大权限，也不自动改用其他 provider。
+本次 Profile 必须保持 Module 的运行要求及技术 Policy 约束。更换模型不能增加工具、改变隔离或
+突破执行预算。实际 Adapter 无法履行要求时，执行准备返回准确缺口，不降级能力或自动换 Provider。
+结构合法的定义不等于某个执行组合已被实现。
 
-### 6.3 默认能力与显式操作声明
+### 6.3 任务源、运行能力与真实领域操作
 
-原生工具能力和受保护操作 ID 属于不同的声明维度。Registry 校验它们的对应关系，而不是将两个
-字符串集合直接要求相等，或通过“没有非模型操作”这一特例绕过判断。
+Portable source 提供任务身份、归属、prompt、完整输入输出 schema 和相关文件，不声明模型、
+transport、工具、Runtime 技术 Policy 或宿主运行配置。普通 Module 的运行要求与任务执行规则由
+Runtime 共用构造合同明确；标准 Reviewer 使用 Runtime 固定环境，调用者无需逐项组装底座。
 
-仅声明模型调用的 Reviewer 可以使用已冻结的默认原生能力。另行声明 repository_read、
-repository_search、sandbox_command_execute 或领域操作的 Module，仍受这些操作的授权、材料和
-命令限制。Invocation 必须验证所选工具能执行这些限制；默认 Shell 不能绕过受限命令入口。
-不存在等价绑定、缺少必要约束或操作未知时拒绝，不删声明、不把名称相近视为等价。
+原生读取、搜索和 Shell 是运行能力；真实领域 operation 保留在 Module 的操作声明及授权边界中。
+Engineering 必须执行哪些命令是本次任务及其结果验证要求，不等于为每个 Reviewer 选择一套工具。
+Runtime 负责把合法本地操作要求映射到受限执行能力，保留材料与命令约束，不以工具 ID 与操作 ID
+字符串集合相等、或“没有非模型操作”的条件排除这条正常通路。
 
-transport 兼容声明仍属于 Module source。增加 claude_cli 必须先由 source owner 修订并审核完整
-source，再编译新 Module release；它不是模型 override，也不能由注册或验收 Agent 临时补入。
-一个样例成功不证明其他 transport 或其他操作组合已经支持。
+未知领域操作、没有资源权限或无法落实限制的组合必须拒绝。Shell 能力不授予领域写入或数据库权限，
+也不能据名称相似就认定映射等价。source 格式变化与其消费者按工程方案迁移，不以清空旧操作声明
+或临时补 transport 清单来制造通过。
 
 ### 6.4 用途准入与历史兼容
 
-Evaluation Policy 表达执行用途限制，不保存 Reviewer 的质量标准，也不替代运行后的输出 Evaluation。
-标准 Reviewer 的 authoring 入口不要求作者选择 module_candidate 或 deterministic_candidate。
-新定义的正常用途由 entry policy 和 Execution request 决定，不仅因为它是 Reviewer 就附加“仅候选测试”
-限制；纯代码测试和模型候选测试由明确的测试请求及相应执行检查区分。
+Evaluation Policy 表达执行用途限制，不保存 Reviewer 质量标准，也不替代运行后的结果判定。
+新正常定义的用途由通用 entry、request 和适用 Policy 决定；Reviewer 身份本身不增加候选测试限制。
+普通无工具和非 Agent Module 保持各自明确能力，不能因共用基类而获得模型、Prompt 或原生工具。
 
-已有 source 或 release 显式固定的候选用途策略保持原解释及限制。Runtime 能解析的既有策略由
-公共 authoring 入口取得准确依赖；不能为了省参而重写其引用或升级成更宽的用途。新标准默认与旧
-显式限制的区别必须进入兼容测试。仅添加 transport 的 source 修订保留其原 Policy、prompt 和 schema。
+已有 release 的内容、ref、hash 和已提交执行事实按原编码保真读取。旧快照存在时，只从已存内容和
+原合同明确含义取得运行要求；没有快照不等于缺少 Reviewer 身份，也不自动补入当前默认。
+旧 Profile 与操作等已有事实足以支持的通路继续由 Runtime 统一入口判断；信息不足时返回具体缺口。
 
-已有 release 的内容、身份和历史解释保持不变。缺少新能力来源或无法执行其边界的旧组合可以继续
-按原合同读取，但不得获得新默认权限；不相容执行在 Provider 前拒绝。显式空工具配置继续表示无工具。
-迁移采用新的定义和绑定，不原地补写历史 records，也不因软件安装自动切换日常 active pointer。
+保留旧 payload 中的 transport 清单用于历史读取，不恢复它对新调用的 source-owned 否决权。
+新调用按准确 Module 运行要求、Profile/Adapter 和实际权限判断；历史已提交执行按记录回放，不重新
+选择配置或调用 Provider。显式用途、无工具、真实操作与资源限制仍然有效。
 
-公开文档从真实接口导出必填参数、默认来源、返回、错误和副作用。精确默认依赖必须可查询，但
-可查询字段不是都要手工提供的构造参数。源缺件、定义冲突和 Adapter 不相容分别保留原有错误边界。
+读取兼容与新定义采用分别验证。新旧编码不能混写；相同 ref 不同内容仍冲突。迁移采用新定义及其
+消费者，不原地补写历史记录。读者支持新旧记录后才能写入新格式；能读旧记录不证明旧软件能读新记录。
 
-### 6.5 Execution Profile 注册入口的环境准备说明
+### 6.5 公共调用与宿主资源
 
-面向使用者的 Execution Profile 注册/准备入口必须同时说明其模型配置与宿主环境参数。
-调用者提供一个明确的环境 root，入口按发布代码给出的固定约定准备本地配置和运行目录，或消费
-已准备的资源；需要时接受明确凭据位置。Reviewer 注册调用同一能力时可传递这些参数，不要求
-使用者先自行拼装一套环境对象。
+Runtime 公共调用接收目标 root、任务输入、本次明确材料与依赖，以及适用的存储和授权。Runtime
+负责目标解析、模型与 Adapter 选择、执行配置组装和调用；宿主不另建执行组装器，也不逐次补写启动
+或日志脚本。Registry 核心继续只处理准确 release 内容、依赖和存取。
 
-入口的 docstring 与命令行帮助必须说明 root 的含义、派生目录的默认位置、配置读取和目录创建的
-时机、已有内容与冲突处理、凭据提供方式，以及返回和错误。宿主配置只描述实际连接和资源，
-不成为 Reviewer 默认工具或模型预设的第二来源。具体目录和参数在代码定义并自动导出，Skill
-只引用该入口，不另外维护它的默认值。
+随包 docstring 与 CLI 帮助说明 root 的含义、资源读取或准备的时机、已有内容与冲突处理、返回和错误。
+具体目录、参数及生效值由代码定义并导出；Skill 引用当前入口。环境 root 用于定位配置，不等于模型
+可读范围，安装准备也不自动授权建立数据库或迁移 schema。
 
-注册准备协调宿主的资源接口，Registry 核心仍只编译、验证和写入 release closure，不拥有凭据
-生命周期或数据库部署。建立本地运行目录不自动授权建立 PostgreSQL 实例、创建或迁移 schema。
-凭据只能交给所需的可信 adapter，不进入 prompt、CLI argv、模型环境或公开日志。环境 root 不等于
-模型可读范围；本地配置、回执和临时状态也不是另一个 Release Store。
+凭据由相应可信接口处理，不进入 prompt、CLI argv 或公开日志。配置、临时运行目录与 Release Store
+各守其用途；存储已准备且明确授权时才执行相应写入。定义导出不承担这些环境动作。
 
 ## 7. Workflow Assembly
 
@@ -289,12 +297,11 @@ state。
 Module 可在 Test、Evaluation、Replay 或允许的 standalone purpose 中独立执行；这些 execution purposes
 属于 Execution T2，不改变 Registry release 或 active-pointer law。
 
-宿主交付单节点审核入口时，用公开 Workflow 编译与注册接口消费准确 Module 结果，形成属于该
-Workflow 和节点的 Variant。该流程消费 Runtime 已解析默认，不在宿主重写底座或建立环境 Profile
-选择服务。注册结果必须包含或能够精确解析下一次调用所需的完整依赖；调用者不能在注册完成后还要
-手工补另一份执行 bundle。standalone Variant 与 Workflow Variant 不可互换。
+Runtime 的单节点调用入口消费准确 Module/Workflow 定义及完整固定依赖，在本次执行准备中形成
+属于该目标和节点的 Variant。定义注册不选择模型或要求预先保存本次执行配置；公共调用负责内部
+组装，宿主无需补另一份执行 bundle。standalone Variant 与 Workflow Variant 不可互换。
 
-这项宿主组合不改变直接 Module 执行的定义，也不为独立测试伪造 Workflow。采用 Workflow 路径时，
+这项共用构图与调用不改变直接 Module 执行的定义，也不为独立测试伪造 Workflow。采用 Workflow 路径时，
 它必须是一份真实编译、注册并被调用的 graph，其授权和输入映射由所属宿主明确提供。
 
 ## 8. Active Pointer
@@ -399,10 +406,14 @@ Prohibited dependencies：
 9. explicit authoring loader 只读指定 project root 下的固定 Module closure，并返回无 path candidate；
 10. public export、Design bundle 和 generated Registry inspection parity。
 
-Reviewer 默认 authoring 还必须验证：省略底座参数得到确定的版本化依赖；不同 prompt 共用同一底座；
-模型变化不改变 Module 固定能力；两类操作声明分别有兼容正例与权限冲突负例；transport 修订保留
-原业务字节且产生新 Module；历史定义不因默认升级改变；注册结果可直接进入已交付宿主 Workflow
-入口，错误 origin/节点/Variant 在执行前拒绝。仅有 Profile 编译成功不证明这条调用路径成立。
+通用 authoring 首先用非审核输入输出的普通 Module 验证真实加载、导出、投影和单节点构图，再验证
+ModuleReviewer 只提供默认环境并继承这些行为。无工具、非 Agent 与真实领域操作的限制保持；
+定义导出不解析模型、Adapter 或环境，Reviewer 共同格式仅在专用 source 检查边界落实。
+
+新旧 payload/ref/hash 的读取保真与新调用资格分别验证；旧 transport 清单不得否决已有明确运行依据的
+新调用，也不得通过补入当前默认掩盖缺失要求。Registry、公共执行准备和实际工具资源各有自己的
+完成证据；定义及纯编译层可以独立测试和审核，后续 source、注册与执行消费者未迁移前，不把中间
+结果宣称为整包可运行或可部署。后续调用仍需验证准确 origin/节点/Variant 与实际资源。
 
 ## 12. References
 

@@ -15,7 +15,8 @@ from ..contracts.registry_release_definition import (
 )
 
 
-MODULE_REGISTRATION_SCHEMA_VERSION = "runtime_module_registration_v2"
+MODULE_REGISTRATION_SCHEMA_VERSION = "runtime_module_registration_v4"
+_LEGACY_REGISTRATION_SCHEMA_VERSION = "runtime_module_registration_v2"
 _DEFAULTS_REGISTRATION_SCHEMA_VERSION = "runtime_module_registration_v3"
 _POLICY_REFERENCE_KEYS = frozenset({"behavior_policy_ref", "evaluation_policy_ref", "retry_policy_ref"})
 MODULE_REGISTRATION_FILENAME = "module_registration.json"
@@ -29,7 +30,7 @@ _MODULE_ID_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 _ROOT_ENTRY_NAMES = frozenset(
     {MODULE_REGISTRATION_FILENAME, MODULE_PROMPT_FILENAME, "schemas", "tests"}
 )
-_MANIFEST_KEYS = frozenset(
+_LEGACY_MANIFEST_KEYS = frozenset(
     {
         "schema_version",
         "skill_id",
@@ -48,6 +49,11 @@ _MANIFEST_KEYS = frozenset(
         "output_resolution_policy",
     }
 )
+
+_TASK_MANIFEST_KEYS = frozenset({
+    "schema_version", "skill_id", "module_id", "owner_contract_path",
+    "input_schema_ref", "input_schema_path", "output_schema_ref", "output_schema_path",
+})
 
 
 def _non_empty_string(label: str, value: Any) -> str:
@@ -155,13 +161,14 @@ class ModuleRegistrationSource:
     output_schema_ref: str
     output_schema_document: str
     instruction_text: str
-    declared_operation_ids: tuple[str, ...]
-    compatible_transport_kinds: tuple[str, ...]
-    behavior_policy_ref: str | None
-    evaluation_policy_ref: str | None
-    retry_policy_ref: str | None
-    entry_policy: ModuleEntryPolicy
-    output_resolution_policy: OutputResolutionPolicy
+    declared_operation_ids: tuple[str, ...] = ()
+    compatible_transport_kinds: tuple[str, ...] = ()
+    behavior_policy_ref: str | None = None
+    evaluation_policy_ref: str | None = None
+    retry_policy_ref: str | None = None
+    entry_policy: ModuleEntryPolicy | None = None
+    output_resolution_policy: OutputResolutionPolicy | None = None
+    schema_version: str = _LEGACY_REGISTRATION_SCHEMA_VERSION
 
     @property
     def instruction_source_ref(self) -> str:
@@ -176,10 +183,11 @@ def load_module_registration(
 ) -> ModuleRegistrationSource:
     """Read one fixed `.claude/skills/<skill>/runtime_modules/<module>` source.
 
-    v2 requires every policy reference as before. v3 permits the three policy
-    references to be omitted; ModuleReviewer resolves those omissions from
-    Runtime defaults. Present references remain exact, never overwritten.
-    Other source, identity, schema, operation and transport rules are unchanged.
+    v4 contains exactly eight task-source fields and no execution configuration.
+    v2/v3 remain explicit legacy source readers; values are not filled or
+    rewritten and new Module authoring requires migration to v4. The same
+    identity, exact-file and path protection rules apply to all formats.
+    Reading a source neither registers it nor checks Reviewer-specific format.
     """
 
     project_root = project_root.resolve()
@@ -251,21 +259,23 @@ def load_module_registration(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Module registration must be UTF-8 JSON") from exc
     schema_version = payload.get("schema_version") if type(payload) is dict else None
-    required_keys = (_MANIFEST_KEYS - _POLICY_REFERENCE_KEYS
-                     if schema_version == _DEFAULTS_REGISTRATION_SCHEMA_VERSION else _MANIFEST_KEYS)
-    if type(payload) is not dict or not required_keys <= set(payload) or set(payload) - _MANIFEST_KEYS:
-        missing = sorted(
-            required_keys - set(payload)
-            if isinstance(payload, dict)
-            else required_keys
-        )
-        extra = sorted(set(payload) - _MANIFEST_KEYS) if isinstance(payload, dict) else []
-        raise ValueError(
-            "Module registration has an invalid v2 shape: "
-            f"missing={missing}, extra={extra}"
-        )
-    if schema_version not in {MODULE_REGISTRATION_SCHEMA_VERSION, _DEFAULTS_REGISTRATION_SCHEMA_VERSION}:
+    if schema_version not in {
+        MODULE_REGISTRATION_SCHEMA_VERSION, _LEGACY_REGISTRATION_SCHEMA_VERSION,
+        _DEFAULTS_REGISTRATION_SCHEMA_VERSION,
+    }:
         raise ValueError("unsupported Module registration schema_version")
+    modern = schema_version == MODULE_REGISTRATION_SCHEMA_VERSION
+    allowed_keys = _TASK_MANIFEST_KEYS if modern else _LEGACY_MANIFEST_KEYS
+    required_keys = (
+        allowed_keys - _POLICY_REFERENCE_KEYS
+        if schema_version == _DEFAULTS_REGISTRATION_SCHEMA_VERSION else allowed_keys
+    )
+    if not required_keys <= set(payload) or set(payload) - allowed_keys:
+        raise ValueError(
+            f"Module registration has an invalid {'v4' if modern else 'v2'} shape: "
+            f"missing={sorted(required_keys - set(payload))}, "
+            f"extra={sorted(set(payload) - allowed_keys)}"
+        )
     if payload["skill_id"] != skill_id:
         raise ValueError("registration skill_id differs from its Skill directory")
     if payload["module_id"] != module_id:
@@ -327,11 +337,13 @@ def load_module_registration(
         raise ValueError("input_schema_ref differs from input schema $id")
     if output_document.get("$id") != output_schema_ref:
         raise ValueError("output_schema_ref differs from output schema $id")
-    try:
-        entry_policy = ModuleEntryPolicy(payload["entry_policy"])
-        output_policy = OutputResolutionPolicy(payload["output_resolution_policy"])
-    except ValueError as exc:
-        raise ValueError("Module registration contains an invalid policy") from exc
+    entry_policy = output_policy = None
+    if not modern:
+        try:
+            entry_policy = ModuleEntryPolicy(payload["entry_policy"])
+            output_policy = OutputResolutionPolicy(payload["output_resolution_policy"])
+        except ValueError as exc:
+            raise ValueError("Module registration contains an invalid policy") from exc
 
     return ModuleRegistrationSource(
         skill_id=skill_id,
@@ -346,12 +358,12 @@ def load_module_registration(
         output_schema_ref=output_schema_ref,
         output_schema_document=output_schema,
         instruction_text=prompt,
-        declared_operation_ids=_sorted_unique_strings(
+        declared_operation_ids=(() if modern else _sorted_unique_strings(
             "declared_operation_ids", payload["declared_operation_ids"]
-        ),
-        compatible_transport_kinds=_sorted_unique_strings(
+        )),
+        compatible_transport_kinds=(() if modern else _sorted_unique_strings(
             "compatible_transport_kinds", payload["compatible_transport_kinds"]
-        ),
+        )),
         behavior_policy_ref=(_non_empty_string("behavior_policy_ref", payload["behavior_policy_ref"])
                              if "behavior_policy_ref" in payload else None),
         evaluation_policy_ref=(_non_empty_string("evaluation_policy_ref", payload["evaluation_policy_ref"])
@@ -360,7 +372,25 @@ def load_module_registration(
                          if "retry_policy_ref" in payload else None),
         entry_policy=entry_policy,
         output_resolution_policy=output_policy,
+        schema_version=schema_version,
     )
+
+
+def load_reviewer_registration(
+    project_root: Path, *, skill_id: str, module_id: str,
+) -> ModuleRegistrationSource:
+    """Load one source and check Runtime's common Reviewer output format.
+
+    The generic loader reads the exact source once. The role-specific checker
+    consumes that captured schema, never reopens it, and returns no approval or
+    registration record. Ordinary Module loading/export does not call this gate.
+    Invalid Reviewer format raises ValueError before compilation or any write.
+    """
+    from .registry_reviewer_defaults import _validate_reviewer_output_schema
+
+    source = load_module_registration(project_root, skill_id=skill_id, module_id=module_id)
+    _validate_reviewer_output_schema(json.loads(source.output_schema_document))
+    return source
 
 
 __all__ = [
@@ -368,4 +398,5 @@ __all__ = [
     "MODULE_REGISTRATION_SCHEMA_VERSION",
     "ModuleRegistrationSource",
     "load_module_registration",
+    "load_reviewer_registration",
 ]

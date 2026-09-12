@@ -751,6 +751,129 @@ class PromptBundleRelease:
         )
 
 
+def _validate_execution_capabilities(
+    *,
+    execution_mode: str,
+    semantic_input_delivery_mode: str,
+    attempt_workspace_policy: str,
+    tool_policy: tuple[str, ...],
+    gateway_access_reasons: tuple[str, ...],
+    network_policy: str,
+    output_constraint_mode: str,
+    timeout_seconds: int,
+) -> None:
+    """Validate shared mode, tool, workspace, network and budget constraints."""
+
+    if execution_mode not in EXECUTION_MODES:
+        raise ValueError("invalid Execution Profile execution_mode")
+    if semantic_input_delivery_mode not in (
+        SEMANTIC_INPUT_DELIVERY_MODES
+    ):
+        raise ValueError(
+            "invalid Execution Profile semantic_input_delivery_mode"
+        )
+    if attempt_workspace_policy not in {
+        "none",
+        "own_draft_read_write",
+    }:
+        raise ValueError(
+            "invalid Execution Profile attempt_workspace_policy"
+        )
+    validate_string_tuple(
+        "gateway_access_reasons",
+        gateway_access_reasons,
+        item_validator=lambda label, value: validate_id(label, value),
+        require_non_empty=False,
+    )
+    allowed_gateway_access_reasons = {
+        "entitlement_specific_semantic_search",
+        "external_fact_verification",
+        "unfrozen_input_set",
+        "oversized_knowledge_retrieval",
+        "authorized_package_external_exploration",
+    }
+    if not set(gateway_access_reasons).issubset(
+        allowed_gateway_access_reasons
+    ):
+        raise ValueError(
+            "invalid Execution Profile gateway_access_reasons"
+        )
+    if tuple(sorted(set(gateway_access_reasons))) != (
+        gateway_access_reasons
+    ):
+        raise ValueError(
+            "Execution Profile gateway_access_reasons must be sorted and unique"
+        )
+    if output_constraint_mode not in OUTPUT_CONSTRAINT_MODES:
+        raise ValueError("invalid Execution Profile output_constraint_mode")
+    validate_string_tuple(
+        "tool_policy",
+        tool_policy,
+        item_validator=lambda label, value: validate_id(label, value),
+        require_non_empty=False,
+    )
+    if len(tool_policy) != len(set(tool_policy)):
+        raise ValueError("Execution Profile tool_policy must be unique")
+    if network_policy not in NETWORK_POLICIES:
+        raise ValueError("invalid Execution Profile network_policy")
+    if execution_mode == "tool_free" and tool_policy:
+        raise ValueError("tool_free Execution Profile cannot declare tools")
+    if execution_mode == "tool_free" and network_policy != "denied":
+        raise ValueError("tool_free Execution Profile must deny network")
+    if (
+        execution_mode == "tool_free"
+        and semantic_input_delivery_mode != "inline"
+    ):
+        raise ValueError(
+            "tool_free Execution Profile requires inline semantic input"
+        )
+    if (
+        execution_mode == "tool_free"
+        and attempt_workspace_policy != "none"
+    ):
+        raise ValueError(
+            "tool_free Execution Profile cannot grant a draft workspace"
+        )
+    gateway_delivery = semantic_input_delivery_mode in {
+        "gateway_read",
+        "hybrid",
+    }
+    if gateway_delivery and not tool_policy:
+        raise ValueError(
+            "Gateway semantic input delivery requires registered tools"
+        )
+    if gateway_delivery and not gateway_access_reasons:
+        raise ValueError(
+            "Gateway semantic input delivery requires an admitted reason"
+        )
+    if gateway_delivery and network_policy != "gateway_only":
+        raise ValueError(
+            "Gateway semantic input delivery requires gateway_only network"
+        )
+    native_workspace = (
+        execution_mode == "agent"
+        and semantic_input_delivery_mode == "inline"
+        and attempt_workspace_policy == "own_draft_read_write"
+        and network_policy == "denied"
+    )
+    if not gateway_delivery and tool_policy and not native_workspace:
+        raise ValueError(
+            "native tools require an explicit agent workspace profile"
+        )
+    if not gateway_delivery and gateway_access_reasons:
+        raise ValueError(
+            "non-Gateway semantic input cannot declare Gateway access reasons"
+        )
+    if (
+        attempt_workspace_policy == "own_draft_read_write"
+        and execution_mode != "agent"
+    ):
+        raise ValueError(
+            "draft workspace requires agent execution mode"
+        )
+    validate_int("timeout_seconds", timeout_seconds, minimum=1, maximum=86_400)
+
+
 @dataclass(frozen=True)
 class ExecutionProfileRelease:
     """Immutable provider and execution configuration available to Variants."""
@@ -817,114 +940,16 @@ class ExecutionProfileRelease:
         validate_snake_case_name("provider_id", self.provider_id)
         validate_model_id("model_id", self.model_id)
         _validate_token("reasoning_profile", self.reasoning_profile)
-        if self.execution_mode not in EXECUTION_MODES:
-            raise ValueError("invalid Execution Profile execution_mode")
-        if self.semantic_input_delivery_mode not in (
-            SEMANTIC_INPUT_DELIVERY_MODES
-        ):
-            raise ValueError(
-                "invalid Execution Profile semantic_input_delivery_mode"
-            )
-        if self.attempt_workspace_policy not in {
-            "none",
-            "own_draft_read_write",
-        }:
-            raise ValueError(
-                "invalid Execution Profile attempt_workspace_policy"
-            )
-        validate_string_tuple(
-            "gateway_access_reasons",
-            self.gateway_access_reasons,
-            item_validator=lambda label, value: validate_id(label, value),
-            require_non_empty=False,
+        _validate_execution_capabilities(
+            execution_mode=self.execution_mode,
+            semantic_input_delivery_mode=self.semantic_input_delivery_mode,
+            attempt_workspace_policy=self.attempt_workspace_policy,
+            tool_policy=self.tool_policy,
+            gateway_access_reasons=self.gateway_access_reasons,
+            network_policy=self.network_policy,
+            output_constraint_mode=self.output_constraint_mode,
+            timeout_seconds=self.timeout_seconds,
         )
-        allowed_gateway_access_reasons = {
-            "entitlement_specific_semantic_search",
-            "external_fact_verification",
-            "unfrozen_input_set",
-            "oversized_knowledge_retrieval",
-            "authorized_package_external_exploration",
-        }
-        if not set(self.gateway_access_reasons).issubset(
-            allowed_gateway_access_reasons
-        ):
-            raise ValueError(
-                "invalid Execution Profile gateway_access_reasons"
-            )
-        if tuple(sorted(set(self.gateway_access_reasons))) != (
-            self.gateway_access_reasons
-        ):
-            raise ValueError(
-                "Execution Profile gateway_access_reasons must be sorted and unique"
-            )
-        if self.output_constraint_mode not in OUTPUT_CONSTRAINT_MODES:
-            raise ValueError("invalid Execution Profile output_constraint_mode")
-        validate_string_tuple(
-            "tool_policy",
-            self.tool_policy,
-            item_validator=lambda label, value: validate_id(label, value),
-            require_non_empty=False,
-        )
-        if len(self.tool_policy) != len(set(self.tool_policy)):
-            raise ValueError("Execution Profile tool_policy must be unique")
-        if self.network_policy not in NETWORK_POLICIES:
-            raise ValueError("invalid Execution Profile network_policy")
-        if self.execution_mode == "tool_free" and self.tool_policy:
-            raise ValueError("tool_free Execution Profile cannot declare tools")
-        if self.execution_mode == "tool_free" and self.network_policy != "denied":
-            raise ValueError("tool_free Execution Profile must deny network")
-        if (
-            self.execution_mode == "tool_free"
-            and self.semantic_input_delivery_mode != "inline"
-        ):
-            raise ValueError(
-                "tool_free Execution Profile requires inline semantic input"
-            )
-        if (
-            self.execution_mode == "tool_free"
-            and self.attempt_workspace_policy != "none"
-        ):
-            raise ValueError(
-                "tool_free Execution Profile cannot grant a draft workspace"
-            )
-        gateway_delivery = self.semantic_input_delivery_mode in {
-            "gateway_read",
-            "hybrid",
-        }
-        if gateway_delivery and not self.tool_policy:
-            raise ValueError(
-                "Gateway semantic input delivery requires registered tools"
-            )
-        if gateway_delivery and not self.gateway_access_reasons:
-            raise ValueError(
-                "Gateway semantic input delivery requires an admitted reason"
-            )
-        if gateway_delivery and self.network_policy != "gateway_only":
-            raise ValueError(
-                "Gateway semantic input delivery requires gateway_only network"
-            )
-        native_workspace = (
-            self.execution_mode == "agent"
-            and self.semantic_input_delivery_mode == "inline"
-            and self.attempt_workspace_policy == "own_draft_read_write"
-            and self.network_policy == "denied"
-        )
-        if not gateway_delivery and self.tool_policy and not native_workspace:
-            raise ValueError(
-                "native tools require an explicit agent workspace profile"
-            )
-        if not gateway_delivery and self.gateway_access_reasons:
-            raise ValueError(
-                "non-Gateway semantic input cannot declare Gateway access reasons"
-            )
-        if (
-            self.attempt_workspace_policy == "own_draft_read_write"
-            and self.execution_mode != "agent"
-        ):
-            raise ValueError(
-                "draft workspace requires agent execution mode"
-            )
-        validate_int("timeout_seconds", self.timeout_seconds, minimum=1, maximum=86_400)
         validate_sha256("release_sha256", self.release_sha256)
         if self.release_sha256 != _canonical_sha256(self._payload()):
             raise ValueError("Execution Profile release hash mismatch")
@@ -974,12 +999,94 @@ class ExecutionProfileRelease:
 
 
 @dataclass(frozen=True)
-class ReviewerDefaults:
-    """Runtime's fixed Reviewer capabilities, frozen into each new definition.
+class ModuleExecutionRequirements:
+    """Frozen, provider-independent requirements embedded in an Agent Module.
 
-    Version v1 supplies isolated context, read/search/shell, denied tool network,
-    private scratch, a 1200-second attempt budget and at most three attempts
-    including the first. Model selection and host resources are independent.
+    No model, Adapter, transport or host paths belong here. An empty tool set
+    and no workspace are valid for a tool-free Module. max_attempts limits
+    existing attempt scheduling; it does not schedule retries.
+    """
+
+    # Class naming metadata, not a payload field or independently registered ID.
+    record_type: ClassVar[str] = "module_execution_requirements"
+
+    context_isolation: str
+    execution_mode: str
+    semantic_input_delivery_mode: str
+    attempt_workspace_policy: str
+    tool_policy: tuple[str, ...]
+    gateway_access_reasons: tuple[str, ...]
+    network_policy: str
+    output_constraint_mode: str
+    timeout_seconds: int
+    max_attempts: int
+
+    _profile_fields: ClassVar[tuple[str, ...]] = (
+        "execution_mode", "semantic_input_delivery_mode",
+        "attempt_workspace_policy", "tool_policy", "gateway_access_reasons",
+        "network_policy", "output_constraint_mode", "timeout_seconds",
+    )
+    _fields: ClassVar[tuple[str, ...]] = (
+        "context_isolation", *_profile_fields, "max_attempts",
+    )
+
+    def validate(self) -> None:
+        """Validate complete requirements without selecting an executor."""
+        for name in ("context_isolation", "execution_mode",
+                     "semantic_input_delivery_mode", "attempt_workspace_policy",
+                     "network_policy", "output_constraint_mode"):
+            if type(getattr(self, name)) is not str:
+                raise ValueError(f"{name} must be a string")
+        if self.context_isolation != "workflow_execution_isolated":
+            raise ValueError("Module context must remain workflow_execution_isolated")
+        validate_int("max_attempts", self.max_attempts, minimum=1, maximum=100)
+        _validate_execution_capabilities(
+            **{name: getattr(self, name) for name in self._profile_fields},
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the complete JSON value included in the Module content hash."""
+        self.validate()
+        return {name: (list(value) if type(value) is tuple else value)
+                for name in self._fields for value in (getattr(self, name),)}
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ModuleExecutionRequirements":
+        """Decode the exact shape without filling omissions or current defaults."""
+        if not isinstance(payload, Mapping) or set(payload) != set(cls._fields):
+            raise ValueError("Module execution requirements have an invalid shape")
+        for name in ("tool_policy", "gateway_access_reasons"):
+            if type(payload[name]) is not list:
+                raise ValueError(f"{name} must be a JSON array")
+        result = cls(**{**payload, "tool_policy": tuple(payload["tool_policy"]),
+                        "gateway_access_reasons": tuple(payload["gateway_access_reasons"])})
+        result.validate()
+        return result
+
+    def assert_profile(self, profile: ExecutionProfileRelease) -> None:
+        """Reject a Profile that changes any of the eight frozen capability fields.
+
+        Behavior context and Retry max_attempts are separate Policy dependencies;
+        their consistency is checked at the compilation/Registry boundary.
+        Model, provider and Adapter identity are deliberately not compared here.
+        """
+        self.validate()
+        if type(profile) is not ExecutionProfileRelease:
+            raise ValueError("profile must be an ExecutionProfileRelease")
+        profile.validate()
+        if any(getattr(profile, name) != getattr(self, name)
+               for name in self._profile_fields):
+            raise ValueError("Profile differs from Module execution requirements")
+
+
+@dataclass(frozen=True)
+class ReviewerDefaults:
+    """Legacy Reviewer capability snapshots, retained for historical decoding.
+
+    The complete saved shape carries isolated context, read/search/shell,
+    denied tool network, private scratch and explicit budgets. Version labels
+    are provenance tokens and do not switch assert_profile semantics. New
+    definitions use ModuleExecutionRequirements, never this role-specific key.
     max_attempts records a limit; it does not implement retry scheduling.
     """
 
@@ -1071,6 +1178,7 @@ class ModuleRelease:
     output_resolution_policy: OutputResolutionPolicy
     release_sha256: str
     reviewer_defaults: ReviewerDefaults | None = None
+    execution_requirements: ModuleExecutionRequirements | None = None
 
     def _payload(self) -> dict[str, Any]:
         payload = {
@@ -1099,7 +1207,10 @@ class ModuleRelease:
             "entry_policy": self.entry_policy.value,
             "output_resolution_policy": self.output_resolution_policy.value,
         }
-        if self.reviewer_defaults is not None:
+        if self.execution_requirements is not None:
+            del payload["compatible_transport_kinds"]
+            payload["execution_requirements"] = self.execution_requirements.as_dict()
+        elif self.reviewer_defaults is not None:
             payload["reviewer_defaults"] = self.reviewer_defaults.as_dict()
         return payload
 
@@ -1111,6 +1222,13 @@ class ModuleRelease:
         validate_opaque_ref("release_ref", self.release_ref)
         if type(self.module_kind) is not ModuleKind:
             raise ValueError("module_kind must be a ModuleKind")
+        if self.execution_requirements is not None:
+            if (self.module_kind is not ModuleKind.AGENT
+                    or type(self.execution_requirements) is not ModuleExecutionRequirements):
+                raise ValueError("Module execution requirements require an Agent Module and typed value")
+            if self.reviewer_defaults is not None or self.compatible_transport_kinds != ():
+                raise ValueError("Module cannot mix new requirements and legacy capabilities")
+            self.execution_requirements.validate()
         if self.reviewer_defaults is not None:
             if self.module_kind is not ModuleKind.AGENT or type(self.reviewer_defaults) is not ReviewerDefaults:
                 raise ValueError("Reviewer defaults require an Agent Module and a typed snapshot")
@@ -1162,7 +1280,7 @@ class ModuleRelease:
             "compatible_transport_kinds",
             self.compatible_transport_kinds,
             item_validator=lambda label, value: _validate_token(label, value),
-            require_non_empty=True,
+            require_non_empty=self.execution_requirements is None,
         )
         if type(self.entry_policy) is not ModuleEntryPolicy:
             raise ValueError("entry_policy must be a ModuleEntryPolicy")
@@ -1173,6 +1291,32 @@ class ModuleRelease:
         validate_sha256("release_sha256", self.release_sha256)
         if self.release_sha256 != _canonical_sha256(self._payload()):
             raise ValueError("Runtime Module release hash mismatch")
+
+    def get_execution_requirements(self) -> ModuleExecutionRequirements | None:
+        """Read frozen requirements without modifying payload, identity or history.
+
+        A complete legacy ReviewerDefaults shape maps by its existing assert
+        semantics, irrespective of its version token. A record without such a
+        snapshot returns None, never current Reviewer defaults. This read does
+        not select an executor or grant permission.
+        """
+        self.validate()
+        if self.execution_requirements is not None:
+            return self.execution_requirements
+        previous = self.reviewer_defaults
+        if previous is None:
+            return None
+        result = ModuleExecutionRequirements(
+            context_isolation=previous.context_isolation, execution_mode="agent",
+            semantic_input_delivery_mode="inline",
+            attempt_workspace_policy=previous.attempt_workspace_policy,
+            tool_policy=previous.tool_policy, gateway_access_reasons=(),
+            network_policy=previous.network_policy,
+            output_constraint_mode="native_structured_output",
+            timeout_seconds=previous.timeout_seconds, max_attempts=previous.max_attempts,
+        )
+        result.validate()
+        return result
 
     def as_dict(self) -> dict[str, Any]:
         """Return the canonical JSON-compatible Runtime Module release."""
@@ -1191,8 +1335,26 @@ class ModuleRelease:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ModuleRelease":
-        """Reconstruct a persisted Module Release."""
-
+        """Reconstruct legacy or requirements-based records without rewriting hashes."""
+        modern = "execution_requirements" in payload
+        requirements = None
+        if modern:
+            expected = {
+                "module_id", "module_version", "release_ref", "module_kind",
+                "owner_contract_ref", "owner_contract_sha256",
+                "executable_ref", "executable_sha256",
+                "input_schema_ref", "input_schema_sha256",
+                "output_schema_ref", "output_schema_sha256",
+                "prompt_bundle_ref", "prompt_bundle_sha256", "declared_operation_ids",
+                "behavior_policy_ref", "behavior_policy_sha256",
+                "evaluation_policy_ref", "evaluation_policy_sha256",
+                "retry_policy_ref", "retry_policy_sha256",
+                "entry_policy", "output_resolution_policy", "release_sha256",
+                "execution_requirements",
+            }
+            if set(payload) != expected:
+                raise ValueError("Module requirements payload has an invalid shape")
+            requirements = ModuleExecutionRequirements.from_dict(payload["execution_requirements"])
         return cls(
             module_id=payload["module_id"],
             module_version=payload["module_version"],
@@ -1215,12 +1377,13 @@ class ModuleRelease:
             evaluation_policy_sha256=payload["evaluation_policy_sha256"],
             retry_policy_ref=payload["retry_policy_ref"],
             retry_policy_sha256=payload["retry_policy_sha256"],
-            compatible_transport_kinds=tuple(payload["compatible_transport_kinds"]),
+            compatible_transport_kinds=(() if modern else tuple(payload["compatible_transport_kinds"])),
             entry_policy=ModuleEntryPolicy(payload["entry_policy"]),
             output_resolution_policy=OutputResolutionPolicy(
                 payload["output_resolution_policy"]
             ),
             release_sha256=payload["release_sha256"],
+            execution_requirements=requirements,
             reviewer_defaults=(ReviewerDefaults.from_dict(payload["reviewer_defaults"])
                                if payload.get("reviewer_defaults") is not None else None),
         )

@@ -12,7 +12,7 @@ from agent_runtime.invocation.invocation_schema_projection import (
 from agent_runtime.foundation.foundation_json_schema_validation import (
     validate_json_document_against_schema,
 )
-from agent_runtime.registry.registry_module_authoring import (
+from agent_runtime.registry.registry_reviewer_defaults import (
     _validate_reviewer_output_schema,
 )
 

@@ -12,6 +12,7 @@ from .registry_module_loading import (
     MODULE_REGISTRATION_SCHEMA_VERSION,
     ModuleRegistrationSource,
     load_module_registration,
+    load_reviewer_registration,
 )
 from .registry_module_authoring import (
     EXECUTION_PROFILE_UNAVAILABLE,
@@ -162,6 +163,7 @@ __all__ = [
     "compile_registry_migration_candidate_set",
     "compile_workflow_release",
     "load_module_registration",
+    "load_reviewer_registration",
     "postgres_release_ddl",
     "resolve_registration_reference",
     "runtime_owned_policy_schema_assets",

@@ -232,7 +232,7 @@ def test_runtime_role_vocabulary_is_confined_to_review_capability_owners() -> No
     # Registry owns fixed defaults; Execution prepares and enforces that snapshot.
     # This exact surface list does not admit other roles or host business meaning.
     capability_paths = {
-        "__init__.py", "contracts/registry_release_definition.py",
+        "__init__.py", "registry/__init__.py", "contracts/registry_release_definition.py",
         "registry/registry_reviewer_defaults.py", "registry/registry_plugin_registration.py",
         "registry/registry_local_persistence.py", "registry/registry_module_loading.py",
         "registry/registry_workflow_authoring.py", "registry/registry_release_compilation.py",

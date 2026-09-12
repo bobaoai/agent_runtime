@@ -15,6 +15,8 @@ reader_persona:
 
 # Agent Runtime Agent Execution Adapter Contract
 
+本文规定调用能力的目标职责与资源边界。实际可用的入口、Adapter 组合和验证结果由发布代码、测试与随包文档说明；文中出现一种能力不代表当前所有 Provider 都已支持它。
+
 ## 0. Intent Capsule
 
 ```yaml
@@ -24,7 +26,7 @@ canonical_owner: designDoc/agent_runtime_08_agent_execution_adapter_contract.md
 parent: designDoc/agent_runtime_00_execution_charter.md
 owned_system_object: provider-neutral Attempt invocation
 scope:
-  - exact provider-neutral request, result, failure and context contracts
+  - shared Module invocation requirements and exact provider-neutral request, result, failure and context contracts
   - Runtime-hosted self-test and external execution boundary consumption
   - adapter descriptor, exact resolution, capability validation and dependency probe
   - frozen input delivery, Attempt workspace, tool and network enforcement
@@ -37,7 +39,7 @@ non_goals:
   - domain database schema, SQL, canonical write or business workflow composition
   - mutable provider support inventory, current deployment state or SDK/source layout
 inputs:
-  - exact admitted Module, Execution Profile, Adapter and applicable Skill release references
+  - exact admitted Module and its general execution requirements, resolved Execution Profile and Adapter, and applicable Skill release references
   - committed Attempt-begin receipt and T2 09 execution boundary result
   - complete frozen Module input closure, Prompt Envelope and input delivery plan
   - explicit request-bound input/output handles and permitted execution resources
@@ -74,15 +76,15 @@ verification_hooks:
 
 ```mermaid
 flowchart TD
-    E["Execution peer<br/>exact Attempt, committed begin and T2 09 boundary"] --> C["prepare_registered_invocation_context"]
+    E["Runtime 公共调用的执行准备<br/>通用 Module 要求、本次模型和资源、准确 Attempt 与 boundary"] --> C["prepare_registered_invocation_context"]
     I["Frozen input closure, delivery plan and Prompt Envelope"] --> C
     R["Registry peer<br/>exact Module, Profile and Adapter releases"] --> A["resolve_execution_adapter"]
     A --> C
     A --> P["probe_execution_adapter"]
     S["Admitted Skill release when required"] --> K["prepare_provider_skill_package"]
     K --> C
-    B["宿主安装配置<br/>CLI、登录来源、运行依赖与存储"] --> C
-    C --> G["核对 Module 固定能力与独立模型选择<br/>从已解析 Profile 生成实际参数"]
+    B["宿主明确提供的 root、任务和资源<br/>材料、依赖及适用存储授权"] --> E
+    C --> G["核对通用运行要求与实际资源<br/>从已解析 Profile 生成 Adapter 参数"]
     G --> X["execute_agent_attempt"]
     X --> U["read_authorized_input"]
     X --> T["authorize_operation"]
@@ -103,14 +105,15 @@ flowchart TD
 Module owner 可以独立测试同一份已注册能力，也可以由业务无关的 Runtime 通过不同 provider 执行它。
 普通自测使用 Runtime 测试宿主提供的受限资源，无需生产授权 client 或伪造 approval；外部受保护操作
 仍使用真实外部决定。Provider 的工具、workspace、网络与输出能力受 Module 固定能力、完整生效
-Profile 和本次资源绑定共同约束；选择模型不重新定义 Reviewer 权限。
+Profile 和本次资源绑定共同约束。Runtime 公共调用统一解析执行配置；ModuleReviewer 只在定义端提供
+固定默认环境，普通 Module 使用同一调用合同，选择模型不改变任务的运行要求或资源权限。
 
 ## 3. Reader Gain
 
 - Runtime Maintainer 能追踪 release、输入、boundary、Attempt 与输出之间的闭包，区分调用完成和结果提交。
 - Adapter Maintainer 能实现 SDK、API 或 CLI transport，同时判断哪些不兼容必须在调用 provider 前拒绝。
 - Module Owner 能判断 inline、Gateway、attachment 或显式项目工作区怎样交付输入，以及 Variant 比较保持了哪些条件。
-- Host Integrator 能从 §6.3 区分 Runtime Reviewer 默认能力、独立模型配置和机器资源；从注册结果进入执行，无需重新拼启动代码或默认工具参数。
+- Host Integrator 能从 §6.3 取得统一调用边界：提供 root、任务和本次明确资源，由 Runtime 完成模型、Adapter 和执行配置解析及日志返回。
 - Security Reviewer 能核对自测资源隔离、外部权限交接、工具拒绝、迟到输出和私有内容去向。
 
 ## 4. Capability and Operation
@@ -123,7 +126,7 @@ Agent role、Workflow node、Reviewer semantic owner 或 domain writer。
 | --- | --- | --- |
 | task prompt、允许的语义证据、output meaning 与完成规则 | Module/domain owner | 消费已注册语义与 output schema，不判断业务质量 |
 | Skill artifact 与写作方法 | Skill Management | provider Skill packaging 转换 exact admitted bytes；项目 Agent 的 Skill 发现按 §10.4 显式配置 |
-| release、Profile 与 active-pointer resolution | Registry、Execution | 消费已冻结的 exact refs，不选择业务目标 |
+| release、模型选择与本次 Profile | Registry、Execution | Runtime 公共调用先解析目标和运行配置；Invocation 消费准确结果并核对实际 Adapter，不重读 source 作选择 |
 | 自测资源或外部 authority boundary | T2 09 与其绑定的可信宿主 | 消费 boundary/fence 结果，不签发生产许可 |
 | provider transport、Context、输入交付与归一化 | Invocation | 实现本 T2 的有界调用 |
 | 实际外部效果与数据库权限 | enforcing adapter 与所属 external/data owner | 通过 request-bound host 交接，保留其结果 owner |
@@ -199,6 +202,9 @@ AgentExecutionFailure | null
 private trace ref/hash
 ```
 
+Reviewer 共同格式由 Registry T2 §6.1 的 Runtime 专用 source 检查入口保证；Invocation 对所有 Module
+使用准确注册的完整输出 schema，不再以 Reviewer 身份增加结果字段要求。
+
 input_tokens 归一为包含 cached input 的总输入量；cache_read_tokens 与 cache_creation_tokens
 仅为可空的子集明细，消费方不再次加到 input_tokens。Adapter 必须对其 pinned transport 的 provider
 usage 口径进行转换，保留无法取得的分量为 null，不能把未知量变成零或编造成本。
@@ -223,9 +229,9 @@ self-test 不表示跳过 profile conformance。
 | agent | exact frozen inline、gateway_read、managed_attachment、hybrid 或显式项目工作区 | 已解析 Profile 保存的 Module 工具能力及 boundary 允许的文件、附件和网络范围 | declared final response 或经验证的 output slot |
 
 完整 Execution Profile 保存已经解析的模型、工具、上下文、工作区、网络、预算和输出配置。
-其中模型选择来自独立模型配置，工具及安全规则来自 Module 的固定能力与 Runtime 默认底座，
-具体资源来自本次绑定。本文后续所称 Profile 均为这一完整执行快照，不把它当作调用者重新选择
-Reviewer 权限的入口。工具清单为空表示没有模型工具；来源不完整、含义不明或 Adapter 不能落实
+其中模型选择由 Runtime 公共调用独立解析，工具及安全规则来自 Module 的通用运行要求，具体资源
+来自本次绑定。ModuleReviewer 在上游提供固定环境后，也使用这一份通用合同；后续调用不要求
+Reviewer 类型或专用默认字段。本文后续所称 Profile 均为这一完整执行快照。工具清单为空表示没有模型工具；来源不完整、含义不明或 Adapter 不能落实
 限制时，在调用 Provider 前拒绝。执行器声明支持范围，不能扩大已冻结能力。
 执行器类名、agent mode、可写 workspace 或加载项目规则，均不能额外开启 Shell 或其他工具。
 
@@ -272,8 +278,8 @@ runtime package binding、transport_family 与 exact transport_kind，并声明�
 execution modes、input delivery、workspace/network policies、output constraints、boundary kinds、
 dynamic-operation enforcement 与 operation binding kinds。字段和当前支持清单属于 code truth。
 
-transport_family 区分 sdk、api、cli、in_process；transport_kind 命名 Module 和 Profile 引用的 exact
-transport。Synthetic in-process double 不能声称真实 SDK、API 或 CLI 能力。
+transport_family 区分 sdk、api、cli、in_process；transport_kind 标明本次 Profile/Adapter 选定的 exact
+transport，由 Runtime 解析。Synthetic in-process double 不能声称真实 SDK、API 或 CLI 能力。
 
 ExecutionProfileRegistry 与 Adapter registry 分离。前者提供 immutable Profile register/resolve/inspect，
 后者登记 descriptor/factory 并提供 exact resolve 与 explicit dependency probe。重复相同身份和字节可
@@ -283,46 +289,52 @@ ExecutionProfileRegistry 与 Adapter registry 分离。前者提供 immutable Pr
 调用前，以 exact Module release、Profile ref/hash 和 Adapter revision 解析唯一实现，并验证
 descriptor 覆盖所需 transport、boundary、input、workspace、tool、network、Context 和 output
 capability。缺少支持声明不能当作兼容；不兼容时 provider invocation count 必须为零。
-Module 的 compatible_transport_kinds 也必须匹配。Adapter 变化产生新 revision 和相应 Variant，
-不能回写已冻结 Profile 或自动选择另一个 provider。
+新调用按 Module 的通用运行要求、准确 Profile/Adapter 能力和实际资源判断，不要求 Portable source
+声明 transport，也不使用旧 source 清单否决新调用。旧 payload/hash 保真读取与已提交执行的回放
+遵守 Registry 合同；缺少要求时只能使用已有明确事实，不能补入当前 Reviewer 默认。
+Adapter 行为变化通过相应 revision 和 Variant 表达，不能回写已冻结 Profile 或自动换 provider。
 
 ### 6.3 配置归属与固定执行方法
 
 #### 6.3.1 固定能力、模型选择与实际参数
 
-Runtime Reviewer 底座定义稳定的审核执行能力；独立模型配置选择 provider、transport、model 和
-推理参数；宿主提供实际 CLI、依赖、工作根、存储和授权。三者经 Runtime 解析后形成一个冻结的
-执行快照。默认省参在这一步完成，Adapter 不向 SDK 或当前环境索取隐式默认。
+Module 定义明确任务和通用运行要求；ModuleReviewer 只在该定义的构造端提供固定默认环境。
+Runtime 公共调用接收 root、任务输入、本次材料与依赖及适用存储授权，内部完成目标解析、模型和
+Adapter 选择、Profile/Variant 构造、调用与日志返回。宿主提供事实和资源，不另建配置组装器。
+
+省略模型选择时，Runtime 使用随包公开的当前预设；普通 Module 的工具能力仍来自其明确要求。
+Adapter 消费已经固定的执行快照，不再向 SDK、ambient 环境或 source 索取默认。低层 kernel 与
+授权端口继续服务于同一公共调用，不因角色特化再建一套 runner。
 
 ```mermaid
 flowchart TD
-    M["Module 固定能力<br/>Runtime Reviewer 默认底座及显式限制"] --> P["完整已解析 Execution Profile"]
+    M["通用 Module 运行要求<br/>Reviewer 仅在上游提供固定环境"] --> P["Runtime 公共调用的执行准备<br/>完整 Profile / Variant"]
     MC["独立模型配置<br/>显式值或 Runtime 模型默认"] --> P
     P --> R["按 provider 与 transport 解析 Adapter"]
     R --> C["Claude Adapter"]
     R --> X["Codex Adapter"]
     C --> A["生成所选 CLI 或 SDK 的实际参数"]
     X --> A
-    H["宿主安装配置<br/>实际程序与资源位置"] --> A
+    H["宿主明确资源<br/>root、程序、材料、依赖和适用存储授权"] --> P
     I["Module 指令与输出 schema<br/>本次任务和材料"] --> E["执行并记录实际配置、结果与工具事件"]
     A --> E
 ```
 
-同一 Reviewer 的任务含义和固定能力保持稳定。Claude 和 Codex 可以用不同原生参数表达相同的
+同一 Module 的任务含义和运行要求保持稳定。Claude 和 Codex 可以用不同原生参数表达相同的
 逻辑能力；具体 Adapter 不支持某项边界时按 §6.2 拒绝。模型可选择不等于所有模型组合都已可执行。
 
 | 内容 | 由谁提供 | Runtime 固定执行什么 |
 | --- | --- | --- |
 | 固定 instruction、输入输出 schema、任务完成含义 | Module owner 的已注册 source | 解析完整内容，按原 schema 校验；Profile 不改写任务含义 |
-| Reviewer 的工具、网络、隔离、材料只读、scratch 与共同执行预算 | Runtime 发布的 Reviewer 默认底座及 Module 固定限制 | 解析并冻结完整能力，保留显式操作的授权与资源约束；不因模型选择增删权限 |
+| 工具、网络、隔离、workspace 与执行预算 | 通用 Module 运行要求；Reviewer 在上游由 Runtime 固定环境提供 | 核对完整能力及 Policy 一致性；保留真实操作的授权与资源约束，不因模型选择增删权限 |
 | provider、transport、model、推理及模型执行参数 | 独立模型选择；省略时使用 Runtime 发布的模型预设 | 校验与固定能力相容，解析准确 Adapter；不自动换模型或降档 |
-| 项目入口加载、Skill 发现及非 Reviewer 角色的文件操作边界 | 对应 Module 的明确能力契约 | 按角色契约分别落实；Reviewer 默认不传播给其他角色，角色名称本身不授予权限 |
+| 项目入口加载、Skill 发现与文件操作边界 | 对应 Module 的明确能力契约及本次资源 | 按通用能力落实；普通无工具 Module 仍无工具，角色名称本身不授予权限 |
 | CLI 路径、认证来源、Python 等依赖、运行状态根、stores | 宿主安装配置 | 解析实际依赖，隔离秘密；不从其他会话、项目 scratch 或业务配置猜测 |
 | 本次任务、材料及既有调用标识 | 当前请求 | 绑定输入与执行记录；任务正文不能覆写 Profile 或变成启动参数 |
 | 配置转换、隔离、进程启动和终止、结果校验、记录与导出 | Runtime 固定代码 | 同一入口复用；结果、失败和公开日志均可按执行记录取得 |
 
-默认规则由 Runtime 提供并版本化；模型预设与能力底座分别更新。完整执行快照保存默认来源和
-实际生效值，不成为第二份可编辑权限配置。超出 Module 固定预算或实现支持范围时拒绝，不能
+Reviewer 固定环境由 Runtime 随软件提供；模型预设与 Module 定义分别更新。默认环境在构造时成为
+同一通用运行要求，后续消费者只核对这份要求和实际生效值。执行快照不成为第二份可编辑权限配置。超出 Module 固定预算或实现支持范围时拒绝，不能
 悄悄截短材料、减少能力或开放更大资源范围。
 
 #### 6.3.2 Reviewer 默认能力及受限操作
@@ -334,17 +346,20 @@ Skills、Plugins 和 hooks 不自动载入。Provider 连接和可信 Runtime �
 逻辑 read/search/shell 到 Provider 工具的映射由 Adapter 固定代码实现。标准原生工具窗口不要求逐条
 命令白名单，但 Module 或本次任务已要求 exact commands 时，必须继续执行 §10.3 的限制。
 
-仅声明 model_execute 的 Module 与另有 repository_read、repository_search、sandbox_command_execute
-等操作的 Module 都消费同一默认能力含义。后一类的额外约束不能丢失：原生工具若触及已声明操作的
-资源或效果，必须通过等价的受控绑定，或由受验证的整体窗口实现相同限制。只按名字把操作改成
-Read/Grep/Bash 不构成等价证明；默认 Bash 也不能绕过受控命令入口。
+普通 Module 可以明确要求与 Reviewer 相同的读取、搜索和 Shell 能力，并使用自己的非审核输出
+schema。Engineering 的合法本地操作要求由 Runtime 统一解释和迁移，不能因存在非模型操作 ID
+或工具名称不同而被排除，也不要求 Portable 再声明技术配置。
+
+原生工具若触及任务明确限制的资源或命令，必须通过等价受控绑定，或由受验证的整体窗口落实
+同一边界。仅将旧 operation ID 改名为 Read/Grep/Bash 不构成等价证明；真实领域操作继续受其
+所属授权和资源边界约束，默认 Bash 不授予额外领域权限。
 
 无法实现限制的组合在调用前拒绝。Runtime 不能删掉非模型操作以进入原生工具特例，也不能用
 “另一个 Reviewer 只声明模型调用”作为开放该组合的理由。具体操作映射和约束保真由测试证明，
 原生事件记录仍不是逐次授权凭据。
 
-不同 Reviewer prompt 共用相同默认底座，不创建每 Reviewer 或每宿主一份可变权限配置。模型或
-Adapter 变化沿用 Registry 的版本边界；Module 固定能力改变则需要新 Module 定义。旧 release 不被
+不同 Reviewer prompt 在上游使用同一固定环境，其共用定义和执行行为来自 Module；宿主不各自维护可变权限配置。模型或
+Adapter 变化沿用 Registry 的版本边界；Module 运行要求改变则需要新 Module 定义。旧 release 不被
 新默认补写或提权。样例只消费这些同一入口，不形成另一套启动参数权威。
 
 #### 6.3.3 CLI 更新与可复用执行
@@ -373,7 +388,9 @@ CLI 参数表、依赖安装和实际命令由随包 runbook 与 sample 提供�
 
 Module schema 决定必需的语义对象与完整性规则。宿主提交冻结输入，或通过其受控 data-access
 adapter 解析已声明的对象；Runtime 只取得有界内容和引用，不连接业务数据库或扫描环境目录。
-普通自测可直接使用测试宿主提供的 exact fixture/input，不要求先经过生产数据服务。
+普通自测可直接使用测试宿主提供的 exact fixture/input，不要求先经过生产数据服务。本次明确提供的
+冻结文件、相对路径与必要只读依赖由 Runtime 公共调用交给同一资源边界；root 或任务 JSON 中的
+路径文字本身不产生读取权限。相关参数和材料编码在公共代码合同中定义，不由宿主临时拼装输入目录。
 
 Module 先冻结任务正文及声明为完整输入的 transport-independent model_semantic_context。
 显式项目工作区的允许读取范围与已经交付的内容分别记录；允许读取目录不等于目录全文已冻结。
@@ -540,8 +557,8 @@ registration 与该 Profile 下完整 stack Evaluation。Native mode 同时遇�
 
 Sibling 的 Attempt history、Context、workspace、outputs、evaluation inputs 和 usage observations 全部
 隔离。多 Variant Run 的下游消费继续由 Execution 的 selected policy、closed EvaluationSet、
-immutable Selection 与 ModuleOutputResolutionRecord 控制；单 Variant 仍遵循 direct_single 或
-evaluated_single 并形成 resolution。完成先后、latest file、provider context、未 resolved output ref 或
+immutable Selection 与 ModuleOutputResolutionRecord 控制；单 Variant 的 direct_single 或
+evaluated_single 结果由 Execution 的对应规则处理，Adapter 不自行创建 resolution。完成先后、latest file、provider context、未 resolved output ref 或
 单个 EvaluationResult 都不能由 Adapter 用来选 winner。
 
 ## 10. Provider Enforcement Requirements
@@ -596,7 +613,8 @@ PA 只在实际数据库权限检查中参与。
 Repository review input 固定一个 immutable commit ref/hash，以及由该 commit 派生、源码只读的
 独立 checkout。只开放明确的材料与运行依赖，临时测试输出写入指定范围；不开放 ambient repository、
 sibling checkout 或 credential。以冻结文稿而非 commit 为对象的计划审核，使用文稿的准确内容与
-只读边界，不要求未来的 implementation commit。
+只读边界，不要求未来的 implementation commit。Runtime 必须交付任务实际需要的冻结文件结构与
+只读运行依赖，使必需测试针对准确候选执行；scratch 新建样例不能替代这一结果。
 
 文件保护与命令限制分别适用：
 
@@ -607,6 +625,7 @@ sibling checkout 或 credential。以冻结文稿而非 commit 为对象的计�
 
 两种配置都保留同样的冻结对象、源码只读与前后核验要求。当前 Reviewer Module 已声明的命令
 要求继续适用，不能为了使用原生 Shell 而删去。只读目录或 prompt 中的禁令均不能替代命令白名单。
+必做命令与“只准运行这些命令”分别表达：前者要求有真实完成证据，后者还要求代码限制其他命令。
 
 调用前后都验证 immutable commit object 与被审源文件的内容一致性。Test-generated files 可存在于
 允许的临时输出范围，但不能修改被审 commit 的源内容或自动成为 review evidence；subject drift
@@ -624,9 +643,9 @@ kind、self-test resource binding 或 external boundary ref、frozen subject 和
 工程 Reviewer 可复用相同执行能力；审 repository commit 时遵守 §10.3 的材料保护，再按本次任务
 和固定能力决定是否附加命令白名单。只读配置不要求两套执行器。评价 Agent 使用独立
 输入与上下文；明确声明无工具的 Module 保持无工具。角色名不直接授予权限，Reviewer 类型的默认
-能力必须先由 Registry 编译成显式冻结依赖，再由 Invocation 执行。
+环境在定义端形成通用运行要求，之后由统一公共调用解析并由 Invocation 执行。
 
-调用前，Runtime 根据准确 Profile 和宿主绑定准备环境，核对实际工具清单、项目入口与依赖，
+调用前，Runtime 根据通用运行要求、准确 Profile 和本次资源准备环境，核对实际工具清单、项目入口与依赖，
 并验证读写和网络限制。Provider 私有状态、登录、原始运行日志和评价材料均置于模型无法越界访问
 的位置。同一 Runtime 进程负责创建、清理和记录这些资源，调用者不需要逐轮补写启动或日志脚本。
 
@@ -653,6 +672,12 @@ Adapter 采集该次 CLI 实际返回的 stdout、stderr 和全部可观察公�
 解析后的工具记录与原始日志同时可回读，解析结果不替代原文。工具请求和结果按 Provider 调用 ID 对应，
 保留真实参数、返回内容和错误，以及原始事件位置；并行、乱序返回和失败后的新 Attempt 不互相覆盖。
 Provider 没有返回的退出码、时间或结果保持未知，不从模型描述补造。
+
+任务要求执行必需命令时，Runtime 提供与本次输入、候选和 Attempt 相符的真实命令执行事实，
+subject validator 判断必做项是否完成及结果是否满足要求。完整工具日志不自动证明命令覆盖；
+模型自报、命令子串或外层 CLI 成功也不能替代内部命令结果。缺少必要事实时保留未能证明的结果，
+不伪造 exit/stdout/stderr，不要求 Portable 解析 Provider 事件或配置工具。具体事实采集与匹配由
+Runtime 公共代码合同实现，并复用现有日志及记录路径。
 
 正常完成、解析失败、工具拒绝、超时和用户中断，都须在临时资源清理前交出已经采集的日志。
 记录上限、流读取或保存失败、缺失事件及脱敏造成的差异必须显式说明，不能把部分内容标作完整日志。
@@ -774,10 +799,11 @@ Adapter 只报告一次尝试的结果及是否可重试，不在内部重新启
 | Module/domain owner 与 data-access owner | semantic completeness、completion validator 与 bounded data result | exact input delivery observations |
 | Agent Capability Verification | owner-qualified case/runbook 与测试资源 | 本 Adapter 的可重现 conformance result |
 
-Code-owned typed contracts、Profile/Adapter registries、input/Context/workspace validators、schema projection
-compiler 和 result normalizer 必须绑定本 T2 的 immutable Code Projection。Current Inspection 展示真实
-supported combinations、依赖探测、admission 状态和失败证据；文档中的 capability family 不证明任何
-当前 SDK/CLI revision 已支持它。DTO/SDK 兼容迁移要经过 Code Design，不静默改写已有 release 或记录。
+类型、实际参数、Profile/Adapter 支持组合、资源验证、schema projection 与结果归一化在代码中定义，
+随包文档和已有 Inspection 展示其可追溯事实，不另建平行 API 或要求每项能力增加投影对象。
+文档中的能力不证明当前 SDK/CLI revision 已支持它；定义与纯编译先独立验证，随后 source、注册、
+公共调用和 Adapter 的迁移分别取得证据，消费者未接通的中间结果不能宣称已可部署或运行。
+兼容迁移遵守既有 release 与记录保真规则。
 
 Conformance 使用 opaque synthetic Module 和可控 test clock，覆盖下列稳定要求；test double 结果与
 真实 provider evidence 分开：
@@ -803,9 +829,14 @@ Conformance 使用 opaque synthetic Module 和可控 test clock，覆盖下列�
 - 多 Variant 下游访问依赖 Execution 的 closed evaluation/selection/resolution，evaluator 也经过正式 Adapter Attempt；
 - provider package 在独立安装和无关工作目录可执行 synthetic conformance，不 import host/domain 或 host Workflow Registry。
 
-Reviewer 默认路径另须证明省略工具参数得到确定的 Runtime 默认、模型变化保留相同能力、模型操作
-与显式受限操作两类 Module 都有兼容正例和越界负例、旧 transport 不被临时扩充，以及宿主注册结果
-确实进入所声明的 Adapter。只通过参数探针、单独工具测试或已知不相容拒绝，均不能当作完整审核支持。
+本次交付的每条通用调用路径首先用普通 Module 和非审核输出 schema 验证，再验证 ModuleReviewer
+固定环境沿同一路径生效。普通无工具、非 Agent 和真实领域操作的边界分别保持；下游不要求 Reviewer
+类型或专用字段，合法 Engineering 操作与未知领域操作有明确不同结果。
+
+公共入口还须证明冻结仓库读取、只读依赖、scratch、必要测试及命令组合真实工作；日志中的命令事实
+绑定正确任务与 Attempt，缺证据、错对象、漏跑或失败不能被自报通过覆盖。新调用不临时扩充旧
+transport 清单，也不以它否决已有明确能力依据的通路。参数探针、纯编译或 scratch 样例不替代完整
+执行证据；这些验证按各层实际实现顺序完成，不要求定义层先交付后续调用结果。
 
 代表性 capability family 包括 tool_free inline、Agent private draft、mediated Gateway、显式项目工作区，
 以及精确受限 repository review。每种 family 都只能在 exact descriptor 与实测 enforcement 同时满足时准入；

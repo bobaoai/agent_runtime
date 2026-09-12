@@ -16,6 +16,9 @@ from agent_runtime import (
     ModuleEntryPolicy,
     ModuleExecutionPurpose,
     ModuleReviewer,
+    ModuleExecutionRequirements,
+    OutputResolutionPolicy,
+    load_reviewer_registration,
 )
 from agent_runtime.registry import (
     BehaviorPolicyReleaseCandidate,
@@ -224,6 +227,66 @@ def _source_hashes(project_root: Path) -> dict[str, str]:
     }
 
 
+def _task_project(tmp_path: Path, *, module_id: str = MODULE_ID) -> Path:
+    """Explicit v4 fixture; _project remains the unchanged legacy consumer source."""
+    project = _project(tmp_path)
+    parent = project / ".claude/skills" / SKILL_ID / "runtime_modules"
+    old_root = parent / MODULE_ID
+    target = parent / module_id
+    if target != old_root:
+        old_root.rename(target)
+        for p in (project / ".claude/skills" / SKILL_ID / "SKILL.md",
+                  project / "designDoc/test_design.md"):
+            p.write_text(p.read_text().replace(MODULE_ID, module_id))
+    registration_path = target / "module_registration.json"
+    old_registration = json.loads(registration_path.read_text())
+    fields = ("schema_version", "skill_id", "module_id", "owner_contract_path",
+              "input_schema_ref", "input_schema_path", "output_schema_ref", "output_schema_path")
+    payload = {key: old_registration[key] for key in fields}
+    payload["schema_version"] = "runtime_module_registration_v4"
+    payload["module_id"] = module_id
+    for direction in ("input", "output"):
+        ref = f"schema:{module_id}_{direction}@v1"
+        payload[f"{direction}_schema_ref"] = ref
+        p = target / f"schemas/{direction}.schema.json"
+        document = json.loads(p.read_text())
+        document["$id"] = ref
+        if module_id == "summarize_note" and direction == "output":
+            document = {"$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "$id": ref, "type": "object", "additionalProperties": False,
+                        "properties": {"summary": {"type": "string"}},
+                        "required": ["summary"]}
+        p.write_text(json.dumps(document) + "\n")
+    registration_path.write_text(json.dumps(payload, sort_keys=True) + "\n")
+    if module_id == "summarize_note":
+        (target / "prompt.md").write_text("Summarize the provided note.\n")
+    return project
+
+
+def _requirements(**changes):
+    values = dict(context_isolation="workflow_execution_isolated", execution_mode="agent",
+                  semantic_input_delivery_mode="inline",
+                  attempt_workspace_policy="own_draft_read_write",
+                  tool_policy=("read", "search", "shell"), gateway_access_reasons=(),
+                  network_policy="denied", output_constraint_mode="native_structured_output",
+                  timeout_seconds=1200, max_attempts=3)
+    return ModuleExecutionRequirements(**{**values, **changes})
+
+
+def _native_profile(**changes):
+    base = _profile()
+    values = dict(execution_mode="agent", semantic_input_delivery_mode="inline",
+                  attempt_workspace_policy="own_draft_read_write",
+                  tool_policy=("read", "search", "shell"), gateway_access_reasons=(),
+                  network_policy="denied", timeout_seconds=1200)
+    candidate = replace(base, **{**values, **changes})
+    return type(base).build(**{
+        **candidate._payload(), "tool_policy": candidate.tool_policy,
+        "gateway_access_reasons": candidate.gateway_access_reasons,
+    })
+
+
+
 def test_runtime_loads_one_exact_module_registration(tmp_path: Path) -> None:
     project_root = _project(tmp_path)
 
@@ -264,7 +327,7 @@ def test_authoring_and_execution_share_module_operation_classification() -> None
 def test_owner_file_relocation_does_not_change_module_candidate_or_release(
     tmp_path: Path,
 ) -> None:
-    project_root = _project(tmp_path)
+    project_root = _task_project(tmp_path)
     behavior, evaluation, retry = _policies()
     original = ModuleReviewer.from_registration(
         project_root,
@@ -272,10 +335,6 @@ def test_owner_file_relocation_does_not_change_module_candidate_or_release(
         module_id=MODULE_ID,
     ).export(
         module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=None,
     )
     original_path = project_root / "designDoc/test_design.md"
     relocated_path = project_root / "designDoc/relocated_design.md"
@@ -300,10 +359,6 @@ def test_owner_file_relocation_does_not_change_module_candidate_or_release(
         module_id=MODULE_ID,
     ).export(
         module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=None,
     )
 
     assert relocated.source.owner_contract_ref == original.source.owner_contract_ref
@@ -418,301 +473,224 @@ def test_loader_reads_only_the_selected_module_closure(tmp_path: Path) -> None:
     assert source.module_id == MODULE_ID
 
 
-def test_module_reviewer_exports_release_and_profile_independently(
-    tmp_path: Path,
-) -> None:
-    project_root = _project(tmp_path)
-    reviewer = ModuleReviewer.from_registration(
-        project_root,
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    behavior, evaluation, retry = _policies()
-
-    first = reviewer.export(
-        module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=_profile(),
-    )
-    revised = reviewer.export(
-        module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=_profile(model_id="claude-opus-5-next"),
-    )
-
-    assert isinstance(reviewer, Module)
-    assert first.module_release.release_sha256 == revised.module_release.release_sha256
-    assert first.execution_variant is not None
-    assert revised.execution_variant is not None
-    assert first.execution_variant.release_sha256 != (
-        revised.execution_variant.release_sha256
-    )
-
-
-def test_module_reviewer_no_profile_is_candidate_with_blocker(tmp_path: Path) -> None:
-    reviewer = ModuleReviewer.from_registration(
-        _project(tmp_path),
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    behavior, evaluation, retry = _policies()
-
-    exported = reviewer.export(
-        module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=None,
-    )
-
-    assert exported.execution_profile is None
-    assert exported.execution_variant is None
-    assert exported.execution_blocker_code == EXECUTION_PROFILE_UNAVAILABLE
-
-
-def test_module_reviewer_export_always_rejects_legacy_output_format(
-    tmp_path: Path,
-) -> None:
-    project_root = _project(tmp_path)
-    output_path = (
-        project_root / ".claude/skills" / SKILL_ID / "runtime_modules"
-        / MODULE_ID / "schemas/output.schema.json"
-    )
-    output_path.write_text(
-        _schema(f"schema:{MODULE_ID}_output@v1"), encoding="utf-8"
-    )
-    reviewer = ModuleReviewer.from_registration(
-        project_root, skill_id=SKILL_ID, module_id=MODULE_ID
-    )
-    behavior, evaluation, retry = _policies()
-
-    with pytest.raises(ValueError, match="top-level"):
-        reviewer.export(
-            module_version="v1",
-            behavior_policy=behavior,
-            evaluation_policy=evaluation,
-            retry_policy=retry,
-            execution_profile=None,
-        )
-
-
-def test_module_reviewer_rejects_tool_profile_mismatch(tmp_path: Path) -> None:
-    reviewer = ModuleReviewer.from_registration(
-        _project(tmp_path),
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    reviewer = ModuleReviewer(
-        source=replace(
-            reviewer.source,
-            declared_operation_ids=("model_execute", "repository_read"),
-        )
-    )
-    behavior, evaluation, retry = _policies()
-
-    with pytest.raises(ModuleAuthoringError) as exc_info:
-        reviewer.export(
-            module_version="v1",
-            behavior_policy=behavior,
-            evaluation_policy=evaluation,
-            retry_policy=retry,
-            execution_profile=_profile(),
-        )
-    assert exc_info.value.error_code == MODULE_EXECUTION_PROFILE_INCOMPATIBLE
-
-
-def test_module_reviewer_accepts_exact_gateway_tool_profile(tmp_path: Path) -> None:
-    reviewer = ModuleReviewer.from_registration(
-        _project(tmp_path),
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    reviewer = ModuleReviewer(
-        source=replace(
-            reviewer.source,
-            declared_operation_ids=("model_execute", "repository_read"),
-        )
-    )
-    behavior, evaluation, retry = _policies()
-
-    exported = reviewer.export(
-        module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=_gateway_profile(),
-    )
-
-    assert exported.execution_blocker_code is None
-    assert exported.execution_variant is not None
-    assert exported.execution_profile == _gateway_profile()
-
-
-def test_module_reviewer_rejects_profile_with_undeclared_tool(
-    tmp_path: Path,
-) -> None:
-    reviewer = ModuleReviewer.from_registration(
-        _project(tmp_path),
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    reviewer = ModuleReviewer(
-        source=replace(
-            reviewer.source,
-            declared_operation_ids=("model_execute", "repository_read"),
-        )
-    )
-    behavior, evaluation, retry = _policies()
-
-    with pytest.raises(ModuleAuthoringError) as exc_info:
-        reviewer.export(
-            module_version="v1",
-            behavior_policy=behavior,
-            evaluation_policy=evaluation,
-            retry_policy=retry,
-            execution_profile=_gateway_profile(
-                tool_policy=("repository_read", "repository_search")
-            ),
-        )
-    assert exc_info.value.error_code == MODULE_EXECUTION_PROFILE_INCOMPATIBLE
-
-
-def test_module_reviewer_rejects_profile_transport_mismatch(
-    tmp_path: Path,
-) -> None:
-    reviewer = ModuleReviewer.from_registration(
-        _project(tmp_path),
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    reviewer = ModuleReviewer(
-        source=replace(
-            reviewer.source,
-            compatible_transport_kinds=("codex_cli",),
-        )
-    )
-    behavior, evaluation, retry = _policies()
-
-    with pytest.raises(ModuleAuthoringError) as exc_info:
-        reviewer.export(
-            module_version="v1",
-            behavior_policy=behavior,
-            evaluation_policy=evaluation,
-            retry_policy=retry,
-            execution_profile=_profile(),
-        )
-    assert exc_info.value.error_code == MODULE_EXECUTION_PROFILE_INCOMPATIBLE
-
-
-def test_module_reviewer_rejects_invalid_model_operation_declaration(
-    tmp_path: Path,
-) -> None:
-    reviewer = ModuleReviewer.from_registration(
-        _project(tmp_path),
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    reviewer = ModuleReviewer(
-        source=replace(
-            reviewer.source,
-            declared_operation_ids=("repository_read",),
-        )
-    )
-    behavior, evaluation, retry = _policies()
-
-    with pytest.raises(ModuleAuthoringError) as exc_info:
-        reviewer.export(
-            module_version="v1",
-            behavior_policy=behavior,
-            evaluation_policy=evaluation,
-            retry_policy=retry,
-            execution_profile=_gateway_profile(),
-        )
-    assert exc_info.value.error_code == MODULE_OPERATION_DECLARATION_INVALID
-
-
-def test_module_export_origin_bundle_excludes_profile_and_variant(
-    tmp_path: Path,
-) -> None:
-    reviewer = ModuleReviewer.from_registration(
-        _project(tmp_path),
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    behavior, evaluation, retry = _policies()
-    exported = reviewer.export(
-        module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=_profile(),
-    )
-
-    origin = exported.origin_bundle
-    assert origin.modules == (exported.module_release,)
-    assert origin.behavior_policies == (behavior,)
-    assert origin.evaluation_policies == (evaluation,)
-    assert origin.retry_policies == (retry,)
-    assert origin.execution_profiles == ()
-    assert origin.execution_variant_policies == ()
-
-
-def test_project_resolves_registered_facts_and_writes_nothing(tmp_path: Path) -> None:
-    project_root = _project(tmp_path)
-    before = _source_hashes(project_root)
-    reviewer = ModuleReviewer.from_registration(
-        project_root,
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    )
-    behavior, evaluation, retry = _policies()
-    profile = _profile()
-    exported = reviewer.export(
-        module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=profile,
-    )
-    assert exported.execution_variant is not None
+def test_ordinary_module_loads_exports_and_projects_non_review_schema(tmp_path, monkeypatch):
+    from agent_runtime.registry import registry_reviewer_defaults
+    project = _task_project(tmp_path, module_id="summarize_note")
+    before = _source_hashes(project)
+    def forbidden(*args, **kwargs):
+        pytest.fail("ordinary authoring must not use Reviewer format or model defaults")
+    monkeypatch.setattr(registry_reviewer_defaults, "_validate_reviewer_output_schema", forbidden)
+    monkeypatch.setattr(registry_reviewer_defaults, "reviewer_execution_profile", forbidden)
+    ordinary = Module.from_registration(project, skill_id=SKILL_ID,
+        module_id="summarize_note", execution_requirements=_requirements())
+    exported = ordinary.export(module_version="v1")
+    assert exported.compiled.schema_assets[1].schema_document()["properties"] == {
+        "summary": {"type": "string"}}
+    assert exported.module_release.module_id == "summarize_note"
+    assert exported.module_release.reviewer_defaults is None
+    assert exported.module_release.execution_requirements == _requirements()
+    assert exported == ordinary.export(module_version="v1")
+    assert not exported.origin_bundle.execution_profiles
+    assert not exported.origin_bundle.execution_variant_policies
     registry = RuntimeReleaseRegistry()
-    registry.register_bundle(
-        RuntimeReleaseBundle(
-            schema_assets=(
-                *runtime_owned_policy_schema_assets(),
-                *exported.compiled.schema_assets,
-            ),
-            prompt_components=exported.compiled.prompt_components,
-            prompt_bundles=(exported.compiled.prompt_bundle,),
-            behavior_policies=(behavior,),
-            evaluation_policies=(evaluation,),
-            retry_policies=(retry,),
-            execution_profiles=(profile,),
-            modules=(exported.module_release,),
-            execution_variant_policies=(exported.execution_variant,),
-        )
-    )
+    registry.register_bundle(exported.origin_bundle)
+    facts = ordinary.project(registry, exported)
+    assert facts["module_release_sha256"] == exported.module_release.release_sha256
+    assert facts["execution_requirements"] == _requirements().as_dict()
+    assert not ({"active", "execution_profile", "execution_variant",
+                 "execution_blocker_code", "compatible_transport_kinds"} & set(facts))
+    assert _source_hashes(project) == before
 
-    projection = reviewer.project(registry, exported)
 
-    assert _source_hashes(project_root) == before
-    assert projection["skill_id"] == SKILL_ID
-    assert projection["module_release_ref"] == exported.module_release.release_ref
-    assert projection["execution_profile"] == {
-        "release_ref": profile.release_ref,
-        "release_sha256": profile.release_sha256,
-    }
-    assert projection["execution_variant"] == {
-        "release_ref": exported.execution_variant.release_ref,
-        "release_sha256": exported.execution_variant.release_sha256,
-    }
-    assert projection["active"] is False
-    registry.assert_module_execution_allowed(
-        exported.module_release,
-        ModuleExecutionPurpose.TEST,
-    )
-    assert exported.module_release.entry_policy is ModuleEntryPolicy.STANDALONE_ALLOWED
+def test_reviewer_inherits_all_module_methods_and_supplies_only_environment(tmp_path):
+    source = load_reviewer_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
+    reviewer = ModuleReviewer(source)
+    ordinary = Module(source, execution_requirements=_requirements())
+    assert reviewer.export(module_version="v1") == ordinary.export(module_version="v1")
+    for name in ("__init__", "from_registration", "export", "project", "to_workflow"):
+        assert name not in ModuleReviewer.__dict__
+    assert ModuleReviewer.export is Module.export
+    assert ModuleReviewer.to_workflow is Module.to_workflow
+    assert reviewer.execution_requirements == _requirements()
+    with pytest.raises(ValueError, match="cannot be overridden"):
+        ModuleReviewer(source, execution_requirements=_requirements())
+    with pytest.raises(ValueError, match="requires explicit"):
+        Module(source)
+    with pytest.raises(TypeError):
+        Module(source, _requirements())
+    with pytest.raises(TypeError):
+        ModuleReviewer(source, _requirements())
+
+
+def test_module_reviewer_exports_release_and_profile_independently(tmp_path):
+    reviewer = ModuleReviewer.from_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
+    for name in ("behavior_policy", "evaluation_policy", "retry_policy", "execution_profile",
+                 "release_registry", "reviewer_defaults", "model_id", "reasoning_profile"):
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            reviewer.export(module_version="v1", **{name: None})
+    exported = reviewer.export(module_version="v1")
+    for name in ("execution_profile", "execution_variant_candidate", "execution_variant", "execution_blocker_code"):
+        assert not hasattr(exported, name)
+    assert exported.evaluation_policy.policy_document() == {"evaluation_mode": "none"}
+    first_profile = _profile()
+    second_profile = _profile(model_id="another_model")
+    assert first_profile.release_sha256 != second_profile.release_sha256
+    assert exported == reviewer.export(module_version="v1")
+
+
+def test_legacy_source_is_readable_but_not_silently_reauthored(tmp_path):
+    project = _project(tmp_path)
+    original = _source_hashes(project)
+    source = load_module_registration(project, skill_id=SKILL_ID, module_id=MODULE_ID)
+    assert source.schema_version == "runtime_module_registration_v2"
+    with pytest.raises(ValueError, match="migrated v4"):
+        ModuleReviewer(source)
+    assert _source_hashes(project) == original
+
+
+@pytest.mark.parametrize("field,value", [
+    ("compatible_transport_kinds", ["claude_cli"]),
+    ("declared_operation_ids", ["model_execute"]),
+    ("behavior_policy_ref", "behavior-policy:workflow_execution_isolated@v1"),
+    ("evaluation_policy_ref", "evaluation-policy:module_candidate@v1"),
+    ("retry_policy_ref", "retry-policy:bounded_candidate@v1"),
+    ("entry_policy", "standalone_allowed"),
+    ("output_resolution_policy", "evaluated_single"),
+])
+def test_v4_rejects_execution_configuration_in_source(tmp_path, field, value):
+    project = _task_project(tmp_path)
+    path = project / ".claude/skills" / SKILL_ID / "runtime_modules" / MODULE_ID / "module_registration.json"
+    payload = json.loads(path.read_text())
+    payload[field] = value
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="invalid v4 shape"):
+        load_module_registration(project, skill_id=SKILL_ID, module_id=MODULE_ID)
+
+
+def test_reviewer_format_gate_checks_the_same_single_loaded_source(tmp_path, monkeypatch):
+    from agent_runtime.registry import registry_module_loading as loading
+    from agent_runtime.registry import registry_reviewer_defaults as reviewer_source
+    project = _task_project(tmp_path)
+    original_loader = loading.load_module_registration
+    original_check = reviewer_source._validate_reviewer_output_schema
+    calls = []
+    def once(*args, **kwargs):
+        source = original_loader(*args, **kwargs)
+        calls.append(source)
+        return source
+    def check(document):
+        assert len(calls) == 1
+        assert document == json.loads(calls[0].output_schema_document)
+        original_check(document)
+    monkeypatch.setattr(loading, "load_module_registration", once)
+    monkeypatch.setattr(reviewer_source, "_validate_reviewer_output_schema", check)
+    source = load_reviewer_registration(project, skill_id=SKILL_ID, module_id=MODULE_ID)
+    assert source is calls[0]
+    ModuleReviewer(source).export(module_version="v1")
+    assert len(calls) == 1
+
+
+def test_reviewer_source_gate_rejects_non_review_schema_not_generic_export(tmp_path):
+    project = _task_project(tmp_path, module_id="summarize_note")
+    with pytest.raises(ValueError, match="common format"):
+        load_reviewer_registration(project, skill_id=SKILL_ID, module_id="summarize_note")
+    # The preset by itself promises environment, not a role-format attestation.
+    ModuleReviewer.from_registration(project, skill_id=SKILL_ID,
+        module_id="summarize_note").export(module_version="v1")
+
+
+def test_tool_free_requirements_and_independent_model_bindings(tmp_path):
+    source = load_module_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
+    req = _requirements(execution_mode="tool_free", attempt_workspace_policy="none",
+                        tool_policy=(), timeout_seconds=900)
+    module = Module(source, execution_requirements=req,
+                    output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE)
+    exported = module.export(module_version="v1")
+    req.assert_profile(_profile())
+    req.assert_profile(_profile(model_id="another_model"))
+    with pytest.raises(ValueError):
+        req.assert_profile(_native_profile())
+    assert exported.module_release.execution_requirements.tool_policy == ()
+    assert exported.module_release.output_resolution_policy is OutputResolutionPolicy.DIRECT_SINGLE
+
+
+def test_gateway_and_real_domain_operations_are_preserved(tmp_path):
+    source = load_module_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
+    req = _requirements(semantic_input_delivery_mode="gateway_read",
+        attempt_workspace_policy="none", network_policy="gateway_only",
+        tool_policy=("repository_read",), timeout_seconds=900,
+        gateway_access_reasons=("authorized_package_external_exploration",))
+    req.assert_profile(_gateway_profile())
+    with pytest.raises(ValueError):
+        req.assert_profile(_gateway_profile(tool_policy=("undeclared_tool",)))
+    module = Module(source, execution_requirements=req,
+                    declared_operation_ids=("model_execute", "write_business_data"))
+    exported = module.export(module_version="v1")
+    assert exported.module_release.declared_operation_ids == ("model_execute", "write_business_data")
+    graph = module.to_workflow(exported).export()
+    assert "write_business_data" in graph.candidate.authorization_manifest_document["operations"]
+
+
+@pytest.mark.parametrize("operations", [(), ("read",), ("model_execute", "invoke_model"), ("model_execute", "model_execute")])
+def test_invalid_model_operation_declaration_is_still_rejected(tmp_path, operations):
+    source = load_module_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
+    with pytest.raises(ModuleAuthoringError) as failure:
+        Module(source, execution_requirements=_requirements(), declared_operation_ids=operations)
+    assert failure.value.error_code == MODULE_OPERATION_DECLARATION_INVALID
+
+
+def test_project_rejects_same_source_with_different_requirements_and_missing_dependencies(tmp_path):
+    source = load_module_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
+    first = Module(source, execution_requirements=_requirements())
+    second = Module(source, execution_requirements=_requirements(timeout_seconds=1100))
+    a, b = first.export(module_version="v1"), second.export(module_version="v2")
+    registry = RuntimeReleaseRegistry()
+    registry.register_bundle(a.origin_bundle)
+    with pytest.raises(ValueError, match="captured task"):
+        first.project(registry, b)
+    with pytest.raises(Exception):
+        first.project(RuntimeReleaseRegistry(), a)
+    assert a.module_release.release_sha256 != b.module_release.release_sha256
+
+
+@pytest.mark.parametrize("field,value", [
+    ("execution_mode", "tool_free"),
+    ("semantic_input_delivery_mode", "managed_attachment"),
+    ("attempt_workspace_policy", "none"),
+    ("tool_policy", ("read",)),
+    ("gateway_access_reasons", ("external_fact_verification",)),
+    ("network_policy", "direct_sandboxed"),
+    ("output_constraint_mode", "prompt_only_json"),
+    ("timeout_seconds", 1100),
+])
+def test_each_profile_capability_difference_is_rejected(field, value):
+    original = _native_profile()
+    try:
+        altered = _native_profile(**{field: value})
+    except ValueError:
+        # A forbidden combination must already fail the shared shape gate.
+        return
+    with pytest.raises(ValueError, match="differs"):
+        _requirements().assert_profile(altered)
+    _requirements().assert_profile(original)
+
+
+@pytest.mark.parametrize("changes", [
+    {"context_isolation": "shared"}, {"max_attempts": 0}, {"max_attempts": 101},
+    {"max_attempts": True}, {"timeout_seconds": True}, {"timeout_seconds": 86401},
+    {"tool_policy": ("read", "read")}, {"tool_policy": ["read"]},
+    {"gateway_access_reasons": ["external_fact_verification"]},
+])
+def test_invalid_requirements_are_rejected(changes):
+    with pytest.raises(ValueError):
+        _requirements(**changes).validate()
+
+
+def test_retry_policy_has_one_requirements_source_and_content_version(tmp_path):
+    source = load_module_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
+    original = Module(source, execution_requirements=_requirements()).export(module_version="v1")
+    adjusted = Module(source, execution_requirements=_requirements(max_attempts=4)).export(module_version="v2")
+    assert original.retry_policy.release_ref == "retry-policy:bounded_candidate@v1"
+    assert adjusted.retry_policy.policy_document() == {"max_attempts": 4}
+    assert adjusted.retry_policy.release_ref != original.retry_policy.release_ref
+    assert adjusted.behavior_policy.policy_document()["context_isolation"] == adjusted.module_release.execution_requirements.context_isolation

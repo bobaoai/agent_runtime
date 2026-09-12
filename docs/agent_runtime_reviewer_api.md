@@ -4,7 +4,8 @@
 
 Runtime package version: `0.2.0.dev1`.
 
-Scope: local Runtime setup, Reviewer authoring/export, versioned registration/loading and single-node evaluation.
+Scope: Module authoring/export, Reviewer source checks, local Runtime setup,
+versioned registration/loading and single-node evaluation.
 Other Runtime APIs are outside this reference. Signatures, fields, descriptions and error
 constant values below come directly from this source tree; no Runtime modules are executed.
 
@@ -12,8 +13,8 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 
 ## Contents
 
-- [ModuleReviewer](#modulereviewer)
 - [Module](#module)
+- [ModuleReviewer](#modulereviewer)
 - [ModuleExport](#moduleexport)
 - [ModuleAuthoringError](#moduleauthoringerror)
 - [run_registered_workflow_module](#run_registered_workflow_module)
@@ -23,7 +24,10 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 - [RuntimeReleaseBundle](#runtimereleasebundle)
 - [register_runtime_module_plugin](#register_runtime_module_plugin)
 - [register_reviewer](#register_reviewer)
+- [ModuleExecutionRequirements](#moduleexecutionrequirements)
+- [ModuleRelease](#modulerelease)
 - [ReviewerDefaults](#reviewerdefaults)
+- [load_reviewer_registration](#load_reviewer_registration)
 - [Workflow](#workflow)
 - [prepare_local_workflow_module](#prepare_local_workflow_module)
 - [evaluate_local_workflow_module](#evaluate_local_workflow_module)
@@ -36,254 +40,49 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 - [Evaluation CLI](#evaluation-cli)
 - [Error constants](#error-constants)
 
-## ModuleReviewer
-
-Public import: `from agent_runtime import ModuleReviewer`
-
-```python
-@dataclass(frozen=True)
-class ModuleReviewer(Module):
-    source: ModuleRegistrationSource
-```
-
-Author and export one fixed Reviewer definition for a subject domain.
-
-Start here when preparing an approved Reviewer source for registration.
-``source`` contains the exact instruction, owner contract, I/O schemas,
-operation and transport declarations, and policy references loaded by
-``from_registration``. This frozen Python object is an authoring object,
-not a running Reviewer or a database registration. ``export`` validates
-the common Reviewer output format and compiles immutable release records;
-``project`` reads the corresponding facts after registration.
-
-**Fixed definition and execution parameters**
-
-A ModuleRelease pins the owner, Prompt Bundle, schemas, operations,
-compatible transports, Behavior/Evaluation/Retry Policies and entry/output
-rules. The subject owner supplies review meaning and its semantic output
-validator. Runtime does not invent a checklist or turn a provider failure
-into a review verdict.
-
-Omitting Policy/Profile arguments uses Runtime's ReviewerDefaults without
-selecting a model. The fixed capability snapshot enters the Module hash;
-model selection happens independently during execution preparation. Explicit
-source restrictions are retained. Fully explicit legacy export calls keep
-their original definition shape and do not acquire new permissions. Runtime software upgrades never
-rewrite an already registered Module.
-
-An immutable ExecutionProfileRelease records the resolved provider, model,
-reasoning and fixed tool/network/workspace budget. An ExecutionVariantPolicyRelease
-binds that Profile to exact Module or Workflow positions. These two
-releases do not enter the Module release hash. Execution preparation combines
-a model choice with the fixed capabilities; a normal review supplies its
-candidate, goal, scope, context and prior findings as input, not as edits to fixed instructions
-or ad hoc provider parameters.
-
-**When versions change**
-
-New review material creates a new execution of the selected Module.
-Switching an approved compatible Profile preserves the same Module ref
-and hash when its version, source and Module dependencies are unchanged;
-the Profile and Variant binding have their own release identities.
-Changing instructions, schemas, policies or operation/transport
-declarations changes the Module definition and requires a new immutable
-Module release. In particular, adding transport compatibility is a source
-change, not a runtime override. The installed Runtime software version is
-separate from all of these registered definition/configuration versions.
-
-**Storage and invocation**
-
-The Skill Package owns editable authoring files. Compilation captures
-their content; the deployment-selected Registry stores published Module,
-Prompt, Schema, Policy and Profile records. Registered execution resolves
-those records rather than rebuilding a prompt from mutable Skill files.
-Each execution's frozen inputs, actual prompt, outputs, usage and failure
-evidence belong to Execution's record/content stores, not this object.
-The host supplies store locations, credentials and authorization interfaces;
-they are not embedded in the Reviewer source or selected by this class.
-
-Ordinary source registration uses ``register_reviewer`` or the installed
-``agent-runtime-registry register-reviewer`` CLI. It resolves defaults,
-uses the inherited ``Module.to_workflow`` to create a one-node Workflow and
-saves its definition closure without
-a Profile or Variant. Use prepare_local_workflow_module to select the model
-for a new invocation, then supply the existing host ports to the kernel.
-The lower-level ``register_runtime_module_plugin`` still accepts an explicit
-bundle and store. Activation is a separate decision. For the
-existing single-node Workflow evaluation path, call
-``run_registered_workflow_module`` using a registered Workflow and matching
-Variant Policy. That entry documents its actual limits and host inputs;
-successful export alone does not establish execution readiness.
-
-### ModuleReviewer.from_registration
-
-```python
-@classmethod
-def from_registration(
-    cls,
-    project_root: Path,
-    *,
-    skill_id: str,
-    module_id: str,
-) -> Self:
-```
-
-Load one exact Reviewer authoring source, without registration.
-
-**Args**
-
-- `project_root`: Explicit host source root. The loader reads the fixed
-  `.claude/skills/<skill_id>/runtime_modules/<module_id>` closure,
-  its Skill declaration and referenced owner Design within it.
-- `skill_id`: Exact canonical kebab-case Skill identity.
-- `module_id`: Exact canonical snake_case Reviewer Module identity.
-
-**Returns**
-
-A ModuleReviewer containing validated, path-free source content.
-Later edits to source files do not update this captured object.
-
-**Raises**
-
-- `ValueError`: Invalid identity, path, source layout, registration,
-  prompt or schema. Inspect the diagnostic and correct the exact
-  source; the loader does not search for a replacement.
-- `OSError`: File access failures not normalized by the source loader.
-
-**Effects**
-
-Reads the explicit authoring closure only. Does not write files,
-register, activate, discover sibling Reviewers or invoke a model.
-
-### ModuleReviewer.export
-
-```python
-def export(
-    self,
-    *,
-    module_version: str,
-    behavior_policy: BehaviorPolicyRelease | None=None,
-    evaluation_policy: EvaluationPolicyRelease | None=None,
-    retry_policy: RetryPolicyRelease | None=None,
-    execution_profile: ExecutionProfileRelease | None | Literal['runtime_default']=None,
-    release_registry: RuntimeReleaseRegistry | None=None,
-    reviewer_defaults: ReviewerDefaults | None=None,
-    model_id: str | None=None,
-    reasoning_profile: str | None=None,
-) -> ModuleExport:
-```
-
-Compile this captured source and validate optional Profile compatibility.
-
-**Args**
-
-- `module_version`: Version of the fixed Module definition. Keep it
-  unchanged for unchanged Module content; a new input or Profile
-  comparison does not by itself require a new Module version.
-- `behavior_policy`: Optional exact override matching the source ref.
-- `evaluation_policy`: Optional exact override. New v3 source omissions
-  use entry-policy admission (evaluation_mode=none); an explicit
-  module_candidate reference retains its candidate-only meaning.
-- `retry_policy`: Optional exact override; Runtime defaults to three
-  attempts including the first. This is a limit, not a scheduler.
-- `execution_profile`: Omit or use None for definition-only export.
-  Explicit runtime_default requests the legacy model-preset export.
-  Fully explicit legacy calls retain their existing record shape.
-- `release_registry`: Lookup for explicit non-default policy refs.
-- `reviewer_defaults`: Previously frozen capability snapshot, normally
-  supplied internally when registering the same version again.
-- `model_id`: Independent model override for the default Claude path.
-- `reasoning_profile`: Independent reasoning override; neither changes
-  the Module capabilities. Explicit Profile and model overrides
-  cannot be combined.
-
-**Returns**
-
-ModuleExport with compiled Module/Prompt/Schema records and the
-supplied policies. A compatible Profile also produces a standalone
-Variant candidate/release. Definition-only default export produces no Variant and no blocker.
-Fully explicit legacy None calls retain EXECUTION_PROFILE_UNAVAILABLE. The
-standalone helper retains v1 for fully explicit legacy calls;
-new default-aware bindings use a deterministic content version.
-Exported bindings are candidates, not updates to a store.
-New Workflow execution preparation is separate from source registration.
-
-**Raises**
-
-- `ModuleAuthoringError`: MODULE_OPERATION_DECLARATION_INVALID for an
-  invalid operation declaration; MODULE_EXECUTION_PROFILE_INCOMPATIBLE
-  for an undeclared transport or incompatible tool boundary.
-- `ValueError`: Invalid common Reviewer output schema, Profile, version,
-  policy reference or compiler input. Definition-only export needs
-  no Profile; only the legacy explicit path retains its missing-
-  Profile blocker. JSON/schema errors retain their original types.
-
-**Effects**
-
-Compiles in memory. No source reload, Registry write, activation,
-provider call or execution evidence is produced. Profile validation
-does not prove the corresponding Adapter can run in this environment.
-
-### ModuleReviewer.project
-
-```python
-def project(
-    self,
-    registry: RuntimeReleaseRegistry,
-    exported: ModuleExport,
-) -> dict[str, Any]:
-```
-
-Read exact registered facts for an export produced from this source.
-
-**Args**
-
-- `registry`: Loaded RuntimeReleaseRegistry containing the exact Module,
-  its dependencies and any Profile/Variant included in exported.
-- `exported`: ModuleExport whose source equals this object's source.
-
-**Returns**
-
-A dict with Skill/Module identities, exact release/dependency refs
-and hashes, operation/transport/entry/output rules, active-pointer
-observation, optional Profile/Variant refs and execution blocker.
-Facts come from the supplied Registry snapshot; freshness against
-persistent storage is the caller's responsibility.
-
-**Raises**
-
-- `ValueError`: Export/source mismatch or invalid Reviewer provenance.
-- `Exception`: Exact Registry lookup failures propagate from the Registry;
-  inspect their native error instead of choosing a nearby version.
-
-**Effects**
-
-Read-only. Does not register, set an active pointer, reload source,
-connect to a database itself or prove successful execution.
-
 ## Module
 
 Public import: `from agent_runtime import Module`
 
 ```python
-class Module(ABC):
-    ...
+@dataclass(frozen=True)
+class Module:
+    source: ModuleRegistrationSource
+    _: KW_ONLY
+    execution_requirements: ModuleExecutionRequirements | None = None
+    declared_operation_ids: tuple[str, ...] = ('model_execute',)
+    entry_policy: ModuleEntryPolicy = ModuleEntryPolicy.STANDALONE_ALLOWED
+    output_resolution_policy: OutputResolutionPolicy = OutputResolutionPolicy.EVALUATED_SINGLE
+    _default_execution_requirements: ClassVar[ModuleExecutionRequirements | None] = None
 ```
 
-Author a fixed Module definition; execution consumes ModuleRelease.
+Author a fixed Agent Module using the existing compiler and Registry.
 
-Implementations load explicit authoring sources, export immutable records
-and inspect registered facts. They do not constitute running Agents.
-Register an export through the public Registry API, then invoke the
-registered target through Execution. A new task input is a new execution
-of a selected definition, not a reason to reload or re-register its source.
-ModuleReviewer is the concrete implementation for Reviewer definitions.
+**Args**
 
-``to_workflow`` composes an exact ModuleExport into a one-node Workflow.
-Subclasses inherit this common capability without inheriting Reviewer
-policies or output constraints. Workflow remains an independent graph
-object. Its default ID equals the Module ID; its kind distinguishes it
-from the Module. Explicit graph composition keeps its supplied names.
+- `source`: Captured runtime_module_registration_v4 task source. Legacy
+  v2/v3 sources must be migrated explicitly; their configuration is
+  never silently ignored. Persisted old releases have separate codecs.
+- `execution_requirements`: Explicit requirements for ordinary Module.
+  A subclass with a fixed class preset uses it when this is None and
+  rejects a caller override. Ordinary Module has no default tools.
+- `declared_operation_ids`: Exactly one model operation and any real domain
+  operations. Native read/search/shell are requirements, not automatic
+  authority for declared domain effects.
+- `entry_policy`: Existing independent-Module entry rule. Defaults to
+  standalone_allowed; callers can retain workflow_bound.
+- `output_resolution_policy`: Existing Agent single-result resolution
+  rule. Defaults to evaluated_single, not a Reviewer output format.
+**Raises**
+
+- `ValueError`: Invalid source format, requirements or task rules.
+- `ModuleAuthoringError`: Invalid operation declaration.
+**Effects**
+
+Construction captures values in memory. It never reads files, registers
+records, chooses a model or grants runtime access to host resources.
+High-level non-Agent authoring is not added by this class; existing
+NonAgentModuleReleaseCandidate and compiler remain its separate path.
 
 ### Module.to_workflow
 
@@ -330,49 +129,73 @@ acquire no Reviewer rules or permissions by using it.
 
 ```python
 @classmethod
-@abstractmethod
 def from_registration(
     cls,
     project_root: Path,
     *,
     skill_id: str,
     module_id: str,
+    execution_requirements: ModuleExecutionRequirements | None=None,
+    declared_operation_ids: tuple[str, ...]=('model_execute',),
+    entry_policy: ModuleEntryPolicy=ModuleEntryPolicy.STANDALONE_ALLOWED,
+    output_resolution_policy: OutputResolutionPolicy=OutputResolutionPolicy.EVALUATED_SINGLE,
 ) -> Self:
 ```
 
-Load source under project_root for the exact skill_id and module_id.
+Load exactly one source then construct cls with the same task rules.
 
-This is explicit authoring-time file access. Return a role-specific
-Module authoring object, without registering records or invoking a
-provider. See the concrete subclass for source and error details.
+Reads the declared source once through load_module_registration, with
+its exact-file and path checks. Subclasses inherit this method and
+supply only their fixed environment. This generic path does not assert
+a role's output format: Reviewer source authoring/registration uses
+load_reviewer_registration before constructing the preset Module.
+
+**Args**
+
+- `project_root`: Explicit source root; only the declared Skill/Module
+  source closure is read, never sibling modules.
+- `skill_id`: Exact Skill directory identity.
+- `module_id`: Exact Module directory identity.
+- `execution_requirements`: Explicit ordinary requirements, or None
+  to consume the subclass's fixed environment.
+- `declared_operation_ids`: Model operation and real domain operations.
+- `entry_policy`: Independent or Workflow-bound entry rule.
+- `output_resolution_policy`: Existing output-resolution rule.
+**Returns**
+
+An instance of cls holding captured source and resolved requirements.
+**Raises**
+
+- `ValueError`: Invalid source, environment or task rules.
+- `ModuleAuthoringError`: Invalid model/operation declaration.
+
+Raises the loader's ValueError or constructor error. No source write,
+registration, model choice or provider call occurs.
 
 ### Module.export
 
 ```python
-@abstractmethod
 def export(
     self,
     *,
     module_version: str,
-    behavior_policy: BehaviorPolicyRelease,
-    evaluation_policy: EvaluationPolicyRelease,
-    retry_policy: RetryPolicyRelease,
-    execution_profile: ExecutionProfileRelease | None,
 ) -> ModuleExport:
 ```
 
-Compile source and exact dependencies into a ModuleExport.
+Compile this captured task and requirements into one fixed export.
 
-module_version identifies the definition being compiled. The three
-policy arguments supply its immutable dependencies; execution_profile
-supplies an optional, separate execution choice. Export has no
-Registry or execution side effects. Concrete subclasses validate their
-role's schema and compatibility requirements.
+Only module_version is selected here. Behavior/Retry derive from the
+requirements; Evaluation uses the existing entry-based mode none.
+Input/output schemas and Prompt compilation use the existing generic
+compiler. A valid non-review schema is accepted without Reviewer checks.
+
+Returns a ModuleExport with no Profile, Variant or execution blocker.
+Invalid version/schema/compiler inputs retain their native errors.
+No source reload, Registry IO, model resolution or execution occurs.
 
 ### Module.project
 
 ```python
-@abstractmethod
 def project(
     self,
     registry: RuntimeReleaseRegistry,
@@ -380,11 +203,47 @@ def project(
 ) -> dict[str, Any]:
 ```
 
-Read registry facts corresponding to exported and return a dict.
+Read the exact registered definition and dependencies as a plain dict.
 
-The Registry must already contain the exact export and its required
-dependencies. This is a read-only projection, not registration,
-activation, source repair or evidence that a provider call succeeded.
+Returns Skill/Module identity, owner/schema/Prompt/Policy ref/hash pairs,
+declared operations, entry/output rules and execution_requirements.
+Source and captured task settings must match this Module; exact Registry
+lookup failures propagate. The supplied Registry snapshot owns facts,
+not this instance's defaults. No active pointer or execution choice is
+resolved and no source, store or provider is changed.
+
+## ModuleReviewer
+
+Public import: `from agent_runtime import ModuleReviewer`
+
+```python
+class ModuleReviewer(Module):
+    ...
+```
+
+Supply a fixed environment and inherit Module authoring unchanged.
+
+Runtime fixes isolated context, read/search/shell, private scratch, denied
+tool network, inline native output, a 1200-second budget and three attempts.
+Model choice and concrete host resources are resolved at execution time.
+The specialized load_reviewer_registration entry checks common output
+format; inherited generic loading/export does not grant that guarantee.
+
+### ModuleReviewer.to_workflow
+
+Inherited from [Module.to_workflow](#moduleto_workflow).
+
+### ModuleReviewer.from_registration
+
+Inherited from [Module.from_registration](#modulefrom_registration).
+
+### ModuleReviewer.export
+
+Inherited from [Module.export](#moduleexport).
+
+### ModuleReviewer.project
+
+Inherited from [Module.project](#moduleproject).
 
 ## ModuleExport
 
@@ -399,36 +258,18 @@ class ModuleExport:
     behavior_policy: BehaviorPolicyRelease
     evaluation_policy: EvaluationPolicyRelease
     retry_policy: RetryPolicyRelease
-    execution_profile: ExecutionProfileRelease | None
-    execution_variant_candidate: ExecutionVariantPolicyReleaseCandidate | None
-    execution_variant: ExecutionVariantPolicyRelease | None
-    execution_blocker_code: str | None
 ```
 
-Compiled Module definition and separately supplied execution binding.
+One compiled definition and its immutable technical Policy dependencies.
 
-``source`` is the loaded, path-free authoring content; ``candidate`` is
-the compiler input; ``compiled`` contains the immutable Module, Prompt
-and Schema records. ``behavior_policy``, ``evaluation_policy`` and
-``retry_policy`` are the exact Module dependencies supplied to export.
-``module_release`` exposes the resulting fixed definition.
+source is the captured task source; candidate is the compiler input;
+compiled contains the Schema, Prompt and Module records. Policies are
+derived by Runtime from this definition's requirements. module_release
+returns the definition and origin_bundle supplies its exact dependency
+closure. Neither includes a model selection, Profile or Variant.
 
-``execution_profile`` and ``execution_variant`` are separate from that
-definition. ``execution_variant_candidate`` is the compiler input for
-the optional standalone binding. With no Profile, all three are None.
-Ordinary definition-only Reviewer export also has no blocker. The fully
-explicit legacy path without a fixed default snapshot retains
-EXECUTION_PROFILE_UNAVAILABLE. With a compatible Profile the blocker is None;
-this is an authoring check, not
-proof that an Adapter, provider login, storage or execution is available.
-
-``origin_bundle`` contains only the Module definition and its immutable
-dependencies. Definition registration uses that bundle alone. The lower-level
-explicit binding path can combine separately selected Profile and Variant
-records with it. For a Workflow, bind the Workflow's exact node positions
-using a Workflow Variant Policy; the standalone Variant produced here
-cannot be substituted for a Workflow binding. Exporting creates in-memory
-records only; registration, activation and execution are separate actions.
+This is an in-memory authoring result. Registration and execution use
+their existing public APIs; export is not proof of either action.
 
 ### ModuleExport.module_release
 
@@ -443,7 +284,7 @@ Return the compiled immutable ModuleRelease without reading a store.
 
 The ref and hash identify the fixed Module definition. Profile and
 Variant choices are excluded from this Module identity. This property
-does not prove that the release has been registered or activated.
+does not prove that the release has been registered or executed.
 
 ### ModuleExport.origin_bundle
 
@@ -459,8 +300,10 @@ Return the Module's dependency-closed RuntimeReleaseBundle.
 Contains policy schemas, input/output schemas, Prompt Components,
 Prompt Bundle, Behavior/Evaluation/Retry Policies and the Module.
 Execution Profiles and Variant Policies are intentionally omitted.
-The caller supplies them separately when forming an executable
-registration bundle. No store write or active-pointer change occurs.
+Runtime's public execution preparation resolves model bindings later;
+callers of this authoring API do not assemble them. The lower-level
+Registry may still accept explicitly prepared binding records through
+its separate bundle API. No store write or active-pointer change occurs.
 
 Raises RuntimeError if required Runtime-owned policy schema assets
 cannot be resolved. Restore a consistent Runtime installation instead
@@ -475,24 +318,12 @@ class ModuleAuthoringError(ValueError):
     ...
 ```
 
-An authoring failure with a machine-readable ``error_code``.
+An authoring failure with a stable error_code and a diagnostic.
 
-``error_code`` is the stable code; the exception message adds a diagnostic.
-``MODULE_OPERATION_DECLARATION_INVALID`` means the source operation list
-cannot be partitioned into model and non-model operations. Correct that
-source through its owner. ``MODULE_EXECUTION_PROFILE_INCOMPATIBLE`` means
-the supplied Profile conflicts with the source transport or tool boundary.
-Supply an approved compatible Profile; changing the Module's declarations
-is a separate source change, not a way to bypass this check.
-
-``EXECUTION_PROFILE_UNAVAILABLE`` is returned only by fully explicit legacy
-Reviewer export without a fixed default snapshot when no Profile is supplied.
-Ordinary definition-only Reviewer export has no Profile, no Variant and
-``ModuleExport.execution_blocker_code=None``. Neither case prevents
-compilation of the fixed definition. Other source, schema, policy
-and Registry validation errors retain their own exception contracts;
-this class does not wrap every possible failure. No Registry write or
-provider invocation occurs during authoring.
+MODULE_OPERATION_DECLARATION_INVALID identifies an invalid model/operation
+declaration. Other source, schema, requirement and Registry errors retain
+their native ValueError or lookup exception. Export never tests executor
+availability, registers records or invokes a provider.
 
 ## run_registered_workflow_module
 
@@ -897,6 +728,179 @@ or compile a model Profile, invoke a provider, discover credentials or
 create an environment. Existing historical files are not cleaned up.
 Model selection and its compatibility checks belong to execution.
 
+## ModuleExecutionRequirements
+
+Public import: `from agent_runtime import ModuleExecutionRequirements`
+
+```python
+@dataclass(frozen=True)
+class ModuleExecutionRequirements:
+    record_type: ClassVar[str] = 'module_execution_requirements'
+    context_isolation: str
+    execution_mode: str
+    semantic_input_delivery_mode: str
+    attempt_workspace_policy: str
+    tool_policy: tuple[str, ...]
+    gateway_access_reasons: tuple[str, ...]
+    network_policy: str
+    output_constraint_mode: str
+    timeout_seconds: int
+    max_attempts: int
+    _profile_fields: ClassVar[tuple[str, ...]] = ('execution_mode', 'semantic_input_delivery_mode', 'attempt_workspace_policy', 'tool_policy', 'gateway_access_reasons', 'network_policy', 'output_constraint_mode', 'timeout_seconds')
+    _fields: ClassVar[tuple[str, ...]] = ('context_isolation', *_profile_fields, 'max_attempts')
+```
+
+Frozen, provider-independent requirements embedded in an Agent Module.
+
+No model, Adapter, transport or host paths belong here. An empty tool set
+and no workspace are valid for a tool-free Module. max_attempts limits
+existing attempt scheduling; it does not schedule retries.
+
+### ModuleExecutionRequirements.validate
+
+```python
+def validate(
+    self,
+) -> None:
+```
+
+Validate complete requirements without selecting an executor.
+
+### ModuleExecutionRequirements.as_dict
+
+```python
+def as_dict(
+    self,
+) -> dict[str, Any]:
+```
+
+Return the complete JSON value included in the Module content hash.
+
+### ModuleExecutionRequirements.from_dict
+
+```python
+@classmethod
+def from_dict(
+    cls,
+    payload: Mapping[str, Any],
+) -> 'ModuleExecutionRequirements':
+```
+
+Decode the exact shape without filling omissions or current defaults.
+
+### ModuleExecutionRequirements.assert_profile
+
+```python
+def assert_profile(
+    self,
+    profile: ExecutionProfileRelease,
+) -> None:
+```
+
+Reject a Profile that changes any of the eight frozen capability fields.
+
+Behavior context and Retry max_attempts are separate Policy dependencies;
+their consistency is checked at the compilation/Registry boundary.
+Model, provider and Adapter identity are deliberately not compared here.
+
+## ModuleRelease
+
+Public import: `from agent_runtime import ModuleRelease`
+
+```python
+@dataclass(frozen=True)
+class ModuleRelease:
+    record_type: ClassVar[str] = 'runtime_module_release'
+    module_id: str
+    module_version: str
+    release_ref: str
+    module_kind: ModuleKind
+    owner_contract_ref: str
+    owner_contract_sha256: str
+    executable_ref: str | None
+    executable_sha256: str | None
+    input_schema_ref: str
+    input_schema_sha256: str
+    output_schema_ref: str
+    output_schema_sha256: str
+    prompt_bundle_ref: str | None
+    prompt_bundle_sha256: str | None
+    declared_operation_ids: tuple[str, ...]
+    behavior_policy_ref: str
+    behavior_policy_sha256: str
+    evaluation_policy_ref: str
+    evaluation_policy_sha256: str
+    retry_policy_ref: str
+    retry_policy_sha256: str
+    compatible_transport_kinds: tuple[str, ...]
+    entry_policy: ModuleEntryPolicy
+    output_resolution_policy: OutputResolutionPolicy
+    release_sha256: str
+    reviewer_defaults: ReviewerDefaults | None = None
+    execution_requirements: ModuleExecutionRequirements | None = None
+```
+
+One immutable, independently executable Runtime Module contract.
+
+### ModuleRelease.validate
+
+```python
+def validate(
+    self,
+) -> None:
+```
+
+Validate Module contracts, executable closure, and release hash.
+
+### ModuleRelease.get_execution_requirements
+
+```python
+def get_execution_requirements(
+    self,
+) -> ModuleExecutionRequirements | None:
+```
+
+Read frozen requirements without modifying payload, identity or history.
+
+A complete legacy ReviewerDefaults shape maps by its existing assert
+semantics, irrespective of its version token. A record without such a
+snapshot returns None, never current Reviewer defaults. This read does
+not select an executor or grant permission.
+
+### ModuleRelease.as_dict
+
+```python
+def as_dict(
+    self,
+) -> dict[str, Any]:
+```
+
+Return the canonical JSON-compatible Runtime Module release.
+
+### ModuleRelease.build
+
+```python
+@classmethod
+def build(
+    cls,
+    **fields: Any,
+) -> 'ModuleRelease':
+```
+
+Build a hash-complete immutable Module Release.
+
+### ModuleRelease.from_dict
+
+```python
+@classmethod
+def from_dict(
+    cls,
+    payload: Mapping[str, Any],
+) -> 'ModuleRelease':
+```
+
+Reconstruct legacy or requirements-based records without rewriting hashes.
+
 ## ReviewerDefaults
 
 Public import: `from agent_runtime import ReviewerDefaults`
@@ -914,11 +918,12 @@ class ReviewerDefaults:
     max_attempts: int = 3
 ```
 
-Runtime's fixed Reviewer capabilities, frozen into each new definition.
+Legacy Reviewer capability snapshots, retained for historical decoding.
 
-Version v1 supplies isolated context, read/search/shell, denied tool network,
-private scratch, a 1200-second attempt budget and at most three attempts
-including the first. Model selection and host resources are independent.
+The complete saved shape carries isolated context, read/search/shell,
+denied tool network, private scratch and explicit budgets. Version labels
+are provenance tokens and do not switch assert_profile semantics. New
+definitions use ModuleExecutionRequirements, never this role-specific key.
 max_attempts records a limit; it does not implement retry scheduling.
 
 ### ReviewerDefaults.validate
@@ -963,6 +968,26 @@ def from_dict(
 ```
 
 Restore and validate a complete saved snapshot without filling omissions.
+
+## load_reviewer_registration
+
+Public import: `from agent_runtime import load_reviewer_registration`
+
+```python
+def load_reviewer_registration(
+    project_root: Path,
+    *,
+    skill_id: str,
+    module_id: str,
+) -> ModuleRegistrationSource:
+```
+
+Load one source and check Runtime's common Reviewer output format.
+
+The generic loader reads the exact source once. The role-specific checker
+consumes that captured schema, never reopens it, and returns no approval or
+registration record. Ordinary Module loading/export does not call this gate.
+Invalid Reviewer format raises ValueError before compilation or any write.
 
 ## Workflow
 
