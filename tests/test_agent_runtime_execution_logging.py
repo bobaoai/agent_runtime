@@ -285,8 +285,7 @@ print(json.dumps({'status':attempt['status'],'complete':log['complete'],'restore
     process = subprocess.run([sys.executable, "-c", driver, phase], cwd=tmp_path, capture_output=True, text=True,
         timeout=15, env={**os.environ, "PYTHONPATH": os.pathsep.join((str(project / "src"), str(project / "tests")))})
     assert process.returncode == 0, process.stderr
-    expected = "completed" if phase == "trace_finalization" else "cancelled"
-    assert json.loads(process.stdout) == {"status": expected, "complete": True, "restored": True}
+    assert json.loads(process.stdout) == {"status": "cancelled", "complete": True, "restored": True}
 
 
 @pytest.mark.parametrize("outcome", ["success", "timeout"])

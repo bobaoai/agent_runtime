@@ -56,10 +56,10 @@ class ClaudeCliNativeToolsModuleExecutor:
     Unresolved aliases, missing evidence and mismatches cannot report success.
 
     Default SIGINT capture spans provider execution, output validation and log
-    preparation. Cancellation observed before trace finalization returns the
-    captured Attempt as cancelled. Once finalization starts, its selected result
-    and trace are delivered even if a late signal arrives; logs are not replaced
-    by a bare interruption error. Custom signal handlers are not overridden.
+    preparation and serialization. Cancellation observed before result handoff
+    returns the captured Attempt as cancelled, reusing an already committed trace
+    unchanged. Logs are not replaced by a bare interruption error. A signal after
+    final handoff does not undo that result. Custom handlers are not overridden.
     """
 
     executor_adapter_id = "claude_cli_native_tools_executor"
@@ -160,7 +160,6 @@ class ClaudeCliNativeToolsModuleExecutor:
             if interrupted.requested:
                 failure_class, failure_code, message = "cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user"
                 retry, terminal_status = "retry_denied", "cancelled"
-                trace["stop_reason"] = "cancelled"
             usage, _ = usage_fields()
             retain_tool_log()
             raise_terminal_failure(
@@ -421,9 +420,11 @@ class ClaudeCliNativeToolsModuleExecutor:
         retain_tool_log()
         if interrupted.requested:
             fail("cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user", terminal_status="cancelled")
-        # Finalize one result with the captured trace. A late signal cannot turn
-        # an already selected result into a bare KeyboardInterrupt that loses it.
         trace_ref, trace_sha256 = commit_attempt_trace_json(self._artifacts, request, trace)
+        if interrupted.requested:
+            # The existing content store accepts the same trace bytes again.
+            # Cancellation adds failure facts without changing committed logs.
+            fail("cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user", terminal_status="cancelled")
         return completed_adapter_result(profile=profile, request=request, outputs=(submission,),
             tool_operation_ref_ids=(), trace_ref=trace_ref, trace_sha256=trace_sha256,
             **usage)

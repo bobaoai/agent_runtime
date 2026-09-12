@@ -28,8 +28,8 @@ def _capture_cli_interrupts():
 
     The Adapter keeps this scope until its result/trace has been finalized. A
     nested process sees the same request immediately and performs group cleanup.
-    Callers retain the completed record if cancellation arrives after finalization
-    has begun, rather than discarding captured output during trace serialization.
+    Callers check the request after trace serialization as well, rather than
+    discarding captured output when a signal arrives during record handoff.
     Custom signal policies and non-main threads are not replaced.
     """
     previous = signal.getsignal(signal.SIGINT) if current_thread() is main_thread() else None
