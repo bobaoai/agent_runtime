@@ -1187,7 +1187,9 @@ there is no separate Skill installation command.
 
 **Args**
 
-- `root`: Explicit host directory. Creates .runtime when missing and places
+- `root`: Explicit host directory, interpreted as a pathlib path. Tilde is
+  not expanded here; a shell may expand it before calling a CLI.
+  Creates .runtime when missing and places
   the two bundled operator Skills in .agents/skills and .claude/skills.
   It is neither a model read root nor a model or database binding.
 **Returns**
@@ -1196,7 +1198,7 @@ Paths actually written, or an empty tuple when setup is already current.
 Existing tool stdout remains the original operation's result.
 **Raises**
 
-- `ValueError`: Invalid setup metadata, a symlink in a managed target path,
+- `ValueError`: Invalid setup metadata, a non-regular file or symlink in a managed target path,
   or locally changed/unknown same-name Skill content. The target is
   included in the error; resolve that content with its owner.
 - `OSError`: Missing package resources or native file failure. Some setup

@@ -1,6 +1,7 @@
 """Bounded local setup and the existing command entry points."""
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -135,7 +136,7 @@ def test_native_file_error_does_not_replace_directory(tmp_path, package):
     root = tmp_path / "host"
     target = root / ".agents/skills/agent-runtime-registration/SKILL.md"
     target.mkdir(parents=True)
-    with pytest.raises(IsADirectoryError):
+    with pytest.raises(ValueError, match="not a regular file"):
         setup_runtime(root)
     assert target.is_dir() and not (root / ".runtime").exists()
 
@@ -223,3 +224,40 @@ def test_setup_failure_stops_registration_dispatch(tmp_path, monkeypatch, capsys
     assert cli.main(["load", "--root", str(tmp_path), "--kind", "module", "--id", "test"]) == 1
     result = capsys.readouterr()
     assert not result.out and json.loads(result.err)["detail"] == "local setup conflict"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO probe")
+@pytest.mark.parametrize("relative", [".runtime/setup.json", ".agents/skills/agent-runtime-registration/SKILL.md"])
+def test_fifo_is_rejected_without_opening_its_content(tmp_path, package, monkeypatch, relative):
+    root = tmp_path / "host"
+    target = root / relative
+    target.parent.mkdir(parents=True)
+    os.mkfifo(target)
+    original = Path.read_bytes
+    def checked(path):
+        if path == target:
+            pytest.fail("FIFO must not be opened for reading")
+        return original(path)
+    monkeypatch.setattr(Path, "read_bytes", checked)
+    with pytest.raises(ValueError, match="not a regular file"):
+        setup_runtime(root)
+    assert not (root / ".claude").exists()
+
+
+def test_literal_tilde_root_has_the_same_meaning_for_setup_and_load(tmp_path, package, monkeypatch, capsys):
+    from agent_runtime.registry import registry_local_persistence as cli
+    monkeypatch.chdir(tmp_path)
+    # A regression must not accidentally prepare the real user's home.
+    monkeypatch.setattr(Path, "expanduser", lambda self: pytest.fail("no implicit tilde expansion"))
+    seen = []
+    load = cli.load_runtime_registration
+    def observed(root, *args):
+        seen.append(root.resolve())
+        return load(root, *args)
+    monkeypatch.setattr(cli, "load_runtime_registration", observed)
+    assert cli.main(["load", "--root", "~/host", "--kind", "module", "--id", "absent"]) == 1
+    target = tmp_path / "~/host"
+    assert (target / ".runtime/setup.json").is_file()
+    assert (target / ".agents/skills/agent-runtime-registration/SKILL.md").is_file()
+    assert seen == [target]
+    assert json.loads(capsys.readouterr().err)["detail"] == "No registered module: absent"
