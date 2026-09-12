@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from collections.abc import Mapping
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, TYPE_CHECKING
 
 from ..contracts.registry_release_definition import (
     BehaviorPolicyRelease,
@@ -35,6 +35,9 @@ from .registry_release_compilation import (
 )
 from .registry_release_registration import RuntimeReleaseBundle, RuntimeReleaseRegistry
 from .registry_reviewer_defaults import content_version, resolve_reviewer_policy, reviewer_execution_profile
+
+if TYPE_CHECKING:
+    from .registry_workflow_authoring import Workflow
 
 
 EXECUTION_PROFILE_UNAVAILABLE = "MODULE_EXECUTION_PROFILE_UNAVAILABLE"
@@ -248,7 +251,7 @@ def _candidate(
 
 @dataclass(frozen=True)
 class ModuleExport:
-    """Compiled Reviewer definition and separately supplied execution binding.
+    """Compiled Module definition and separately supplied execution binding.
 
     ``source`` is the loaded, path-free authoring content; ``candidate`` is
     the compiler input; ``compiled`` contains the immutable Module, Prompt
@@ -289,7 +292,7 @@ class ModuleExport:
     def module_release(self) -> ModuleRelease:
         """Return the compiled immutable ModuleRelease without reading a store.
 
-        The ref and hash identify the fixed Reviewer definition. Profile and
+        The ref and hash identify the fixed Module definition. Profile and
         Variant choices are excluded from this Module identity. This property
         does not prove that the release has been registered or activated.
         """
@@ -339,10 +342,82 @@ class Module(ABC):
     Implementations load explicit authoring sources, export immutable records
     and inspect registered facts. They do not constitute running Agents.
     Register an export through the public Registry API, then invoke the
-    registered target through Execution. A new review input is a new execution
+    registered target through Execution. A new task input is a new execution
     of a selected definition, not a reason to reload or re-register its source.
     ModuleReviewer is the concrete implementation for Reviewer definitions.
+
+    ``to_workflow`` composes an exact ModuleExport into a one-node Workflow.
+    Subclasses inherit this common capability without inheriting Reviewer
+    policies or output constraints. Workflow remains an independent graph
+    object. Its default ID equals the Module ID; its kind distinguishes it
+    from the Module. Explicit graph composition keeps its supplied names.
     """
+
+    @staticmethod
+    def to_workflow(
+        exported: ModuleExport, *, workflow_id: str | None = None,
+    ) -> Workflow:
+        """Compose an exact Module export into a one-node Workflow without IO.
+
+        Args:
+            exported: Exact ModuleExport already compiled by the author. This
+                static method consumes that value, not an author's instance
+                state; it never calls export or reloads authoring source.
+            workflow_id: Explicit snake_case graph name. Only None selects the
+                Module ID as the default. The Workflow version is the Module
+                version; its sole node is named module. Explicit graphs with
+                different nodes or mappings use Workflow.from_graph instead.
+        Returns:
+            Workflow authoring object retaining the exact Module export and
+            declared operations. Call its export method to compile and validate
+            the dependency closure, then use the public Registry to register it.
+            A single node is still a Workflow, in a separate identity namespace.
+        Raises:
+            WorkflowAuthoringError: WORKFLOW_MODULE_CLOSURE_INVALID if exported
+                is not an exact ModuleExport. Graph/dependency validation in
+                Workflow.export retains the same existing error contract.
+            ValueError: workflow_id is empty or not a valid snake_case name.
+        Effects:
+            Constructs in memory only. No source read, Module recompilation,
+            default resolution, Registry write, model selection or execution.
+            Reviewer subclasses inherit this method unchanged. Ordinary Modules
+            acquire no Reviewer rules or permissions by using it.
+        """
+        from ..contracts.registry_release_definition import WorkflowEdge, WorkflowNodeKind
+        from ..foundation.foundation_contract_validation import validate_snake_case_name
+        from .registry_release_compilation import WorkflowReleaseCandidate, WorkflowNodeReleaseCandidate
+        from .registry_workflow_authoring import (
+            Workflow, WorkflowAuthoringError, WORKFLOW_MODULE_CLOSURE_INVALID,
+        )
+
+        if type(exported) is not ModuleExport:
+            raise WorkflowAuthoringError(
+                WORKFLOW_MODULE_CLOSURE_INVALID, "exported must be an exact ModuleExport",
+            )
+        module = exported.module_release
+        workflow_id = module.module_id if workflow_id is None else workflow_id
+        validate_snake_case_name("workflow_id", workflow_id)
+        version = module.module_version
+        suffix = f"{workflow_id}@{version}"
+        candidate = WorkflowReleaseCandidate(
+            workflow_id=workflow_id, workflow_version=version, workflow_contract_version="v1",
+            owner_contract_ref=exported.source.owner_contract_ref,
+            owner_contract_content=exported.source.owner_contract_content,
+            graph_ref="workflow-graph:" + suffix, initial_node_id="module",
+            nodes=(WorkflowNodeReleaseCandidate(
+                node_id="module", node_kind=WorkflowNodeKind.MODULE,
+                module_release_ref=module.release_ref, module_release_sha256=module.release_sha256,
+                input_mapping_ref="input-mapping:" + suffix,
+                input_mapping_document={"task_input": "payload"}),),
+            edges=(WorkflowEdge("module", "complete", None, True),),
+            authorization_manifest_ref="authorization-manifest:" + suffix,
+            authorization_manifest_document={"module_release_ref": module.release_ref,
+                "module_release_sha256": module.release_sha256, "operations": list(module.declared_operation_ids)},
+            execution_binding_ref="execution-binding:" + suffix,
+            execution_binding_document={"schema_version": "workflow_execution_binding_v1",
+                "variant_policy_family": "execution_variant_policy", "workflow_id": workflow_id},
+        )
+        return Workflow.from_graph(candidate, module_exports=(exported,))
 
     @classmethod
     @abstractmethod
@@ -453,7 +528,8 @@ class ModuleReviewer(Module):
 
     Ordinary source registration uses ``register_reviewer`` or the installed
     ``agent-runtime-registry register-reviewer`` CLI. It resolves defaults,
-    creates the fixed one-node Workflow and saves its definition closure without
+    uses the inherited ``Module.to_workflow`` to create a one-node Workflow and
+    saves its definition closure without
     a Profile or Variant. Use prepare_local_workflow_module to select the model
     for a new invocation, then supply the existing host ports to the kernel.
     The lower-level ``register_runtime_module_plugin`` still accepts an explicit

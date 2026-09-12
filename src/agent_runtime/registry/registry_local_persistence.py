@@ -252,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     reviewer.add_argument("--source-root", type=Path, help="explicit source root; defaults to --root")
     reviewer.add_argument("--skill-id", required=True, help="exact kebab-case Skill identity")
     reviewer.add_argument("--module-id", required=True, help="exact snake_case Reviewer identity")
+    reviewer.add_argument("--workflow-id", help="explicit Workflow name; omitted means the same name as --module-id; kinds remain distinct")
     reviewer.add_argument("--version", required=True, help="approved Module/Workflow definition version")
     register = commands.add_parser("register", help="validate/register a bundle and save its objects")
     register.add_argument("--root", required=True)
@@ -295,7 +296,7 @@ def _run_command(args) -> int:
     if args.command == "register-reviewer":
         from .registry_plugin_registration import register_reviewer
         result = register_reviewer(args.root, source_root=args.source_root, skill_id=args.skill_id,
-            module_id=args.module_id, module_version=args.version)
+            module_id=args.module_id, module_version=args.version, workflow_id=args.workflow_id)
         bundle = result.submitted_bundle
         print(json.dumps({
             "modules": [record.as_dict() for record in bundle.modules],

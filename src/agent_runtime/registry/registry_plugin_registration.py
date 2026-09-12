@@ -152,6 +152,7 @@ def register_reviewer(
     skill_id: str,
     module_id: str,
     module_version: str,
+    workflow_id: str | None = None,
     source_root: Path | None = None,
     model_id: str | None = None,
     reasoning_profile: str | None = None,
@@ -162,6 +163,11 @@ def register_reviewer(
     Runtime defaults provide isolated context, read/search/shell, read-only
     materials, private scratch, denied tool network, a 1200-second attempt
     budget and a limit of three attempts. Registration never selects a model.
+
+    The single-node Workflow defaults to the same ID and version as the Module;
+    workflow_id overrides only its name. Module and Workflow are distinguished
+    by kind, not a review suffix. The shared construction is inherited from
+    Module.to_workflow; the node name is module.
 
     Repeating a definition version retains its saved capabilities and policies.
     Changed source needs a new approved definition version. Source operation
@@ -178,11 +184,12 @@ def register_reviewer(
 
     Args:
         root: Host destination for .runtime/module/<id>/<version>.json and
-            .runtime/workflow/<id>_review/<version>.json. Existing files retain
+            .runtime/workflow/<workflow_id>/<version>.json. Existing files retain
             historical bindings; those do not select new executions' models.
         skill_id: Exact kebab-case source Skill identity.
         module_id: Exact snake_case Reviewer identity declared by the source.
         module_version: Approved definition version; never generated on conflict.
+        workflow_id: Optional explicit Workflow name; None uses module_id.
         source_root: Explicit authoring root, defaulting to root.
         model_id: Retired registration parameter. Non-None is rejected before
             IO; pass model choices to prepare_local_workflow_module instead.
@@ -211,7 +218,6 @@ def register_reviewer(
 
     from .registry_local_persistence import _restore_registry, _bundle, load_runtime_registration
     from .registry_module_authoring import ModuleReviewer
-    from .registry_workflow_authoring import Workflow
 
     registry = _restore_registry(root)
     if release_registry is not None:
@@ -231,7 +237,7 @@ def register_reviewer(
             reviewer_defaults=previous.reviewer_defaults,
         )
     exported = reviewer.export(module_version=module_version, **options)
-    workflow_export = Workflow.for_reviewer(exported).export()
+    workflow_export = reviewer.to_workflow(exported, workflow_id=workflow_id).export()
     # Policy lookup may include independently registered model configurations.
     # Only fixed definitions enter this registration's submitted catalog.
     result = register_runtime_module_plugin(

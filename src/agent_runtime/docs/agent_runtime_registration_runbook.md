@@ -59,11 +59,15 @@ CLI 查询仍只读注册定义，但首次调用可能补齐环境；普通 eva
 agent-runtime-registry register-reviewer --help
 agent-runtime-registry register-reviewer --root /path/to/host --source-root /path/to/source \
   --skill-id reviewed-skill --module-id reviewed_reviewer --version v1
-agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_reviewer_review
-agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_reviewer_review --version v1
+agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_reviewer
+agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_reviewer --version v1
 ```
 
 示例中的身份与版本应替换为准确已审 source 的值。source-root 省略时使用 root。
+单节点 Workflow 默认与 Module 同名、同版本，通过 `--kind module` 和 `--kind workflow` 区分。
+需要其他图名称时，在注册命令中传入 `--workflow-id explicit_name`；显式组装的图保留自己的名称。
+这项共同能力由 [Module.to_workflow](agent_runtime_reviewer_api.md#moduleto_workflow) 提供，
+Reviewer 通过继承使用。方法消费准确 export，不重新读取 source 或解析默认值。
 命令直接读取 source，自动解析 Runtime 默认、编译固定单节点 Workflow 并保存、回读；不需要
 先手写 Policy、Profile 或 bundle。软件安装使用宿主明确的标准安装命令，与注册分开。
 该命令的前置 setup 只准备本地 Runtime 环境；不会安装依赖、登录 Provider、创建 PG schema 或调用模型。
@@ -219,7 +223,7 @@ print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
 普通自测可以直接使用安装包中的正式命令，不需要 PG 或生产授权：
 
 ```sh
-agent-runtime-evaluate --root /path/to/host --workflow example_reviewer_review \
+agent-runtime-evaluate --root /path/to/host --workflow example_reviewer \
   --input /path/to/prepared_input.json --transport claude_cli
 ```
 

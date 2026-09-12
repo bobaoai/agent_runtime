@@ -101,7 +101,8 @@ they are not embedded in the Reviewer source or selected by this class.
 
 Ordinary source registration uses ``register_reviewer`` or the installed
 ``agent-runtime-registry register-reviewer`` CLI. It resolves defaults,
-creates the fixed one-node Workflow and saves its definition closure without
+uses the inherited ``Module.to_workflow`` to create a one-node Workflow and
+saves its definition closure without
 a Profile or Variant. Use prepare_local_workflow_module to select the model
 for a new invocation, then supply the existing host ports to the kernel.
 The lower-level ``register_runtime_module_plugin`` still accepts an explicit
@@ -271,9 +272,56 @@ Author a fixed Module definition; execution consumes ModuleRelease.
 Implementations load explicit authoring sources, export immutable records
 and inspect registered facts. They do not constitute running Agents.
 Register an export through the public Registry API, then invoke the
-registered target through Execution. A new review input is a new execution
+registered target through Execution. A new task input is a new execution
 of a selected definition, not a reason to reload or re-register its source.
 ModuleReviewer is the concrete implementation for Reviewer definitions.
+
+``to_workflow`` composes an exact ModuleExport into a one-node Workflow.
+Subclasses inherit this common capability without inheriting Reviewer
+policies or output constraints. Workflow remains an independent graph
+object. Its default ID equals the Module ID; its kind distinguishes it
+from the Module. Explicit graph composition keeps its supplied names.
+
+### Module.to_workflow
+
+```python
+@staticmethod
+def to_workflow(
+    exported: ModuleExport,
+    *,
+    workflow_id: str | None=None,
+) -> Workflow:
+```
+
+Compose an exact Module export into a one-node Workflow without IO.
+
+**Args**
+
+- `exported`: Exact ModuleExport already compiled by the author. This
+  static method consumes that value, not an author's instance
+  state; it never calls export or reloads authoring source.
+- `workflow_id`: Explicit snake_case graph name. Only None selects the
+  Module ID as the default. The Workflow version is the Module
+  version; its sole node is named module. Explicit graphs with
+  different nodes or mappings use Workflow.from_graph instead.
+**Returns**
+
+Workflow authoring object retaining the exact Module export and
+declared operations. Call its export method to compile and validate
+the dependency closure, then use the public Registry to register it.
+A single node is still a Workflow, in a separate identity namespace.
+**Raises**
+
+- `WorkflowAuthoringError`: WORKFLOW_MODULE_CLOSURE_INVALID if exported
+  is not an exact ModuleExport. Graph/dependency validation in
+  Workflow.export retains the same existing error contract.
+- `ValueError`: workflow_id is empty or not a valid snake_case name.
+**Effects**
+
+Constructs in memory only. No source read, Module recompilation,
+default resolution, Registry write, model selection or execution.
+Reviewer subclasses inherit this method unchanged. Ordinary Modules
+acquire no Reviewer rules or permissions by using it.
 
 ### Module.from_registration
 
@@ -354,7 +402,7 @@ class ModuleExport:
     execution_blocker_code: str | None
 ```
 
-Compiled Reviewer definition and separately supplied execution binding.
+Compiled Module definition and separately supplied execution binding.
 
 ``source`` is the loaded, path-free authoring content; ``candidate`` is
 the compiler input; ``compiled`` contains the immutable Module, Prompt
@@ -390,7 +438,7 @@ def module_release(
 
 Return the compiled immutable ModuleRelease without reading a store.
 
-The ref and hash identify the fixed Reviewer definition. Profile and
+The ref and hash identify the fixed Module definition. Profile and
 Variant choices are excluded from this Module identity. This property
 does not prove that the release has been registered or activated.
 
@@ -671,6 +719,7 @@ rewrite files. Loading still leaves registered definitions unchanged.
 | `--source-root` | optional | explicit source root; defaults to --root |
 | `--skill-id` | required | exact kebab-case Skill identity |
 | `--module-id` | required | exact snake_case Reviewer identity |
+| `--workflow-id` | optional | explicit Workflow name; omitted means the same name as --module-id; kinds remain distinct |
 | `--version` | required | approved Module/Workflow definition version |
 
 ### agent-runtime-registry register
@@ -778,6 +827,7 @@ def register_reviewer(
     skill_id: str,
     module_id: str,
     module_version: str,
+    workflow_id: str | None=None,
     source_root: Path | None=None,
     model_id: str | None=None,
     reasoning_profile: str | None=None,
@@ -790,6 +840,11 @@ Register approved Reviewer source and its one-node Workflow under root.
 Runtime defaults provide isolated context, read/search/shell, read-only
 materials, private scratch, denied tool network, a 1200-second attempt
 budget and a limit of three attempts. Registration never selects a model.
+
+The single-node Workflow defaults to the same ID and version as the Module;
+workflow_id overrides only its name. Module and Workflow are distinguished
+by kind, not a review suffix. The shared construction is inherited from
+Module.to_workflow; the node name is module.
 
 Repeating a definition version retains its saved capabilities and policies.
 Changed source needs a new approved definition version. Source operation
@@ -807,11 +862,12 @@ is not a compatibility boundary. Never repair this by rewriting old records.
 **Args**
 
 - `root`: Host destination for .runtime/module/<id>/<version>.json and
-  .runtime/workflow/<id>_review/<version>.json. Existing files retain
+  .runtime/workflow/<workflow_id>/<version>.json. Existing files retain
   historical bindings; those do not select new executions' models.
 - `skill_id`: Exact kebab-case source Skill identity.
 - `module_id`: Exact snake_case Reviewer identity declared by the source.
 - `module_version`: Approved definition version; never generated on conflict.
+- `workflow_id`: Optional explicit Workflow name; None uses module_id.
 - `source_root`: Explicit authoring root, defaulting to root.
 - `model_id`: Retired registration parameter. Non-None is rejected before
   IO; pass model choices to prepare_local_workflow_module instead.
@@ -916,24 +972,14 @@ class Workflow:
     module_exports: tuple[ModuleExport, ...]
 ```
 
-Graph-backed authoring facade over the existing Workflow compiler.
+Author an independent graph over exact Module exports.
 
-### Workflow.for_reviewer
-
-```python
-@classmethod
-def for_reviewer(
-    cls,
-    exported: ModuleExport,
-) -> Self:
-```
-
-Compose the fixed one-node review graph from an exact Module export.
-
-Workflow ID is <module_id>_review, its version is the Module version,
-and its sole node is review. The owner and operation declarations come
-from the Module source. No live authorization or model execution occurs.
-The result is a Workflow regardless of its node count.
+Use from_graph for an explicitly named graph, with any admitted node count.
+Module.to_workflow supplies the common single-node construction: its default
+Workflow ID equals the Module ID and can be explicitly overridden. Module
+and Workflow identities remain distinct by kind. Graph compilation and
+dependency validation happen in export; registration and execution are
+separate operations. No Reviewer-specific construction belongs in this class.
 
 ### Workflow.from_graph
 

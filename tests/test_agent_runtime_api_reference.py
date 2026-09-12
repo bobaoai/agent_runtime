@@ -44,9 +44,11 @@ def test_checked_in_documents_equal_source():
         "not a running Reviewer", "same Module ref", "adding transport compatibility",
         "intentionally omitted", "execution_blocker_code", "idempotency_key",
         "single-node", "authorize", "PermissionError", "origin_bundle",
+        "Module.to_workflow", "@staticmethod", "--workflow-id",
     ):
         assert fragment in body
     assert all(name in body for name in ERROR_CONSTANTS)
+    assert "Workflow.for_reviewer" not in body
     assert "/Users/" not in body and "/private/tmp/" not in body
 
 

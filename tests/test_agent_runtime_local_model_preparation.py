@@ -64,7 +64,7 @@ def test_old_saved_model_is_preserved_but_does_not_select_new_invocations(tmp_pa
     fresh = _prepared_bundle(root)
     assert fresh.execution_profiles[0].model_id == "claude-opus-5[1m]"
     assert len(fresh.execution_variant_policies) == len(fresh.execution_profiles) == 1
-    assert load_runtime_registration(root, "workflow", MODULE_ID + "_review").registry.snapshot().execution_profiles[0].model_id == "saved-model-c"
+    assert load_runtime_registration(root, "workflow", MODULE_ID).registry.snapshot().execution_profiles[0].model_id == "saved-model-c"
     assert _files(root) == before
 
 
@@ -75,7 +75,7 @@ def test_external_policy_lookup_does_not_copy_model_configuration_to_new_root(tm
     registry.register_bundle(_prepared_bundle(tmp_path / "old", model_id="not-a-registration-default"))
     result = _register(tmp_path / "new", source, release_registry=registry)
     assert not result.submitted_bundle.execution_profiles
-    assert not load_runtime_registration(tmp_path / "new", "workflow", MODULE_ID + "_review").registry.snapshot().execution_profiles
+    assert not load_runtime_registration(tmp_path / "new", "workflow", MODULE_ID).registry.snapshot().execution_profiles
 
 
 def test_new_default_affects_only_new_preparations_not_fixed_files(tmp_path, monkeypatch):
@@ -84,11 +84,11 @@ def test_new_default_affects_only_new_preparations_not_fixed_files(tmp_path, mon
     _register(root, source)
     before = _files(root)
     original = local.reviewer_execution_profile
-    old, _ = prepare_local_workflow_module(root, MODULE_ID + "_review")
+    old, _ = prepare_local_workflow_module(root, MODULE_ID)
     monkeypatch.setattr(local, "reviewer_execution_profile",
         lambda defaults, **kw: original(defaults, **{**kw, "model_id": kw.get("model_id") or "model-b"}))
     _register(root, source)
-    new, _ = prepare_local_workflow_module(root, MODULE_ID + "_review")
+    new, _ = prepare_local_workflow_module(root, MODULE_ID)
     assert old.registry.snapshot().execution_profiles[0].model_id == "claude-opus-5[1m]"
     assert new.registry.snapshot().execution_profiles[0].model_id == "model-b"
     assert old.release == new.release and _files(root) == before
@@ -106,7 +106,7 @@ def test_unsupported_transport_has_no_fallback_or_store_write(tmp_path, transpor
         def load_release_registry(self):
             pytest.fail("No reads for an unsupported model transport")
     with pytest.raises(ValueError, match="Unsupported Reviewer model transport"):
-        prepare_local_workflow_module(root, MODULE_ID + "_review", transport_kind=transport, release_store=Store())
+        prepare_local_workflow_module(root, MODULE_ID, transport_kind=transport, release_store=Store())
     assert _files(root) == before
 
 
@@ -163,7 +163,7 @@ def test_prepared_selection_runs_once_and_preserves_ledger_identity(tmp_path, mo
     source, _ = _source(tmp_path / "source")
     root = tmp_path / "host"
     _register(root, source)
-    prepared = prepare_local_workflow_module(root, MODULE_ID + "_review", model_id="model-a")
+    prepared = prepare_local_workflow_module(root, MODULE_ID, model_id="model-a")
     _register(root, source, "v2")
     source.rename(source.with_name("unavailable_source"))
     monkeypatch.setattr(local, "load_runtime_registration", lambda *a, **k: pytest.fail("No reload at dispatch"))
@@ -184,8 +184,8 @@ def test_changed_model_requires_new_key_and_invalid_input_never_calls_provider(t
     source, _ = _source(tmp_path / "source")
     root = tmp_path / "host"
     _register(root, source)
-    a = prepare_local_workflow_module(root, MODULE_ID + "_review", model_id="model-a")
-    b = prepare_local_workflow_module(root, MODULE_ID + "_review", model_id="model-b")
+    a = prepare_local_workflow_module(root, MODULE_ID, model_id="model-a")
+    b = prepare_local_workflow_module(root, MODULE_ID, model_id="model-b")
     calls = []
     first, records, contents = _invoke(a, tmp_path / "a", calls, key="same_request")
     with pytest.raises(ValueError, match="already bound"):
@@ -211,12 +211,12 @@ def test_prepare_store_failure_and_wrong_readback_do_not_update_local_files(tmp_
         def load_release_registry(self):
             return RuntimeReleaseRegistry()
     with pytest.raises(RuntimeError, match="store write unavailable"):
-        prepare_local_workflow_module(root, MODULE_ID + "_review", release_store=Store())
+        prepare_local_workflow_module(root, MODULE_ID, release_store=Store())
     class MissingReadback(Store):
         def register_bundle(self, bundle):
             self.submitted = bundle
     with pytest.raises(KeyError, match="unknown Workflow"):
-        prepare_local_workflow_module(root, MODULE_ID + "_review", release_store=MissingReadback())
+        prepare_local_workflow_module(root, MODULE_ID, release_store=MissingReadback())
     assert _files(root) == before
 
 
@@ -232,10 +232,10 @@ def test_pg_new_model_and_fresh_log_query_keep_original_configuration(
     root = tmp_path / "host"
     _register(root, source)
     before = _files(root)
-    a = prepare_local_workflow_module(root, MODULE_ID + "_review", model_id="model-a", release_store=releases)
+    a = prepare_local_workflow_module(root, MODULE_ID, model_id="model-a", release_store=releases)
     calls = []
     first, _, _ = _invoke(a, tmp_path / "a", calls, key="pg_request_a", records=ledger, contents=ledger)
-    b = prepare_local_workflow_module(root, MODULE_ID + "_review", model_id="model-b", release_store=releases)
+    b = prepare_local_workflow_module(root, MODULE_ID, model_id="model-b", release_store=releases)
     _invoke(b, tmp_path / "b", calls, key="pg_request_b", records=ledger, contents=ledger)
     fresh = PostgresRuntimeReleaseStore.from_dsn(dsn, schema=postgres_release_test_schema).load_release_registry()
     query = PostgresRuntimeExecutionQueryStore.from_dsn(dsn, schema=postgres_test_schema)

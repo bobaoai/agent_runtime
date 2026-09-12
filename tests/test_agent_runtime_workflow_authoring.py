@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 
 from agent_runtime import (
     WORKFLOW_MODULE_CLOSURE_INVALID,
+    Module,
     ModuleReviewer,
     Workflow,
     WorkflowAuthoringError,
@@ -216,6 +218,85 @@ def _workflow_export():
         candidate,
         module_exports=(module_export,),
     ).export()
+
+
+def test_plain_module_and_reviewer_inherit_one_exact_export_constructor(monkeypatch):
+    from agent_runtime.registry import registry_module_authoring as authoring
+    from agent_runtime.registry import compile_agent_module_release
+
+    seed = _module_export()
+    source = replace(seed.source, module_id="plain_writer",
+                     output_schema_document=_schema(seed.source.output_schema_ref))
+    candidate = authoring._candidate(source, module_version="v1",
+        behavior_policy=seed.behavior_policy, evaluation_policy=seed.evaluation_policy,
+        retry_policy=seed.retry_policy)
+    exported = replace(seed, source=source, candidate=candidate,
+                       compiled=compile_agent_module_release(candidate))
+
+    class PlainModule(Module):
+        @classmethod
+        def from_registration(cls, *args, **kwargs):
+            pytest.fail("conversion must not load source")
+
+        def export(self, **kwargs):
+            return exported
+
+        def project(self, *args, **kwargs):
+            pytest.fail("conversion must not inspect a Registry")
+
+    plain = PlainModule()
+    fixed = plain.export()
+    before = fixed.origin_bundle
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("conversion must only consume the exact Module export")
+
+    with monkeypatch.context() as patch:
+        for name in ("load_module_registration", "compile_agent_module_release",
+                     "resolve_reviewer_policy", "reviewer_execution_profile", "_validate_reviewer_output_schema"):
+            patch.setattr(authoring, name, forbidden)
+        patch.setattr(PlainModule, "export", forbidden)
+        patch.setattr(RuntimeReleaseRegistry, "register_bundle", forbidden)
+        workflow = plain.to_workflow(fixed)
+    result = workflow.export()
+    module = fixed.module_release
+    assert result.workflow_release.workflow_id == module.module_id == "plain_writer"
+    assert result.workflow_release.workflow_version == module.module_version
+    assert result.workflow_release.release_ref != module.release_ref
+    assert result.workflow_release.initial_node_id == "module"
+    assert result.workflow_release.nodes[0].module_release_ref == module.release_ref
+    assert result.workflow_release.nodes[0].module_release_sha256 == module.release_sha256
+    assert workflow.module_exports[0] is fixed
+    assert fixed.origin_bundle == before
+    assert result.origin_bundle.modules == before.modules
+    assert result.origin_bundle.schema_assets == tuple(sorted(before.schema_assets, key=lambda row: row.release_ref))
+    assert module.reviewer_defaults is None
+    assert result.origin_bundle.execution_profiles == result.origin_bundle.execution_variant_policies == ()
+    assert ModuleReviewer.to_workflow is Module.to_workflow
+    assert "to_workflow" not in ModuleReviewer.__dict__
+    assert not hasattr(Workflow, "for_reviewer")
+
+
+def test_single_module_explicit_workflow_name_preserves_module():
+    exported = _module_export()
+    workflow = ModuleReviewer.to_workflow(exported, workflow_id="explicit_pipeline").export()
+    assert workflow.workflow_release.workflow_id == "explicit_pipeline"
+    assert workflow.origin_bundle.modules == (exported.module_release,)
+    custom_graph = _workflow_export().workflow_release
+    assert custom_graph.workflow_id == "portable_review_workflow"
+    assert [node.node_id for node in custom_graph.nodes] == ["first_review", "second_review"]
+
+
+@pytest.mark.parametrize("name", ["", "../escape", "CamelCase", "space name", 42])
+def test_single_module_invalid_workflow_name_is_not_a_default(name):
+    with pytest.raises(ValueError, match="workflow_id"):
+        Module.to_workflow(_module_export(), workflow_id=name)
+
+
+def test_single_module_rejects_non_export():
+    with pytest.raises(WorkflowAuthoringError) as failure:
+        Module.to_workflow(object())
+    assert failure.value.error_code == WORKFLOW_MODULE_CLOSURE_INVALID
 
 
 def _target_variant_bundle(exported, profile_id: str, model_id: str):

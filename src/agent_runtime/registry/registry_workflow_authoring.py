@@ -8,12 +8,10 @@ from typing import Any, Iterable, Self
 from ..contracts.registry_release_definition import (
     WorkflowNodeKind,
     WorkflowRelease,
-    WorkflowEdge,
 )
 from .registry_module_authoring import ModuleExport
 from .registry_release_compilation import (
     WorkflowReleaseCandidate,
-    WorkflowNodeReleaseCandidate,
     compile_workflow_release,
 )
 from .registry_release_registration import RuntimeReleaseBundle
@@ -55,41 +53,18 @@ class WorkflowExport:
 
 @dataclass(frozen=True)
 class Workflow:
-    """Graph-backed authoring facade over the existing Workflow compiler."""
+    """Author an independent graph over exact Module exports.
+
+    Use from_graph for an explicitly named graph, with any admitted node count.
+    Module.to_workflow supplies the common single-node construction: its default
+    Workflow ID equals the Module ID and can be explicitly overridden. Module
+    and Workflow identities remain distinct by kind. Graph compilation and
+    dependency validation happen in export; registration and execution are
+    separate operations. No Reviewer-specific construction belongs in this class.
+    """
 
     candidate: WorkflowReleaseCandidate
     module_exports: tuple[ModuleExport, ...]
-
-    @classmethod
-    def for_reviewer(cls, exported: ModuleExport) -> Self:
-        """Compose the fixed one-node review graph from an exact Module export.
-
-        Workflow ID is <module_id>_review, its version is the Module version,
-        and its sole node is review. The owner and operation declarations come
-        from the Module source. No live authorization or model execution occurs.
-        The result is a Workflow regardless of its node count.
-        """
-        module = exported.module_release
-        workflow_id, version = module.module_id + "_review", module.module_version
-        suffix = f"{workflow_id}@{version}"
-        candidate = WorkflowReleaseCandidate(
-            workflow_id=workflow_id, workflow_version=version, workflow_contract_version="v1",
-            owner_contract_ref=exported.source.owner_contract_ref,
-            owner_contract_content=exported.source.owner_contract_content,
-            graph_ref="workflow-graph:" + suffix, initial_node_id="review",
-            nodes=(WorkflowNodeReleaseCandidate(
-                node_id="review", node_kind=WorkflowNodeKind.MODULE,
-                module_release_ref=module.release_ref, module_release_sha256=module.release_sha256,
-                input_mapping_ref="input-mapping:" + suffix, input_mapping_document={"task_input": "payload"}),),
-            edges=(WorkflowEdge("review", "complete", None, True),),
-            authorization_manifest_ref="authorization-manifest:" + suffix,
-            authorization_manifest_document={"module_release_ref": module.release_ref,
-                "module_release_sha256": module.release_sha256, "operations": list(module.declared_operation_ids)},
-            execution_binding_ref="execution-binding:" + suffix,
-            execution_binding_document={"schema_version": "workflow_execution_binding_v1",
-                "variant_policy_family": "execution_variant_policy", "workflow_id": workflow_id},
-        )
-        return cls.from_graph(candidate, module_exports=(exported,))
 
     @classmethod
     def from_graph(

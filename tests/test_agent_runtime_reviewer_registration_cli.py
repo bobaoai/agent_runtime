@@ -41,7 +41,7 @@ def _register(root, source, version="v1", **kwargs):
 
 
 def _prepared_bundle(root, **kwargs):
-    prepared, _ = prepare_local_workflow_module(root, MODULE_ID + "_review", **kwargs)
+    prepared, _ = prepare_local_workflow_module(root, MODULE_ID, **kwargs)
     return RuntimeReleaseBundle(**{f.name: getattr(prepared.registry.snapshot(), f.name)
                                   for f in fields(RuntimeReleaseBundle)})
 
@@ -66,15 +66,73 @@ def test_source_registration_defaults_and_exact_workflow_closure(tmp_path):
     assert module.reviewer_defaults == ReviewerDefaults()
     assert bundle.execution_profiles == bundle.execution_variant_policies == ()
     assert bundle.evaluation_policies[0].policy_document()["evaluation_mode"] == "none"
-    assert workflow.workflow_id == MODULE_ID + "_review"
+    assert workflow.workflow_id == MODULE_ID
+    assert workflow.release_ref != module.release_ref
+    assert workflow.initial_node_id == "module"
     assert workflow.nodes[0].module_release_ref == module.release_ref
     loaded = load_runtime_registration(root, "workflow", workflow.workflow_id)
     assert loaded.release == workflow
     assert not loaded.registry.snapshot().execution_profiles
     assert set(_files(root)) == {
-        f".runtime/module/{MODULE_ID}/v1.json", f".runtime/workflow/{MODULE_ID}_review/v1.json"}
+        f".runtime/module/{MODULE_ID}/v1.json", f".runtime/workflow/{MODULE_ID}/v1.json"}
     assert _files(source) == original
     assert not result.catalog_snapshot.active_release_refs
+
+
+def test_named_workflow_cli_and_both_identity_namespaces(tmp_path):
+    source, _ = _source(tmp_path / "source")
+    root = tmp_path / "host"
+    process = _cli(root, source, "v1", "--workflow-id", "explicit_pipeline")
+    assert process.returncode == 0, process.stderr
+    result = json.loads(process.stdout)
+    assert result["modules"][0]["module_id"] == MODULE_ID
+    assert result["workflows"][0]["workflow_id"] == "explicit_pipeline"
+    assert load_runtime_registration(root, "module", MODULE_ID, "v1").release.release_ref == result["modules"][0]["release_ref"]
+    assert load_runtime_registration(root, "workflow", "explicit_pipeline", "v1").release.release_ref == result["workflows"][0]["release_ref"]
+    before = _files(root)
+    assert _cli(root, source, "v1", "--workflow-id", "explicit_pipeline").returncode == 0
+    assert _files(root) == before
+    assert _cli(root, source, "v1", "--workflow-id", "").returncode == 1
+    assert _files(root) == before
+    assert _cli(root, source, "v1", "--workflow-id").returncode == 2
+    assert _files(root) == before
+
+
+def test_existing_suffix_workflow_re_registration_preserves_original_bytes(tmp_path):
+    from agent_runtime import Workflow, register_runtime_module_plugin, RuntimeModulePlugin
+    from agent_runtime.contracts.registry_release_definition import WorkflowEdge
+
+    source, _ = _source(tmp_path / "source")
+    root = tmp_path / "host"
+    reviewer = ModuleReviewer.from_registration(source, skill_id=SKILL_ID, module_id=MODULE_ID)
+    exported = reviewer.export(module_version="scope1")
+    graph = reviewer.to_workflow(exported).candidate
+    old_id = MODULE_ID + "_review"
+    suffix = old_id + "@scope1"
+    old_graph = replace(graph, workflow_id=old_id, graph_ref="workflow-graph:" + suffix,
+        initial_node_id="review",
+        nodes=(replace(graph.nodes[0], node_id="review", input_mapping_ref="input-mapping:" + suffix),),
+        edges=(WorkflowEdge("review", "complete", None, True),),
+        authorization_manifest_ref="authorization-manifest:" + suffix,
+        execution_binding_ref="execution-binding:" + suffix,
+        execution_binding_document={**graph.execution_binding_document, "workflow_id": old_id})
+    old = Workflow.from_graph(old_graph, module_exports=(exported,)).export()
+    register_runtime_module_plugin(RuntimeReleaseRegistry(),
+        RuntimeModulePlugin("legacy_fixture", "scope1", old.origin_bundle), root=root)
+    before = _files(root)
+    assert f".runtime/workflow/{MODULE_ID}/scope1.json" not in before
+    current = _register(root, source, version="scope1").submitted_bundle
+    assert current.modules == old.origin_bundle.modules
+    assert current.workflows[0].workflow_id == MODULE_ID
+    assert current.workflows[0].nodes[0].module_release_sha256 == exported.module_release.release_sha256
+    after = _files(root)
+    assert all(after[path] == body for path, body in before.items())
+    assert set(after) - set(before) == {f".runtime/workflow/{MODULE_ID}/scope1.json"}
+    assert load_runtime_registration(root, "workflow", old_id, "scope1").release == old.workflow_release
+    assert load_runtime_registration(root, "module", MODULE_ID).release == exported.module_release
+    assert load_runtime_registration(root, "workflow", MODULE_ID).release == current.workflows[0]
+    _register(root, source, version="scope1")
+    assert _files(root) == after
 
 
 def test_v2_explicit_candidate_policy_remains_candidate_only(tmp_path):
@@ -142,7 +200,7 @@ def test_source_cli_runs_without_precompiled_bundle_and_can_load_after_source_re
     source.rename(source.with_name("authoring_unavailable"))
     for extra, expected in (([], "v2"), (["--version", "v1"], "v1")):
         process = subprocess.run([*CLI, "load", "--root", str(root), "--kind", "workflow",
-                                  "--id", MODULE_ID + "_review", *extra],
+                                  "--id", MODULE_ID, *extra],
             cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
             capture_output=True, text=True, check=True)
         assert json.loads(process.stdout)["release"]["workflow_version"] == expected
@@ -323,7 +381,9 @@ def test_installed_console_cli_registers_source_without_checkout_import(tmp_path
     assert json.loads(result.stdout)["readback"] == "verified"
     assert json.loads(result.stdout)["execution_profiles"] == []
     assert json.loads(result.stdout)["execution_variants"] == []
-    loaded = subprocess.run([str(cli), "load", "--root", str(root), "--kind", "workflow", "--id", MODULE_ID + "_review"],
+    assert json.loads(result.stdout)["modules"][0]["module_id"] == MODULE_ID
+    assert json.loads(result.stdout)["workflows"][0]["workflow_id"] == MODULE_ID
+    loaded = subprocess.run([str(cli), "load", "--root", str(root), "--kind", "workflow", "--id", MODULE_ID],
         cwd=tmp_path, env=process_env, check=True, capture_output=True, text=True)
     assert json.loads(loaded.stdout)["release"]["workflow_version"] == "v1"
     fixed_bytes = _files(root)
@@ -331,10 +391,20 @@ def test_installed_console_cli_registers_source_without_checkout_import(tmp_path
         "import json,sys; from pathlib import Path; from agent_runtime import prepare_local_workflow_module; "
         "p,v=prepare_local_workflow_module(Path(sys.argv[1]),sys.argv[2],model_id='installed-model'); "
         "print(json.dumps({'model':p.registry.snapshot().execution_profiles[0].model_id,'workflow':p.release.workflow_version}))",
-        str(root), MODULE_ID + "_review"], cwd=tmp_path, env=process_env,
+        str(root), MODULE_ID], cwd=tmp_path, env=process_env,
         check=True, capture_output=True, text=True)
     assert json.loads(prepared.stdout) == {"model": "installed-model", "workflow": "v1"}
     assert _files(root) == fixed_bytes
+
+    named = subprocess.run([str(cli), "register-reviewer", "--root", str(root), "--source-root", str(source),
+        "--skill-id", SKILL_ID, "--module-id", MODULE_ID, "--version", "v1", "--workflow-id", "installed_pipeline"],
+        cwd=tmp_path, env=process_env, check=True, capture_output=True, text=True)
+    assert json.loads(named.stdout)["modules"] == json.loads(result.stdout)["modules"]
+    assert json.loads(named.stdout)["workflows"][0]["workflow_id"] == "installed_pipeline"
+    for kind, identity in (("module", MODULE_ID), ("workflow", MODULE_ID), ("workflow", "installed_pipeline")):
+        exact = subprocess.run([str(cli), "load", "--root", str(root), "--kind", kind, "--id", identity, "--version", "v1"],
+            cwd=tmp_path, env=process_env, check=True, capture_output=True, text=True)
+        assert json.loads(exact.stdout)["release"][kind + "_id"] == identity
 
 
 @pytest.mark.parametrize("new_record", ["module_defaults", "model_source"])

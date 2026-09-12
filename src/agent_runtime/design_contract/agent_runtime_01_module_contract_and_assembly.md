@@ -195,6 +195,9 @@ hash 匹配。Execution T2 在运行时选择一份 exact registered Variant Pol
 不是另一个 Runtime 子系统。它自动使用 Runtime 发布的标准 Reviewer 底座；其他角色不会因为共用
 Module 基类而获得 Reviewer 的工具或策略。
 
+由准确 Module 定义构造单节点 Workflow 是通用 Module authoring 能力。Reviewer 特化通过继承取得
+该能力，共用同一套图构造与编译规则；构造过程保留传入定义及其依赖，不重新加载 source 或解析默认值。
+
 默认底座包含独立上下文、读取、搜索、受限 Shell、审核材料只读、私有 scratch、关闭工具网络和
 有界技术重试。通用审核结果格式由既有 Review Contract 提供；业务 prompt、checklist、完整输入输出
 schema 和结果含义继续属于 subject owner。Runtime 不替作者补写审核内容。
@@ -271,6 +274,12 @@ Evaluation Policy 表达执行用途限制，不保存 Reviewer 的质量标准�
 
 Workflow release 只引用 exact Module release refs/hashes。每个 `node_id` 是 workflow-local graph position，
 用于区分同一 Module 的多次出现；它不成为可独立注册的 Step 或 Component。
+
+通用单节点构造默认沿用 Module 的名称和版本，调用者可以明确指定另一个 Workflow 名称。
+Module 与 Workflow 由对象种类区分身份；相同名称不会使两者成为同一个对象，也无需添加审核后缀。
+该默认只适用于从一个准确 Module 定义构造新图，不改写显式图的名称、节点或任何已注册版本。
+多节点 Workflow 继续由调用者定义名称和编排。单节点结果仍是独立的 Workflow，通过既有图编译、
+注册与解析接口处理；构造不注册记录、不选择模型、不授予执行权限，也不改变直接 Module 执行的准入条件。
 
 Workflow candidate 定义 module/control node、typed edge、input mapping、branch、loop、wait 和 terminal
 condition。Compiler 校验所有 referenced release、node identity、edge target、parallel join 和 terminal

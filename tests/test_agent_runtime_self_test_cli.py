@@ -73,7 +73,7 @@ def environment(tmp_path, monkeypatch):
 
 def invoke(environment, **kwargs):
     root, executable, *_ = environment
-    return evaluate_local_workflow_module(root, MODULE_ID+"_review", input_payload={}, cli_path=executable, **kwargs)
+    return evaluate_local_workflow_module(root, MODULE_ID, input_payload={}, cli_path=executable, **kwargs)
 
 
 def test_self_test_runs_without_pg_or_product_authorization(environment):
@@ -145,7 +145,7 @@ def test_cli_success_non_pass_and_execution_failure(environment, tmp_path, capsy
     root, executable, calls, _, controls, output = environment
     payload = tmp_path / "input.json"
     payload.write_text("{}")
-    args = ["--root", str(root), "--workflow", MODULE_ID+"_review", "--input", str(payload),
+    args = ["--root", str(root), "--workflow", MODULE_ID, "--input", str(payload),
             "--cli-path", str(executable)]
     assert main(args) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "completed"
@@ -278,7 +278,7 @@ def test_installed_console_executes_without_checkout_or_pg(tmp_path):
     child = {key:value for key,value in os.environ.items()
              if key not in {"PLATFORM_DATABASE_URL", "AGENT_RUNTIME_TEST_DATABASE_URL", "DDM_REVIEW_EXECUTOR"}}
     child["PYTHONPATH"] = str(installed)
-    argv = [str(installed/"bin/agent-runtime-evaluate"), "--root", str(root), "--workflow", MODULE_ID+"_review",
+    argv = [str(installed/"bin/agent-runtime-evaluate"), "--root", str(root), "--workflow", MODULE_ID,
             "--input", str(payload), "--cli-path", str(executable)]
     completed = subprocess.run(argv, cwd=tmp_path, env=child, capture_output=True, text=True, timeout=60)
     assert completed.returncode == 0, (completed.stdout, completed.stderr)
