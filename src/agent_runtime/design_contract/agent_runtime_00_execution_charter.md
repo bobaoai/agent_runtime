@@ -169,6 +169,12 @@ Reviewer 的共同运行底座由 Runtime 提供，业务审核定义由 Module 
 ModuleReviewer 是通用 Module authoring 的特化，不增加同层 Runtime responsibility，也不将 Reviewer
 默认能力传播给其他角色。具体定义和兼容边界由 Registry 与 Invocation T2 共同闭合。
 
+Runtime 提供注册与 evaluation 的操作 Skill，作为自身产品的随包使用说明。宿主通过明确的
+Workspace root 将它们接入已有 Skill 发现位置，使 Agent 能找到并使用 Runtime 的公开入口。
+Runtime 拥有这些操作内容，Skill Management 保留 Skill 的结构、发现和审核规则；宿主自有 Skill
+仍由宿主管理。操作 Skill 不形成新的执行 Module 或同层 responsibility，内核也不依赖宿主 Skill 树。
+随包资源与 Workspace 接入的交付要求由 Standalone Release T2 承接。
+
 宿主入口可以接受一个明确的项目 root，据此定位已准备的运行资源和连接配置，并允许显式指定
 凭据位置。该 root 是配置定位，不是模型可读范围，也不决定默认模型或工具能力。凭据只交给相应
 可信存储或授权接口，模型仅获得本次允许的材料和隔离工作区。配置目录、临时运行目录和数据库

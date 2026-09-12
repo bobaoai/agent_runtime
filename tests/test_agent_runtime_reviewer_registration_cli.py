@@ -164,7 +164,9 @@ def test_registration_preserves_declarations_and_execution_checks_compatibility(
     process = _cli(root, source)
     if fault == "policy":
         assert process.returncode == 1 and "Unresolved exact Reviewer policy" in process.stderr
-        assert not (root / ".runtime").exists()
+        assert (root / ".runtime/setup.json").is_file()
+        assert not (root / ".runtime/module").exists()
+        assert not (root / ".runtime/workflow").exists()
     else:
         assert process.returncode == 0, process.stderr
         saved = _files(root)

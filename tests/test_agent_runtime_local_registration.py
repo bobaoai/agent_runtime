@@ -251,10 +251,13 @@ def test_cold_registration_rejects_conflicting_existing_profile(tmp_path, workfl
         cwd=tmp_path, env=process_env, capture_output=True, text=True)
     assert process.returncode != 0
     assert "collision" in process.stderr
-    assert {p: p.read_bytes() for p in root.rglob("*.json")} == before
+    setup_path = root / ".runtime/setup.json"
+    assert {p: p.read_bytes() for p in root.rglob("*.json") if p != setup_path} == before
+    assert setup_path.exists() is (entry == "cli")
     # Rejection must leave the local catalog usable by the next fresh CLI.
     path.write_text(json.dumps(first.as_dict()))
     subprocess.run([sys.executable, "-c", "from agent_runtime.registry.registry_local_persistence import main; raise SystemExit(main())",
         "register", "--root", str(root), "--bundle", str(path), "--plugin-id", "local_sample", "--plugin-version", "v1"],
         cwd=tmp_path, env=process_env, capture_output=True, text=True, check=True)
-    assert {p: p.read_bytes() for p in root.rglob("*.json")} == before
+    assert {p: p.read_bytes() for p in root.rglob("*.json") if p != setup_path} == before
+    assert setup_path.is_file()

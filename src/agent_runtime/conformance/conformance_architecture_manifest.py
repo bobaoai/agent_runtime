@@ -330,6 +330,7 @@ RUNTIME_PUBLIC_SURFACE_MANIFEST = MappingProxyType(
             "ModuleReviewer",
             "LoadedRuntimeRegistration",
             "load_runtime_registration",
+            "setup_runtime",
             "save_runtime_registration",
             "run_local_workflow_module",
             "prepare_local_workflow_module",

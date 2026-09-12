@@ -196,7 +196,7 @@ RUNTIME_SUPPORTING_PLANE_REGISTRATIONS = (
         supporting_plane_id="foundation",
         purpose=(
             "Own responsibility-neutral identity, serialization, validation, "
-            "and immutable-value primitives without importing Runtime peers."
+            "immutable-value primitives, and local environment preparation without importing Runtime peers."
         ),
         owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
     ),
@@ -241,7 +241,7 @@ RUNTIME_SOURCE_DIRECTORY_REGISTRATIONS = (
     RuntimeSourceDirectoryRegistration(
         source_directory_id="foundation",
         source_directory=f"{_RUNTIME_SOURCE_ROOT}/foundation",
-        purpose="responsibility-neutral import-free Runtime primitives",
+        purpose="responsibility-neutral Runtime primitives and local environment preparation",
     ),
     RuntimeSourceDirectoryRegistration(
         source_directory_id="conformance",
@@ -787,6 +787,14 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
 
 
 RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
+    RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/foundation/foundation_environment_setup.py",
+        supporting_plane_id="foundation",
+        source_directory_id="foundation",
+        subject="environment",
+        nominalized_action="setup",
+        owner_contract_ref="designDoc/agent_runtime_05_delivery_roadmap.md",
+    ),
     RuntimeSupportingSourceFileRegistration(
         source_path=(
             "src/agent_runtime/testing/"

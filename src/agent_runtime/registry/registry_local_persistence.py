@@ -243,7 +243,7 @@ def load_runtime_registration(root: Path, kind: str, subject_id: str,
 def build_parser() -> argparse.ArgumentParser:
     """Return the installed CLI parser; help is also used by the API renderer."""
     from .registry_plugin_registration import register_reviewer
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog="Root-based commands first ensure lightweight local Runtime setup; ready environments are not rewritten.")
     commands = parser.add_subparsers(dest="command", required=True)
     reviewer = commands.add_parser("register-reviewer", help="register approved source using Runtime Reviewer defaults",
         description=inspect.getdoc(register_reviewer).split("\n\nArgs:")[0],
@@ -276,9 +276,14 @@ def main(argv=None) -> int:
     goes to stdout. Failure does not imply that no writes occurred: inspect
     saved facts before repeating the same registration after an I/O failure.
     No code represents a Reviewer verdict; registration does not run a model.
+    Root-based commands first perform lightweight Runtime setup, filling missing
+    .runtime setup metadata and bundled operator Skills. Ready setup does not
+    rewrite files. Loading still leaves registered definitions unchanged.
     """
     args = build_parser().parse_args(argv)
     try:
+        from ..foundation.foundation_environment_setup import setup_runtime
+        setup_runtime(Path(args.root))
         return _run_command(args)
     except (ValueError, OSError, KeyError) as exc:
         print(json.dumps({"error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", None),

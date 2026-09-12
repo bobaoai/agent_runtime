@@ -6,6 +6,7 @@
 
 | 我想做什么 | 从哪里开始 |
 | --- | --- |
+| 在指定 root 使用 Runtime 工具 | [轻量运行前 setup](docs/agent_runtime_registration_runbook.md#local-runtime-setup)；现有命令自动完成，无需另装 Skill |
 | 注册新的 Reviewer / register a new reviewer | [准备资料与注册](docs/agent_runtime_registration_runbook.md#new-reviewer) |
 | 用宿主环境首次测试 Reviewer / test a reviewer | [固定测试配置与实际调用](docs/agent_runtime_registration_runbook.md#test-reviewer) |
 | 查询审核结果、执行日志或失败 / inspect a review | [按执行 ID 查询](docs/agent_runtime_registration_runbook.md#inspect-reviewer) |

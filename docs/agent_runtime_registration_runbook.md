@@ -15,6 +15,24 @@ drift。
 测试用途不要求复制 Reviewer；切换 Profile 是否需要新的 Module，取决于 Module 内容是否改变及
 兼容声明是否满足，具体规则以类说明和现有 Registry 合同为准。
 
+<a id="local-runtime-setup"></a>
+
+## 使用工具前的轻量 setup
+
+安装当前 Runtime 包后，直接使用下面的现有注册、查询或 evaluation 命令，并提供明确 root。
+这些入口在参数解析成功后共用 [setup_runtime](agent_runtime_reviewer_api.md#setup_runtime)：
+首次准备 `.runtime` 和两个随包操作 Skill，放入宿主的 `.agents/skills` 与 `.claude/skills`；
+已就绪时只做固定少量本地检查，不重复写文件，无需另执行 Skill 安装命令。
+
+setup 不扫描项目或注册历史，不安装软件、连接 PG 或登录 Provider。它只维护自身的 setup 元数据
+和可识别的操作 Skill，保留 Module、Workflow 定义和其他用户内容。同名本地修改或非法元数据会
+返回具体冲突，后续操作不会开始；I/O 失败后可用同包继续完成准备。精确效果与失败见上述自动接口说明。
+程序化宿主可在已有初始化中调用 `from agent_runtime import setup_runtime`；普通 import、CLI help
+和参数用法错误不会创建环境。无 root 的快照检查不猜测当前目录为 Runtime 环境。
+
+CLI 查询仍只读注册定义，但首次调用可能补齐环境；普通 evaluation 的 `persistence=not_requested`
+指本次执行事实不写持久存储，与环境 setup 文件的必要写入分开。
+
 <a id="new-reviewer"></a>
 
 ## 0. 注册新的 Reviewer 并在宿主测试 / Register a new reviewer and test it
@@ -48,7 +66,7 @@ agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_r
 示例中的身份与版本应替换为准确已审 source 的值。source-root 省略时使用 root。
 命令直接读取 source，自动解析 Runtime 默认、编译固定单节点 Workflow 并保存、回读；不需要
 先手写 Policy、Profile 或 bundle。软件安装使用宿主明确的标准安装命令，与注册分开。
-该命令不会安装依赖、创建环境、登录 Provider、创建 PG schema 或调用模型。
+该命令的前置 setup 只准备本地 Runtime 环境；不会安装依赖、登录 Provider、创建 PG schema 或调用模型。
 
 新 source 的 runtime_module_registration_v3 允许省略三个 Policy 引用；v2 仍要求完整声明。
 显式引用保持原限制，注册原样保存 operation 和 transport 声明。
@@ -212,7 +230,8 @@ agent-runtime-evaluate --root /path/to/host --workflow example_reviewer_review \
 [evaluate_local_workflow_module](agent_runtime_reviewer_api.md#evaluate_local_workflow_module)。
 
 命令用临时资源执行已有单节点 Workflow，stdout 返回结果及内存执行事实，标注
-persistence=not_requested；不会写 PG、.runtime 或持久请求回执。测试资源退出时清理，不能用本次
+persistence=not_requested；不会写 PG、注册定义或持久请求回执。CLI 前置 setup 可能补齐环境文件。
+测试资源退出时清理，不能用本次
 execution ID 查询持久历史，也不提供跨进程重放。操作者可以明确保存 stdout 作为测试证据，
 但该文件不是持久 Runtime Ledger。当前此命令不接 PG；保存类参数会被拒绝，不自动忽略。
 已完成并通过注册输出 schema 的执行退出 0（包括有效 non_pass），技术失败退出 1，

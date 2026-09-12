@@ -9,7 +9,7 @@ from ..execution.execution_local_invocation import evaluate_local_workflow_modul
 
 def build_parser():
     """Declare the actual evaluation arguments used by help and generated docs."""
-    parser = argparse.ArgumentParser(description="Evaluate one registered Workflow; no PG or production authorization.")
+    parser = argparse.ArgumentParser(description="Evaluate one registered Workflow; first ensure lightweight local Runtime setup. No PG or production authorization.")
     parser.add_argument("--root", required=True, type=Path, help="Root containing .runtime definitions; not a model read root.")
     parser.add_argument("--workflow", required=True, help="Registered single-node Workflow ID.")
     parser.add_argument("--version", help="Exact version; omit for the latest registered new definition.")
@@ -32,9 +32,14 @@ def main(argv=None):
     is called. Exit 130: user interruption; no subject verdict is manufactured.
     Each invocation is a new temporary test. No cross-process recovery or stored
     history is promised. Explicit stdout capture belongs to the calling operator.
+    Before evaluation, lightweight Runtime setup fills missing setup metadata
+    and bundled operator Skills under the explicit root. Ready setup makes no
+    writes; registered definitions and persistent execution stores are unchanged.
     """
     args = build_parser().parse_args(argv)
     try:
+        from ..foundation.foundation_environment_setup import setup_runtime
+        setup_runtime(args.root)
         payload = json.loads(args.input.read_text(encoding="utf-8"))
         record = evaluate_local_workflow_module(args.root, args.workflow, input_payload=payload,
             version=args.version, transport_kind=args.transport, model_id=args.model,

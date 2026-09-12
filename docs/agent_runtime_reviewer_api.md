@@ -4,7 +4,7 @@
 
 Runtime package version: `0.2.0.dev0`.
 
-Scope: Reviewer authoring/export, local versioned registration/loading and single-node evaluation.
+Scope: local Runtime setup, Reviewer authoring/export, versioned registration/loading and single-node evaluation.
 Other Runtime APIs are outside this reference. Signatures, fields, descriptions and error
 constant values below come directly from this source tree; no Runtime modules are executed.
 
@@ -28,6 +28,7 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 - [prepare_local_workflow_module](#prepare_local_workflow_module)
 - [evaluate_local_workflow_module](#evaluate_local_workflow_module)
 - [run_local_workflow_module](#run_local_workflow_module)
+- [setup_runtime](#setup_runtime)
 - [CLI commands](#cli-commands)
 - [Evaluation CLI](#evaluation-cli)
 - [Error constants](#error-constants)
@@ -658,6 +659,9 @@ command/argument usage error and includes usage on stderr. Success JSON
 goes to stdout. Failure does not imply that no writes occurred: inspect
 saved facts before repeating the same registration after an I/O failure.
 No code represents a Reviewer verdict; registration does not run a model.
+Root-based commands first perform lightweight Runtime setup, filling missing
+.runtime setup metadata and bundled operator Skills. Ready setup does not
+rewrite files. Loading still leaves registered definitions unchanged.
 
 ### agent-runtime-registry register-reviewer
 
@@ -1147,6 +1151,9 @@ Exit 2: invalid arguments, including unsupported persistence options; no model
 is called. Exit 130: user interruption; no subject verdict is manufactured.
 Each invocation is a new temporary test. No cross-process recovery or stored
 history is promised. Explicit stdout capture belongs to the calling operator.
+Before evaluation, lightweight Runtime setup fills missing setup metadata
+and bundled operator Skills under the explicit root. Ready setup makes no
+writes; registered definitions and persistent execution stores are unchanged.
 
 ### agent-runtime-evaluate
 
@@ -1160,6 +1167,56 @@ history is promised. Explicit stdout capture belongs to the calling operator.
 | `--model` | optional | Independent concrete model ID, verified against the response; omit for Runtime default. |
 | `--effort` | optional | Independent reasoning effort; omit for Runtime default. |
 | `--cli-path` | optional | Installed provider executable; omit to resolve claude from PATH. |
+
+## setup_runtime
+
+Public import: `from agent_runtime import setup_runtime`
+
+```python
+def setup_runtime(
+    root: Path,
+) -> tuple[Path, ...]:
+```
+
+Check one host root and fill in missing Runtime setup resources.
+
+Called by the existing registration/load and evaluation CLIs after argument
+parsing, before the requested operation. Hosts may also call it as part of
+their setup. A ready environment performs bounded local reads and no writes;
+there is no separate Skill installation command.
+
+**Args**
+
+- `root`: Explicit host directory. Creates .runtime when missing and places
+  the two bundled operator Skills in .agents/skills and .claude/skills.
+  It is neither a model read root nor a model or database binding.
+**Returns**
+
+Paths actually written, or an empty tuple when setup is already current.
+Existing tool stdout remains the original operation's result.
+**Raises**
+
+- `ValueError`: Invalid setup metadata, a symlink in a managed target path,
+  or locally changed/unknown same-name Skill content. The target is
+  included in the error; resolve that content with its owner.
+- `OSError`: Missing package resources or native file failure. Some setup
+  writes may have completed; repeat setup with the same installed
+  package to finish preparation, not the model operation blindly.
+**Effects**
+
+Reads only two packaged Skill files, four fixed host Skill files and
+.runtime/setup.json. The latter records its format and last installed
+Skill SHA-256 values, covering raw UTF-8 file bytes, not Module identity.
+Preserves registered module/workflow definitions and all other Skills.
+Known predecessor content or unchanged managed content may be upgraded;
+unknown local content is never overwritten by name alone.
+Preflights targets before writing, replaces individual files atomically,
+and writes setup metadata last. Partial preparation is recoverable with
+the same package. The host serializes setup on one root; there is no
+cross-process transaction, lock, history, credential or request service.
+Does not scan a workspace/catalog, connect to PG, call/login a provider,
+change models, install software, or validate business object inputs.
+Import and CLI help do not initialize a host environment.
 
 ## Error constants
 
