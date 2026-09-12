@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from typing import Any, Mapping, NoReturn
 
 from ..contracts.invocation_adapter_definition import (
@@ -177,6 +178,33 @@ def completed_adapter_result(
     return completed
 
 
+def cancel_adapter_result(*, artifact_host: ModuleArtifactHost,
+                          request: AuthorizedAgentExecutionRequest,
+                          result: AgentExecutionResult,
+                          failure_code: str, message: str) -> AgentExecutionResult:
+    """Cancel a finalized result without rewriting its already captured trace.
+
+    The Adapter retains preceding transport/failure facts in that trace. This
+    records cancellation through the existing failure-detail store, preserves
+    usage/context/tool observations, removes consumable outputs and denies retry.
+    It works for both completed and failed results, including a signal received
+    during their original diagnostic commits or temporary-resource cleanup.
+    """
+    if result.terminal_status == "cancelled":
+        return result
+    detail = artifact_host.commit_failure_detail(
+        module_run_id=request.module_run_id, variant_id=request.variant_id, attempt_id=request.attempt_id,
+        failure_class="cancelled", content=build_provider_failure_detail(
+            failure_class="cancelled", failure_code=failure_code, message=message,
+            provider_response="", provider_error_message=None, transport_exit_code=None, retryable=False),
+        media_type="application/json")
+    cancelled = replace(result, terminal_status="cancelled", outputs=(),
+        failure=AgentExecutionFailure(failure_class="cancelled", retry_disposition_id="retry_denied",
+            failure_scope_id="attempt_only", detail_ref=detail.detail_ref, detail_sha256=detail.detail_sha256))
+    cancelled.validate()
+    return cancelled
+
+
 def raise_terminal_failure(
     *,
     artifact_host: ModuleArtifactHost,
@@ -261,6 +289,7 @@ __all__ = [
     "bounded_trace_text",
     "commit_attempt_trace_json",
     "completed_adapter_result",
+    "cancel_adapter_result",
     "provider_adapter_descriptor",
     "raise_terminal_failure",
     "stateless_context_result",

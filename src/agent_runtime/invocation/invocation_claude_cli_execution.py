@@ -25,7 +25,7 @@ from .invocation_cli_logging import captured_cli_streams, parse_cli_log, decode_
 from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
 from .invocation_result_assembly import (
     TerminalAdapterFailure, commit_attempt_trace_json, completed_adapter_result,
-    provider_adapter_descriptor, raise_terminal_failure,
+    provider_adapter_descriptor, raise_terminal_failure, cancel_adapter_result,
 )
 from .invocation_schema_projection import NativeOutputSchemaProjectionError, claude_native_output_schema
 from .invocation_tool_definition import ModuleArtifactHost
@@ -56,7 +56,7 @@ class ClaudeCliNativeToolsModuleExecutor:
     Unresolved aliases, missing evidence and mismatches cannot report success.
 
     Default SIGINT capture spans provider execution, output validation and log
-    preparation and serialization. Cancellation observed before result handoff
+    preparation, serialization and resource cleanup. Cancellation before handoff
     returns the captured Attempt as cancelled, reusing an already committed trace
     unchanged. Logs are not replaced by a bare interruption error. A signal after
     final handoff does not undo that result. Custom handlers are not overridden.
@@ -111,14 +111,20 @@ class ClaudeCliNativeToolsModuleExecutor:
             ),
             self_test_validator=validate_self_test,
         )
-        with ExitStack() as cleanup:
-            try:
-                return self._execute(request, host, prepared, cleanup)
-            except TerminalAdapterFailure as failure:
-                return failure.result
+        with _capture_cli_interrupts() as interrupted:
+            with ExitStack() as cleanup:
+                try:
+                    result = self._execute(request, host, prepared, cleanup)
+                except TerminalAdapterFailure as failure:
+                    result = failure.result
+            # One handoff for both success and failure, after their trace commits
+            # and resource cleanup. An interrupted timeout must not allow retry.
+            if interrupted.requested:
+                return cancel_adapter_result(artifact_host=self._artifacts, request=request, result=result,
+                    failure_code="claude_cli_interrupted", message="Claude CLI interrupted by user; preceding facts remain in the provider trace")
+            return result
 
     def _execute(self, request, host, prepared, cleanup) -> AgentExecutionResult:
-        interrupted = cleanup.enter_context(_capture_cli_interrupts())
         profile = prepared.profile
         if not profile.tool_policy or set(profile.tool_policy) - NATIVE_TOOLS.keys():
             raise ValueError("Claude Profile requests unsupported native tools")
@@ -157,9 +163,8 @@ class ClaudeCliNativeToolsModuleExecutor:
                     "issues": ["normalization_failed:" + type(exc).__name__], "tool_calls": None, "events": []}
 
         def fail(failure_class, failure_code, message, *, retry="retry_denied", cause=None, terminal_status="failed"):
-            if interrupted.requested:
-                failure_class, failure_code, message = "cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user"
-                retry, terminal_status = "retry_denied", "cancelled"
+            trace["adapter_failure"] = {"failure_class": failure_class, "failure_code": failure_code,
+                "message": message, "retry_disposition_id": retry, "terminal_status": terminal_status}
             usage, _ = usage_fields()
             retain_tool_log()
             raise_terminal_failure(
@@ -418,13 +423,7 @@ class ClaudeCliNativeToolsModuleExecutor:
             fail("authorization", "self_test_resources_unavailable" if request.self_test_binding_ref is not None
                  else "output_authorization_refused", str(exc), cause=exc)
         retain_tool_log()
-        if interrupted.requested:
-            fail("cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user", terminal_status="cancelled")
         trace_ref, trace_sha256 = commit_attempt_trace_json(self._artifacts, request, trace)
-        if interrupted.requested:
-            # The existing content store accepts the same trace bytes again.
-            # Cancellation adds failure facts without changing committed logs.
-            fail("cancelled", "claude_cli_interrupted", "Claude CLI interrupted by user", terminal_status="cancelled")
         return completed_adapter_result(profile=profile, request=request, outputs=(submission,),
             tool_operation_ref_ids=(), trace_ref=trace_ref, trace_sha256=trace_sha256,
             **usage)
