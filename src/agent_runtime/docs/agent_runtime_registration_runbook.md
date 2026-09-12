@@ -320,6 +320,9 @@ None 表示该引用没有可读内容，不能当成成功空输出。输出、
 每项带实际工具请求、结果、原始事件位置和完整性信息；`provider_log.raw_streams` 保存原始 stdout/stderr
 的 base64 字节。它在临时资源清理前生成，调用者可保存完整 stdout JSON；无需 PG 或新的日志命令。
 `complete=false` 和 `issues` 表示日志存在缺口，不能将部分记录或空列表当成已确认没有工具调用。
+日志完整不等于执行成功。每个 Attempt 的 `failure_detail` 返回最终失败或取消原因；
+`claude_cli_cleanup_failed` 表示临时资源清理失败，`claude_cli_interrupted` 表示取消且禁止重试。
+取消前已观察到的超时或输出上限保留在 `provider_log.prior_stop_reason`，不被取消状态覆盖。
 
 持久执行使用同一个日志读取实现，凭据仍由已有查询配置提供：
 

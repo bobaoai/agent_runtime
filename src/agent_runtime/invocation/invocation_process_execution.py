@@ -90,7 +90,11 @@ class CliProcessTimeout(subprocess.TimeoutExpired):
 
 
 class CliProcessInterrupted(KeyboardInterrupt):
-    """A user interruption with the actual captured streams after group cleanup."""
+    """A user interruption with captured streams and any earlier capture failure.
+
+    prior_stop_reason retains an observed timeout/output-limit/stream failure
+    that existed before cancellation was handed off; no event time is inferred.
+    """
 
     def __init__(self, *, returncode, output, stderr, stdout_bytes, stderr_bytes,
                  cleanup_error=None, stream_error=None, prior_stop_reason=None):

@@ -1125,6 +1125,10 @@ missing model evidence uses claude_cli_model_identity_mismatch or
 claude_cli_model_identity_unavailable; closed resources use
 self_test_resources_unavailable. Executable/dependency faults retain
 ADAPTER_BINDING_UNAVAILABLE rather than pretending resources expired.
+Temporary-resource cleanup failure uses claude_cli_cleanup_failed while
+preserving the received trace. User cancellation uses claude_cli_interrupted
+and denies retry; a prior process stop remains in provider_log.prior_stop_reason.
+Each execution_log Attempt includes its final private failure_detail.
 **Raises**
 
 - `FileNotFoundError`: Missing registration, version or provider executable.
