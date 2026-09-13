@@ -96,7 +96,12 @@ stdout/stderr 保留有界原始输出，process_output_complete=false 表示它
 兼容 CalledProcessError 和 TimeoutExpired，不能将 Runtime 停止原因解释为进程退出码。
 
 CLI 使用 auto 模式处理其内置的确认判断，不使用 bypassPermissions；文件与网络窗口继续强制执行。
-CLI 明确返回的 permission_denied 或 permission_denials 会使 Attempt 失败。Bash 的普通工具错误则逐次记录为 failed；没有结构化权限信号时，Runtime 不从错误文本或模型描述编造权限原因，模型处理错误后仍可能完成任务。因此 completed 不表示每个工具都成功，也不证明所有 OS 拒绝都已归类为 policy_violation。资源限制的实际效果与拒绝原因的可观测性分别验证。
+CLI 返回的 permission_denied、permission_denials 和普通工具错误逐次保留。Agent 可以在原有
+权限范围内处理错误并继续形成有效结果；它们本身不使 Attempt 失败。未声明工具的请求与实际
+执行分别判断：被拒绝的请求可以继续，准确配对的结果证明未声明能力成功执行时拒收输出。
+初始化实际能力冲突、材料真实改变、Provider 整体失败、超时、取消和输出无效仍按各自原因失败。
+缺少或矛盾的工具事件明确标为不完整，不从错误正文或模型描述编造 ID、权限原因或实际效果。
+因此 completed 不表示每个工具都成功；业务 non_pass/blocked 也可以是正常完成的审核结果。
 实际 permissionMode 与请求值一致才继续。Git/Python 由宿主显式提供真实运行目录，避免命中系统启动
 代理；Git 不加载用户或系统配置。trace 同时保存 argv 与安全环境值，便于复现，不依赖 Agent 临时修环境。
 

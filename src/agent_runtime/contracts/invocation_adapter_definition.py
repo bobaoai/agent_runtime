@@ -19,6 +19,7 @@ from ..foundation.foundation_contract_validation import (
     validate_int,
     validate_opaque_ref,
     validate_sha256,
+    validate_snake_case_name,
     validate_string_tuple,
     validate_token,
     validate_utc_timestamp,
@@ -366,6 +367,33 @@ class AuthorizedOperationReceipt:
                 "grant_disposition_ref", self.grant_disposition_ref
             )
         validate_utc_timestamp("recorded_at_utc", self.recorded_at_utc)
+
+
+class OperationAuthorizationDenied(PermissionError):
+    """One validated resource decision denied an operation, not the Attempt.
+
+    The request-bound host raises this only after validating the exact Product
+    decision and recording its Gateway observation. An Adapter may deliver the
+    denial as a tool error and continue within the unchanged execution boundary.
+    It must not call the denied resource or manufacture an ALLOW receipt.
+
+    Args:
+        reason_code: Original resource owner's reason, not a text classifier.
+        decision_ref: Reference to that owner's already-observed decision.
+        decision_sha256: Exact decision content digest supplied by that owner.
+    Effects:
+        Validates metadata only; does not authorize, persist or execute anything.
+        Constructing this exception is not proof of a trusted host decision.
+    """
+
+    def __init__(self, *, reason_code: str, decision_ref: str, decision_sha256: str) -> None:
+        validate_snake_case_name("reason_code", reason_code)
+        validate_opaque_ref("decision_ref", decision_ref)
+        validate_sha256("decision_sha256", decision_sha256)
+        self.reason_code = reason_code
+        self.decision_ref = decision_ref
+        self.decision_sha256 = decision_sha256
+        super().__init__(f"dynamic operation denied: {reason_code}")
 
 
 @dataclass(frozen=True)
@@ -855,7 +883,14 @@ class AuthorizedAgentExecutionHost(Protocol):
         self,
         request: ProviderOperationIntent,
     ) -> AuthorizedOperationReceipt:
-        """Authorize one dynamic provider operation before it is approved."""
+        """Authorize one exact operation before the Adapter calls its resource.
+
+        Returns an ALLOW receipt. OperationAuthorizationDenied means the exact
+        resource decision was validated and recorded: return it as a tool error
+        without executing that resource; the Agent may continue. Other errors
+        are execution-boundary or dependency faults, not ordinary tool denials.
+        Catching them does not restore the Attempt's output eligibility.
+        """
 
         ...
 
@@ -887,6 +922,7 @@ __all__ = [
     "AuthorizedAgentExecutionHost",
     "AuthorizedAgentExecutionRequest",
     "AuthorizedOperationReceipt",
+    "OperationAuthorizationDenied",
     "AgentExecutionAdapterDescriptor",
     "AgentExecutionFailure",
     "AgentExecutionResult",

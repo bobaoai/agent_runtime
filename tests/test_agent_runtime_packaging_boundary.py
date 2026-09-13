@@ -187,6 +187,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
         import json
         from pathlib import Path
         import sys
+        from types import SimpleNamespace
 
         sys.meta_path = [finder for finder in sys.meta_path
             if not getattr(finder, '__module__', type(finder).__module__).startswith(
@@ -209,6 +210,8 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
             ExecutionProfileReleaseSpec, compile_execution_profile_release)
         from agent_runtime.registry.registry_local_persistence import main as registry_main
         from agent_runtime.testing.execution_local_evaluation import main as evaluation_main
+        from agent_runtime.invocation.invocation_result_assembly import completed_adapter_result
+        from agent_runtime.contracts.invocation_adapter_definition import OutputSubmission
 
         assert importlib.util.find_spec(
             'agent_runtime.invocation.invocation_claude_module_invocation') is None
@@ -237,19 +240,32 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
         assert argv[argv.index('--tools') + 1] == ''
         assert '--json-schema' not in argv
         assert CodexCliModuleExecutor.executor_adapter_id == 'codex_cli_agent_executor'
+        assert adapter.descriptor.runtime_package_version == sys.argv[2]
+        # Exercise the real result assembler in this wheel, without a Provider
+        # call; the stub below supplies only already-resolved context digests.
+        assembled = completed_adapter_result(profile=profile,
+            request=SimpleNamespace(module_release_sha256='a'*64,
+                execution_profile_sha256=profile.release_sha256, prompt_envelope_sha256='b'*64),
+            outputs=(OutputSubmission(output_slot_id='result', local_handle='output/result.json'),),
+            tool_operation_ref_ids=(), input_tokens=None, output_tokens=None,
+            cache_read_tokens=None, cache_creation_tokens=None,
+            trace_ref='trace:version-probe', trace_sha256='c'*64)
+        assert assembled.runtime_version == sys.argv[2]
         assert not attempted
         assert not any(name == 'claude_agent_sdk' or name.startswith('claude_agent_sdk.')
                        for name in sys.modules)
         print(json.dumps({'sdk_import_attempts': attempted, 'cli_help_checked': 2,
-                          'claude_command_rendered': True}))
+                          'claude_command_rendered': True, 'runtime_version': assembled.runtime_version}))
         """,
         str(wheel),
+        tomllib.loads((REPO_ROOT / 'pyproject.toml').read_text())['project']['version'],
         cwd=tmp_path,
     )
     assert result == {
         "sdk_import_attempts": [],
         "cli_help_checked": 2,
         "claude_command_rendered": True,
+        "runtime_version": tomllib.loads((REPO_ROOT / 'pyproject.toml').read_text())['project']['version'],
     }
 
 

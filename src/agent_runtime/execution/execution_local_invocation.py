@@ -23,6 +23,7 @@ from ..registry.registry_release_compilation import (
 )
 from .execution_module_invocation import (
     _assert_admitted_test_evaluation_profile, _prepare_registered_workflow_module,
+    _assert_registered_module_adapter,
     AgentExecutionAdapterRegistry, run_registered_workflow_module, run_workflow_module,
 )
 from .execution_content_staging import InMemoryCellArtifactStore
@@ -38,21 +39,32 @@ def _execution_profile_for_requirements(
 
     Model selection happens here, independently of task definition and saved
     historical bindings. None uses claude_cli, claude-opus-5[1m], xhigh; explicit
-    empty/unsupported values fail. This pure check opens no executable/resources.
+    empty/unsupported values fail. codex_cli requires explicit model and effort;
+    its Adapter validates supported requirements. No executable/resources opened.
     """
-    from ..invocation.invocation_claude_cli_execution import _execution_expectation
-
     requirements.validate()
-    if transport_kind is not None and transport_kind != "claude_cli":
+    transport = "claude_cli" if transport_kind is None else transport_kind
+    if transport == "claude_cli":
+        from ..invocation.invocation_claude_cli_execution import _execution_expectation
+        model = "claude-opus-5[1m]" if model_id is None else model_id
+        effort = "xhigh" if reasoning_profile is None else reasoning_profile
+        adapter_id, revision, provider = "claude_cli_adapter", "v1", "anthropic"
+        defaults = "v1" if model_id is None and reasoning_profile is None else None
+    elif transport == "codex_cli":
+        if not model_id or not reasoning_profile:
+            raise ValueError("codex_cli requires explicit model_id and reasoning_profile; no Claude defaults apply")
+        from ..invocation.invocation_codex_module_invocation import _execution_expectation, CodexCliModuleExecutor
+        model, effort, provider = model_id, reasoning_profile, "openai"
+        adapter_id, revision = CodexCliModuleExecutor.executor_adapter_id, CodexCliModuleExecutor.executor_adapter_revision
+        defaults = None
+    else:
         raise ValueError(f"Unsupported model transport: {transport_kind}; no automatic fallback")
     spec = ExecutionProfileReleaseSpec(
-        execution_profile_id="claude_cli",
-        executor_adapter_id="claude_cli_adapter", executor_adapter_revision="v1",
-        transport_kind="claude_cli", provider_id="anthropic",
-        model_id="claude-opus-5[1m]" if model_id is None else model_id,
-        reasoning_profile="xhigh" if reasoning_profile is None else reasoning_profile,
+        execution_profile_id=transport,
+        executor_adapter_id=adapter_id, executor_adapter_revision=revision,
+        transport_kind=transport, provider_id=provider, model_id=model, reasoning_profile=effort,
         **{name: getattr(requirements, name) for name in ModuleExecutionRequirements._profile_fields},
-        model_defaults_version="v1" if model_id is None and reasoning_profile is None else None,
+        model_defaults_version=defaults,
     )
     profile = compile_execution_profile_release(replace(spec, release_version=content_version(asdict(spec))))
     requirements.assert_profile(profile)
@@ -74,10 +86,13 @@ def prepare_local_workflow_module(
         version: Exact definition version, or None for the latest registered
             new definition. Resolved once before preparing exact releases.
         transport_kind: Independent model transport; None uses Runtime's model
-            preset. Currently only claude_cli is supported by this preparation.
+            preset. codex_cli supports its admitted tool-free requirements and
+            requires explicit model_id and reasoning_profile.
             Model names are never used to infer another transport or provider.
-        model_id: Independent model override; None uses claude-opus-5[1m].
-        reasoning_profile: Independent effort override; None uses xhigh.
+        model_id: Independent model override; None uses claude-opus-5[1m] for
+            claude_cli. codex_cli requires an explicit concrete model.
+        reasoning_profile: Independent effort override; None uses xhigh for
+            claude_cli. codex_cli requires an explicit supported effort.
             Omitted model fields use the Runtime preset, never saved bindings.
             Tools/network/workspace/budgets come from frozen Module requirements.
         release_store: Optional explicit existing store providing register_bundle
@@ -174,12 +189,20 @@ def evaluate_local_workflow_module(
         transport_kind: Independent execution transport; None uses Runtime's
             default. claude_cli supports empty or selected native tool sets,
             inline input, and no write area or a private draft as defined.
-        model_id: Independent concrete model ID; None uses Runtime's default.
-            The Adapter verifies observed model identity, allowing the known
-            CLI [1m] selector. It does not infer model families from aliases.
+            codex_cli supports tool_free, inline, empty tools, workspace none
+            and denied tool network. It requires explicit model_id and effort;
+            unsupported requirements are rejected, never reduced to fit.
+        model_id: Independent concrete model ID; None uses the Claude default.
+            Codex requires an explicit model. Claude verifies observed model
+            identity, allowing its known CLI [1m] selector. Codex retains the
+            requested identity and available Provider facts without inventing
+            an unreported actual response model. Model names do not select transport.
         reasoning_profile: Independent effort; None uses Runtime's default.
-        cli_path: Explicit installed provider executable, or resolve claude from
-            the host PATH. No login, installation or fallback provider is run.
+            Required for codex_cli; no default is inferred from another Provider.
+        cli_path: Explicit installed provider executable, or resolve the chosen
+            claude/codex from host PATH. No login or installation is performed.
+            Codex uses file-based auth from the host's standard CODEX_HOME/auth.json
+            (default ~/.codex/auth.json), never from task JSON or a fallback account.
     Returns:
         JSON-compatible execution facts and output. provider_trace retains the
         observed response models and diagnostics. persistence is not_requested;
@@ -200,6 +223,12 @@ def evaluate_local_workflow_module(
         and denies retry. Interrupted capture retains prior_stop_reason; a failure
         already received by the Adapter remains in provider_log.adapter_failure.
         Each execution_log Attempt includes its final private failure_detail.
+        Codex uses codex_cli_interrupted/codex_cli_cleanup_failed for the same
+        interruption/cleanup distinction. If CLI authentication replaces its
+        temporary auth reference, cleanup fails and preserves the separate
+        private state; its recovery locator is in the private failure detail.
+        The caller must inspect that state before reuse. This is local temporary
+        recovery, not durable credential backup or automatic writeback.
     Raises:
         FileNotFoundError: Missing registration, version or provider executable.
         ValueError: Unsupported graph/Profile, input or resource configuration.
@@ -215,32 +244,39 @@ def evaluate_local_workflow_module(
         explicitly save the returned result; Runtime does not save it by default.
     """
     from ..invocation.invocation_claude_cli_execution import ClaudeAdapter
+    from ..invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
     from ..ledger.ledger_execution_logging import read_execution_log
 
     saved, selection = prepare_local_workflow_module(root, workflow_id, version=version,
         transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile)
-    executable = cli_path if cli_path is not None else shutil.which("claude")
-    if executable is None:
-        raise FileNotFoundError("Claude CLI executable is unavailable; provide cli_path or host PATH")
     workflow = saved.release
     node = workflow.nodes[0]
     module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
     binding = selection.policy_document()["bindings"][0]
     selected_profile = saved.registry.get_execution_profile(
         binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
+    program = {"claude_cli": "claude", "codex_cli": "codex"}[selected_profile.transport_kind]
+    executable = cli_path if cli_path is not None else shutil.which(program)
+    if executable is None:
+        raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path or host PATH")
     artifacts = InMemoryCellArtifactStore()
     ledger = InMemoryModuleExecutionLedger()
     with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:
         workspace = Path(directory).resolve()
-        adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
-            workspace_root=workspace, cli_path=executable,
-            adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
+        if selected_profile.transport_kind == "claude_cli":
+            adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
+                workspace_root=workspace, cli_path=executable,
+                adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
+        else:
+            adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
+                workspace_root=workspace, codex_bin=str(executable))
         adapters = AgentExecutionAdapterRegistry()
         adapters.register(adapter)
         request, module, profile, _, _ = _prepare_registered_workflow_module(
             module_id=module.module_id, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
             release_registry=saved.registry, workflow=workflow, variant_policy=selection,
-            adapters=adapters, artifact_host=artifacts)
+            artifact_host=artifacts)
+        _assert_registered_module_adapter(module, profile, adapters)
         resources = ModuleSelfTestResources(request=request, workflow=workflow, variant=selection,
             registry=saved.registry, adapter=adapter, artifact_host=artifacts, ledger=ledger, workspace_root=workspace)
         try:

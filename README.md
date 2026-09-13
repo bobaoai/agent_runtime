@@ -618,17 +618,45 @@ model-visible tools. Network `denied` means no Agent-initiated general outbound
 or tool network access; the registered CLI transport may still connect to
 its model Provider control plane. Transport connectivity is not an Agent
 capability. In the Gateway slice, `gateway_only` exposes only the exact
-Profile/Module tool intersection; `DENY`, a closed fence, mismatched Attempt
-lineage, or a missing receipt prevents the governed resource call and taints
-the Attempt even if the calling adapter catches the callback error; exact
-request/response lineage is retained on the terminal Attempt. This existing
-kernel-wide refusal behavior still needs alignment with the operation-scoped
-failure rules in the Invocation Design; removing the SDK does not change it.
+Profile/Module tool intersection. A validated and recorded `DENY` prevents that
+resource call and returns `OperationAuthorizationDenied`; an Adapter may deliver
+it as a tool error and continue. A closed fence, mismatched Attempt lineage,
+invalid decision or required-record failure still prevents continuation and
+result acceptance, even when the Adapter catches the error. Allowed Gateway
+calls retain their exact request/response lineage; denied operations never gain
+an ALLOW receipt.
+
+Claude permission events and ordinary tool failures are recorded independently
+of the invocation outcome. Codex completion requires a successful process, an
+unambiguous successful Provider terminal and valid output. Both CLI paths retain
+captured stdout/stderr and public tool events in the existing private trace,
+including failure and cancellation prefixes. `read_execution_log` returns these
+facts with explicit capture or content limitations. A valid business `non_pass`
+or `blocked` response remains a completed technical execution, not a reason to
+retry the model. Tool, Provider, Attempt and business outcomes stay distinct.
 
 Opt-in live smoke tests cover the remaining CLI implementations. The Codex
 test below covers the tool-free path. Claude CLI's native-tool cases and their
 environment prerequisites are documented in
 `docs/agent_runtime_claude_native_tools.md`; none invokes Claude Agent SDK.
+
+For a registered tool-free Module, the existing `agent-runtime-evaluate` command
+also accepts `--transport codex_cli --model MODEL --effort EFFORT`. Both model
+fields are explicit for Codex; omitting transport keeps the Claude defaults.
+Codex v4 uses a fresh private Provider state and the host's one standard
+file-based login source, with Skills, plugins, MCP and task tools disabled.
+The real process launch is ordered against temporary-resource closure; no
+Product Authorization decision is fabricated for this path. A replaced
+authentication reference is retained in a separate private state and reported
+as cleanup failure, not silently deleted or written back to the host credential.
+
+The v4 configuration replaces the executable v3 binding. Historical v3 Profiles
+and committed results remain readable; exact committed requests can replay
+without the retired Adapter. New execution requires an explicitly prepared v4
+Profile rather than rewriting a saved v3 record. Codex's tool-enabled workspace
+candidate remains unavailable; a Module's required tools are never dropped to
+fit this tool-free path. See the generated Codex API and registration runbook
+for the actual resource parameters, errors and supported combinations.
 
 ```bash
 RUN_PROVIDER_INTEGRATION=1 python -m pytest \

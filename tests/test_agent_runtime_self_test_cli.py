@@ -128,7 +128,7 @@ def test_closed_resources_reject_late_output(environment):
 
 def test_wrong_transport_stops_before_provider(environment):
     with pytest.raises(ValueError, match="Unsupported model transport"):
-        invoke(environment, transport_kind="codex_cli")
+        invoke(environment, transport_kind="unsupported_cli")
     assert environment[2] == []
 
 

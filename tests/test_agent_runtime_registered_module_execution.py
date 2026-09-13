@@ -114,9 +114,10 @@ class _Host:
 
 
 def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
-                 input_schema=None, output_schema=None, pg=None):
+                 input_schema=None, output_schema=None, pg=None, profile_revision="v4"):
     options = {} if output_schema is None else {"output_schema_document": output_schema}
-    compiled = _compile_native_module(tmp_path, output_resolution_policy=policy, **options)
+    compiled = _compile_native_module(tmp_path, output_resolution_policy=policy,
+                                      executor_adapter_revision=profile_revision, **options)
     if input_schema is not None:
         changed = compile_agent_module_release(AgentModuleReleaseCandidate(
             module_id=compiled.module.module_id, module_version="candidate_v1",
@@ -176,7 +177,7 @@ def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
     calls = []
     state = {"payload": {"value": "done"}, "provider_error": False}
 
-    def invoke(*, argv, prompt, cwd, timeout_seconds):
+    def invoke(*, argv, prompt, cwd, timeout_seconds, environment, launch_guard=None):
         assert timeout_seconds == compiled.execution_profile.timeout_seconds
         assert cwd.is_relative_to(tmp_path)
         assert "--output-schema" in argv
@@ -198,8 +199,12 @@ def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
         return original_authorize(request)
 
     adapters = AgentExecutionAdapterRegistry()
+    authentication = tmp_path / "synthetic_codex_auth.json"
+    authentication.parent.mkdir(parents=True, exist_ok=True)
+    authentication.write_text('{"test_only":"not-a-credential"}')
     adapters.register(CodexCliModuleExecutor(release_registry=registry, artifact_host=cell,
-        workspace_root=tmp_path / "attempts", invoker=invoke, codex_bin="controlled-codex"))
+        workspace_root=tmp_path / "attempts", invoker=invoke, codex_bin="controlled-codex",
+        auth_file=authentication))
     kwargs = dict(release_registry=registry, workflow=workflow, variant_policy=selection, authorize=authorize,
         context_client=host, operation_client=host, enforcing_gateway_id="agent_runtime_module_kernel",
         environment_id="development", adapters=adapters, artifact_host=cell, record_store=store,
@@ -233,6 +238,34 @@ def test_candidate_result_replay_preserves_policy_and_recorded_bytes(tmp_path):
     body = env.cell.read_bytes(first.outputs[0].output_ref, first.outputs[0].output_sha256)
     assert json.loads(body) == {"value": "done"}
     assert first.outputs == second.outputs
+
+
+def test_committed_v3_replays_through_public_entry_without_retired_adapter(tmp_path):
+    """An in-memory double creates the historical record; no retired CLI runs."""
+    from test_agent_runtime_native_structured_output import _StubInlineAdapter
+    env = _environment(tmp_path, profile_revision="v3")
+    history_writer = _StubInlineAdapter(release_registry=env.registry, artifact_host=env.cell,
+        adapter_id="codex_cli_agent_executor", adapter_revision="v3", provider_id="openai",
+        transport_kind="codex_cli", transport_family="cli", payload=b'{"value":"historical"}')
+    historical_adapters = AgentExecutionAdapterRegistry()
+    historical_adapters.register(history_writer)
+    before = env.profile.as_dict()
+    original = _run(env, adapters=historical_adapters)
+    assert original.attempts[0].status == "completed" and history_writer.calls == 1
+    trace = env.store.load_trace(original.module_run.workflow_execution_id)
+    env.host.reject = True
+    replay = _run(env, adapters=AgentExecutionAdapterRegistry())
+    assert replay == original and history_writer.calls == 1
+    assert env.store.load_trace(original.module_run.workflow_execution_id) == trace
+    assert env.profile.as_dict() == before and env.host.calls == 1 and env.calls == []
+    fresh_replay = _run(env, artifact_host=InMemoryCellArtifactStore(), adapters=AgentExecutionAdapterRegistry())
+    assert fresh_replay == original
+    with pytest.raises(ValueError, match="different inputs or releases"):
+        _run(env, payload={"value":"different"}, artifact_host=InMemoryCellArtifactStore(),
+             adapters=AgentExecutionAdapterRegistry())
+    with pytest.raises(KeyError, match="codex_cli_agent_executor@v3"):
+        _run(env, key="new_request", adapters=env.kwargs["adapters"])
+    assert env.host.calls == 1 and history_writer.calls == 1 and not env.calls
 
 
 def test_second_schema_is_not_reviewer_specific(tmp_path):

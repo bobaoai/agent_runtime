@@ -71,6 +71,136 @@ def test_tool_error_is_recorded_separately_from_log_completeness():
     assert "returncode" not in log["tool_calls"][0]
 
 
+def denied(identity, name="Read"):
+    # Same public field shape as the real Runtime deny_read probe, whose
+    # permission event carries tool_use_id and no fabricated shell exit code.
+    return {"type": "system", "subtype": "permission_denied", "tool_use_id": identity,
+            "tool_name": name, "decision_reason_type": "other", "decision_reason": "outside scope"}
+
+
+@pytest.mark.parametrize("mode", ["event", "summary", "all", "out_of_order"])
+def test_permission_sources_describe_one_failed_call_without_duplicate_tool_result(mode):
+    refusal = denied("read_1")
+    terminal = {**native._result(), "permission_denials": [refusal]} if mode != "event" else native._result()
+    events = [use("read_1", "Read", file_path="outside")]
+    if mode in {"event", "all", "out_of_order"}:
+        events.append(refusal)
+    if mode in {"all", "out_of_order"}:
+        events.append(reply("read_1", failed=True))
+    if mode == "out_of_order":
+        events = events[1:] + events[:1]
+    events += [use("read_2", "Read", file_path="allowed"), reply("read_2"), terminal]
+    parsed = parse_cli_log(trace(events))
+    assert parsed["complete"] and parsed["issues"] == []
+    assert len(parsed["tool_calls"]) == 2
+    first, second = parsed["tool_calls"]
+    assert first["tool_call_id"] == "read_1" and first["status"] == "failed"
+    assert second["tool_call_id"] == "read_2" and second["status"] == "completed"
+    assert ("tool_result" in first["response"]) == (mode in {"all", "out_of_order"})
+    assert "exit_code" not in first and "grant_id" not in first
+    assert [row["event"] for row in parsed["events"]] == events
+
+
+@pytest.mark.parametrize("kind", ["event", "summary", "result"])
+def test_missing_denial_identity_is_retained_without_name_based_pairing(kind):
+    unknown = denied(None)
+    terminal = native._result()
+    body = unknown if kind == "event" else reply(None, failed=True)
+    if kind == "summary":
+        body = {**terminal, "permission_denials": [unknown]}
+        terminal = None
+    events = [use("a", "Read"), use("b", "Read"), body]
+    if terminal:
+        events.append(terminal)
+    parsed = parse_cli_log(trace(events))
+    assert not parsed["complete"]
+    assert any(issue.startswith("missing_tool_call_id:") for issue in parsed["issues"])
+    assert [row["tool_call_id"] for row in parsed["tool_calls"]] == ["a", "b"]
+    assert all(row["status"] == "incomplete" for row in parsed["tool_calls"])
+    assert body in [row["event"] for row in parsed["events"]]
+
+
+@pytest.mark.parametrize("extra,issue", [
+    (reply("a"), "duplicate_tool_response:a"),
+    (denied("a"), "conflicting_tool_results:a"),
+    (use("a", "Read"), "duplicate_tool_request:a"),
+    ({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "a",
+        "content": "untrusted error flag", "is_error": "false"}]}}, "invalid_tool_error_flag:2"),
+])
+def test_ambiguous_call_never_reports_trustworthy_success(extra, issue):
+    original_result = reply("a")
+    parsed = parse_cli_log(trace([use("a", "Read"), original_result, extra, native._result()]))
+    assert not parsed["complete"] and issue in parsed["issues"]
+    assert parsed["tool_calls"][0]["status"] == "incomplete"
+    assert parsed["tool_calls"][0]["response"]["tool_result"] == original_result["message"]["content"][0]
+
+
+def test_codex_observed_command_events_preserve_reverse_completion_and_exact_output():
+    # CLI 0.153.4 real smoke: review_artifacts/cli_native_smoke_r1/events.jsonl,
+    # whole-file SHA-256 07517305284645aa3855b9e0f68958c6036a1d6b6caea19b83675deb9bc0b0c7.
+    # Commands and input response are the original event fields; second output
+    # is shortened here solely to keep this synthetic interleaving case small.
+    one = {"id": "item_1", "type": "command_execution", "command": "/bin/zsh -c 'cat input.json'",
+           "aggregated_output": "", "exit_code": None, "status": "in_progress"}
+    two = {**one, "id": "item_2", "command": "/bin/zsh -c 'cat .agents/skills/add-fixture/SKILL.md'"}
+    complete_one = {**one, "aggregated_output": '{"numbers":[19,23,8]}\n', "exit_code": 0, "status": "completed"}
+    complete_two = {**two, "aggregated_output": "synthetic skill output\n", "exit_code": 0, "status": "completed"}
+    events = [{"type": "item.started", "item": one}, {"type": "item.started", "item": two},
+              {"type": "item.updated", "item": {**two, "aggregated_output": "partial"}},
+              {"type": "item.completed", "item": complete_two},
+              {"type": "item.completed", "item": complete_one}, {"type": "turn.completed"}]
+    parsed = parse_cli_log(trace(events, transport="codex_cli"))
+    assert parsed["complete"]
+    assert [row["tool_call_id"] for row in parsed["tool_calls"]] == ["item_1", "item_2"]
+    assert parsed["tool_calls"][0]["response"] == complete_one
+    assert parsed["tool_calls"][1]["response_event_indices"] == [3]
+    assert parsed["tool_calls"][1]["request_event_indices"] == [1, 3]
+    assert "stdout" not in parsed["tool_calls"][0]["response"]
+    assert [row["event"] for row in parsed["events"]] == events
+
+
+@pytest.mark.parametrize("kind,request_fields,status,limitation", [
+    ("file_change", {"changes": [{"path": "a/added.txt", "kind": "add"},
+                                  {"path": "c/modified.txt", "kind": "update"}]}, "completed", "provider_request_content_unavailable"),
+    ("file_change", {"changes": [{"path": "file.txt", "kind": "update"}]}, "failed", "provider_request_content_unavailable"),
+    ("web_search", {"query": "rust async await", "action": {"type": "search", "query": "rust async await"}},
+     None, "provider_result_content_unavailable"),
+])
+def test_codex_completion_only_public_fields_do_not_invent_missing_tool_content(kind, request_fields, status, limitation):
+    # Official protocol fixtures (not a real run of our installed CLI):
+    # github.com/openai/codex/blob/1715e55076737158ba61d43158ede504de6d4ce1/
+    # codex-rs/exec/tests/event_processor_with_json_output.rs:367,817,880.
+    item = {"id": "item_0", "type": kind, **request_fields}
+    if status:
+        item["status"] = status
+    parsed = parse_cli_log(trace([{"type": "item.completed", "item": item},
+                                 {"type": "turn.completed"}], transport="codex_cli"))
+    assert not parsed["complete"] and parsed["issues"] == [limitation + ":item_0"]
+    row = parsed["tool_calls"][0]
+    assert row["request"] == request_fields and row["response"] == item
+    assert row["request_event_indices"] == row["response_event_indices"] == [0]
+    assert row["status"] == ("failed" if status == "failed" else "completed")
+    assert "diff" not in row["request"] and "results" not in row["response"]
+
+
+def test_codex_search_start_empty_query_is_completed_by_actual_query():
+    start = {"id": "s", "type": "web_search", "query": "", "action": {"type": "other"}}
+    end = {**start, "query": "actual query", "action": {"type": "search", "query": "actual query"}}
+    parsed = parse_cli_log(trace([{"type": "item.started", "item": start},
+        {"type": "item.completed", "item": end}, {"type": "turn.completed"}], transport="codex_cli"))
+    assert parsed["tool_calls"][0]["request"]["query"] == "actual query"
+    assert parsed["issues"] == ["provider_result_content_unavailable:s"]
+
+
+def test_codex_failed_turn_can_have_complete_failed_tool_records():
+    item = {"id": "c", "type": "command_execution", "command": "false",
+            "aggregated_output": "", "exit_code": 1, "status": "failed"}
+    parsed = parse_cli_log(trace([{"type": "item.completed", "item": item},
+        {"type": "turn.failed", "error": {"message": "provider failure"}}], transport="codex_cli"))
+    assert parsed["complete"] and parsed["tool_calls"][0]["status"] == "failed"
+    assert parsed["tool_calls"][0]["response"]["exit_code"] == 1
+
+
 def test_invalid_json_and_non_utf8_preserve_exact_raw_bytes():
     raw = b'{"type":"result"}\nnot-json\n\xff\xfe\n'
     original = trace([], raw=raw)

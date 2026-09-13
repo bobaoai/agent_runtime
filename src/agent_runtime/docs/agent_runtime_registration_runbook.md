@@ -226,6 +226,26 @@ execution ID 查询持久历史，也不提供跨进程重放。操作者可以�
 已完成并通过注册输出 schema 的执行退出 0（包括有效 non_pass），技术失败退出 1，
 用法错误退出 2，中断退出 130。所属语义 validator 仍由宿主调用，不能将 schema 通过当作审核通过。
 
+无工具普通Module也可以通过同一命令选择Codex：
+
+```sh
+agent-runtime-evaluate --root /path/to/workspace --workflow summarize_note \
+  --input /path/to/input.json --transport codex_cli --model YOUR_CODEX_MODEL --effort high \
+  --cli-path /path/to/codex
+```
+
+Codex要求显式模型与effort，只接纳tool_free、inline、空工具、workspace none和network denied。
+要求工具的Module不会被自动降为无工具。省略transport继续原Claude默认；模型名不决定transport。
+命令使用宿主标准CODEX_HOME/auth.json，未设置CODEX_HOME时使用用户标准.codex/auth.json。
+当前Codex认证方式是file-based；缺文件就返回环境错误，不登录或寻找其他账号。
+Runtime为每次调用准备独立Provider state，不载入宿主Skills/Plugins/会话；实际启动受本次活资源
+约束。凭据内容不进入模型材料，CLI仍自行管理认证。CLI替换临时认证引用时，Runtime保留独立
+state并返回清理失败，私有诊断给出恢复目录；不自动覆盖源凭据。该目录只提供本机临时恢复。
+
+新的Codex配置使用codex_cli_agent_executor@v4。旧v3 Profile和已保存结果保持原样；相同准确
+请求的committed结果可在没有旧Adapter时重放。再次执行需通过prepare或现有compiler创建v4
+Profile/Variant，不能把旧v3静默改成v4。Module/Workflow定义不因新执行配置而修改。
+
 需要外部授权和持久记录时，使用已有宿主项目文档的“Reviewer 测试/运行”入口。宿主提供授权和存储，
 使用 Runtime 的执行准备接口解析本次固定定义与独立模型选择，不复制 Reviewer 默认工具参数：
 
@@ -323,6 +343,16 @@ log = repository.read_execution_log(execution_id, include_private_content=True)
 [read_execution_log](agent_runtime_reviewer_api.md#read_execution_log) 读取真实 `ModuleRunRecord` 及其 Attempts；
 该接口与持久查询共用同一实现。权限、缺失内容和 hash 不符保留原错误，不扫描目录寻找替代日志。
 历史 trace 未记录新日志格式时明确不完整，不补造数据。Provider 原生调用与 Gateway 授权操作分开展示。
+
+工具拒绝与整次执行失败分别记录。Claude 实时拒绝、工具结果与最终拒绝摘要可关联同一准确
+tool_use_id；缺少或冲突的身份保持不完整。Codex 日志保留实际命令、聚合输出、可得退出码和
+Provider 终态；命令失败不自动使整个 turn 失败。文件变更事件只报告路径与变更种类，搜索事件
+只报告公开 query/action 时，缺少的 patch 或搜索结果在 issues 中明确说明，不补造正文。
+这些数据从同一个 Runtime 日志接口读取；退出码 0、日志完整和业务审核通过分别判断。
+
+新调用与显式历史绑定使用当前安装软件的修复实现，Runtime descriptor 和执行结果记录实际
+package version。Adapter revision 表示参数转换与能力合同；本次结果判定修正未改变这些参数。
+旧 Profile、Variant、已提交结果和已保存日志保持原样，不用新 parser 覆盖历史记录。
 
 当前新的执行准备使用 ClaudeAdapter 的 claude_cli_adapter@v1，已注册 Module/Workflow 不因此改变。旧 claude_cli_native_tools_executor@v2 绑定按其原能力通过同一实现显式执行，原 Profile/Variant 内容保持；不能把旧 revision 静默换成新 revision。准确接口与迁移说明见 [Claude Adapter](agent_runtime_reviewer_api.md#claudeadapter)。
 独立 CLI 审核的助引日志可由 Runtime 的 [parse_cli_log](agent_runtime_reviewer_api.md#parse_cli_log) 解释，

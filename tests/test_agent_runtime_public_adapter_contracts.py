@@ -26,8 +26,25 @@ from agent_runtime.contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionRequest,
     AuthorizedExecutionInput,
     ProviderOperationIntent,
+    OperationAuthorizationDenied,
     OutputSubmission,
 )
+
+
+def test_operation_denial_public_contract_keeps_owner_decision_and_no_allow_receipt():
+    from agent_runtime import OperationAuthorizationDenied as PublicDenial
+    from agent_runtime.contracts import OperationAuthorizationDenied as ContractDenial
+    assert PublicDenial is OperationAuthorizationDenied
+    assert ContractDenial is PublicDenial
+    error = PublicDenial(reason_code="resource_denied", decision_ref="decision:original",
+                         decision_sha256="a" * 64)
+    assert isinstance(error, PermissionError)
+    assert error.reason_code == "resource_denied"
+    assert error.decision_ref == "decision:original" and error.decision_sha256 == "a" * 64
+    assert not hasattr(error, "receipt_id") and not hasattr(error, "grant_disposition_ref")
+    with pytest.raises(ValueError):
+        PublicDenial(reason_code="resource_denied", decision_ref="decision:original",
+                     decision_sha256="not-a-hash")
 
 
 def _durable_start_request() -> RuntimeWorkflowStartRequest:

@@ -46,7 +46,7 @@ class ModuleSelfTestResources:
         requirements = module.get_execution_requirements()
         if requirements is not None:
             requirements.assert_profile(profile)
-        if (profile.transport_kind != "claude_cli" or profile.network_policy != "denied"
+        if (profile.network_policy != "denied"
                 or profile.gateway_access_reasons or profile.semantic_input_delivery_mode != "inline"
                 or profile.execution_mode not in {"agent", "tool_free"}
                 or profile.attempt_workspace_policy not in {"none", "own_draft_read_write"}):

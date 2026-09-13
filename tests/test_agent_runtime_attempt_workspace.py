@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 import subprocess
 import sys
@@ -213,48 +212,41 @@ with tempfile.TemporaryDirectory() as directory:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_provider_adapters_hold_lease_around_provider_entry_and_classify_conflicts() -> None:
-    invocation_root = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "agent_runtime"
-        / "invocation"
-    )
-    expected_provider_entry = {
-        "invocation_codex_module_invocation.py": "_invoker",
-    }
-    for file_name, provider_name in expected_provider_entry.items():
-        tree = ast.parse((invocation_root / file_name).read_text(encoding="utf-8"))
-        leased_blocks = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.With, ast.AsyncWith))
-            and any(
-                isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Name)
-                and call.func.id == "lease_attempt_workspace"
-                for call in ast.walk(node)
-            )
-        ]
-        assert len(leased_blocks) == 1, file_name
-        assert any(
-            isinstance(name, ast.Name)
-            and name.id == provider_name
-            or isinstance(name, ast.Attribute)
-            and name.attr == provider_name
-            for name in ast.walk(leased_blocks[0])
-        ), file_name
-        conflict_handlers = [
-            handler
-            for handler in ast.walk(tree)
-            if isinstance(handler, ast.ExceptHandler)
-            and isinstance(handler.type, ast.Name)
-            and handler.type.id == "AttemptWorkspaceConflictError"
-        ]
-        assert len(conflict_handlers) >= 1, file_name
-        assert any(
-            isinstance(value, ast.Constant)
-            and value.value == "dependency_unavailable"
-            for handler in conflict_handlers
-            for value in ast.walk(handler)
-        ), file_name
+@pytest.mark.parametrize("provider_fails", [False, True])
+def test_provider_adapters_hold_lease_around_provider_entry_and_classify_conflicts(
+    tmp_path: Path, provider_fails: bool,
+) -> None:
+    """Observe the actual lease lifetime, independently of context-manager syntax."""
+    import test_agent_runtime_codex_execution_outcomes as codex_cases
+
+    held = []
+    def invocation(fields):
+        with pytest.raises(AttemptWorkspaceConflictError):
+            with lease_attempt_workspace(fields["cwd"]):
+                pytest.fail("Provider entry did not hold its workspace lease")
+        held.append(fields["cwd"])
+        events = ([{"type": "turn.failed", "error": {"message": "synthetic provider failure"}}]
+                  if provider_fails else [codex_cases.message(), codex_cases.terminal()])
+        return codex_cases.process(events)
+
+    env = codex_cases.environment(tmp_path, invocation)
+    result, _ = codex_cases.execute(env)
+    assert result.terminal_status == ("failed" if provider_fails else "completed")
+    assert len(held) == len(env.calls) == 1
+    with lease_attempt_workspace(held[0]):
+        pass  # The real lease was released after success or failure.
+
+    conflict_root = tmp_path / "conflict"
+    conflict_root.mkdir()
+    conflict = codex_cases.environment(conflict_root,
+        lambda _: pytest.fail("A lease conflict must precede Provider entry"))
+    workspace = prepare_attempt_workspace(workspace_root=conflict_root / "workspaces",
+        attempt_identity={key: getattr(conflict.request, key) for key in (
+            "attempt_id", "module_run_id", "variant_id", "module_release_sha256",
+            "execution_profile_sha256", "prompt_envelope_sha256")})
+    with lease_attempt_workspace(workspace):
+        refused, _ = codex_cases.execute(conflict)
+    assert refused.terminal_status == "failed"
+    assert refused.failure.failure_class == "dependency_unavailable"
+    assert refused.failure.retry_disposition_id == "retry_denied"
+    assert conflict.calls == []

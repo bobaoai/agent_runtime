@@ -32,6 +32,9 @@ API_SOURCES = {
     "src/agent_runtime/contracts/registry_release_definition.py": (
         "ModuleExecutionRequirements", "ModuleRelease", "ReviewerDefaults",
     ),
+    "src/agent_runtime/contracts/invocation_adapter_definition.py": (
+        "OperationAuthorizationDenied", "AuthorizedAgentExecutionHost",
+    ),
     "src/agent_runtime/registry/registry_module_loading.py": ("load_reviewer_registration",),
     "src/agent_runtime/registry/registry_workflow_authoring.py": ("Workflow",),
     "src/agent_runtime/execution/execution_local_invocation.py": (
@@ -42,6 +45,7 @@ API_SOURCES = {
     "src/agent_runtime/ledger/ledger_execution_logging.py": ("read_execution_log",),
     "src/agent_runtime/invocation/invocation_cli_logging.py": ("parse_cli_log",),
     "src/agent_runtime/invocation/invocation_claude_cli_execution.py": ("ClaudeAdapter",),
+    "src/agent_runtime/invocation/invocation_codex_module_invocation.py": ("CodexCliModuleExecutor", "CodexCliInvocationResult", "build_command"),
     "src/agent_runtime/inspection/inspection_postgres_querying.py": ("PostgresWorkflowInspectionRepository",),
 }
 ERROR_CONSTANTS = (
@@ -110,6 +114,9 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
     module = {
         "PostgresWorkflowInspectionRepository": "agent_runtime.inspection",
         "ClaudeAdapter": "agent_runtime.invocation.invocation_claude_cli_execution",
+        "CodexCliModuleExecutor": "agent_runtime.invocation.invocation_codex_module_invocation",
+        "CodexCliInvocationResult": "agent_runtime.invocation.invocation_codex_module_invocation",
+        "build_command": "agent_runtime.invocation.invocation_codex_module_invocation",
     }.get(name, "agent_runtime")
     lines = [f'## {name}', "", f"Public import: `from {module} import {name}`", ""]
     if isinstance(node, ast.ClassDef):
@@ -137,10 +144,17 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
             if isinstance(parent, ast.ClassDef):
                 for method in parent.body:
                     if (isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                            and not method.name.startswith("_") and method.name not in own_methods):
+                            and (not method.name.startswith("_") or method.name == "__init__")
+                            and method.name not in own_methods):
                         qualified = f"{parent.name}.{method.name}"
-                        lines.extend([f"### {name}.{method.name}", "",
-                                      f"Inherited from [{qualified}](#{qualified.lower().replace('.', '')}).", ""])
+                        if parent.name.startswith("_"):
+                            # A private implementation base is not a public import
+                            # target. Export the real inherited signature/docstring.
+                            lines.extend([f"### {name}.{method.name}", "", "```python",
+                                          _signature(method), "```", "", _doc(method, qualified), ""])
+                        else:
+                            lines.extend([f"### {name}.{method.name}", "",
+                                          f"Inherited from [{qualified}](#{qualified.lower().replace('.', '')}).", ""])
     else:
         lines.extend(["```python", _signature(node), "```", "", _doc(node, name), ""])
     return lines

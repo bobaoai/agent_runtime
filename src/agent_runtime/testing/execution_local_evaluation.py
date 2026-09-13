@@ -14,10 +14,10 @@ def build_parser():
     parser.add_argument("--workflow", required=True, help="Registered single-node Workflow ID.")
     parser.add_argument("--version", help="Exact version; omit for the latest registered new definition.")
     parser.add_argument("--input", required=True, type=Path, help="JSON input prepared under the Module's input schema.")
-    parser.add_argument("--transport", help="Independent transport; omit for Runtime default. Currently claude_cli only.")
-    parser.add_argument("--model", help="Independent concrete model ID, verified against the response; omit for Runtime default.")
-    parser.add_argument("--effort", help="Independent reasoning effort; omit for Runtime default.")
-    parser.add_argument("--cli-path", type=Path, help="Installed provider executable; omit to resolve claude from PATH.")
+    parser.add_argument("--transport", help="Independent transport: claude_cli (default), or codex_cli for tool-free inline Modules.")
+    parser.add_argument("--model", help="Independent concrete model ID; required for codex_cli, otherwise omit for Runtime default.")
+    parser.add_argument("--effort", help="Independent reasoning effort; required for codex_cli, otherwise omit for Runtime default.")
+    parser.add_argument("--cli-path", type=Path, help="Installed executable; omit to resolve the selected claude/codex from PATH. Codex uses the host's standard file-based login.")
     return parser
 
 

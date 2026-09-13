@@ -41,6 +41,9 @@ def read_execution_log(
         This preserves final cancellation/cleanup facts alongside the Provider log.
         Native calls retain original event indices and never acquire a grant;
         Gateway calls retain their exact request/response refs and bytes.
+        Codex native records preserve actual public completion fields, including
+        aggregated command output. Missing patch bodies or search result content
+        are explicit issues, not reconstructed from an Agent's final answer.
         Missing/legacy logs are explicitly incomplete, not proof of zero calls.
         Unknown shell exit codes and tool-level times are not inferred. Reading
         an in-memory source does not make it durably saved or recoverable later.

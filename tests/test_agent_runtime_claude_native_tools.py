@@ -72,6 +72,23 @@ def _init(tools=("Read", "Grep", "Bash")):
             "tools": [*tools, "StructuredOutput"], "skills": [], "plugins": [], "slash_commands": [], "mcp_servers": []}
 
 
+def _tool_use(identity, name="Read", **arguments):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": identity, "name": name, "input": arguments}]}}
+
+
+def _tool_result(identity, *, failed=False, content="actual tool output"):
+    return {"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": identity, "is_error": failed, "content": content}]}}
+
+
+def _denial(identity, name="Read"):
+    return {"type": "system", "subtype": "permission_denied", "tool_name": name,
+            "tool_use_id": identity, "decision_reason_type": "other",
+            "decision_reason": "--restricted: path outside the working directory",
+            "message": "The requested path is outside the allowed workspace."}
+
+
 def _run(env, tmp_path, event_factory):
     _, registry, cell, request, authority = env
     def process(**kwargs):
@@ -298,7 +315,8 @@ def test_preflight_timeout_keeps_byte_diagnostics(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("damage", [None, "change", "remove", "symlink"])
 @pytest.mark.parametrize("binding", [("claude_cli_adapter", "v1"), ("claude_cli_native_tools_executor", "v2")])
-def test_materials_checked_even_on_process_exception(tmp_path, damage, binding):
+@pytest.mark.parametrize("process_error", [False, True])
+def test_materials_checked_on_process_completion_and_exception(tmp_path, damage, binding, process_error):
     env = _environment(tmp_path, material=b"original", binding=binding)
     def events(call):
         yield _init()
@@ -312,19 +330,26 @@ def test_materials_checked_even_on_process_exception(tmp_path, damage, binding):
                 replacement.write_bytes(b"original")
                 source.symlink_to(replacement)
         yield _result()
-        raise subprocess.CalledProcessError(1, call["argv"], output="", stderr="process failed")
+        if process_error:
+            raise subprocess.CalledProcessError(1, call["argv"], output="", stderr="process failed")
     run, cell = _run(env, tmp_path, events)
+    if damage is None and not process_error:
+        assert _assert_completed_provider_run(run, cell) == {"value": "checked"}
+        return
     assert run.attempts[0].failure_class == ("transport" if damage is None else "policy_violation")
     assert run.attempts[0].usage.input_tokens == 7
     assert not run.outputs
 
 
-@pytest.mark.parametrize("surface", ["tools", "skills", "plugins", "slash_commands", "mcp_servers"])
+@pytest.mark.parametrize("surface", ["tools", "skills", "plugins", "slash_commands", "mcp_servers", "permissionMode"])
 def test_unexpected_init_stops_stream(tmp_path, surface):
     reached = []
     def events(call):
         initial = _init()
-        initial[surface].append("unexpected")
+        if surface == "permissionMode":
+            initial[surface] = "bypassPermissions"
+        else:
+            initial[surface].append("unexpected")
         yield initial
         reached.append(True)
         yield _result()
@@ -333,18 +358,141 @@ def test_unexpected_init_stops_stream(tmp_path, surface):
     assert reached == []
 
 
-@pytest.mark.parametrize("source", ["event", "result"])
-def test_explicit_cli_permission_denial_prevents_success(tmp_path, source):
+@pytest.mark.parametrize("source", ["event", "result", "combined"])
+@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v1"), ("claude_cli_native_tools_executor", "v2")])
+def test_cli_permission_denial_allows_later_tools_and_output(tmp_path, source, binding):
+    continued = []
     def events(call):
         yield _init()
-        if source == "event":
-            yield {"type": "system", "subtype": "permission_denied", "tool_name": "Read"}
-        yield _result(permission_denials=[{"tool_name": "Read"}])
-    run, cell = _run(_environment(tmp_path), tmp_path, events)
+        yield _tool_use("denied", file_path="outside")
+        if source != "result":
+            yield _denial("denied")
+        if source == "combined":
+            yield _tool_result("denied", failed=True, content="Read was refused")
+        continued.append(True)
+        yield _tool_use("allowed", "Bash", command="printf allowed")
+        yield _tool_result("allowed", content="allowed")
+        yield _result(permission_denials=[] if source == "event" else [
+            {"tool_name": "Read", "tool_use_id": "denied", "tool_input": {"file_path": "outside"}}])
+    run, cell = _run(_environment(tmp_path, binding=binding), tmp_path, events)
+    assert _assert_completed_provider_run(run, cell) == {"value": "checked"}
+    assert continued == [True] and len(run.attempts) == 1
     attempt = run.attempts[0]
-    assert attempt.failure_class == "policy_violation"
-    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
-    assert detail["retryable"] is False
+    assert attempt.usage.input_tokens == 7 and attempt.usage.output_tokens == 3
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert "policy_refusal_reason" not in trace
+    calls = {item["tool_call_id"]: item for item in trace["tool_log"]["tool_calls"]}
+    assert len(calls) == 2 and calls["denied"]["status"] == "failed"
+    assert calls["allowed"]["status"] == "completed"
+    assert trace["tool_log"]["complete"]
+    assert bool(trace["public_events"]) is (source != "result")
+
+
+@pytest.mark.parametrize("source", ["event", "result", "tool_result"])
+def test_unidentified_tool_denial_retains_events_without_inventing_a_call(tmp_path, source):
+    observation = _denial(None) if source == "event" else _tool_result(None, failed=True)
+    def events(call):
+        yield _init()
+        if source != "result":
+            yield observation
+        yield _result(permission_denials=[{"tool_name": "Read"}] if source == "result" else [])
+    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    _assert_completed_provider_run(run, cell)
+    attempt = run.attempts[0]
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert not trace["tool_log"]["complete"] and trace["tool_log"]["tool_calls"] == []
+    recorded = [item["event"] for item in trace["tool_log"]["events"]]
+    if source == "result":
+        assert recorded[-1]["permission_denials"] == [{"tool_name": "Read"}]
+    else:
+        assert observation in recorded
+
+
+@pytest.mark.parametrize("ending,expected", [
+    ("provider", "provider"), ("nonzero", "transport"), ("timeout", "timeout"),
+    ("cancelled", "cancelled"), ("missing", "provider"), ("schema", "schema"),
+    ("invalid_event", "provider"), ("material", "policy_violation"),
+])
+def test_normal_denial_does_not_mask_later_execution_failure(tmp_path, ending, expected):
+    prefix = [_init(), _tool_use("denied", file_path="outside"), _denial("denied"),
+              _tool_result("denied", failed=True)]
+    def events(call):
+        yield from prefix
+        if ending == "timeout":
+            raise subprocess.TimeoutExpired(call["argv"], 1)
+        if ending == "cancelled":
+            raw = "\n".join(json.dumps(item) for item in prefix)
+            raise claude.CliProcessInterrupted(returncode=-15, output=raw, stderr="cancelled",
+                stdout_bytes=raw.encode(), stderr_bytes=b"cancelled")
+        if ending == "missing":
+            return
+        if ending == "invalid_event":
+            yield "invalid-json-line"
+            return
+        if ending == "material":
+            (call["cwd"].parent / "materials/source").write_bytes(b"changed")
+        yield _result(**({"subtype": "error_during_execution", "is_error": True} if ending == "provider" else
+                         {"structured_output": {"wrong": 1}} if ending == "schema" else {}))
+        if ending == "nonzero":
+            raise subprocess.CalledProcessError(1, call["argv"])
+    run, cell = _run(_environment(tmp_path, material=b"protected"), tmp_path, events)
+    attempt = run.attempts[0]
+    assert attempt.failure_class == expected and not run.outputs
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert trace["public_events"] == [_denial("denied")]
+    assert "permission_denied" in trace["stdout"]
+    if ending != "material":
+        assert "policy_refusal_reason" not in trace
+
+
+@pytest.mark.parametrize("outcome", ["denied", "error", "completed", "missing", "missing_id",
+                                     "wrong_id", "duplicate_request", "conflicting_results"])
+def test_undeclared_tool_request_requires_unambiguous_success_evidence(tmp_path, outcome):
+    continued = []
+    def events(call):
+        yield _init(("Read",))
+        yield _tool_use("extra", "Bash", command="printf unapproved")
+        continued.append(True)
+        if outcome == "duplicate_request":
+            yield _tool_use("extra", "Bash", command="printf another")
+        if outcome == "denied":
+            yield _denial("extra", "Bash")
+        if outcome != "missing":
+            yield _tool_result(None if outcome == "missing_id" else "other" if outcome == "wrong_id" else "extra",
+                               failed=outcome in {"denied", "error"})
+        if outcome == "conflicting_results":
+            yield _tool_result("extra", failed=True)
+        yield _tool_use("allowed", file_path="material")
+        yield _tool_result("allowed")
+        yield _result()
+    run, cell = _run(_environment(tmp_path, tools=("read",)), tmp_path, events)
+    assert continued == [True]
+    attempt = run.attempts[0]
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert any(item.get("id") == "extra" for item in trace["native_tool_events"])
+    if outcome == "completed":
+        assert attempt.failure_class == "policy_violation" and not run.outputs
+        assert trace["policy_refusal_reason"] == "CLI completed an undeclared tool"
+    else:
+        _assert_completed_provider_run(run, cell)
+        assert "policy_refusal_reason" not in trace
+        if outcome not in {"denied", "error"}:
+            assert trace["tool_log"]["complete"] is False
+
+
+@pytest.mark.parametrize("verdict", ["non_pass", "blocked"])
+def test_valid_business_verdict_after_denial_is_not_a_technical_retry(tmp_path, verdict):
+    invocations = []
+    def events(call):
+        invocations.append(True)
+        yield _init()
+        yield _tool_use("denied", file_path="outside")
+        yield _denial("denied")
+        yield _tool_result("denied", failed=True)
+        yield _result(structured_output={"value": verdict})
+    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    assert _assert_completed_provider_run(run, cell) == {"value": verdict}
+    assert invocations == [True] and len(run.attempts) == 1
 
 
 def test_command_permission_words_are_not_permission_evidence(tmp_path):
@@ -855,10 +1003,8 @@ def test_live_claude_rejects_ab_sibling_read(tmp_path, capture_exit):
     attempt = run.attempts[0]
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
     (root / ("captured_denial_trace.json" if capture_exit else "denied_trace.json")).write_text(json.dumps(trace, ensure_ascii=False, indent=2))
-    if trace.get("policy_refusal_reason"):
-        assert attempt.failure_class == "policy_violation"
-    else:
-        _assert_completed_provider_run(run, cell)
+    assert _assert_completed_provider_run(run, cell) == {"value": "blocked"}
+    assert "policy_refusal_reason" not in trace
     results = [e for e in trace["native_tool_events"] if e["type"] == "tool_result"]
     assert any("not permitted" in str(e["content"]).lower() for e in results)
     assert all("outside_attempt_sentinel" not in str(e["content"]) for e in results)
@@ -941,14 +1087,15 @@ def test_live_claude_resource_boundaries_in_ab(tmp_path, boundary):
 
 @pytest.mark.skipif(os.environ.get("RUN_PROVIDER_INTEGRATION") != "1", reason="explicit live Claude test")
 @pytest.mark.parametrize("tool", ["read", "search"])
-def test_live_runtime_stops_on_file_tool_denial(tmp_path, tool):
+def test_live_runtime_continues_after_file_tool_denial(tmp_path, tool):
     root = Path(os.environ["AGENT_RUNTIME_TEST_AB_WORKSPACE"]).resolve(strict=True)
     outside = root / f"outside_{tool}"
     outside.write_text("RUNTIME_OUTSIDE_FILE_SENTINEL")
-    _, registry, cell, request, authority = _environment(tmp_path, tools=(tool,), instructions=(
+    _, registry, cell, request, authority = _environment(tmp_path, tools=(tool,), material=b"authorized material", instructions=(
         f"This is an authorized boundary test with a disposable fixture. Use {claude.NATIVE_TOOLS[tool]} once "
         f"on the exact file {outside}" + (" with pattern '.'" if tool == "search" else "") +
-        ". Do not retry or ask for escalation. Report the real outcome."
+        ". After that refusal, use the same tool on ../materials/source" + (" with pattern '.'" if tool == "search" else "") +
+        ". Do not retry the forbidden path or ask for escalation. Return value='blocked' after the allowed read."
     ))
     adapters = AgentExecutionAdapterRegistry()
     adapters.register(claude.ClaudeAdapter(release_registry=registry, artifact_host=cell,
@@ -958,9 +1105,15 @@ def test_live_runtime_stops_on_file_tool_denial(tmp_path, tool):
     attempt = run.attempts[0]
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
     (root / f"file_denial_{tool}.json").write_text(json.dumps(trace, ensure_ascii=False, indent=2))
-    assert attempt.failure_class == "policy_violation" and not run.outputs
+    assert _assert_completed_provider_run(run, cell) == {"value": "blocked"}
+    assert "policy_refusal_reason" not in trace
     assert any(event.get("subtype") == "permission_denied" for event in trace["public_events"])
     assert "RUNTIME_OUTSIDE_FILE_SENTINEL" not in json.dumps(trace["native_tool_events"])
+    calls = trace["tool_log"]["tool_calls"]
+    assert any(item["status"] == "failed" and item["tool_name"] == claude.NATIVE_TOOLS[tool] for item in calls)
+    assert any(item["status"] == "completed" and item["tool_name"] == claude.NATIVE_TOOLS[tool]
+               and str((item["request"] or {}).get("file_path", (item["request"] or {}).get("path", "")))
+                   .endswith("materials/source") for item in calls)
 
 
 @pytest.mark.skipif(

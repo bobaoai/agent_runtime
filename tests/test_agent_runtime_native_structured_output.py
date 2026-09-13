@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from contextlib import contextmanager
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -34,6 +35,7 @@ from agent_runtime.contracts.invocation_adapter_definition import (
     AgentExecutionFailure,
     AgentExecutionResult,
     AuthorizedAgentExecutionRequest,
+    OperationAuthorizationDenied,
     OutputSubmission,
     ProviderOperationIntent,
 )
@@ -146,11 +148,11 @@ def _compile_native_module(
     ),
     execution_profile_id: str = "native_profile",
     executor_adapter_id: str = "codex_cli_agent_executor",
-    executor_adapter_revision: str = "v3",
+    executor_adapter_revision: str = "v4",
     transport_kind: str = "codex_cli",
     provider_id: str = "openai",
     model_id: str = "native_model",
-    reasoning_profile: str = "none",
+    reasoning_profile: str = "high",
     timeout_seconds: int = 60,
     execution_mode: str = "tool_free",
     semantic_input_delivery_mode: str = "inline",
@@ -252,6 +254,17 @@ def _compile_native_module(
 
 _TEST_TIME = "2026-08-09T12:00:00Z"
 _RUN_PROVIDER_INTEGRATION = os.environ.get("RUN_PROVIDER_INTEGRATION") == "1"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_offline_codex_credentials(tmp_path, monkeypatch, request):
+    """Offline protocol doubles must never consume the user's actual login."""
+    if request.node.name.startswith("test_live_"):
+        return
+    source = tmp_path / "offline-codex-auth"
+    source.mkdir()
+    (source / "auth.json").write_text('{"test_only":"not-a-credential"}')
+    monkeypatch.setenv("CODEX_HOME", str(source))
 
 
 def _register_compiled_for_evaluation(compiled) -> RuntimeReleaseRegistry:
@@ -1269,7 +1282,7 @@ def test_run_module_evaluation_executes_registered_codex_transport(
     assert captured["argv"][1] == "exec"
 
 
-@pytest.mark.parametrize("failure_path", ["nonzero_exit", "invalid_output"])
+@pytest.mark.parametrize("failure_path", ["nonzero_exit", "provider_failed"])
 def test_run_module_records_registered_codex_transport_failure(
     tmp_path: Path,
     failure_path: str,
@@ -1290,6 +1303,7 @@ def test_run_module_records_registered_codex_transport_failure(
             stdout=private_event + "\n" + json.dumps(
                 {
                     "type": "turn.failed",
+                    "error": {"message": "provider unavailable"},
                     "usage": {"input_tokens": 5, "output_tokens": 0},
                 }
             ),
@@ -1319,17 +1333,24 @@ def test_run_module_records_registered_codex_transport_failure(
     )
 
     assert run.attempts[0].status == "failed"
-    assert run.attempts[0].failure_class == ("provider" if failure_path == "nonzero_exit" else "schema")
+    assert run.attempts[0].failure_class == "provider"
     assert run.attempts[0].failure_detail_ref is not None
     assert run.attempts[0].usage.input_tokens == 5
     assert run.resolution is None
     attempt = run.attempts[0]
-    for ref, digest in ((attempt.failure_detail_ref, attempt.failure_detail_sha256),
-                        (attempt.provider_trace_ref, attempt.provider_trace_sha256)):
-        content = artifact_host.read_bytes(ref, digest)
-        assert b"SYNTHETIC_PRIVATE" not in content
-    trace = artifact_host.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256)
-    assert b"provider unavailable" in trace
+    from agent_runtime import read_execution_log
+    from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+    def no_private_read(*_args):
+        raise AssertionError("metadata-only inspection must not read private content")
+    public = read_execution_log(run.module_run, attempts=run.attempts, read_content=no_private_read)
+    assert "SYNTHETIC_PRIVATE" not in json.dumps(public)
+    private = read_execution_log(run.module_run, attempts=run.attempts,
+                                read_content=artifact_host.read_bytes, include_private_content=True)
+    trace = private["attempts"][0]["provider_log"]
+    assert "SYNTHETIC_PRIVATE_REASONING\u2028SYNTHETIC_PRIVATE_CONTINUATION" in (
+        cli_stream_bytes(trace, "stdout").decode("utf-8"))
+    assert cli_stream_bytes(trace, "stderr") == b"provider unavailable"
+    assert trace["display_redacted"] is True and trace["byte_capture_exact"] is False
 
 
 def test_tool_free_profile_rejects_undeclared_gateway_surface_before_provider(
@@ -1443,7 +1464,8 @@ def test_codex_tool_free_adapter_checks_actual_shell_before_provider(tmp_path, i
         calls.append(kwargs)
         assert "features.shell_tool=false" in kwargs["argv"]
         return CodexCliInvocationResult(0, json.dumps({"type": "item.completed", "item": {
-            "type": "agent_message", "text": '{"value":"checked"}'}}), "")
+            "type": "agent_message", "text": '{"value":"checked"}'}})
+            + "\n" + json.dumps({"type": "turn.completed"}), "")
     executor = CodexCliModuleExecutor(release_registry=registry, artifact_host=artifacts,
         workspace_root=tmp_path / "workspaces", invoker=invoke, codex_bin="controlled-codex")
     executor.shell_tool_enabled = implicit_shell
@@ -1465,7 +1487,7 @@ def test_codex_tool_free_adapter_checks_actual_shell_before_provider(tmp_path, i
 
 
 @pytest.mark.parametrize("tool", ["read", "shell"])
-def test_codex_workspace_rejects_explicit_tool_mismatch_before_effects(tmp_path, tool):
+def test_codex_workspace_remains_unavailable_with_explicit_tools_before_effects(tmp_path, tool):
     compiled = _compile_native_module(tmp_path,
         executor_adapter_id="codex_cli_agent_workspace_executor", executor_adapter_revision="v2",
         execution_mode="agent", attempt_workspace_policy="own_draft_read_write", tool_policy=(tool,))
@@ -1475,7 +1497,7 @@ def test_codex_workspace_rejects_explicit_tool_mismatch_before_effects(tmp_path,
     calls = []
     executor = CodexCliAgentWorkspaceModuleExecutor(release_registry=registry, artifact_host=artifacts,
         workspace_root=tmp_path / "workspaces", invoker=lambda **kw: calls.append(kw), codex_bin="controlled-codex")
-    with pytest.raises(ValueError, match="tool policy differs"):
+    with pytest.raises(PermissionError, match="workspace candidate lacks required ambient-read isolation"):
         executor.execute(_direct_adapter_request(compiled, prompt, suffix="wrong_tool"), _RecordingHost())
     assert calls == [] and not (tmp_path / "workspaces").exists()
 
@@ -2313,7 +2335,7 @@ def test_operation_free_module_cannot_use_a_provider_transport(
     registry, module, profile = _operation_free_release(
         transport_kind="codex_cli",
         executor_adapter_id="codex_cli_agent_executor",
-        executor_adapter_revision="v3",
+        executor_adapter_revision="v4",
         provider_id="openai",
     )
     artifact_host = InMemoryCellArtifactStore()
@@ -2800,6 +2822,111 @@ def test_gateway_read_denial_never_enters_resource_callable(
     assert run.resolution is None
 
 
+@pytest.mark.parametrize("allow_later", [False, True])
+def test_handled_gateway_denial_preserves_decision_without_invalidating_attempt(
+    tmp_path: Path, allow_later: bool,
+) -> None:
+    artifacts = InMemoryCellArtifactStore()
+    denied_calls, allowed_calls, denials = [], [], []
+
+    def handle(request, host):
+        product.operation_effects["read_source"] = GatewayDecisionEffect.DENY
+        try:
+            _gateway_tool_callback(artifacts, denied_calls, resource_id="denied_resource")(request, host)
+        except OperationAuthorizationDenied as exc:
+            denials.append(exc)
+        else:
+            pytest.fail("DENY must not return an ALLOW receipt")
+        if allow_later:
+            product.operation_effects["read_source"] = GatewayDecisionEffect.ALLOW
+            return _gateway_tool_callback(artifacts, allowed_calls, resource_id="allowed_resource",
+                                          tool_call_id="allowed_after_denial")(request, host)
+        return ()
+
+    _, registry, adapters, adapter, request, authority, product = _registered_gateway_stub(
+        tmp_path, artifacts, on_execute=handle)
+    ledger = InMemoryModuleExecutionLedger()
+    run = run_module(request, release_registry=registry, adapters=adapters, artifact_host=artifacts,
+                     ledger=ledger, authority=authority, clock=lambda: _TEST_TIME)
+    assert _assert_completed_provider_run(run, artifacts) == {"value": "stub"}
+    assert adapter.calls == 1 and denied_calls == [] and len(denials) == 1
+    assert len(allowed_calls) == int(allow_later)
+    assert [call.tool_call_id for call in run.attempts[0].tool_calls] == (
+        ["allowed_after_denial"] if allow_later else [])
+    authorization_log = authority.controller.protected_operation_client
+    observations = authorization_log.observations_for_execution(
+        authority.binding.workflow_execution_id)
+    denied = [row for row in observations if row.effect is GatewayDecisionEffect.DENY]
+    assert len(denied) == 1
+    assert (denials[0].reason_code, denials[0].decision_ref, denials[0].decision_sha256) == (
+        "operation_denied", denied[0].decision_ref, denied[0].decision_sha256)
+    assert denied[0].effect_evidence_ref is None and denied[0].grant_disposition_ref is None
+    replay = run_module(request, release_registry=registry, adapters=AgentExecutionAdapterRegistry(),
+                        artifact_host=artifacts, ledger=ledger, authority=authority,
+                        clock=lambda: _TEST_TIME)
+    assert replay == run and adapter.calls == 1
+
+
+@pytest.mark.parametrize("fault,exception_type", [
+    ("lineage", "PermissionError"),
+    ("revoked", "PermissionError"),
+    ("decision_mismatch", "PermissionError"),
+    ("invalid_decision", "TypeError"),
+    ("observation_storage", "OSError"),
+    ("client_denial_exception", "OperationAuthorizationDenied"),
+])
+def test_caught_gateway_execution_fault_cannot_commit_or_call_another_resource(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str, exception_type: str,
+) -> None:
+    artifacts = InMemoryCellArtifactStore()
+    resource_calls, caught = [], []
+
+    def handle(request, host):
+        original_authorize = product.authorize_operation
+        if fault == "revoked":
+            product.context_state = ExecutionAuthorizationContextState.REVOKED
+        elif fault in {"decision_mismatch", "invalid_decision", "client_denial_exception"}:
+            def invalid_authorize(query):
+                decision = original_authorize(query)
+                if fault == "client_denial_exception":
+                    raise OperationAuthorizationDenied(reason_code="unverified_denial",
+                        decision_ref="product-decision:unverified", decision_sha256="a" * 64)
+                return (replace(decision, query_sha256="a" * 64)
+                        if fault == "decision_mismatch" else None)
+            monkeypatch.setattr(product, "authorize_operation", invalid_authorize)
+        elif fault == "observation_storage":
+            product.operation_effects["read_source"] = GatewayDecisionEffect.DENY
+            def fail_observation(**_fields):
+                raise OSError("synthetic required observation storage failed")
+            monkeypatch.setattr(authority.controller, "record_gateway_observation", fail_observation)
+        for mismatched, resource in ((fault == "lineage", "first"), (False, "second")):
+            try:
+                _gateway_tool_callback(artifacts, resource_calls, resource_id=resource,
+                                      mismatched_lineage=mismatched)(request, host)
+            except Exception as exc:
+                caught.append(exc)
+        # Deliberately return a completed provider result after catching the fault.
+        return ()
+
+    _, registry, adapters, adapter, request, authority, product = _registered_gateway_stub(
+        tmp_path, artifacts, on_execute=handle)
+    run = run_module(request, release_registry=registry, adapters=adapters, artifact_host=artifacts,
+                     ledger=InMemoryModuleExecutionLedger(), authority=authority,
+                     clock=lambda: _TEST_TIME)
+    assert adapter.calls == 1 and resource_calls == []
+    assert len(caught) == 2 and caught[0] is caught[1]
+    assert type(caught[0]).__name__ == exception_type
+    assert run.attempts[0].status == "failed" and run.outputs == () and run.resolution is None
+    assert run.attempts[0].usage.input_tokens == 3
+    assert run.attempts[0].provider_trace_ref is not None
+    failure = json.loads(artifacts.read_bytes(run.attempts[0].failure_detail_ref,
+                                            run.attempts[0].failure_detail_sha256))
+    assert failure["exception_type"] == exception_type
+    assert failure["message"] == str(caught[0])
+    assert run.attempts[0].failure_class == (
+        "authorization" if isinstance(caught[0], PermissionError) else "unknown")
+
+
 def test_gateway_read_revalidates_fence_before_resource_call(
     tmp_path: Path,
 ) -> None:
@@ -3161,6 +3288,8 @@ def test_codex_native_structured_output_executes_end_to_end(
         prompt: str,
         cwd: Path,
         timeout_seconds: int,
+        environment: dict,
+        launch_guard=None,
     ) -> CodexCliInvocationResult:
         assert lease_events == ["enter:attempt_native_001"]
         captured["argv"] = list(argv)
@@ -3178,7 +3307,7 @@ def test_codex_native_structured_output_executes_end_to_end(
                     "text": json.dumps(provider_payload),
                 },
             }
-        )
+        ) + "\n" + json.dumps({"type": "turn.completed"})
         return CodexCliInvocationResult(returncode=0, stdout=stdout, stderr="")
 
     executor = CodexCliModuleExecutor(

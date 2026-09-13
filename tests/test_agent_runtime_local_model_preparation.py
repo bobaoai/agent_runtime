@@ -213,7 +213,7 @@ def test_new_default_affects_only_new_preparations_not_fixed_files(tmp_path, mon
     assert old.release == new.release and _files(root) == before
 
 
-@pytest.mark.parametrize("transport", ["codex_cli", "claude_agent_sdk", "", "unknown"])
+@pytest.mark.parametrize("transport", ["claude_agent_sdk", "", "unknown"])
 def test_unsupported_transport_has_no_fallback_or_store_write(tmp_path, transport):
     source, _ = _source(tmp_path / "source")
     root = tmp_path / "host"

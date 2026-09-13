@@ -46,6 +46,7 @@ from ..contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionRequest,
     AuthorizedExecutionInput,
     AuthorizedOperationReceipt,
+    OperationAuthorizationDenied,
     OutputSubmission,
     ProviderOperationIntent,
     SelfTestResourceUnavailableError,
@@ -232,7 +233,7 @@ class _AttemptExecutionHost:
         }
         self._staged: dict[str, tuple[OutputSubmission, bytes]] = {}
         self._authorized_operation_names: list[str] = []
-        self._dynamic_authorization_refused = False
+        self._operation_execution_error: Exception | None = None
 
     def read_authorized_input(self, local_handle: str) -> bytes:
         def read():
@@ -284,19 +285,36 @@ class _AttemptExecutionHost:
         self,
         request: ProviderOperationIntent,
     ) -> AuthorizedOperationReceipt:
-        """Authorize one exact Gateway tool before its resource call."""
+        """Return an ALLOW receipt or a recorded, operation-scoped denial.
 
+        Failures while validating the request/decision or persisting required
+        evidence invalidate completion, even if an Adapter catches the error.
+        Only our successfully recorded DENY is converted outside that failure
+        boundary; a client raising OperationAuthorizationDenied is still a
+        dependency failure rather than an authenticated denial decision.
+        """
+
+        if self._operation_execution_error is not None:
+            raise self._operation_execution_error
         try:
-            return self._authorize_operation(request)
-        except Exception:
-            self._dynamic_authorization_refused = True
+            outcome = self._authorize_operation(request)
+        except Exception as exc:
+            if self._operation_execution_error is None:
+                self._operation_execution_error = exc
             raise
+        if type(outcome) is ProductOperationDecision:
+            raise OperationAuthorizationDenied(
+                reason_code=outcome.reason_code,
+                decision_ref=outcome.decision_ref,
+                decision_sha256=outcome.decision_sha256,
+            )
+        return outcome
 
     def _authorize_operation(
         self,
         request: ProviderOperationIntent,
-    ) -> AuthorizedOperationReceipt:
-        """Resolve one dynamic operation while the public wrapper tracks denial."""
+    ) -> AuthorizedOperationReceipt | ProductOperationDecision:
+        """Validate and record the decision; return DENY without granting access."""
 
         if type(request) is not ProviderOperationIntent:
             raise ValueError("request must be an exact ProviderOperationIntent")
@@ -390,9 +408,7 @@ class _AttemptExecutionHost:
             observed_at_utc=observed_at_utc,
         )
         if decision.effect is not GatewayDecisionEffect.ALLOW:
-            raise PermissionError(
-                f"dynamic operation denied: {decision.reason_code}"
-            )
+            return decision
         if self._workflow_ledger is not None:
             self._workflow_ledger.authorize_tool_call(
                 request,
@@ -426,10 +442,8 @@ class _AttemptExecutionHost:
     ) -> None:
         """Require exact ordered lineage for every dynamically allowed call."""
 
-        if self._dynamic_authorization_refused:
-            raise PermissionError(
-                "at least one dynamic operation was refused during the Attempt"
-            )
+        if self._operation_execution_error is not None:
+            raise self._operation_execution_error
         observed_names = tuple(item.tool_name for item in observations)
         if observed_names != tuple(self._authorized_operation_names):
             raise PermissionError(
@@ -495,9 +509,13 @@ class _AttemptExecutionHost:
 
 def _prepare_registered_workflow_module(
     *, module_id, input_payload, idempotency_key, release_registry, workflow,
-    variant_policy, adapters, artifact_host,
+    variant_policy, artifact_host,
 ):
-    """Freeze the same validated request for persistent and temporary executions."""
+    """Freeze exact definitions and input without requiring a runnable Adapter.
+
+    Committed replay needs this same request identity, but not the historical
+    Provider installation. New execution separately checks its live adapter.
+    """
     from jsonschema import Draft202012Validator
 
     validate_id("module_id", module_id)
@@ -533,12 +551,6 @@ def _prepare_registered_workflow_module(
     profile = release_registry.get_execution_profile(
         selected["execution_profile_release_ref"], selected["execution_profile_release_sha256"]
     )
-    try:
-        _assert_admitted_test_evaluation_profile(module, profile)
-    except NotImplementedError as exc:
-        raise ValueError(str(exc)) from exc
-    adapter = adapters.resolve(profile.executor_adapter_id, profile.executor_adapter_revision)
-    _assert_descriptor_covers_profile(adapter.descriptor, profile)
     for method in ("put_bytes", "artifact", "resolve_artifact_ref"):
         if not callable(getattr(artifact_host, method, None)):
             raise ValueError(f"artifact_host must implement {method}")
@@ -579,6 +591,16 @@ def _prepare_registered_workflow_module(
         ),), idempotency_key=idempotency_key,
     )
     return request, module, profile, task, prompt_ref
+
+
+def _assert_registered_module_adapter(module, profile, adapters):
+    """Require current execution dependencies only for an uncommitted request."""
+    try:
+        _assert_admitted_test_evaluation_profile(module, profile)
+    except NotImplementedError as exc:
+        raise ValueError(str(exc)) from exc
+    adapter = adapters.resolve(profile.executor_adapter_id, profile.executor_adapter_revision)
+    _assert_descriptor_covers_profile(adapter.descriptor, profile)
 
 
 def run_registered_workflow_module(
@@ -642,6 +664,8 @@ def run_registered_workflow_module(
         environment_id: Explicit execution environment identity.
         adapters: Registry of installed executors matching the selected Profile.
             Actual compatibility is checked before starting the provider.
+            Exact committed replay does not require its historical executor;
+            new execution still requires the exact installed binding.
         artifact_host: ModuleArtifactHost with put_bytes, artifact and
             resolve_artifact_ref, as supplied by InMemoryCellArtifactStore.
             Holds staged input, prompt and authorization evidence for recording.
@@ -696,7 +720,7 @@ def run_registered_workflow_module(
     request, module, profile, task, prompt_ref = _prepare_registered_workflow_module(
         module_id=module_id, input_payload=input_payload, idempotency_key=idempotency_key,
         release_registry=release_registry, workflow=workflow, variant_policy=variant_policy,
-        adapters=adapters, artifact_host=artifact_host,
+        artifact_host=artifact_host,
     )
     execution_id = request.workflow_execution_id
     trace = record_store.load_trace(execution_id)
@@ -720,6 +744,7 @@ def run_registered_workflow_module(
         if replay is not None:
             return replay
         raise RuntimeError("execution already started; existing Runtime recovery is required")
+    _assert_registered_module_adapter(module, profile, adapters)
     authorization = authorize(request)
     if type(authorization) is not tuple or len(authorization) != 4:
         raise ValueError("authorize must return a context and three existing evidence refs")

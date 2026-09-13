@@ -96,12 +96,12 @@ class ClaudeAdapter:
     combinations, including Gateway requests without a CLI bridge, fail before
     provider invocation. The canonical output schema is always validated.
 
-    A failed native Shell tool remains a failed per-call observation. A valid
-    final response can still complete that Attempt when the CLI reports no
-    structured permission denial. Explicit permission_denied events, terminal
-    permission_denials and Runtime-detected resource violations fail the Attempt.
-    Shell error text and model summaries never supply an invented policy cause;
-    OS-level denial classification is limited by the CLI's observable signals.
+    A tool error or permission denial remains a per-call observation. The Agent
+    can continue within the same configured capabilities and return a valid final
+    response. Initialization outside those capabilities, accurately paired proof
+    of an undeclared tool completing, and protected-material changes still
+    invalidate the Attempt. Missing or ambiguous tool results remain unknown;
+    Shell error text and model summaries never supply an invented policy cause.
 
     Concrete model IDs and the CLI [1m] selector are supported. Initialization
     and response-model evidence must agree with the Profile; terminal usage for
@@ -288,6 +288,8 @@ class ClaudeAdapter:
                     "cache_read_tokens": read, "cache_creation_tokens": created}, invalid
 
         def retain_tool_log():
+            if "tool_log" in trace:
+                return
             try:
                 trace["tool_log"] = parse_cli_log(trace)
             except Exception as exc:
@@ -295,6 +297,17 @@ class ClaudeAdapter:
                 # from reaching the existing private trace commit.
                 trace["tool_log"] = {"schema_version": "runtime_cli_log_v1", "complete": False,
                     "issues": ["normalization_failed:" + type(exc).__name__], "tool_calls": None, "events": []}
+
+        def inspect_tool_boundary():
+            nonlocal policy_refusal
+            retain_tool_log()
+            for call in trace["tool_log"].get("tool_calls") or ():
+                response = call.get("response")
+                if (call.get("source_kind") == "provider_native" and call.get("status") == "completed"
+                        and call.get("tool_name") not in expected_tools
+                        and len(call.get("request_event_indices", ())) == 1
+                        and isinstance(response, dict) and isinstance(response.get("tool_result"), dict)):
+                    policy_refusal = policy_refusal or "CLI completed an undeclared tool"
 
         def fail(failure_class, failure_code, message, *, retry="retry_denied", cause=None, terminal_status="failed"):
             trace["adapter_failure"] = {"failure_class": failure_class, "failure_code": failure_code,
@@ -338,14 +351,11 @@ class ClaudeAdapter:
                     policy_refusal = "CLI initialized capabilities outside the Profile"
             elif kind == "system" and subtype == "permission_denied":
                 trace["public_events"].append(event)
-                policy_refusal = "CLI reported a permission denial"
             elif kind == "result":
                 if result:
                     event_error = "CLI returned multiple terminal results"
                 result = event
                 trace["result"] = event
-                if event.get("permission_denials"):
-                    policy_refusal = "CLI reported permission denials"
             message = event.get("message")
             if isinstance(message, dict):
                 if kind == "assistant" and message.get("model"):
@@ -358,8 +368,6 @@ class ClaudeAdapter:
                     if block.get("type") == "tool_use":
                         trace["native_tool_events"].append({"type": "tool_use", "id": block.get("id"),
                             "name": block.get("name"), "input": block.get("input")})
-                        if block.get("name") not in expected_tools:
-                            policy_refusal = "CLI requested an undeclared tool"
                     elif block.get("type") == "tool_result":
                         trace["native_tool_events"].append(block)
             return policy_refusal is None and event_error is None
@@ -499,6 +507,7 @@ class ClaudeAdapter:
                     trace["stream_error"] = exc.stream_error
             if event_error:
                 trace["event_error"] = event_error
+            inspect_tool_boundary()
             if isinstance(exc, SelfTestResourceUnavailableError):
                 fail("authorization", "self_test_resources_unavailable", str(exc), cause=exc)
             if policy_refusal:
@@ -517,6 +526,7 @@ class ClaudeAdapter:
             if event_error and trace.get("stop_reason") in (None, "observer_stopped"):
                 fail("provider", "claude_cli_result_missing_or_invalid", event_error, cause=exc)
             fail("transport", "claude_cli_process_failed", str(exc), cause=exc)
+        inspect_tool_boundary()
         if policy_refusal:
             trace["policy_refusal_reason"] = policy_refusal
             fail("policy_violation", "ADAPTER_POLICY_VIOLATION", policy_refusal)
