@@ -1,5 +1,6 @@
 """Model-independent registration and exact per-invocation preparation."""
 from dataclasses import fields, replace
+import hashlib
 import json
 import os
 import subprocess
@@ -82,7 +83,7 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
     assert saved.release.workflow_id == "summarize_note"
     selected = saved.registry.snapshot().execution_profiles[0]
     requirements.assert_profile(selected)
-    assert (selected.executor_adapter_id, selected.executor_adapter_revision) == ("claude_cli_adapter", "v1")
+    assert (selected.executor_adapter_id, selected.executor_adapter_revision) == ("claude_cli_adapter", "v2")
     assert selected.model_id == "claude-opus-5[1m]" and selected.reasoning_profile == "xhigh"
     assert exported.module_release.reviewer_defaults is None
     assert not exported.origin_bundle.execution_profiles
@@ -112,6 +113,8 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
     assert record["status"] == "completed", record["failure_detail"]
     assert record["output"] == {"summary": "the actual ordinary output"}
     assert record["execution_log"]["complete"] and len(calls) == 1
+    assert hashlib.sha256(calls[0]["prompt"].encode()).hexdigest() == record["execution_trace"]["attempts"][0]["prompt_envelope_sha256"]
+    assert record["provider_trace"]["actual_prompt"] == calls[0]["prompt"]
     assert _files(root) == before
 
 
@@ -130,6 +133,163 @@ def test_requested_gateway_requires_cli_bridge_before_resources_or_provider():
         gateway_access_reasons=("external_fact_verification",))
     with pytest.raises(ValueError, match="trusted CLI Gateway/MCP bridge"):
         local._execution_profile_for_requirements(requirements)
+
+
+def _resource_test_module(tmp_path, *, tools=("read", "search", "shell")):
+    from agent_runtime import Module
+    from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID as TASK_SKILL
+    source = _task_project(tmp_path / "source", module_id="summarize_note")
+    module = Module.from_registration(source, skill_id=TASK_SKILL, module_id="summarize_note",
+        execution_requirements=_requirements(execution_mode="agent" if tools else "tool_free", tool_policy=tools,
+            attempt_workspace_policy="own_draft_read_write" if tools else "none", timeout_seconds=30, max_attempts=1))
+    root = tmp_path / "host"
+    workflow = module.to_workflow(module.export(module_version="v1")).export()
+    register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
+        "resource_example", "v1", workflow.origin_bundle), root=root)
+    return root
+
+
+def _observe_resource_evaluation(monkeypatch, inspect, *, tools=("read", "search", "shell")):
+    adapter_type = claude.ClaudeAdapter
+    calls = []
+    def process(**kwargs):
+        kwargs["launch_guard"](lambda: calls.append(kwargs))
+        inspect(kwargs)
+        events = [_init(tuple(claude.NATIVE_TOOLS[name] for name in tools)),
+                  _result(structured_output={"summary": "resource input observed"})]
+        lines = [json.dumps(event) for event in events]
+        for line in lines:
+            assert kwargs["on_stdout_line"](line)
+        result = subprocess.CompletedProcess(kwargs["argv"], 0, "\n".join(lines), "")
+        result.stdout_bytes, result.stderr_bytes = result.stdout.encode(), b""
+        return result
+    monkeypatch.setattr(claude, "ClaudeAdapter", lambda **kwargs: adapter_type(**kwargs, process_runner=process))
+    return calls
+
+
+def test_public_resources_freeze_tree_and_exact_prompt_with_host_defaults(tmp_path, monkeypatch):
+    from pathlib import Path
+    root = _resource_test_module(tmp_path)
+    tree = tmp_path / "tree"
+    (tree / "pkg").mkdir(parents=True)
+    body = b"VALUE = 41\n"
+    (tree / "pkg/value.py").write_bytes(body)
+    dependency = tmp_path / "library"
+    dependency.mkdir()
+    executable = _fake_cli(tmp_path)
+    (root / ".runtime/config.json").write_text(json.dumps({
+        "provider_cli_paths": {"claude_cli": str(executable), "codex_cli": "unused/missing"},
+        "read_only_dependencies": [str(dependency)]}))
+    before = _files(root)
+    def inspect(fields):
+        materials = fields["cwd"].parent / "materials"
+        assert (materials / "source/pkg/value.py").read_bytes() == body
+        assert not (materials / "local_resources").exists()
+        assert str(tree) not in fields["prompt"] and str(dependency) not in fields["prompt"]
+        assert "content_base64" not in fields["prompt"] and "../materials/source" in fields["prompt"]
+        assert Path(fields["argv"][0]) == executable.resolve()
+        (tree / "pkg/value.py").write_text("changed only after capture\n")
+        assert (materials / "source/pkg/value.py").read_bytes() == body
+    calls = _observe_resource_evaluation(monkeypatch, inspect)
+    record = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={}, material_root=tree,
+        material_files=({"relative_path": "pkg/value.py", "sha256": hashlib.sha256(body).hexdigest(), "executable": False},))
+    assert record["status"] == "completed", record["failure_detail"]
+    assert len(calls) == 1 and len(record["input_bindings"]) == 2 and _files(root) == before
+    assert record["provider_trace"]["actual_prompt"] == calls[0]["prompt"]
+    assert hashlib.sha256(calls[0]["prompt"].encode()).hexdigest() == record["execution_trace"]["attempts"][0]["prompt_envelope_sha256"]
+    assert not calls[0]["cwd"].exists()
+
+
+@pytest.mark.parametrize("tools,explicit_dependencies", [((), None), (("read", "search", "shell"), ())])
+def test_unused_or_cleared_host_dependencies_do_not_open_resources(tmp_path, monkeypatch, tools, explicit_dependencies):
+    root = _resource_test_module(tmp_path, tools=tools)
+    (root / ".runtime/config.json").write_text(json.dumps({
+        "provider_cli_paths": {"claude_cli": "unused/missing"},
+        "read_only_dependencies": ["unused/library"]}))
+    calls = _observe_resource_evaluation(monkeypatch, lambda fields: None, tools=tools)
+    result = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+        cli_path=_fake_cli(tmp_path), read_only_dependencies=explicit_dependencies)
+    assert result["status"] == "completed", result["failure_detail"]
+    assert len(calls) == 1 and len(result["input_bindings"]) == 1
+
+
+def test_invalid_material_hash_is_rejected_before_attempt_resources(tmp_path, monkeypatch):
+    root = _resource_test_module(tmp_path)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "value.txt").write_text("current data")
+    monkeypatch.setattr(local.tempfile, "TemporaryDirectory", lambda *a, **kw: pytest.fail("no Attempt for invalid input"))
+    with pytest.raises(ValueError):
+        local.evaluate_local_workflow_module(root, "summarize_note", input_payload={}, material_root=tree,
+            material_files=({"relative_path": "value.txt", "sha256": "a"*64, "executable": False},))
+
+
+def test_staged_tree_mutation_is_rejected_and_keeps_provider_log(tmp_path, monkeypatch):
+    root = _resource_test_module(tmp_path)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    body = b"fixed data"
+    (tree / "value.txt").write_bytes(body)
+    def mutate(fields):
+        target = fields["cwd"].parent / "materials/source/value.txt"
+        target.chmod(0o600)
+        target.write_text("real changed bytes")
+    calls = _observe_resource_evaluation(monkeypatch, mutate)
+    record = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+        cli_path=_fake_cli(tmp_path), material_root=tree,
+        material_files=({"relative_path": "value.txt", "sha256": hashlib.sha256(body).hexdigest(), "executable": False},))
+    assert record["status"] == "failed" and record["output"] is None
+    assert len(calls) == 1 and record["provider_trace"]["raw_streams"]
+
+
+def test_public_command_execution_and_cli_observations_share_one_verified_log(tmp_path, monkeypatch):
+    from pathlib import Path
+    from agent_runtime.invocation.invocation_local_command_mcp import exchange
+    from agent_runtime.invocation.invocation_local_command_execution import LOCAL_COMMAND_CLI_TOOL_NAME
+    from test_agent_runtime_execution_logging import use, local_reply
+    root = _resource_test_module(tmp_path)
+    adapter_type = claude.ClaudeAdapter
+    calls, command_responses = [], []
+    def process(**fields):
+        fields["launch_guard"](lambda: calls.append(fields))
+        argv = fields["argv"]
+        server = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]["runtime_commands"]
+        endpoint = Path(server["args"][-1])
+        assert str(endpoint) not in fields["prompt"]
+        init = _init()
+        init["tools"].append(LOCAL_COMMAND_CLI_TOOL_NAME)
+        init["mcp_servers"] = [{"name": "runtime_commands", "status": "connected"}]
+        events = [init]
+        for index, command_id in enumerate(("ok", "bad"), 1):
+            provider_id = f"provider_{index}"
+            events.append(use(provider_id, LOCAL_COMMAND_CLI_TOOL_NAME, command_id=command_id))
+            response = exchange(endpoint, {"method": "invoke", "command_id": command_id})
+            command_responses.append(response)
+            events.append(local_reply(provider_id, {"response": response,
+                "status": "completed" if response["returncode"] == 0 else "failed"}))
+        events.append(_result(structured_output={"summary": "both command results observed"}))
+        lines = [json.dumps(event) for event in events]
+        for line in lines:
+            assert fields["on_stdout_line"](line)
+        result = subprocess.CompletedProcess(argv, 0, "\n".join(lines), "")
+        result.stdout_bytes, result.stderr_bytes = result.stdout.encode(), b""
+        return result
+    monkeypatch.setattr(claude, "ClaudeAdapter", lambda **kwargs: adapter_type(**kwargs, process_runner=process))
+    record = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
+        commands=({"command_id": "ok", "argv": ["/usr/bin/printf", "real command stdout"], "cwd": "scratch/run", "timeout_seconds": 5},
+                  {"command_id": "bad", "argv": ["/usr/bin/false"], "cwd": "source", "timeout_seconds": 5}))
+    assert record["status"] == "completed", record["failure_detail"]
+    assert len(calls) == 1 and [response["returncode"] for response in command_responses] == [0, 1]
+    log = record["execution_log"]
+    assert log["complete"], log["attempts"][0]["issues"]
+    assert len(log["tool_calls"]) == len(log["attempts"][0]["provider_tool_calls"]) == 2
+    for index, (row, response) in enumerate(zip(log["tool_calls"], command_responses), 1):
+        assert row["source_kind"] == "runtime_local" and row["response"] == response
+        assert row["tool_call_id"] == response["local_call_id"] and row["provider_tool_call_id"] == f"provider_{index}"
+        assert row["status"] == ("completed" if index == 1 else "failed")
+    assert command_responses[0]["stdout"] == "real command stdout"
+    assert hashlib.sha256(calls[0]["prompt"].encode()).hexdigest() == record["execution_trace"]["attempts"][0]["prompt_envelope_sha256"]
+    assert not calls[0]["cwd"].exists()
 
 
 @pytest.mark.parametrize("saved_variants", [0, 1, 2])

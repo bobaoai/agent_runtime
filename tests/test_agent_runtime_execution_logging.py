@@ -71,6 +71,82 @@ def test_tool_error_is_recorded_separately_from_log_completeness():
     assert "returncode" not in log["tool_calls"][0]
 
 
+LOCAL_TOOL = "mcp__runtime_commands__sandbox_command_execute"
+
+
+def local_record(identity, *, command_id="unit", returncode=0, raw=b"observed\n"):
+    process = subprocess.CompletedProcess([], returncode, raw.decode("utf-8", errors="replace"), "")
+    process.stdout_bytes, process.stderr_bytes = raw, b""
+    response = {"local_call_id": identity, "command_id": command_id, "allowed": True,
+        "argv": ["/usr/bin/true"], "cwd": "/frozen/source", "returncode": returncode,
+        "stdout": process.stdout, "stderr": "", "failure": None, "process_output_complete": True,
+        **captured_cli_streams(process)}
+    return {"tool_call_id": identity, "tool_name": "sandbox_command_execute", "source_kind": "runtime_local",
+        "request": {"command_id": command_id}, "response": response,
+        "status": "completed" if returncode == 0 else "failed"}
+
+
+def local_reply(provider_id, record):
+    return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": provider_id,
+        "content": [{"type": "text", "text": json.dumps(record["response"])}],
+        "is_error": record["status"] != "completed"}]}}
+
+
+def local_trace(events, records):
+    return {**trace(events), "local_command_cli_tool_name": LOCAL_TOOL, "local_command_calls": records}
+
+
+def test_local_commands_correlate_real_ids_not_same_command_or_completion_order():
+    one, two = local_record("local_command_1", raw=b"one\n"), local_record("local_command_2", returncode=7, raw=b"two\xff\n")
+    events = [use("provider_1", LOCAL_TOOL, command_id="unit"), use("provider_2", LOCAL_TOOL, command_id="unit"),
+        local_reply("provider_2", two), local_reply("provider_1", one), native._result()]
+    original = local_trace(events, [two, one])
+    parsed = parse_cli_log(original)
+    assert parsed["complete"], parsed["issues"]
+    assert len(parsed["tool_calls"]) == len(parsed["provider_tool_calls"]) == 2
+    assert [row["tool_call_id"] for row in parsed["tool_calls"]] == ["local_command_1", "local_command_2"]
+    first, second = parsed["tool_calls"]
+    assert first["provider_tool_call_id"] == "provider_1" and first["response_event_indices"] == [3]
+    assert second["provider_tool_call_id"] == "provider_2" and second["status"] == "failed"
+    assert second["response"]["returncode"] == 7 and cli_stream_bytes(second["response"], "stdout") == b"two\xff\n"
+    assert [row["tool_call_id"] for row in parsed["provider_tool_calls"]] == ["provider_1", "provider_2"]
+    assert original["local_command_calls"] == [two, one]
+    assert [row["event"] for row in parsed["events"]] == events
+
+
+@pytest.mark.parametrize("problem", ["missing_response", "wrong_result", "reused_id", "missing_parent", "other_tool"])
+def test_unproven_local_command_correlations_remain_incomplete(problem):
+    actual = local_record("local_command_1")
+    records = [actual]
+    events = [use("provider_1", LOCAL_TOOL, command_id="unit"), local_reply("provider_1", actual)]
+    if problem == "missing_response":
+        events.pop()
+    elif problem == "wrong_result":
+        events[-1] = local_reply("provider_1", local_record("local_command_1", raw=b"different result"))
+    elif problem == "reused_id":
+        events += [use("provider_2", LOCAL_TOOL, command_id="unit"), local_reply("provider_2", actual)]
+    elif problem == "missing_parent":
+        records = []
+    elif problem == "other_tool":
+        events[0] = use("provider_1", "Read", command_id="unit")
+    events.append(native._result())
+    parsed = parse_cli_log(local_trace(events, records))
+    assert not parsed["complete"]
+    assert any(message.startswith("local_command_") for message in parsed["issues"])
+    assert [row["event"] for row in parsed["events"]] == events
+    local_rows = [row for row in parsed["tool_calls"] if row["source_kind"] == "runtime_local"]
+    assert all(row["status"] == "incomplete" and row["response"] == actual["response"] for row in local_rows)
+
+
+def test_local_command_failed_capture_does_not_become_complete_from_mcp_response():
+    record = local_record("local_command_1", returncode=-9, raw=b"prefix")
+    record["response"].update(process_output_complete=False, failure={"error_type": "TimeoutExpired"})
+    parsed = parse_cli_log(local_trace([use("p", LOCAL_TOOL, command_id="unit"),
+        local_reply("p", record), native._result()], [record]))
+    assert not parsed["complete"] and "local_command_output_incomplete:local_command_1" in parsed["issues"]
+    assert len(parsed["tool_calls"]) == 1 and parsed["tool_calls"][0]["status"] == "failed"
+
+
 def denied(identity, name="Read"):
     # Same public field shape as the real Runtime deny_read probe, whose
     # permission event carries tool_use_id and no fabricated shell exit code.

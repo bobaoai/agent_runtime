@@ -264,20 +264,24 @@ class _AttemptExecutionHost:
             )
         self._staged[submission.output_slot_id] = (submission, content)
 
-    def validate_self_test_binding(self, request, *, adapter, artifact_host, workspace_root):
+    def validate_self_test_binding(self, request, *, adapter, artifact_host, workspace_root,
+                                  read_only_dependencies=()):
         """Resolve self-test evidence against the actual live host resources."""
         if self._self_test is None or request != self._request:
             raise SelfTestResourceUnavailableError("self-test request has no matching trusted host")
         self._self_test.check_invocation(request, adapter=adapter,
-            artifact_host=artifact_host, workspace_root=workspace_root)
+            artifact_host=artifact_host, workspace_root=workspace_root,
+            read_only_dependencies=read_only_dependencies)
 
-    def guard_self_test_launch(self, request, launch, *, adapter, artifact_host, workspace_root):
+    def guard_self_test_launch(self, request, launch, *, adapter, artifact_host, workspace_root,
+                              read_only_dependencies=()):
         """Order actual process creation with closing this request's resources."""
         if self._self_test is None:
             raise SelfTestResourceUnavailableError("self-test launch has no trusted resources")
         def guarded():
             self.validate_self_test_binding(request, adapter=adapter,
-                artifact_host=artifact_host, workspace_root=workspace_root)
+                artifact_host=artifact_host, workspace_root=workspace_root,
+                read_only_dependencies=read_only_dependencies)
             return launch()
         return self._self_test.guarded(guarded)
 
@@ -509,7 +513,7 @@ class _AttemptExecutionHost:
 
 def _prepare_registered_workflow_module(
     *, module_id, input_payload, idempotency_key, release_registry, workflow,
-    variant_policy, artifact_host,
+    variant_policy, artifact_host, local_resources: bytes | None = None,
 ):
     """Freeze exact definitions and input without requiring a runnable Adapter.
 
@@ -568,10 +572,28 @@ def _prepare_registered_workflow_module(
     )
     input_binding = ModuleInputBinding("task_input", task.artifact_ref, task.artifact_sha256,
                                       module.input_schema_ref, module.input_schema_sha256, "application/json")
+    from ..invocation.invocation_local_resource_preparation import (
+        LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256,
+        LOCAL_RESOURCES_MEDIA_TYPE, LOCAL_RESOURCES_LOGICAL_NAME,
+        describe_local_resources, parse_local_resources,
+    )
+    inputs = (input_binding,)
+    if local_resources is not None:
+        parse_local_resources(local_resources)
+        resource = put_bytes(
+            artifact_kind_id="module_input", schema_version="v1",
+            schema_ref=LOCAL_RESOURCES_SCHEMA_REF, schema_sha256=LOCAL_RESOURCES_SCHEMA_SHA256,
+            media_type=LOCAL_RESOURCES_MEDIA_TYPE, content=local_resources,
+            idempotency_key=execution_id + "_resources", logical_name=LOCAL_RESOURCES_LOGICAL_NAME,
+        )
+        inputs += (ModuleInputBinding(LOCAL_RESOURCES_LOGICAL_NAME, resource.artifact_ref,
+            resource.artifact_sha256, LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256,
+            LOCAL_RESOURCES_MEDIA_TYPE),)
     bundle = release_registry.get_prompt_bundle(module.prompt_bundle_ref, module.prompt_bundle_sha256)
     prompt = build_inline_provider_prompt(
         compiled_static_body=bundle.compiled_static_body, execution_specific_instructions="",
         inputs=((input_binding, input_bytes),), output_constraint_mode=profile.output_constraint_mode,
+        resource_description=describe_local_resources(profile=profile, body=local_resources),
     )
     prompt_ref = put_bytes(
         artifact_kind_id="prompt_envelope", schema_version="v1",
@@ -585,7 +607,7 @@ def _prepare_registered_workflow_module(
         workflow_node_id=node.node_id, module_run_id=_stable_id("module_run", execution_id),
         module_release_ref=module.release_ref, module_release_sha256=module.release_sha256,
         input_package_ref=task.artifact_ref, input_package_sha256=task.artifact_sha256,
-        inputs=(input_binding,), variants=(ModuleVariantRequest(
+        inputs=inputs, variants=(ModuleVariantRequest(
             "default", 0, profile.release_ref, profile.release_sha256,
             prompt_ref.artifact_ref, prompt_ref.artifact_sha256,
         ),), idempotency_key=idempotency_key,

@@ -72,6 +72,24 @@ class ModuleSelfTestResources:
         self._artifacts = artifact_host
         self._ledger = ledger
         self._workspace = Path(workspace_root).resolve(strict=True)
+        from ..invocation.invocation_local_resource_preparation import (
+            LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256,
+            LOCAL_RESOURCES_MEDIA_TYPE, LOCAL_RESOURCES_LOGICAL_NAME, validate_local_resources,
+        )
+        resource_inputs = [item for item in request.inputs if item.schema_ref == LOCAL_RESOURCES_SCHEMA_REF]
+        if len(resource_inputs) > 1:
+            raise ValueError("self-test must bind one local resources input at most")
+        self._read_only_dependencies = ()
+        if resource_inputs:
+            resource, = resource_inputs
+            if (resource.schema_sha256, resource.media_type, resource.logical_name) != (
+                    LOCAL_RESOURCES_SCHEMA_SHA256, LOCAL_RESOURCES_MEDIA_TYPE, LOCAL_RESOURCES_LOGICAL_NAME):
+                raise ValueError("self-test local resources input has a different type")
+            data = artifact_host.read_bytes(resource.input_ref, resource.input_sha256)
+            if hashlib.sha256(data).hexdigest() != resource.input_sha256:
+                raise ValueError("self-test local resources content changed")
+            parsed = validate_local_resources(profile=profile, body=data)
+            self._read_only_dependencies = tuple(Path(item) for item in parsed["read_only_dependencies"])
         self._active = True
         body = json.dumps({"request_sha256": request.request_sha256,
             "workflow_release_ref": workflow.release_ref, "workflow_release_sha256": workflow.release_sha256,
@@ -99,7 +117,7 @@ class ModuleSelfTestResources:
                 or adapters.resolve(self._profile.executor_adapter_id, self._profile.executor_adapter_revision) is not self._adapter):
             raise SelfTestResourceUnavailableError("self-test resources belong to another execution")
 
-    def check_invocation(self, request, *, adapter, artifact_host, workspace_root):
+    def check_invocation(self, request, *, adapter, artifact_host, workspace_root, read_only_dependencies=()):
         self.require_active()
         source = self._request
         selected = source.variants[0]
@@ -118,7 +136,8 @@ class ModuleSelfTestResources:
                 or request.prompt_envelope_sha256 != selected.prompt_envelope_sha256
                 or request.input_closure_sha256 != source.input_closure_sha256
                 or expected_inputs != actual_inputs or adapter is not self._adapter
-                or artifact_host is not self._artifacts or Path(workspace_root).resolve() != self._workspace):
+                or artifact_host is not self._artifacts or Path(workspace_root).resolve() != self._workspace
+                or tuple(Path(item).resolve() for item in read_only_dependencies) != self._read_only_dependencies):
             raise SelfTestResourceUnavailableError("self-test invocation differs from its live resource binding")
 
     def guarded(self, operation):

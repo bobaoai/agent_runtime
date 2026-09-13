@@ -57,7 +57,10 @@ adapters.register(adapter)
 
 project_root、workflow_id 指向准确注册；requested_model/requested_effort 为本次选择，None 使用 Runtime 默认。cell_artifacts、adapters 和 host_* 是已有执行入口的真实资源。通过 run_registered_workflow_module 或 run_workflow_module 消费同一次准备结果，完整参数沿用公共 API。普通自测直接使用 agent-runtime-evaluate，无需手工实例化 Adapter 或提供 PG。
 
-新准备使用 claude_cli_adapter@v1。显式执行准确旧 Profile 时，可向同一个 ClaudeAdapter 传入 adapter_binding=("claude_cli_native_tools_executor", "v2")，仅服务原 v2 能力。旧 v2 保留 cwd=work、materials/<name> 和 scratch/ 的相对路径及原私有 work 写区，材料仍只读；新 v1 的草稿 cwd 和写区均为 scratch。未知 pair 拒绝；旧 Profile/Variant 不改写，也不自动升级。Python 旧类名已移除，调用方改为上述公开名称。
+新准备使用 claude_cli_adapter@v2，完整实际输入在 Prompt Envelope 保存前固定。旧
+claude_cli_adapter@v1 和 claude_cli_native_tools_executor@v2 的记录仍按原 bytes/hash 读取，
+已提交请求通过原记录重放；新包不再执行这两个旧 pair，也不将其改写成新绑定。当前宿主入口先迁移
+到公共准备接口，再采用新包；需要再次执行时明确准备新的 Profile。新调用的草稿 cwd 和写区均为 scratch。
 
 ## 2. 参数与材料
 
@@ -73,14 +76,14 @@ model_id 原样传入 CLI，包含 Claude 支持的 `[1m]` 选择形式；不依
 API-key-only beta。CLI 不锁定某一个版本，代码检查所需选项，并在 trace 中记录实际版本。
 新 CLI 的实际行为仍需要相应测试，不能仅凭 `--help` 断言隔离或输出能力。
 
-当前 v1 在 Attempt 的私有目录运行模型；有草稿时 cwd 是 scratch，无草稿时不提供可写 scratch。旧 v2 按 §1.2 保留原 work 布局。授权输入按安全的 logical_name 放入只读 materials，
+当前 v2 在 Attempt 的私有目录运行模型；有草稿时 cwd 是 scratch，无草稿时不提供可写 scratch。授权输入按安全的 logical_name 放入只读 materials，
 提供路径索引。只有要求允许草稿时才提供可写 scratch；local_handle 只经过 host 查表。CLI 的 restricted 模式约束 Read/Grep 的
 实际路径，Bash 使用原生 sandbox；运行依赖显式只读提供，网络默认关闭。旧 draft 的隐含工具权限
 不会继续执行，需使用显式工具配置。
 
 所有 argv 由同一 Adapter 转换逻辑组装，实际调用使用它；输入经 stdin，settings 仅来自已验证资源，调用方不透传任意参数/JSON。命令与生效配置记录在 trace 中。
-原生 Bash 中可使用 head、git diff、ls、grep 等普通命令，不设命令白名单。safe-mode 关闭自动加载的
-CLAUDE.md、Skills、Plugins 和 hooks，MCP 与会话持久化也关闭；原生工具会话的临时目录由 Runtime 独立创建，退出后清理。原始任务、工具记录、实际配置与
+原生 Bash 中可使用 head、git diff、ls、grep 等普通命令，不设命令白名单。未提供记录型命令时，safe-mode 关闭自动加载的
+CLAUDE.md、Skills、Plugins 和 hooks，MCP 与会话持久化也关闭；提供 commands 的分支使用下述显式 MCP 配置。原生工具会话的临时目录由 Runtime 独立创建，退出后清理。原始任务、工具记录、实际配置与
 结果通过现有私有 trace 和 Ledger 返回；已授权存储才持久保存，无 PG 自测不承诺跨进程恢复。执行失败与 Reviewer 的 non_pass 分开解释。
 
 目前 CLI 没有可信 Gateway/MCP 进程桥；显式要求该资源时调用前准确拒绝，不丢弃工具。Runtime 不提供 Claude SDK 执行路径或 fallback。将来接桥仍由同一 Adapter 消费可信工具 session，不能直接透传 task 中的 mcp-config。
@@ -104,6 +107,27 @@ CLI 返回的 permission_denied、permission_denials 和普通工具错误逐次
 因此 completed 不表示每个工具都成功；业务 non_pass/blocked 也可以是正常完成的审核结果。
 实际 permissionMode 与请求值一致才继续。Git/Python 由宿主显式提供真实运行目录，避免命中系统启动
 代理；Git 不加载用户或系统配置。trace 同时保存 argv 与安全环境值，便于复现，不依赖 Agent 临时修环境。
+
+### 2.1 明确的本地工程资源与命令记录
+
+普通自测通过现有 `agent-runtime-evaluate --resources FILE` 提供冻结材料树、只读依赖和任务命令，
+不需要调用者实例化 Adapter。资源控制包进入原 inputs hash 闭包，控制包本身保持私有；模型只看到
+任务全文、确定的相对材料位置和命令说明。实际 stdin 与保存的 Prompt Envelope 使用相同字节。
+可选 `.runtime/config.json` 只提供程序/依赖 locator 默认，完整参数见自动 API 中的 load_runtime_config。
+
+有 commands 时，Runtime 增加一个 `sandbox_command_execute` 本地 MCP 工具，让 Agent 按
+command_id 选择本次已经提供的命令；原生 Read/Grep/Bash 保留。父进程使用当前真实资源 guard，
+在 macOS sandbox-exec 内执行该命令，保存实际 argv/cwd/returncode、stdout/stderr 与原始 bytes。
+IPC 代理和控制目录不进入模型或命令可读范围。这是本地资源工具，不是领域 Gateway 或生产 grant。
+
+该分支需要 `cli_tools` 可选依赖，使用 restricted、空 setting-sources、strict 单 server MCP，
+以及明确的 memory/hooks/plugins 限制。safe-mode 会关闭 MCP，因此不用于带 commands 的分支；
+普通无 commands 路径继续 safe-mode。首次接入或 CLI/配置变化时须真实核对初始化与允许/拒绝效果，
+不能仅凭 help 声称 MCP/OAuth 与隔离成立；实际管理配置冲突仍拒绝，不增加绕过开关。
+
+统一日志仅在实际返回的 local_call_id 与父进程事实唯一一致时合并为一次调用，同时保留 Provider
+调用 ID、事件位置和原生观察。普通非零/超时是工具结果；资源、材料或必需记录失效另行阻止提交。
+缺失、矛盾或未配对的观察明确不完整，业务 owner 决定是否完成必做命令，不从模型文字补造退出码。
 
 ## 3. 重复验证
 

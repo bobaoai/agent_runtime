@@ -635,6 +635,32 @@ facts with explicit capture or content limitations. A valid business `non_pass`
 or `blocked` response remains a completed technical execution, not a reason to
 retry the model. Tool, Provider, Attempt and business outcomes stay distinct.
 
+Claude's current binding is `claude_cli_adapter@v2`. Its complete stdin prompt,
+including relative resource locations, is frozen before the Prompt Envelope is
+stored. Old Claude v1 and `claude_cli_native_tools_executor@v2` records remain
+readable, and committed requests replay without an Adapter; new executions use
+an explicitly prepared current Profile. Hosts must migrate their current entry
+points before adopting this package rather than reinterpret saved bindings.
+
+The existing evaluation CLI accepts `--resources FILE` for an explicitly frozen
+file tree, read-only dependency directories and task-supplied command IDs. On
+macOS, Claude can use its ordinary Read/Grep/Bash tools and, when commands are
+supplied, an additional Runtime-owned local MCP tool. The `cli_tools` extra is
+required only for this command bridge. Each selected command runs in its own
+actual OS sandbox under the same live resource guard; it supplies real argv,
+cwd, returncode and captured bytes. Ordinary Bash is not restricted to this
+command list, and the list does not define a business verdict or domain grant.
+The original CLI observations remain available alongside parent-process facts;
+only uniquely proven correlations become one unified call.
+
+Optional `root/.runtime/config.json` stores executable and read-only dependency
+locators, not models, Profiles, task material or database permissions. Explicit
+arguments override the selected resource defaults, including an empty dependency
+tuple. Unused defaults do not expose resources to tool-free Modules. See
+`load_runtime_config` and `evaluate_local_workflow_module` in the generated API
+for the exact fields, relative-path rules and error boundaries. This ordinary
+self-test remains non-persistent and does not connect to PostgreSQL.
+
 Opt-in live smoke tests cover the remaining CLI implementations. The Codex
 test below covers the tool-free path. Claude CLI's native-tool cases and their
 environment prerequisites are documented in

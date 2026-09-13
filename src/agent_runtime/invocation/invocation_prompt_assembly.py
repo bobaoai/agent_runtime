@@ -10,6 +10,10 @@ from ..foundation.foundation_schema_traversal import (
     resolve_local_schema_reference,
 )
 from .invocation_schema_projection import task_plane_output_schema
+from .invocation_local_resource_preparation import (
+    LOCAL_RESOURCES_LOGICAL_NAME, LOCAL_RESOURCES_MEDIA_TYPE, LOCAL_RESOURCES_SCHEMA_REF,
+    LOCAL_RESOURCES_SCHEMA_SHA256, parse_local_resources,
+)
 
 
 PROMPT_ONLY_JSON = "prompt_only_json"
@@ -225,11 +229,22 @@ def build_inline_provider_prompt(
     execution_specific_instructions: str,
     inputs: tuple[tuple[ModuleInputBinding, bytes], ...],
     output_constraint_mode: str,
+    resource_description: str = "",
 ) -> str:
-    """Build one shared inline Prompt Envelope for every provider Adapter."""
+    """Build the complete application-controlled text before freezing its hash.
+
+    Task inputs are inlined. The exact Runtime local-resource schema identifies
+    a private control input: validate it but never inline its locators or encoded
+    bytes. Invocation supplies resource_description from the selected binding's
+    relative-layout renderer. No resources/description preserves previous bytes.
+    A reserved schema ref with wrong metadata/content is rejected, not rendered
+    as ordinary task data. Unrelated schemas are not classified by logical name.
+    """
 
     if type(execution_specific_instructions) is not str:
         raise ValueError("execution_specific_instructions must be text")
+    if type(resource_description) is not str:
+        raise ValueError("resource_description must be text")
     sections = [
         model_visible_static_instructions(
             compiled_static_body=compiled_static_body,
@@ -239,6 +254,7 @@ def build_inline_provider_prompt(
     if execution_specific_instructions.strip():
         sections.append(execution_specific_instructions.strip())
     input_sections: list[str] = []
+    resources_seen = False
     for item in inputs:
         if type(item) is not tuple or len(item) != 2:
             raise ValueError("each model input must be one binding/content tuple")
@@ -248,6 +264,16 @@ def build_inline_provider_prompt(
         binding.validate()
         if hashlib.sha256(content).hexdigest() != binding.input_sha256:
             raise ValueError("model input content hash mismatch")
+        if binding.schema_ref == LOCAL_RESOURCES_SCHEMA_REF:
+            if (resources_seen or binding.schema_sha256 != LOCAL_RESOURCES_SCHEMA_SHA256
+                    or binding.logical_name != LOCAL_RESOURCES_LOGICAL_NAME
+                    or binding.media_type != LOCAL_RESOURCES_MEDIA_TYPE):
+                raise ValueError("private local-resource input has invalid binding metadata")
+            parse_local_resources(content)
+            if not resource_description.strip():
+                raise ValueError("private local-resource input requires its generated resource description")
+            resources_seen = True
+            continue
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -255,6 +281,8 @@ def build_inline_provider_prompt(
         input_sections.append(f"### {binding.logical_name}\n{text}")
     if input_sections:
         sections.append("## Task Input\n\n" + "\n\n".join(input_sections))
+    if resource_description.strip():
+        sections.append(resource_description.strip())
     completion = _prompt_only_completion_instruction(output_constraint_mode)
     if completion:
         sections.append(completion)

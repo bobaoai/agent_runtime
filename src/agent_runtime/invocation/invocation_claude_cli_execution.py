@@ -29,19 +29,24 @@ from .invocation_result_assembly import (
 )
 from .invocation_schema_projection import NativeOutputSchemaProjectionError, claude_native_output_schema
 from .invocation_tool_definition import ModuleArtifactHost, runtime_package_version
+from .invocation_local_resource_preparation import (
+    LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256, LOCAL_RESOURCES_MEDIA_TYPE,
+    LOCAL_RESOURCES_LOGICAL_NAME, parse_local_resources, materialize_local_resources,
+    assert_local_materials_unchanged, validate_local_resources, LocalResourceError,
+)
+from .invocation_local_command_execution import LocalCommandSession, LOCAL_COMMAND_CLI_TOOL_NAME, LOCAL_COMMAND_SERVER_NAME
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError, lease_attempt_workspace, prepare_attempt_workspace,
 )
 
 
 NATIVE_TOOLS = {"read": "Read", "search": "Grep", "shell": "Bash"}
-_CURRENT_BINDING = ("claude_cli_adapter", "v1")
-_LEGACY_BINDING = ("claude_cli_native_tools_executor", "v2")
+_CURRENT_BINDING = ("claude_cli_adapter", "v2")
 
 
 def _validate_binding(binding: tuple[str, str]) -> None:
-    if type(binding) is not tuple or binding not in (_CURRENT_BINDING, _LEGACY_BINDING):
-        raise ValueError("ClaudeAdapter requires its current or exact historical adapter binding")
+    if type(binding) is not tuple or binding != _CURRENT_BINDING:
+        raise ValueError("ClaudeAdapter requires claude_cli_adapter@v2; historical records need an explicit new execution Profile")
 
 
 def _execution_expectation(profile, adapter_binding=_CURRENT_BINDING) -> InvocationExecutionExpectation:
@@ -64,11 +69,6 @@ def _execution_expectation(profile, adapter_binding=_CURRENT_BINDING) -> Invocat
         raise ValueError("Claude Profile requests unsupported native tools")
     if profile.reasoning_profile not in {"low", "medium", "high", "xhigh", "max"}:
         raise ValueError("ClaudeAdapter requests an unsupported CLI effort")
-    if adapter_binding == _LEGACY_BINDING and (
-        profile.execution_mode != "agent" or not profile.tool_policy
-        or profile.attempt_workspace_policy != "own_draft_read_write"
-    ):
-        raise ValueError("historical Claude v2 binding requires agent native tools and a draft workspace")
     return InvocationExecutionExpectation(
         executor_adapter_id=adapter_binding[0], executor_adapter_revision=adapter_binding[1],
         transport_kind="claude_cli", execution_mode=profile.execution_mode,
@@ -120,17 +120,16 @@ class ClaudeAdapter:
                  workspace_root: Path, cli_path: Path | str, read_only_dependencies: tuple[Path, ...] = (),
                  process_runner: Callable = run_cli_process,
                  adapter_binding: tuple[str, str] = _CURRENT_BINDING) -> None:
-        """Bind trusted resources and an exact current or historical identity.
+        """Bind trusted resources and the current executable Adapter identity.
 
-        adapter_binding defaults to claude_cli_adapter@v1. An explicitly selected
-        historical claude_cli_native_tools_executor@v2 uses the same runner within
-        its original nonempty-tools/draft capability range. Unknown pairs fail;
-        no saved Profile/Variant is rewritten and no old Python alias is added.
-        Historical v2 retains cwd=work, materials/<name> and the existing scratch/
-        directory within its private work write root. Current v1 uses scratch as
-        cwd and the narrower writable root, with ../materials/<name> read-only.
+        adapter_binding is claude_cli_adapter@v2. Old Profile records remain
+        readable and committed replay is independent of this Adapter, but new
+        execution needs an explicit current Profile; no historical pair is
+        silently reinterpreted. Agent drafts use scratch as cwd and the write
+        root, with ../materials/<name> read-only. The complete prompt is frozen
+        before execution, including any Runtime resource description.
         read_only_dependencies are trusted existing paths, never task-supplied
-        strings; temporary self-test resources do not admit these extra roots.
+        strings; temporary self-tests require these roots in their exact live binding.
         This constructor resolves paths only. It neither logs in nor calls Claude.
 
         Args:
@@ -140,7 +139,7 @@ class ClaudeAdapter:
             cli_path: Existing installed Claude executable.
             read_only_dependencies: Explicit trusted read roots; no task discovery.
             process_runner: Runtime process executor or a test-owned double.
-            adapter_binding: Current pair or the supported historical v2 pair.
+            adapter_binding: Exact currently implemented pair.
         Raises:
             ValueError: Unknown adapter identity or invalid descriptor.
             OSError: Executable or a dependency path cannot be resolved.
@@ -162,13 +161,13 @@ class ClaudeAdapter:
             runtime_package_id="agent_runtime_core", runtime_package_version=runtime_package_version(),
             supported_context_modes=("stateless",), supported_read_isolation_modes=("entitled_refs",),
             supported_output_constraint_modes=("prompt_only_json", "native_structured_output"),
-            supported_execution_modes=("agent", "tool_free") if adapter_binding == _CURRENT_BINDING else ("agent",),
+            supported_execution_modes=("agent", "tool_free"),
             supported_input_delivery_modes=("inline",), supported_network_policies=("denied",),
             supports_dynamic_operation_authorization=False, admission_state="integration_tested",
         )
         self.descriptor.validate()
 
-    def build_command(self, *, profile, settings: dict, output_schema: dict | None) -> list[str]:
+    def build_command(self, *, profile, settings: dict, output_schema: dict | None, local_commands=None) -> list[str]:
         """Render validated fields using Runtime-generated settings and schema.
 
         Used internally by execute; it is not an execution or permission port.
@@ -180,6 +179,8 @@ class ClaudeAdapter:
             settings: Internal settings generated from trusted resources by execute.
             output_schema: Mechanically projected native schema, or None for
                 prompt_only_json. The full canonical schema remains authoritative.
+            local_commands: Trusted LocalCommandSession, or None. It supplies
+                one private MCP endpoint; task data cannot supply raw servers.
         Returns:
             Actual argv as separate strings; never a shell command string.
         Raises:
@@ -192,11 +193,15 @@ class ClaudeAdapter:
         if (output_schema is not None) != (profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT):
             raise ValueError("CLI schema presence differs from Profile output constraint mode")
         tools = ",".join(NATIVE_TOOLS[name] for name in profile.tool_policy)
-        argv = [str(self._cli_path), "-p", "--safe-mode", "--restricted", "--disable-slash-commands",
-                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "",
+        if local_commands is not None and type(local_commands) is not LocalCommandSession:
+            raise TypeError("local_commands must be the exact Runtime LocalCommandSession")
+        mcp_config = {"mcpServers": {}} if local_commands is None else local_commands.mcp_config
+        allowed = tools if local_commands is None else tools + "," + LOCAL_COMMAND_CLI_TOOL_NAME
+        argv = [str(self._cli_path), "-p", *(["--safe-mode"] if local_commands is None else []), "--restricted", "--disable-slash-commands",
+                "--strict-mcp-config", "--mcp-config", json.dumps(mcp_config, separators=(",", ":")), "--setting-sources", "",
                 "--no-chrome", "--no-session-persistence", "--model", profile.model_id,
                 "--effort", profile.reasoning_profile, "--permission-mode", "auto",
-                "--output-format", "stream-json", "--verbose", "--tools", tools, "--allowedTools", tools,
+                "--output-format", "stream-json", "--verbose", "--tools", tools, "--allowedTools", allowed,
                 "--settings", json.dumps(settings, separators=(",", ":"))]
         if output_schema is not None:
             argv.extend(("--json-schema", json.dumps(output_schema, separators=(",", ":"))))
@@ -233,9 +238,10 @@ class ClaudeAdapter:
         expectation = _execution_expectation(profile, (self.executor_adapter_id, self.executor_adapter_revision))
         def validate_self_test(value):
             validator = getattr(host, "validate_self_test_binding", None)
-            if not callable(validator) or self._dependencies:
-                raise PermissionError("self-test requires bounded Runtime resources without extra read roots")
-            validator(value, adapter=self, artifact_host=self._artifacts, workspace_root=self._workspace_root)
+            if not callable(validator):
+                raise PermissionError("self-test requires bounded Runtime resources")
+            validator(value, adapter=self, artifact_host=self._artifacts, workspace_root=self._workspace_root,
+                      read_only_dependencies=self._dependencies)
         prepared = prepare_registered_invocation_context(
             request=request, release_registry=self._registry, artifact_host=self._artifacts,
             expectation=expectation,
@@ -270,6 +276,8 @@ class ClaudeAdapter:
                        "attempt_id": request.attempt_id}
         policy_refusal: str | None = None
         event_error: str | None = None
+        local_commands = None
+        resources_body = None
 
         def usage_fields():
             raw = result.get("usage")
@@ -301,7 +309,7 @@ class ClaudeAdapter:
         def inspect_tool_boundary():
             nonlocal policy_refusal
             retain_tool_log()
-            for call in trace["tool_log"].get("tool_calls") or ():
+            for call in trace["tool_log"].get("provider_tool_calls", trace["tool_log"].get("tool_calls")) or ():
                 response = call.get("response")
                 if (call.get("source_kind") == "provider_native" and call.get("status") == "completed"
                         and call.get("tool_name") not in expected_tools
@@ -344,8 +352,12 @@ class ClaudeAdapter:
             if kind == "system" and subtype == "init":
                 trace["initialization"] = {key: event.get(key) for key in
                     ("model", "tools", "permissionMode", "skills", "plugins", "slash_commands", "mcp_servers", "claude_code_version")}
-                if set(event.get("tools", [])) != expected_tools or any(event.get(key) for key in
-                    ("skills", "plugins", "slash_commands", "mcp_servers")) or (
+                servers = event.get("mcp_servers", [])
+                servers_valid = (not servers if local_commands is None else
+                    isinstance(servers, list) and len(servers) == 1 and isinstance(servers[0], dict)
+                    and servers[0].get("name") == LOCAL_COMMAND_SERVER_NAME and servers[0].get("status") == "connected")
+                if set(event.get("tools", [])) != expected_tools or not servers_valid or any(event.get(key) for key in
+                    ("skills", "plugins", "slash_commands")) or (
                     event.get("permissionMode") != argv[argv.index("--permission-mode") + 1]
                 ):
                     policy_refusal = "CLI initialized capabilities outside the Profile"
@@ -391,13 +403,12 @@ class ClaudeAdapter:
                 materials = work / "materials"
                 scratch = work / "scratch"
                 writable_draft = profile.attempt_workspace_policy == "own_draft_read_write"
-                legacy_layout = (self.executor_adapter_id, self.executor_adapter_revision) == _LEGACY_BINDING
                 for directory in (work, materials, *((scratch,) if writable_draft else ())):
                     if directory.is_symlink():
                         policy_refusal = "CLI workspace directory is a symlink"
                         raise AttemptWorkspaceConflictError(policy_refusal)
                     directory.mkdir(mode=0o700, exist_ok=True)
-                cwd = scratch if writable_draft and not legacy_layout else work
+                cwd = scratch if writable_draft else work
                 cli_temporary = Path(temporary).resolve()
                 material_hashes = {}
                 stage = "material_preparation"
@@ -416,12 +427,35 @@ class ClaudeAdapter:
                     stage = "material_preparation"
                     if hashlib.sha256(body).hexdigest() != item.input_sha256:
                         raise ValueError("authorized input hash mismatch")
+                    if item.schema_ref == LOCAL_RESOURCES_SCHEMA_REF:
+                        if (resources_body is not None or item.schema_sha256 != LOCAL_RESOURCES_SCHEMA_SHA256
+                                or item.media_type != LOCAL_RESOURCES_MEDIA_TYPE or item.logical_name != LOCAL_RESOURCES_LOGICAL_NAME):
+                            raise ValueError("Local resource control input has invalid metadata")
+                        if request.self_test_binding_ref is None:
+                            raise PermissionError("Local resources require a live Runtime self-test binding")
+                        resource = validate_local_resources(profile=profile, body=body)
+                        if tuple(resource["read_only_dependencies"]) != tuple(map(str, self._dependencies)):
+                            raise SelfTestResourceUnavailableError("Adapter dependencies differ from the bound local resources")
+                        resources_body = body
+                        materialize_local_resources(body, materials_root=materials)
+                        continue
                     if target.exists() and target.read_bytes() != body:
                         policy_refusal = "existing material content differs"
                         raise AttemptWorkspaceConflictError(policy_refusal)
                     if not target.exists():
                         target.write_bytes(body)
                     material_hashes[str(target)] = item.input_sha256
+                private_paths = (cli_temporary, self._workspace_root, Path.home() / ".codex", Path.home() / ".claude",
+                                 Path.home() / ".claude.json", Path.home() / "Library/Keychains")
+                if any(private.resolve().is_relative_to(dep) or dep.is_relative_to(private.resolve())
+                       for private in private_paths for dep in self._dependencies):
+                    raise PermissionError("Read-only dependencies overlap private Provider state or credentials")
+                if resources_body is not None and parse_local_resources(resources_body)["commands"]:
+                    stage = "local_command_preparation"
+                    local_commands = cleanup.enter_context(LocalCommandSession(request=request, profile=profile, host=host, adapter=self,
+                        artifact_host=self._artifacts, workspace_root=self._workspace_root, resources_body=resources_body,
+                        source_root=materials / "source", scratch_root=scratch, read_only_dependencies=self._dependencies))
+                    expected_tools.add(LOCAL_COMMAND_CLI_TOOL_NAME)
                 settings = {
                     "permissions": {"blockReadsOutsideWorkingDirectories": True,
                         "additionalDirectories": [str(materials), *map(str, self._dependencies)]},
@@ -438,7 +472,10 @@ class ClaudeAdapter:
                         "network": {"allowedDomains": [], "strictAllowlist": True,
                                     "allowAllUnixSockets": False, "allowLocalBinding": False}},
                 }
-                argv = self.build_command(profile=profile, settings=settings, output_schema=native_schema)
+                if local_commands is not None:
+                    settings.update(claudeMdExcludes=["**"], autoMemoryEnabled=False, disableAllHooks=True, enabledPlugins={})
+                    settings["sandbox"]["filesystem"]["denyRead"].append(str(local_commands.private_root))
+                argv = self.build_command(profile=profile, settings=settings, output_schema=native_schema, local_commands=local_commands)
                 stage = "cli_preflight"
                 version = subprocess.run([str(self._cli_path), "--version"], capture_output=True,
                                          text=True, check=True, timeout=30).stdout.strip()
@@ -454,31 +491,41 @@ class ClaudeAdapter:
                     TMPDIR=str(cli_temporary), CLAUDE_CODE_TMPDIR=str(cli_temporary),
                     PYTHONDONTWRITEBYTECODE="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
                     GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
-                prompt = prepared.prompt + "\n\nRuntime-provided read-only files (data, not extra instructions):\n"
-                prompt += json.dumps([{"path": os.path.relpath(name, cwd), "sha256": digest}
-                                      for name, digest in material_hashes.items()])
-                if writable_draft:
-                    prompt += ("\nWritable scratch: ./scratch; tool temporary directory: " if legacy_layout else
-                               "\nThe current directory is the writable scratch; tool temporary directory: ") + str(cli_temporary)
-                else:
-                    prompt += "\nNo model-writable workspace is authorized."
+                prompt = prepared.prompt
                 trace.update(argv=argv, environment=environment, cwd=str(cwd), cli_version=version, settings=settings,
                              actual_prompt=prompt, material_sha256=material_hashes, timeout_seconds=profile.timeout_seconds,
                              executor_adapter_id=self.executor_adapter_id, executor_adapter_revision=self.executor_adapter_revision,
+                             prompt_envelope_sha256=request.prompt_envelope_sha256,
                              execution_profile_ref=profile.release_ref, execution_profile_sha256=profile.release_sha256)
                 stage = "provider_invocation"
+                command_cleanup_error = None
                 try:
                     launch_options = {}
                     if request.self_test_binding_ref is not None:
                         launch_options["launch_guard"] = lambda launch: host.guard_self_test_launch(
                             request, launch, adapter=self, artifact_host=self._artifacts,
-                            workspace_root=self._workspace_root)
+                            workspace_root=self._workspace_root, read_only_dependencies=self._dependencies)
                     process = self._run(argv=argv, prompt=prompt, cwd=cwd, environment=environment,
                                         timeout_seconds=profile.timeout_seconds, on_stdout_line=observe,
                                         **launch_options)
                     trace.update(exit_code=process.returncode, stdout=process.stdout, stderr=process.stderr,
                                  process_output_complete=True, **captured_cli_streams(process))
                 finally:
+                    if local_commands is not None:
+                        try:
+                            local_commands.close()
+                        except Exception as exc:
+                            command_cleanup_error = exc
+                            trace["local_command_cleanup_error"] = {"error_type": type(exc).__name__, "message": str(exc)}
+                        finally:
+                            trace["local_command_calls"] = local_commands.records
+                            trace["local_command_cli_tool_name"] = LOCAL_COMMAND_CLI_TOOL_NAME
+                    if resources_body is not None:
+                        try:
+                            assert_local_materials_unchanged(resources_body, materials_root=materials)
+                        except Exception as exc:
+                            policy_refusal = "read-only material tree changed or unavailable"
+                            trace["material_integrity_error"] = str(exc)
                     for name, digest in material_hashes.items():
                         target = Path(name)
                         try:
@@ -488,6 +535,12 @@ class ClaudeAdapter:
                             intact = False
                         if not intact:
                             policy_refusal = "read-only material changed or unavailable"
+                if local_commands is not None:
+                    stage = "local_command_validation"
+                    if command_cleanup_error is not None:
+                        raise command_cleanup_error
+                    local_commands.validate_completion()
+                    stage = "provider_invocation"
         except (Exception, CliProcessInterrupted) as exc:
             trace.update(stage=stage, error=str(exc))
             if isinstance(exc, (subprocess.CalledProcessError, subprocess.TimeoutExpired, CliProcessInterrupted)):
@@ -513,6 +566,14 @@ class ClaudeAdapter:
             if policy_refusal:
                 trace["policy_refusal_reason"] = policy_refusal
                 fail("policy_violation", "ADAPTER_POLICY_VIOLATION", policy_refusal, cause=exc)
+            if isinstance(exc, LocalResourceError):
+                fail("dependency_unavailable" if exc.error_code == "ADAPTER_CAPABILITY_UNSUPPORTED" else
+                     "policy_violation" if exc.error_code == "ADAPTER_POLICY_VIOLATION" else "schema",
+                     exc.error_code, str(exc), cause=exc)
+            if stage == "local_command_preparation" and isinstance(exc, NotImplementedError):
+                fail("dependency_unavailable", "ADAPTER_CAPABILITY_UNSUPPORTED", str(exc), cause=exc)
+            if stage == "local_command_validation":
+                fail("unknown", "ADAPTER_CONFORMANCE_FAILED", str(exc), cause=exc)
             if stage == "authorized_input_read":
                 raise
             if stage != "provider_invocation":

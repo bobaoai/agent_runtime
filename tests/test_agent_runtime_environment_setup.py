@@ -6,13 +6,88 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime import setup_runtime
+from agent_runtime import load_runtime_config, setup_runtime
 from agent_runtime.foundation import foundation_environment_setup as setup
 
 
 def _snapshot(root):
     return {p.relative_to(root): (p.read_bytes(), p.stat().st_mtime_ns)
             for p in root.rglob("*") if p.is_file()}
+
+
+def test_missing_config_has_no_setup_or_resource_side_effect(tmp_path):
+    root = tmp_path / "not_created"
+    assert load_runtime_config(root) == {"provider_cli_paths": {}, "read_only_dependencies": ()}
+    assert not root.exists()
+
+
+def test_config_resolves_host_locators_without_opening_unused_resources(tmp_path, monkeypatch):
+    root = tmp_path / "host"
+    config = root / ".runtime/config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"provider_cli_paths": {"claude_cli": "bin/claude", "codex_cli": "absent/codex"},
+        "read_only_dependencies": [".venv", str(tmp_path / "external-library")]}))
+    before = _snapshot(root)
+    monkeypatch.chdir(tmp_path)
+    result = load_runtime_config(root)
+    assert result == {"provider_cli_paths": {"claude_cli": root / "bin/claude", "codex_cli": root / "absent/codex"},
+        "read_only_dependencies": (root / ".venv", tmp_path / "external-library")}
+    assert _snapshot(root) == before and not (root / ".agents").exists()
+    result["provider_cli_paths"]["claude_cli"] = Path("changed")
+    assert load_runtime_config(root)["provider_cli_paths"]["claude_cli"] == root / "bin/claude"
+
+
+@pytest.mark.parametrize("body", ["[]", "null", "{", '{"model_id":"forbidden"}',
+    '{"provider_cli_paths":{"unknown":"program"}}', '{"provider_cli_paths":[]}',
+    '{"read_only_dependencies":"library"}', '{"read_only_dependencies":[""]}',
+    '{"provider_cli_paths":{"claude_cli":true}}', '{"read_only_dependencies":["x\\u0000y"]}',
+    '{"read_only_dependencies":[],"read_only_dependencies":["override"]}'])
+def test_invalid_config_never_creates_setup_or_changes_content(tmp_path, body):
+    config = tmp_path / ".runtime/config.json"
+    config.parent.mkdir()
+    config.write_text(body)
+    with pytest.raises(ValueError):
+        load_runtime_config(tmp_path)
+    assert config.read_text() == body and not (tmp_path / ".agents").exists()
+
+
+def test_config_rejects_link_without_reading_target(tmp_path):
+    config = tmp_path / "host/.runtime/config.json"
+    config.parent.mkdir(parents=True)
+    target = tmp_path / "outside.json"
+    target.write_text("not a config")
+    config.symlink_to(target)
+    with pytest.raises(ValueError, match="symlink"):
+        load_runtime_config(tmp_path / "host")
+    assert target.read_text() == "not a config"
+
+
+def test_resource_file_resolves_only_host_locators_and_preserves_command_argv(tmp_path, monkeypatch):
+    from agent_runtime.testing.execution_local_evaluation import _resource_arguments
+    file = tmp_path / "request/resources.json"
+    file.parent.mkdir()
+    command = {"command_id": "unit", "argv": ["python", "-m", "pytest", "tests"],
+               "cwd": "source", "timeout_seconds": 15}
+    file.write_text(json.dumps({"material_root": "tree", "material_files": [],
+        "read_only_dependencies": ["../library"], "commands": [command]}))
+    monkeypatch.chdir(tmp_path)
+    result = _resource_arguments(file)
+    assert result["material_root"] == file.parent / "tree"
+    assert result["read_only_dependencies"] == (file.parent / "../library",)
+    assert result["commands"] == (command,) and result["material_files"] == ()
+    file.write_text('{"read_only_dependencies":[]}')
+    assert _resource_arguments(file) == {"read_only_dependencies": ()}
+    assert _resource_arguments(None) == {}
+
+
+@pytest.mark.parametrize("document", [{"profile": {}}, {"commands": {}}, {"material_root": 1},
+                                       {"read_only_dependencies": [False]}, []])
+def test_resource_file_rejects_unknown_configuration_and_wrong_shapes(tmp_path, document):
+    from agent_runtime.testing.execution_local_evaluation import _resource_arguments
+    file = tmp_path / "resources.json"
+    file.write_text(json.dumps(document))
+    with pytest.raises(ValueError):
+        _resource_arguments(file)
 
 
 @pytest.fixture

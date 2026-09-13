@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-runtime-core"
-version = "0.2.0.dev3"
+version = "0.2.0.dev4"
 description = "Provider-neutral execution infrastructure for registered agent workflows"
 readme = "README.md"
 license = "MIT"
@@ -22,6 +22,7 @@ classifiers = [
 Repository = "https://github.com/bobaoai/agent_runtime"
 
 [project.optional-dependencies]
+cli_tools = ["mcp>=1.29,<2"]
 temporal = ["temporalio>=1.31"]
 postgres = ["psycopg[binary]>=3.2"]
 test = [

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 from typing import Any, Mapping
 
@@ -55,6 +56,134 @@ def cli_stream_bytes(trace: Mapping[str, Any], stream: str) -> bytes:
     return value.encode("utf-8")
 
 
+def _with_local_commands(view: dict, trace: Mapping[str, Any]) -> dict:
+    """Correlate real parent-process facts with the response the CLI observed.
+
+    This runs while Invocation creates its stored view, never while Ledger
+    reinterprets historical logs. Neither matching command names nor order is
+    evidence of identity: the actual returned local_call_id must pair uniquely,
+    and the exact request/response JSON must agree with the parent record.
+    """
+    if "local_command_calls" not in trace:
+        return view
+    native = view["tool_calls"]
+    view["provider_tool_calls"] = copy.deepcopy(native)
+    issues = view["issues"]
+    records = trace["local_command_calls"]
+    if type(records) is not list:
+        issues.append("invalid_local_command_records")
+        view["complete"] = False
+        return view
+    tool_name = trace.get("local_command_cli_tool_name")
+    if not isinstance(tool_name, str) or not tool_name:
+        issues.append("local_command_tool_identity_unavailable")
+    by_id, bad_ids = {}, set()
+    for position, supplied in enumerate(records):
+        row = copy.deepcopy(supplied)
+        identity = row.get("tool_call_id") if isinstance(row, dict) else None
+        if not isinstance(identity, str) or not identity:
+            issues.append(f"invalid_local_command_identity:{position}")
+            continue
+        if identity in by_id:
+            issues.append(f"duplicate_local_command_identity:{identity}")
+            bad_ids.add(identity)
+            continue
+        by_id[identity] = row
+        response, request = row.get("response"), row.get("request")
+        valid = (row.get("source_kind") == "runtime_local" and row.get("tool_name") == "sandbox_command_execute"
+            and row.get("status") in {"completed", "failed"} and type(request) is dict
+            and set(request) == {"command_id"} and type(request["command_id"]) is str
+            and type(response) is dict and response.get("local_call_id") == identity
+            and response.get("command_id") == request["command_id"]
+            and type(response.get("allowed")) is bool
+            and (response.get("returncode") is None or type(response["returncode"]) is int)
+            and type(response.get("stdout")) is str and type(response.get("stderr")) is str
+            and type(response.get("process_output_complete")) is bool)
+        if valid and row["status"] == "completed":
+            valid = (response["allowed"] and response.get("returncode") == 0
+                and response["process_output_complete"] and response.get("failure") is None)
+        if valid and response["allowed"]:
+            valid = (type(response.get("argv")) is list and bool(response["argv"])
+                and all(type(value) is str for value in response["argv"])
+                and type(response.get("cwd")) is str and bool(response["cwd"]))
+        if not valid:
+            issues.append(f"invalid_local_command_record:{identity}")
+            bad_ids.add(identity)
+            continue
+        if response["allowed"]:
+            if response.get("byte_capture_exact") is not True:
+                issues.append(f"local_command_byte_capture_unavailable:{identity}")
+            if not response["process_output_complete"]:
+                issues.append(f"local_command_output_incomplete:{identity}")
+        if "raw_streams" in response:
+            try:
+                for stream in ("stdout", "stderr"):
+                    if cli_stream_bytes(response, stream).decode("utf-8", errors="replace") != response[stream]:
+                        raise ValueError("command text differs from captured bytes")
+            except (ValueError, TypeError, KeyError):
+                issues.append(f"invalid_local_command_streams:{identity}")
+                bad_ids.add(identity)
+
+    observed, incomplete_native = {}, set()
+    for index, call in enumerate(native):
+        if call.get("tool_name") != tool_name:
+            continue
+        response = call.get("response")
+        block = response.get("tool_result") if isinstance(response, dict) else None
+        content = block.get("content") if isinstance(block, dict) else None
+        if isinstance(content, list) and all(isinstance(item, dict) and item.get("type") == "text"
+                                            and isinstance(item.get("text"), str) for item in content):
+            content = "\n".join(item["text"] for item in content)
+        try:
+            returned = decode_cli_event(content) if isinstance(content, str) else None
+        except (ValueError, UnicodeError):
+            returned = None
+        identity = returned.get("local_call_id") if isinstance(returned, dict) else None
+        if not isinstance(identity, str) or not identity:
+            if call.get("status") == "completed":
+                issues.append(f"local_command_response_identity_missing:{call['tool_call_id']}")
+                incomplete_native.add(index)
+            continue
+        if identity not in by_id:
+            issues.append(f"local_command_parent_record_missing:{identity}")
+            incomplete_native.add(index)
+            continue
+        observed.setdefault(identity, []).append((index, returned))
+
+    replacements, paired = {}, set()
+    for identity, row in by_id.items():
+        candidates = observed.get(identity, [])
+        if len(candidates) != 1:
+            issues.append(f"local_command_correlation_{'missing' if not candidates else 'ambiguous'}:{identity}")
+            bad_ids.add(identity)
+            incomplete_native.update(index for index, _ in candidates)
+            continue
+        index, returned = candidates[0]
+        call = native[index]
+        same_json = lambda left, right: json.dumps(left, sort_keys=True, ensure_ascii=False, allow_nan=False) == json.dumps(right, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        if (identity in bad_ids or call.get("status") != row.get("status")
+                or len(call.get("request_event_indices", [])) != 1
+                or not same_json(call.get("request"), row.get("request"))
+                or not same_json(returned, row.get("response"))):
+            issues.append(f"local_command_correlation_conflict:{identity}")
+            bad_ids.add(identity)
+            incomplete_native.add(index)
+            continue
+        row.update(provider_tool_call_id=call["tool_call_id"], provider_tool_name=call["tool_name"],
+            request_event_indices=list(call["request_event_indices"]),
+            response_event_indices=list(call["response_event_indices"]))
+        replacements[index] = row
+        paired.add(identity)
+    unified = [replacements.get(index, {**call, "status": "incomplete"} if index in incomplete_native else call)
+               for index, call in enumerate(native)]
+    for identity, row in by_id.items():
+        if identity not in paired:
+            row["status"] = "incomplete"
+            unified.append(row)
+    view.update(tool_calls=unified, complete=not issues)
+    return view
+
+
 def parse_cli_log(trace: Mapping[str, Any]) -> dict:
     """Project observed Claude/Codex CLI tool calls from a trusted private trace.
 
@@ -71,6 +200,11 @@ def parse_cli_log(trace: Mapping[str, Any]) -> dict:
     completed. Codex native completion snapshots retain their public fields;
     absent patch bodies and search results are explicit content limitations.
     A complete failed turn is a recorded terminal, not a missing terminal.
+    When this invocation supplies local_command_calls, exact returned IDs and
+    matching request/result JSON correlate its own process facts with the CLI.
+    A paired call appears once in tool_calls with both real identities; the
+    untouched CLI observations remain in provider_tool_calls and events. Missing,
+    contradictory or duplicate correlations are incomplete, never inferred.
     """
     if not isinstance(trace, Mapping):
         raise ValueError("CLI trace must be an object")
@@ -301,8 +435,8 @@ def parse_cli_log(trace: Mapping[str, Any]) -> dict:
                          "failed" if identity in denials or failed_results.get(identity) else "completed")
     if terminal_count != 1:
         issues.append("terminal_event_missing_or_duplicated")
-    return {"schema_version": "runtime_cli_log_v1", "complete": not issues, "issues": issues, "events": events,
-            "tool_calls": list(calls.values())}
+    return _with_local_commands({"schema_version": "runtime_cli_log_v1", "complete": not issues,
+        "issues": issues, "events": events, "tool_calls": list(calls.values())}, trace)
 
 
 __all__ = ["captured_cli_streams", "cli_stream_bytes", "parse_cli_log"]

@@ -140,7 +140,7 @@ from .registry.registry_module_authoring import (
 )
 from .registry.registry_module_loading import load_reviewer_registration
 from .registry.registry_local_persistence import LoadedRuntimeRegistration, load_runtime_registration, save_runtime_registration
-from .foundation.foundation_environment_setup import setup_runtime
+from .foundation.foundation_environment_setup import load_runtime_config, setup_runtime
 from .execution.execution_local_invocation import evaluate_local_workflow_module, prepare_local_workflow_module, run_local_workflow_module
 from .registry.registry_workflow_authoring import (
     WORKFLOW_MODULE_CLOSURE_INVALID,
@@ -286,6 +286,7 @@ __all__ = [
     "load_reviewer_registration",
     "load_runtime_registration",
     "setup_runtime",
+    "load_runtime_config",
     "save_runtime_registration",
     "run_local_workflow_module",
     "prepare_local_workflow_module",

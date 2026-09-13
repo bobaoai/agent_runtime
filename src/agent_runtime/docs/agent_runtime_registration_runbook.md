@@ -246,6 +246,28 @@ state并返回清理失败，私有诊断给出恢复目录；不自动覆盖源
 请求的committed结果可在没有旧Adapter时重放。再次执行需通过prepare或现有compiler创建v4
 Profile/Variant，不能把旧v3静默改成v4。Module/Workflow定义不因新执行配置而修改。
 
+普通工程材料仍通过同一命令提供：
+
+```sh
+agent-runtime-evaluate --root /path/to/workspace --workflow registered_workflow \
+  --input /path/to/task.json --resources /path/to/resources.json
+```
+
+资源 JSON 提供明确的材料根、带 hash/执行位的文件清单、只读依赖及按 ID 选择的命令；准确字段、
+相对路径规则与错误见 [evaluate_local_workflow_module](agent_runtime_reviewer_api.md#evaluate_local_workflow_module)
+和同版本 `--help`。调用者提供源工具生成的冻结清单，不把整个宿主 root 隐含交给模型。
+材料复制保持相对目录结构，实际完整 prompt 在保存 envelope 前形成。
+
+当前该资源组合使用 macOS 的 Claude v2。明确 commands 时需安装当前包的 `cli_tools` 可选依赖；
+无 commands 时不加载它。Runtime 的本地 MCP 命令工具取得真实进程退出码与原始输出，普通
+Read/Grep/Bash 仍可使用，未被限制成该命令清单。是否已完成全部必做命令由任务 owner 校验。
+统一日志按真实返回 ID 关联父进程和 CLI 观察；没有配对证据就明确不完整，不能凭命令名猜测。
+
+宿主可在可选 `.runtime/config.json` 中提供程序路径和只读依赖默认，
+[load_runtime_config](agent_runtime_reviewer_api.md#load_runtime_config) 给出完整格式。
+显式 CLI 路径覆盖对应默认；依赖 None 使用默认，显式空列表清空。无工具调用不暴露未使用的依赖。
+这个文件不保存模型、Profile、任务材料或 PG 权限，也不自动创建或连接数据库。
+
 需要外部授权和持久记录时，使用已有宿主项目文档的“Reviewer 测试/运行”入口。宿主提供授权和存储，
 使用 Runtime 的执行准备接口解析本次固定定义与独立模型选择，不复制 Reviewer 默认工具参数：
 
@@ -354,7 +376,10 @@ Provider 终态；命令失败不自动使整个 turn 失败。文件变更事�
 package version。Adapter revision 表示参数转换与能力合同；本次结果判定修正未改变这些参数。
 旧 Profile、Variant、已提交结果和已保存日志保持原样，不用新 parser 覆盖历史记录。
 
-当前新的执行准备使用 ClaudeAdapter 的 claude_cli_adapter@v1，已注册 Module/Workflow 不因此改变。旧 claude_cli_native_tools_executor@v2 绑定按其原能力通过同一实现显式执行，原 Profile/Variant 内容保持；不能把旧 revision 静默换成新 revision。准确接口与迁移说明见 [Claude Adapter](agent_runtime_reviewer_api.md#claudeadapter)。
+当前新的执行准备使用 ClaudeAdapter 的 claude_cli_adapter@v2，已注册 Module/Workflow 不因此改变。
+旧 claude_cli_adapter@v1 和 claude_cli_native_tools_executor@v2 记录仍可读，committed 请求可重放；
+新包不再启动旧绑定。当前调用者先迁移到公共准备接口，再采用新包；旧 Profile/Variant 不被改写。
+准确接口与迁移说明见 [Claude Adapter](agent_runtime_reviewer_api.md#claudeadapter)。
 独立 CLI 审核的助引日志可由 Runtime 的 [parse_cli_log](agent_runtime_reviewer_api.md#parse_cli_log) 解释，
 其来源仍是独立 CLI，不因此成为 managed Runtime execution。业务接受规则由 Portable validator 判断。
 

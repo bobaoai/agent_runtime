@@ -41,7 +41,7 @@ API_SOURCES = {
         "prepare_local_workflow_module", "evaluate_local_workflow_module", "run_local_workflow_module",
     ),
     "src/agent_runtime/testing/execution_local_evaluation.py": (),
-    "src/agent_runtime/foundation/foundation_environment_setup.py": ("setup_runtime",),
+    "src/agent_runtime/foundation/foundation_environment_setup.py": ("setup_runtime", "load_runtime_config"),
     "src/agent_runtime/ledger/ledger_execution_logging.py": ("read_execution_log",),
     "src/agent_runtime/invocation/invocation_cli_logging.py": ("parse_cli_log",),
     "src/agent_runtime/invocation/invocation_claude_cli_execution.py": ("ClaudeAdapter",),

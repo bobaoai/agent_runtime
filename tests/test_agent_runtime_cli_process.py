@@ -10,6 +10,25 @@ from agent_runtime.invocation.invocation_process_execution import run_cli_proces
 from agent_runtime.invocation import invocation_process_execution as cli_process
 
 
+def test_resource_cancellation_is_not_user_interruption(tmp_path):
+    from threading import Event, Timer
+    closed = Event()
+    timer = Timer(.25, closed.set)
+    timer.start()
+    try:
+        with pytest.raises(cli_process.CliProcessError) as error:
+            run_cli_process(argv=[sys.executable, "-u", "-c", "import time;print('running');time.sleep(20)"],
+                prompt="", cwd=tmp_path, timeout_seconds=5, environment=dict(os.environ), cancel_requested=closed.is_set)
+        assert error.value.stop_reason == "resource_closed" and "running" in error.value.stdout
+        assert error.value.returncode != 0
+        with pytest.raises(cli_process.CliProcessError) as before:
+            run_cli_process(argv=["not-a-real-program"], prompt="", cwd=tmp_path, timeout_seconds=5,
+                            environment=dict(os.environ), cancel_requested=closed.is_set)
+        assert before.value.returncode is None and before.value.stdout_bytes == b""
+    finally:
+        timer.cancel()
+
+
 def test_launch_guard_orders_actual_popen_not_the_whole_invocation(tmp_path, monkeypatch):
     observed = []
     popen = cli_process.subprocess.Popen

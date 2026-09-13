@@ -116,6 +116,7 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
     assert configuration["project"]["readme"] == "README.md"
     assert configuration["project"]["dependencies"] == ["jsonschema>=4.23"]
     assert configuration["project"]["optional-dependencies"] == {
+        "cli_tools": ["mcp>=1.29,<2"],
         "postgres": ["psycopg[binary]>=3.2"],
         "temporal": ["temporalio>=1.31"],
         "test": ["build>=1.2", "psycopg[binary]>=3.2",
@@ -226,7 +227,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
             assert 'usage:' in output.getvalue().lower()
         profile = compile_execution_profile_release(ExecutionProfileReleaseSpec(
             execution_profile_id='claude_cli_probe',
-            executor_adapter_id='claude_cli_adapter', executor_adapter_revision='v1',
+            executor_adapter_id='claude_cli_adapter', executor_adapter_revision='v2',
             transport_kind='claude_cli', provider_id='anthropic',
             model_id='claude-opus-5', reasoning_profile='high',
             execution_mode='tool_free', semantic_input_delivery_mode='inline',

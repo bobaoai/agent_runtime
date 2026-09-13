@@ -605,6 +605,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source("invocation", "cli", "logging",
             "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "local_resource", "preparation",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "local_command", "execution",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "local_command", "mcp",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
     _source("ledger", "execution", "logging",
             "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md"),
     _source(

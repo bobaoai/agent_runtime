@@ -47,6 +47,11 @@ def read_execution_log(
         Missing/legacy logs are explicitly incomplete, not proof of zero calls.
         Unknown shell exit codes and tool-level times are not inferred. Reading
         an in-memory source does not make it durably saved or recoverable later.
+        New local command views retain the actual parent-process returncode and
+        bytes in runtime_local rows. Exact CLI correlations carry Provider IDs
+        and event indices; paired calls are counted once. provider_tool_calls
+        preserves the original CLI-only observations separately when recorded.
+        This function consumes that stored interpretation, never reparses history.
     Raises:
         ValueError: Invalid source, crossed identities, duplicate attempts or
             a content hash mismatch. Native reader/storage failures propagate;
@@ -139,6 +144,10 @@ def read_execution_log(
                     if not parsed["complete"] and not parsed["issues"]:
                         row["issues"].append("provider_log_incomplete")
                     row["tool_calls"].extend(parsed["tool_calls"] or [])
+                    if "provider_tool_calls" in parsed:
+                        if not isinstance(parsed["provider_tool_calls"], list):
+                            raise ValueError("Invalid stored original Provider tool view")
+                        row["provider_tool_calls"] = parsed["provider_tool_calls"]
             for call in gateways[attempt.attempt_id]:
                 call.validate()
                 if call.request_ref is None or call.response_ref is None:

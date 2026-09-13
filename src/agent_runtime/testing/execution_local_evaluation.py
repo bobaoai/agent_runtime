@@ -17,8 +17,38 @@ def build_parser():
     parser.add_argument("--transport", help="Independent transport: claude_cli (default), or codex_cli for tool-free inline Modules.")
     parser.add_argument("--model", help="Independent concrete model ID; required for codex_cli, otherwise omit for Runtime default.")
     parser.add_argument("--effort", help="Independent reasoning effort; required for codex_cli, otherwise omit for Runtime default.")
-    parser.add_argument("--cli-path", type=Path, help="Installed executable; omit to resolve the selected claude/codex from PATH. Codex uses the host's standard file-based login.")
+    parser.add_argument("--cli-path", type=Path, help="Installed executable; overrides root/.runtime/config.json provider_cli_paths, then PATH is used if unconfigured. Codex uses the host's standard file-based login.")
+    parser.add_argument("--resources", type=Path, help="Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}]. Paths are relative to this file; command cwd is source/scratch-relative and argv is not rewritten. Empty dependencies clear host defaults. No models, credentials or production grants here.")
     return parser
+
+
+def _resource_arguments(path: Path | None) -> dict:
+    if path is None:
+        return {}
+    path = path.resolve(strict=True)
+    resource = json.loads(path.read_text(encoding="utf-8"))
+    allowed = {"material_root", "material_files", "read_only_dependencies", "commands"}
+    if type(resource) is not dict or set(resource) - allowed:
+        raise ValueError("Resource JSON accepts only material_root, material_files, read_only_dependencies and commands")
+    def locator(value):
+        if type(value) is not str or not value.strip() or "\x00" in value:
+            raise ValueError("Resource locator must be a non-empty path")
+        candidate = Path(value)
+        return candidate if candidate.is_absolute() else path.parent / candidate
+    result = {}
+    if resource.get("material_root") is not None:
+        result["material_root"] = locator(resource["material_root"])
+    for field in ("material_files", "commands", "read_only_dependencies"):
+        if field not in resource:
+            continue
+        value = resource[field]
+        if field == "read_only_dependencies" and value is None:
+            result[field] = None
+        elif type(value) is not list:
+            raise ValueError(f"{field} must be a JSON array")
+        else:
+            result[field] = tuple(locator(item) for item in value) if field == "read_only_dependencies" else tuple(value)
+    return result
 
 
 def main(argv=None):
@@ -44,7 +74,7 @@ def main(argv=None):
         payload = json.loads(args.input.read_text(encoding="utf-8"))
         record = evaluate_local_workflow_module(args.root, args.workflow, input_payload=payload,
             version=args.version, transport_kind=args.transport, model_id=args.model,
-            reasoning_profile=args.effort, cli_path=args.cli_path)
+            reasoning_profile=args.effort, cli_path=args.cli_path, **_resource_arguments(args.resources))
         print(json.dumps(record, ensure_ascii=False, allow_nan=False))
         return 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
     except KeyboardInterrupt:

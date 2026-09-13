@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from importlib.resources import files
 import json
+import os
 from pathlib import Path
 import stat
 import tempfile
@@ -56,6 +57,67 @@ def _write(path: Path, content: bytes) -> None:
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def load_runtime_config(root: Path) -> dict[str, object]:
+    """Read optional host resource defaults from root/.runtime/config.json.
+
+    Args:
+        root: Host configuration root, never a model read grant. The optional
+            JSON object accepts only provider_cli_paths and read_only_dependencies.
+            provider_cli_paths maps claude_cli or codex_cli to executable paths;
+            read_only_dependencies is a list of trusted dependency directory paths.
+            Relative locators are resolved against root. Tilde is not expanded.
+    Returns:
+        A new dictionary with provider_cli_paths (a mapping to Path values) and
+        read_only_dependencies (a tuple of Path values). A missing config file
+        supplies empty defaults. Locators are normalized here; the execution
+        consumer checks the existence and type of resources it actually selects.
+        Unused provider/dependency defaults never open resources or add tools.
+    Raises:
+        ValueError: Malformed JSON, unknown fields/providers, duplicate keys,
+            empty locators, invalid field types, or a non-regular config path.
+        OSError: Native file access failure; no alternate config is searched.
+    Effects:
+        Reads this one file only and writes nothing. Does not run setup, choose
+        a model/Profile, read credentials, probe executables, connect to PG, or
+        discover material. Explicit execution arguments take precedence: a
+        dependency tuple overrides the default, including an explicitly empty
+        tuple; None selects these defaults. A program argument overrides only
+        the chosen transport's locator. External stores remain explicit API
+        objects, not implicit connections from this configuration.
+    """
+    root = Path(root).resolve()
+    body = _read(_target(root, ".runtime", "config.json"))
+    if body is None:
+        return {"provider_cli_paths": {}, "read_only_dependencies": ()}
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate Runtime config key")
+            result[key] = value
+        return result
+
+    document = json.loads(body, object_pairs_hook=unique_object)
+    if type(document) is not dict or set(document) - {"provider_cli_paths", "read_only_dependencies"}:
+        raise ValueError("Runtime config accepts only provider_cli_paths and read_only_dependencies")
+    providers = document.get("provider_cli_paths", {})
+    dependencies = document.get("read_only_dependencies", [])
+    if type(providers) is not dict or set(providers) - {"claude_cli", "codex_cli"}:
+        raise ValueError("provider_cli_paths must map claude_cli/codex_cli to resource locators")
+    if type(dependencies) is not list:
+        raise ValueError("read_only_dependencies must be a list of directory locators")
+
+    def locator(value):
+        if type(value) is not str or not value.strip() or "\x00" in value:
+            raise ValueError("Runtime resource locator must be a non-empty path")
+        path = Path(value)
+        return Path(os.path.abspath(path if path.is_absolute() else root / path))
+
+    return {"provider_cli_paths": {key: locator(value) for key, value in providers.items()},
+            "read_only_dependencies": tuple(locator(value) for value in dependencies)}
 
 
 def setup_runtime(root: Path) -> tuple[Path, ...]:

@@ -45,10 +45,11 @@ def _execution_profile_for_requirements(
     requirements.validate()
     transport = "claude_cli" if transport_kind is None else transport_kind
     if transport == "claude_cli":
-        from ..invocation.invocation_claude_cli_execution import _execution_expectation
+        from ..invocation.invocation_claude_cli_execution import _execution_expectation, _CURRENT_BINDING
         model = "claude-opus-5[1m]" if model_id is None else model_id
         effort = "xhigh" if reasoning_profile is None else reasoning_profile
-        adapter_id, revision, provider = "claude_cli_adapter", "v1", "anthropic"
+        adapter_id, revision = _CURRENT_BINDING
+        provider = "anthropic"
         defaults = "v1" if model_id is None and reasoning_profile is None else None
     elif transport == "codex_cli":
         if not model_id or not reasoning_profile:
@@ -178,6 +179,8 @@ def evaluate_local_workflow_module(
     root: Path, workflow_id: str, *, input_payload: dict, version: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
     reasoning_profile: str | None = None, cli_path: Path | str | None = None,
+    material_root: Path | None = None, material_files: tuple[dict, ...] = (),
+    read_only_dependencies: tuple[Path, ...] | None = None, commands: tuple[dict, ...] = (),
 ) -> dict:
     """Evaluate a registered single-node Workflow using temporary test resources.
 
@@ -199,18 +202,45 @@ def evaluate_local_workflow_module(
             an unreported actual response model. Model names do not select transport.
         reasoning_profile: Independent effort; None uses Runtime's default.
             Required for codex_cli; no default is inferred from another Provider.
-        cli_path: Explicit installed provider executable, or resolve the chosen
-            claude/codex from host PATH. No login or installation is performed.
+        cli_path: Explicit installed provider executable; otherwise use the
+            selected transport's root/.runtime/config.json provider_cli_paths
+            value, then host PATH when that value is absent. No login or
+            installation is performed. Model selection does not come from config.
             Relative paths are resolved from the caller's working directory
             before entering the temporary Attempt directory.
             Codex uses file-based auth from the host's standard CODEX_HOME/auth.json
             (default ~/.codex/auth.json), never from task JSON or a fallback account.
+        material_root: Explicit source directory for the frozen file list below,
+            never implicitly the host root. Only listed ordinary files are read.
+        material_files: Tuple of dictionaries with relative_path, sha256 and
+            executable. Bytes and executable bits must match the supplied list;
+            relative structure is preserved in the Attempt's read-only source
+            copy. Paths cannot traverse symlinks or escape material_root.
+            These auxiliary files are not silently appended as inline task text.
+        read_only_dependencies: Explicit tuple of trusted dependency directories,
+            including an empty tuple to clear host defaults. None uses the
+            optional config's read_only_dependencies for a Module with tools.
+            Unused defaults are not exposed to tool-free Modules. Explicit
+            dependencies still require the selected Adapter's actual support.
+        commands: Tuple of command_id, argv, cwd and timeout_seconds dictionaries.
+            IDs are unique within this call. cwd selects source or scratch and
+            their relative subdirectories. argv is fixed by the caller; timeout
+            cannot exceed the Module budget. A relative executable path in
+            argv[0] resolves against that cwd; a bare program name uses the
+            command's fixed PATH. Claude's local command tool records
+            actual process results for these IDs; ordinary native Bash remains
+            available independently. Required/expected business outcomes belong
+            to the task input and its validator, not these resource definitions.
     Returns:
         JSON-compatible execution facts and output. provider_trace retains the
         observed response models and diagnostics. persistence is not_requested;
         execution_log contains every Attempt's full private provider trace,
         original encoded streams, per-call view and explicit completeness issues,
         assembled by read_execution_log before temporary resources are cleared.
+        input_bindings and input_closure_sha256 identify the exact staged task
+        and optional resource package; their temporary content refs are not
+        cross-process recovery handles. Actual command and Provider observations
+        remain separate facts, correlated only where the returned IDs prove it.
         Missing or unpaired events never become a successful empty tool list.
         execution_trace is the actual in-memory Run/Variant/Attempt result, not
         a durable Workflow Ledger. The subject owner still validates its verdict.
@@ -248,6 +278,8 @@ def evaluate_local_workflow_module(
     from ..invocation.invocation_claude_cli_execution import ClaudeAdapter
     from ..invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
     from ..ledger.ledger_execution_logging import read_execution_log
+    from ..foundation.foundation_environment_setup import load_runtime_config
+    from ..invocation.invocation_local_resource_preparation import capture_local_resources, parse_local_resources
 
     saved, selection = prepare_local_workflow_module(root, workflow_id, version=version,
         transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile)
@@ -257,8 +289,20 @@ def evaluate_local_workflow_module(
     binding = selection.policy_document()["bindings"][0]
     selected_profile = saved.registry.get_execution_profile(
         binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
+    config = load_runtime_config(root)
+    dependencies = read_only_dependencies
+    if dependencies is None:
+        dependencies = config["read_only_dependencies"] if selected_profile.tool_policy else ()
+    if type(dependencies) is not tuple:
+        raise ValueError("read_only_dependencies must be a tuple or None for host defaults")
+    resource_body = capture_local_resources(profile=selected_profile, material_root=material_root,
+        material_files=material_files, read_only_dependencies=dependencies, commands=commands)
+    dependencies = (() if resource_body is None else
+        tuple(Path(value) for value in parse_local_resources(resource_body)["read_only_dependencies"]))
     program = {"claude_cli": "claude", "codex_cli": "codex"}[selected_profile.transport_kind]
-    executable = cli_path if cli_path is not None else shutil.which(program)
+    executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(selected_profile.transport_kind)
+    if executable is None:
+        executable = shutil.which(program)
     if executable is None:
         raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path or host PATH")
     executable = Path(executable).resolve(strict=True)
@@ -268,7 +312,7 @@ def evaluate_local_workflow_module(
         workspace = Path(directory).resolve()
         if selected_profile.transport_kind == "claude_cli":
             adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
-                workspace_root=workspace, cli_path=executable,
+                workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
                 adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
         else:
             adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
@@ -278,7 +322,7 @@ def evaluate_local_workflow_module(
         request, module, profile, _, _ = _prepare_registered_workflow_module(
             module_id=module.module_id, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
             release_registry=saved.registry, workflow=workflow, variant_policy=selection,
-            artifact_host=artifacts)
+            artifact_host=artifacts, local_resources=resource_body)
         _assert_registered_module_adapter(module, profile, adapters)
         resources = ModuleSelfTestResources(request=request, workflow=workflow, variant=selection,
             registry=saved.registry, adapter=adapter, artifact_host=artifacts, ledger=ledger, workspace_root=workspace)
@@ -300,6 +344,8 @@ def evaluate_local_workflow_module(
                 "execution_variant_ref": selection.release_ref, "execution_variant_sha256": selection.release_sha256,
                 "workflow_execution_id": request.workflow_execution_id, "module_run_id": result.module_run.module_run_id,
                 "attempt_id": attempt.attempt_id, "model": profile.model_id, "effort": profile.reasoning_profile,
+                "input_bindings": [asdict(item) for item in request.inputs],
+                "input_closure_sha256": request.input_closure_sha256,
                 "runtime_version": importlib.metadata.version("agent-runtime-core"),
                 "execution": "run_workflow_module", "managed_runtime": True, "persistence": "not_requested",
                 "status": attempt.status, "output": output, "failure_class": attempt.failure_class,

@@ -129,6 +129,7 @@ def _run_cli_process(
     environment: dict[str, str], max_output_bytes: int = DEFAULT_PROCESS_OUTPUT_BYTES,
     on_stdout_line: Callable[[str], bool] | None = None,
     launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
     interrupted: _CliInterruptState,
 ) -> subprocess.CompletedProcess[str]:
     """Drain both streams, stop the group on failure, preserve exact captured bytes.
@@ -150,6 +151,9 @@ def _run_cli_process(
         if interrupted.requested:
             raise CliProcessInterrupted(returncode=None, output="", stderr="",
                                         stdout_bytes=b"", stderr_bytes=b"")
+        if cancel_requested is not None and cancel_requested():
+            raise CliProcessError(None, argv, stop_reason="resource_closed", message="Runtime process resources are closed",
+                                  output="", stderr="", stdout_bytes=b"", stderr_bytes=b"")
         return subprocess.Popen(
             argv, cwd=cwd, env=environment, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
@@ -228,6 +232,9 @@ def _run_cli_process(
                 break
             if failure is not None:
                 break
+            if cancel_requested is not None and cancel_requested():
+                mark_failure("resource_closed")
+                break
             if time.monotonic() >= deadline:
                 mark_failure("timeout")
                 break
@@ -235,6 +242,9 @@ def _run_cli_process(
     except KeyboardInterrupt:
         interrupted.requested = True
         mark_failure("cancelled")
+    except Exception as exc:
+        callback_errors.append(exc)
+        mark_failure("resource_closed")
     finally:
         # Descendants must not outlive the one-shot invocation, even if the
         # CLI parent exits before a descendant closes an inherited output pipe.
@@ -276,6 +286,7 @@ def _run_cli_process(
         message = {"observer_stopped": "Runtime stopped the CLI event stream",
                    "stream_error": "CLI stream processing failed",
                    "output_limit": "Runtime process output limit reached; log incomplete",
+                   "resource_closed": "Runtime process resources are closed",
                    "cleanup_error": "CLI process cleanup failed"}[failure]
         if stream_error:
             message += "; stream processing: " + stream_error
@@ -294,6 +305,7 @@ def run_cli_process(
     environment: dict[str, str], max_output_bytes: int = DEFAULT_PROCESS_OUTPUT_BYTES,
     on_stdout_line: Callable[[str], bool] | None = None,
     launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Capture bounded exact streams through process shutdown and output handoff.
 
@@ -302,11 +314,14 @@ def run_cli_process(
     output. On the main thread, the default SIGINT behavior is deferred until
     cleanup and captured-byte handoff; the previous handler is always restored.
     Custom handlers and non-main-thread signal policy are not replaced.
+    An optional trusted cancel_requested callback stops resource-bound commands
+    with resource_closed, not a forged user interruption. It is checked before
+    Popen and during waiting; the launch guard still orders creation with close.
     """
     with _capture_cli_interrupts() as interrupted:
         return _run_cli_process(argv=argv, prompt=prompt, cwd=cwd, timeout_seconds=timeout_seconds,
             environment=environment, max_output_bytes=max_output_bytes, on_stdout_line=on_stdout_line,
-            launch_guard=launch_guard, interrupted=interrupted)
+            launch_guard=launch_guard, cancel_requested=cancel_requested, interrupted=interrupted)
 
 
 __all__ = ["CliProcessError", "CliProcessTimeout", "CliProcessInterrupted", "run_cli_process"]
