@@ -17,7 +17,7 @@ metadata:
 保存到调用者指定 root 的 `.runtime`，并回读准确结果。已有定义只需查询或运行新材料时，直接使用
 已有注册，不重新编译。注册与模型选择分开，Reviewer 默认能力由 Runtime 解析。
 
-现有命令在操作前共用轻量 setup：首次或缺项时准备 `.runtime` 并接入随包操作 Skill，已就绪时
+现有命令在操作前共用轻量 setup：首次或缺项时准备 `.runtime` 并接入两份随包操作 Skill，已就绪时
 不重复写入。无需另执行 Skill 安装命令；具体对象检查仍由注册或查询操作负责。
 
 ## 2. Reader Gain
@@ -28,8 +28,11 @@ Agent 能找到同一安装版本的 CLI 和操作说明，区分宿主 root 与
 ## 3. Entry and Exit
 
 “注册 Reviewer”“注册 Module/Workflow”“更新已审定义版本”及“查询已有注册”进入本 Skill。
-只有审核想法、尚无已审 source 时，先交 source owner 完成定义与审核。修改 prompt、schema、操作
-或 transport 声明属于 source 修改，不在注册途中补写。
+只有审核想法、尚无已审 source 时，先交 source owner 完成定义与审核。修改任务指令、owner 或
+输入输出 schema 属于 source 更新，不在注册途中补写。
+
+当前 Reviewer 注册入口消费 `runtime_module_registration_v4` 任务 source。v2/v3 或其他不相容来源
+交回 source owner 明确迁移；操作者不靠删字段、补 transport 或改版本使注册通过。
 
 请求运行已注册对象时，使用 `agent-runtime-evaluation` 完成其支持的普通自测；需要持久执行、
 PG 注册或其他宿主专用操作时，按同版本 runbook 交给已有宿主入口，不将这些配置变成普通本地注册前提。
@@ -42,6 +45,7 @@ CLI 或必要资料缺失时说明具体缺件及提供方，保留已完成事�
 - 调用者明确的宿主 root，以及在该位置注册的授权。root 决定 `.runtime` 的位置，不决定模型权限。
 - Reviewer 注册需要 source root、准确 skill ID、module ID、批准的定义版本及对应 source 审核依据。
   source root 省略时使用宿主 root；两者不同时显式传入。
+- 需要特定 Workflow 名称时，提供已批准的名称；未提供时 Runtime 生成与 Module 同名、同版本的单节点 Workflow。
 - 其他 Module 或 Workflow 使用 source owner 提供的完整已编译 bundle JSON，以及其 plugin ID 和版本。
   仅有 graph 构想或零散记录不足以使用 bundle 注册命令。
 - 查询只需目标 root、对象种类和 ID；版本可指定，也可按请求加载最新定义。
@@ -53,7 +57,7 @@ CLI 或必要资料缺失时说明具体缺件及提供方，保留已完成事�
 ### 4.2 Output and Completion
 
 返回原生 CLI 结果及实际 root、对象种类、ID、版本和 release hash。Reviewer 注册结果应含
-`readback=verified`、保存路径及完整 Module、Workflow records；消费返回的 Workflow 身份，不自行命名。
+`readback=verified`、保存路径及完整 Module、Workflow records；消费返回的 Workflow 身份，不自行拼接名称。
 bundle 注册返回对象引用后，用 `load` 分别回读所需对象和准确版本，再报告完成。
 
 Module 保存在 `.runtime/module/<module_id>/<version>.json`，Workflow 保存在
@@ -72,7 +76,7 @@ Module 保存在 `.runtime/module/<module_id>/<version>.json`，Workflow 保存�
 | 已审定义与模型选择分开 | 为注册设置模型或环境 Profile，因换模型而重注册未变 source |
 | 本地保存与其他宿主操作分开 | 自动连接 PG、建表、切换日常配置或在注册后调用模型 |
 | 注册事实与使用结果分开 | 只见文件存在就声称回读成功，或把注册成功说成审核通过 |
-| source owner 保留内容决定 | 临时修改 prompt、schema、operation 或 transport 声明以通过注册 |
+| source owner 保留内容决定 | 注册途中修改任务、schema 或旧版字段，或向 v4 source 塞入工具、transport、Policy 参数 |
 
 ## 6. Method
 
@@ -98,7 +102,7 @@ print(package.joinpath("docs/agent_runtime_reviewer_api.md"))
 默认参数、退出码与错误处理查同版本 help 和自动接口说明，不另维护一套配置表。
 CLI、文档或构建身份不匹配时返回安装维护者，不回落到 sibling checkout。setup 的具体效果查自动手册
 中的 setup_runtime；本地 Skill 冲突按原错误交其 owner 处理，不手工覆盖。向共享目录写入新格式前，
-按 help 中的兼容说明核对受影响读取者；相同 dev 版本字符串不足以证明兼容。
+按同版本 runbook 的兼容说明核对受影响读取者；相同 dev 版本字符串不足以证明兼容。
 
 ### 6.2 注册准确 source 或 bundle
 
@@ -114,8 +118,18 @@ agent-runtime-registry register-reviewer --root /path/to/host --source-root /pat
 prompt、schemas 及其声明依赖。这个作者目录与当前 Agent 从哪里发现本操作 Skill 是两件事。
 缺少完整 source 时由提供方补齐，不为注册手工安装或迁移 Skill。
 
-命令解析 Runtime 默认、编译 Reviewer 及单节点 Workflow、保存并回读。注册无需 Provider CLI、
-登录、PG 或预选模型。返回的声明原样保留，执行相容性由后续 Runtime 准备阶段检查。
+v4 source 声明任务身份、owner 路径和输入输出 schema 的引用及路径，prompt 来自同一目录。
+它不携带模型、transport、工具、技术 Policy 或 Profile 参数；这些由 Runtime 的定义和执行接口
+各自处理。准确字段由 loader 和同版本文档定义，注册操作者不重写。
+
+命令解析 Runtime 默认、编译 Reviewer 及单节点 Workflow、保存并回读。默认图与 Module 同名、
+同版本；需要已批准的其他图名时增加 `--workflow-id explicit_workflow_id`。不使用旧 `_review`
+后缀猜当前图名，既有图也不会因新注册被自动重命名或删除。
+注册无需 Provider CLI、登录、PG 或预选模型；执行相容性由后续 Runtime 准备阶段检查。
+
+重复同版本注册会核对任务 source 并复用原定义与依赖，不重新应用当前默认。真实定义变化需要
+source owner 批准新版本；同版本不同内容的冲突不能靠临时换版本回避。若 Module 已保存而
+Workflow 保存失败，回读后可重试同一请求补齐，不手工拼写缺失文件。
 
 已编译的其他 Module 或 Workflow 使用：
 
@@ -135,7 +149,7 @@ agent-runtime-registry load --root /path/to/host --kind workflow \
 
 `returned_workflow_id` 来自注册输出。查 Module 时改用 `--kind module` 和实际 Module ID。
 未指定版本时加载最近成功注册的新定义；重复注册同一版本不把它重新提升为最新。要复验某次结果，
-显式使用其版本。这个本地入口没有 active 选项或激活步骤，旧版本也不需删除。
+显式使用其版本。这个本地入口没有 active 选项或激活步骤，查询旧版本无需删除其他版本。
 
 确认返回的身份、版本和 hash 与注册结果一致。注册成功但执行入口不相容时，保留注册完成状态并
 说明测试未执行，不临时换 source。交给 evaluation 时提供实际 root、返回的 Workflow ID、需要固定的

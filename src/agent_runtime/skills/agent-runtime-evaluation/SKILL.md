@@ -1,6 +1,6 @@
 ---
 name: agent-runtime-evaluation
-description: 使用已安装的 agent-runtime-evaluate，对指定 root 中已固定 Reviewer 默认能力的已注册单节点 Workflow 做普通自测，检查执行事实并交给对象所属语义校验。不注册对象、不保存 PG、不修改默认模型配置。
+description: 使用已安装的 agent-runtime-evaluate，对指定 root 中已注册的单节点 Module Workflow 做普通自测，检查执行事实并交给对象所属语义校验。用于普通 Module 或 Reviewer 的已注册定义；不注册对象、不保存 PG、不修改默认模型配置。
 metadata:
   skill_class: primary_agent_development
   primary_agent_entry_role: operator
@@ -16,7 +16,7 @@ metadata:
 使用 `agent-runtime-evaluate` 对已有注册定义和本次输入运行一次普通自测，报告实际执行结果。
 当前 CLI 支持范围见 §3，通过现有 Runtime 内核调用模型，不需要 PG 或生产授权服务。
 它不会注册 source，也不会改写 `.runtime` 中已有的注册定义或日常模型配置。工具入口先共用轻量
-setup，首次或缺项时补齐本地环境和随包操作 Skill；已就绪时不重复写入，无需单独安装 Skill。
+setup，首次或缺项时补齐本地环境和两份随包操作 Skill；已就绪时不重复写入，无需单独安装 Skill。
 
 ## 2. Reader Gain
 
@@ -25,16 +25,20 @@ Agent 能从已注册 Workflow 找到固定 Module 与输入 schema，使用本�
 
 ## 3. Entry and Exit
 
-“测试这个 Reviewer”“在这个 root 跑一次已注册定义”进入本 Skill。当前入口支持注册时已固定
-Reviewer 默认能力的单节点 Workflow，其 Module 带有 `ReviewerDefaults` 能力快照；执行前由
-Runtime 检查该定义是否允许 evaluation，以及能力与本次执行配置的相容性。
-通过 `register-reviewer` 注册时，这些默认能力由 Runtime 自动提供，调用者无需额外选择或组装。
-只有 Module、尚无可用 Workflow 时先使用 `agent-runtime-registration` 处理已授权注册，
-本 Skill 不临时拼装图、复制 Reviewer 或手补能力快照。
+“测试这个 Module”“测试这个 Reviewer”“在这个 root 跑一次已注册定义”进入本 Skill。当前入口
+使用已注册的单节点 Workflow，由 Runtime 从其中的 Module 解析通用运行要求。历史定义按同版本
+兼容规则读取，不要求操作者检查或补写 `ModuleExecutionRequirements` 字段。Module 无需属于
+Reviewer，也不以 `ReviewerDefaults` 快照作为进入条件。Runtime 根据解析的运行要求、evaluation
+用途及本次 Adapter 的真实能力判断能否执行，信息不足时返回具体缺口。
 
-多节点图、生产操作、PG 持久执行、历史 execution 查询或跨进程恢复，使用宿主已有的对应入口。
-不要把它们降格为普通自测后宣称完成。模型、工具或输入所需能力超出当前 CLI 支持范围时，保留
-不相容结果并交给对应负责人，不自动换模型或放宽声明。
+当前已交付入口支持 Claude CLI，以及显式选择 Codex 的无工具、inline、workspace none、network
+denied 组合。Codex 不会把有工具 Module 降为无工具；完整相容性以当前安装的 CLI 和自动 API 文档
+为准。新材料路径、工程命令等超出该入口当前公开参数时，报告准确缺口，交 Runtime 维护者处理，
+不临时增加参数、拼执行器或假定其他 API 的能力已经接入本命令。
+
+只有 Module、尚无可用 Workflow 时，使用 `agent-runtime-registration` 处理已授权注册；本 Skill
+不临时拼图或复制 Reviewer。多节点图、生产操作、PG 持久执行、历史 execution 查询或跨进程恢复，
+使用宿主已有的对应入口。请求不相容时保留原错误，不自动换模型、资源或放宽声明。
 
 ## 4. Execution Contract
 
@@ -44,26 +48,29 @@ Runtime 检查该定义是否允许 evaluation，以及能力与本次执行配�
 - 可选准确版本。未指定时由 Runtime 加载最新已注册定义；复验某个已知版本时显式指定。
 - 对象所属工具或 owner 按已注册 Module input schema 准备的 JSON 输入，以及适用的输出语义
   validator 或判断依据。未提供材料时先补齐，不从整个 Workspace 搜集输入。
-- 宿主已安装且可用的 Provider CLI。可选本次 transport、model、effort 和 CLI 路径；
-  省略执行参数时使用 Runtime 默认，不从环境名称推导模型或重新绑定 Profile。
+- 宿主已安装且可用的 Provider CLI，以及当前入口所需的登录条件。可选本次 transport 和 CLI 路径；
+  Codex 必须显式提供 model 和 effort。省略 transport 继续 Runtime 的 Claude 默认，不能从模型名
+  或环境名推断 Provider。模型默认值和支持语法由 Runtime 与同版本 CLI 说明，不在 Skill 保存另一份表。
 - 仅在需要留存时提供明确的证据输出位置。普通运行默认只返回结果。
 
 准确支持范围、参数和错误来自当前安装的 CLI 与随包文档，见 §6.1。root 只定位注册定义，
 不向模型开放整个项目，也不授权访问生产数据。Provider 登录仍由宿主维护；缺失时报告，
-不自行开启登录或修改环境配置。
+不自行开启登录、搜索其他账号或修改环境配置。
 
 ### 4.2 Output and Completion
 
 保留 CLI 原始结果，报告实际 Module、Workflow 版本与 hash、本次模型和 effort、执行状态、
-输出或 failure detail，以及实际可取得的用量。字段来自 Runtime 返回，不能手写一份执行日志代替。
+输出或 failure detail，以及实际可取得的用量。使用返回的 `execution_log` 查看每个 Attempt 已采集的
+原始流、工具记录和完整性说明；未知或缺失的记录如实保留，不能由 Agent 补写执行日志。
 
 退出成功只表明执行完成并取得符合注册 output schema 的输出。随后调用对象所属的语义 validator，
 或按调用者给出的判断依据解释结果；未执行所需语义校验时明确标记未完成该项。
 Reviewer 返回有效 `non_pass` 是材料需要修改的结论，不是技术重试理由。
 
 本命令返回 `persistence=not_requested`，指执行事实不写持久存储，不排除前置 setup 补齐环境文件。
-临时资源退出时清理。execution ID 不能用于之后查询
-持久历史；明确保存 stdout 可以保留测试证据，但不构成 PG Ledger 或可恢复请求回执。
+正常退出时清理本次临时资源；若返回私有资源保留或清理失败，按 Runtime 的错误说明交给环境负责人，
+不自行删除恢复目录。execution ID 不能用于之后查询持久历史；明确保存 stdout 可以保留测试证据，
+但不构成 PG Ledger 或可恢复请求回执。完整执行日志可能含私有材料，只交给本次已授权的读取者。
 失败时保留 stdout 中已有执行事实和 stderr 原错误，不用空响应制造 Reviewer verdict。
 
 ## 5. Boundaries
@@ -71,8 +78,9 @@ Reviewer 返回有效 `non_pass` 是材料需要修改的结论，不是技术�
 | 边界 | 可观察的越界 |
 | --- | --- |
 | 已注册定义与新材料分开 | 每次自测重注册 prompt，或修改 .runtime 定义 |
-| 模型选择与能力相容性分开 | 换模型时改工具权限，或为通过测试删 source 声明 |
+| 模型选择与能力相容性分开 | 换模型时改工具权限，清空 Module 要求以通过测试，或把旧 Profile 当新调用默认 |
 | 本次资源由请求限定 | 把 root 当模型可读项目全集，或从业务配置搜 PG 凭据 |
+| Runtime 负责执行配置 | 操作者叠加未声明 CLI 开关、拼 Provider 启动器或使用虚构的生产授权 |
 | 执行与语义结论分开 | 用退出成功代替材料通过，或反复重跑直到得到 passed |
 | 临时测试与持久恢复分开 | 把保存的 stdout 叫 Ledger，或声称可用此次 ID 跨进程重放 |
 
@@ -97,8 +105,8 @@ print(package.joinpath("docs/agent_runtime_reviewer_api.md"))
 ```
 
 读 runbook §0.3 与自动 API reference 的 Evaluation CLI、evaluate_local_workflow_module。
-当前支持 `claude_cli`；具体默认模型和重试规则由 Runtime 提供，不复制到本 Skill。
-接口缺失或安装不匹配时交安装维护者，不从生产源码拼 Provider 启动器。
+默认模型、Provider 认证支持、能力限制和失败处理使用这些同版本说明。接口缺失、安装不匹配或
+注册定义缺少当前准备所需运行要求时，交给 Runtime 或定义负责人；不从生产源码拼 Provider 启动器。
 
 需要确认定义时使用现有回读命令。它只读注册定义；前置 setup 在首次或缺项时仍可能写入环境资源：
 
@@ -113,22 +121,34 @@ agent-runtime-registry load --root /path/to/host --kind workflow \
 
 ### 6.2 执行一次普通自测
 
+使用 Runtime 默认执行选择：
+
 ```sh
 agent-runtime-evaluate --root /path/to/host --workflow registered_workflow_id \
   --version selected_version --input /path/to/prepared_input.json
 ```
 
-只有本次请求需要时才加 `--transport`、`--model`、`--effort` 或 `--cli-path`。
-参数与允许值查实际 help；注册记录中旧的模型绑定不成为这个入口的默认。提供材料按其 schema
-约定使用，Runtime 负责原有隔离和工具映射，操作者不另拼 read/search/shell 或 Read/Grep/Bash 配置。
+对符合当前 Codex 无工具要求的已注册 Module，且调用者已明确选择 Codex 时，使用同一个入口：
+
+```sh
+agent-runtime-evaluate --root /path/to/host --workflow registered_workflow_id \
+  --version selected_version --input /path/to/prepared_input.json \
+  --transport codex_cli --model selected_model --effort selected_effort
+```
+
+`selected_model` 和 `selected_effort` 换成本次明确的真实值，不写入 source 或另存环境 Profile。
+需要指定宿主已安装的程序时增加 `--cli-path /path/to/provider_cli`；省略时由 Runtime 解析所选程序。
+提供材料按其 schema 约定使用，Runtime 负责当前已支持的隔离、工具映射、私有状态和启动条件。
+操作者不另拼 read/search/shell 或 Read/Grep/Bash 配置，也不按本次任务擅自改默认能力。
 
 需要留存时，将本次 stdout 捕获到调用者明确的新证据文件，保留 stderr 和退出码；未请求时直接返回。
-不添加当前 CLI 不支持的持久保存参数。
+不添加当前 CLI 不支持的持久保存、材料挂载或测试命令参数。
 
 ### 6.3 判断结果与停止
 
 先检查退出码和实际 `status`，再做对象所属输出语义检查。准确退出码含义见同版本自动接口说明，
-不要把技术失败、用法错误、中断或业务 `non_pass` 混为一类。
+不要把技术失败、用法错误、中断或业务 `non_pass` 混为一类。某次工具被拒绝或报错不自动等于整次
+调用失败；以 Runtime 的实际终态、输出校验和相应工具记录分别说明。
 
 Runtime 内部技术重试由原有策略决定。再次启动 CLI 是新的测试，不能据此恢复上一次临时执行。
 超时、丢失响应或中断后先报告已有事实和不确定部分，不自动重跑整条命令。输入或模型明确变化，
