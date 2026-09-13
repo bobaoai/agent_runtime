@@ -73,6 +73,7 @@ def environment(tmp_path, monkeypatch):
             controls["during_provider"]()
         events = [
             {"type": "thread.started", "thread_id": "synthetic"}, {"type": "turn.started"},
+            *controls.get("tool_events", []),
             {"type": "item.completed", "item": {"type": "agent_message", "id": "answer",
                 "text": json.dumps({"summary": controls.get("summary", "non_pass")})}},
             {"type": "turn.completed", "usage": {"input_tokens": 8, "output_tokens": 3,
@@ -118,6 +119,109 @@ def test_codex_requires_explicit_model_and_effort_without_default_or_writes(envi
     with pytest.raises(ValueError, match="requires explicit"):
         prepare_local_workflow_module(root, "summarize_note", transport_kind="codex_cli", **values)
     assert not calls and _files(root) == before
+
+
+@pytest.mark.parametrize("effort", ["two words", "line\nbreak", "quoted\"value"])
+def test_codex_invalid_nonempty_effort_precedes_store_resources_and_process(environment, monkeypatch, effort):
+    from agent_runtime.invocation import invocation_codex_environment as private_state
+    root, _, resources, calls, _, adapters = environment
+    before = _files(root)
+    touched = []
+    def forbidden(*args, **kwargs):
+        touched.append(True)
+        pytest.fail("invalid effort reached a store, resource or process")
+    class Store:
+        register_bundle = forbidden
+        load_release_registry = forbidden
+    monkeypatch.setattr(local.tempfile, "TemporaryDirectory", forbidden)
+    monkeypatch.setattr(private_state, "prepare_codex_environment", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    selection = dict(transport_kind="codex_cli", model_id="gpt-6-astra", reasoning_profile=effort)
+    with pytest.raises(ValueError, match="effort|reasoning_profile"):
+        prepare_local_workflow_module(root, "summarize_note", release_store=Store(), **selection)
+    with pytest.raises(ValueError, match="effort|reasoning_profile"):
+        local.evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+            cli_path=Path(sys.executable), **selection)
+    assert touched == resources == calls == adapters == []
+    assert _files(root) == before
+
+
+@pytest.mark.parametrize("effort", ["max", "ultra", "persistent", "model_custom"])
+def test_codex_preparation_preserves_current_cli_effort_syntax(environment, effort):
+    root, _, resources, calls, _, adapters = environment
+    before = _files(root)
+    saved, variant = prepare_local_workflow_module(root, "summarize_note", transport_kind="codex_cli",
+        model_id="explicit-model", reasoning_profile=effort)
+    binding, = variant.policy_document()["bindings"]
+    profile = saved.registry.get_execution_profile(binding["execution_profile_release_ref"],
+        binding["execution_profile_release_sha256"])
+    assert profile.reasoning_profile == effort and profile.model_id == "explicit-model"
+    assert resources == calls == adapters == [] and _files(root) == before
+
+
+def test_public_codex_log_preserves_orphan_progress_without_inventing_execution(environment):
+    root, _, _, calls, controls, _ = environment
+    before = _files(root)
+    event = {"type": "item.updated", "item": {"type": "command_execution", "id": "c",
+        "command": "unknown", "aggregated_output": "partial", "status": "in_progress", "exit_code": None}}
+    controls["tool_events"] = [event]
+    record = invoke(environment)
+    assert record["status"] == "completed", record["failure_detail"]
+    assert len(calls) == 1 and _files(root) == before
+    log = record["execution_log"]
+    assert not log["complete"]
+    attempt, = log["attempts"]
+    assert "unpaired_tool_call:c" in attempt["issues"]
+    row, = attempt["tool_calls"]
+    assert row["status"] == "incomplete" and row["request"] is None and row["response"] is None
+    assert event in [entry["event"] for entry in attempt["provider_log"]["tool_log"]["events"]]
+
+
+def test_public_codex_cli_resolves_relative_executable_before_actual_attempt_cwd(environment, tmp_path, monkeypatch, capsys):
+    from agent_runtime import setup_runtime
+    from agent_runtime.invocation.invocation_process_execution import run_cli_process
+    monkeypatch.setattr(codex, "run_cli_process", run_cli_process)
+    root, _, resources, _, _, _ = environment
+    executable = root / "bin" / "codex"
+    executable.parent.mkdir()
+    launched = tmp_path / "launched.jsonl"
+    events = [
+        {"type": "thread.started", "thread_id": "synthetic"}, {"type": "turn.started"},
+        {"type": "item.completed", "item": {"type": "agent_message", "id": "answer",
+            "text": json.dumps({"summary": "relative executable ran"})}},
+        {"type": "turn.completed", "usage": {"input_tokens": 8, "output_tokens": 3}},
+    ]
+    executable.write_text(f"#!{sys.executable}\n" + f'''
+import json, os, sys
+with open({str(launched)!r}, "a") as output:
+    output.write(json.dumps({{"argv": sys.argv, "cwd": os.getcwd()}}) + "\\n")
+if "--version" in sys.argv:
+    print("codex-cli synthetic-local-process")
+else:
+    assert "exec" in sys.argv and sys.stdin.read()
+    for event in {events!r}:
+        print(json.dumps(event))
+''')
+    executable.chmod(0o700)
+    payload = tmp_path / "input.json"
+    payload.write_text("{}")
+    monkeypatch.chdir(root)
+    # Include normal setup before measuring invocation-only mutation.
+    setup_runtime(root)
+    before = _files(root)
+    exit_code = main(["--root", str(root), "--workflow", "summarize_note", "--input", str(payload),
+        "--transport", "codex_cli", "--model", "gpt-6-astra", "--effort", "xhigh",
+        "--cli-path", "./bin/codex"])
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.out + captured.err
+    record = json.loads(captured.out)
+    assert record["output"] == {"summary": "relative executable ran"}
+    processes = [json.loads(line) for line in launched.read_text().splitlines()]
+    assert len(processes) == 2 and "--version" in processes[0]["argv"]
+    assert all(Path(process["argv"][0]) == executable.resolve() for process in processes)
+    assert all(Path(process["cwd"]) != root for process in processes)
+    assert record["execution_log"]["complete"] and _files(root) == before
+    assert not resources[0]._workspace.exists()
 
 
 def test_codex_model_change_keeps_definition_and_changes_only_execution_selection(environment):

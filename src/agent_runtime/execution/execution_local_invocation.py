@@ -201,6 +201,8 @@ def evaluate_local_workflow_module(
             Required for codex_cli; no default is inferred from another Provider.
         cli_path: Explicit installed provider executable, or resolve the chosen
             claude/codex from host PATH. No login or installation is performed.
+            Relative paths are resolved from the caller's working directory
+            before entering the temporary Attempt directory.
             Codex uses file-based auth from the host's standard CODEX_HOME/auth.json
             (default ~/.codex/auth.json), never from task JSON or a fallback account.
     Returns:
@@ -259,6 +261,7 @@ def evaluate_local_workflow_module(
     executable = cli_path if cli_path is not None else shutil.which(program)
     if executable is None:
         raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path or host PATH")
+    executable = Path(executable).resolve(strict=True)
     artifacts = InMemoryCellArtifactStore()
     ledger = InMemoryModuleExecutionLedger()
     with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:

@@ -1239,6 +1239,8 @@ Evaluate a registered single-node Workflow using temporary test resources.
   Required for codex_cli; no default is inferred from another Provider.
 - `cli_path`: Explicit installed provider executable, or resolve the chosen
   claude/codex from host PATH. No login or installation is performed.
+  Relative paths are resolved from the caller's working directory
+  before entering the temporary Attempt directory.
   Codex uses file-based auth from the host's standard CODEX_HOME/auth.json
   (default ~/.codex/auth.json), never from task JSON or a fallback account.
 **Returns**

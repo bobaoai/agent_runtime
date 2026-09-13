@@ -521,3 +521,42 @@ def test_invalid_stdout_bytes_are_retained_and_not_silently_ignored(tmp_path):
     assert result.failure.failure_class == "provider" and not env.host.staged
     assert cli_stream_bytes(trace, "stdout") == raw and trace["byte_capture_exact"]
     assert trace["provider_stream_issues"][0].startswith("invalid_event:0:")
+
+
+# Codex rust-v0.153.4, commit 3d2ee51ca2d5db578f328aa75e20aa22c0197c9a:
+# protocol/src/openai_models.rs:50-62,131-146 has these named values plus Custom.
+# This is CLI syntax coverage, not a claim that every model advertises each value.
+@pytest.mark.parametrize("effort", [
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent",
+    "automatic", "model_custom", "future:v2",
+])
+def test_codex_named_and_custom_effort_preserve_exact_profile_and_command(tmp_path, effort):
+    compiled = native._compile_native_module(tmp_path, executor_adapter_revision="v4", reasoning_profile=effort)
+    profile = compiled.execution_profile
+    before = profile.as_dict()
+    assert codex._execution_expectation(profile).executor_adapter_revision == "v4"
+    command = codex.build_command(profile=profile, workspace=tmp_path, codex_bin="not-invoked")
+    settings = [command[index + 1] for index, value in enumerate(command) if value == "-c"]
+    assert "model_reasoning_effort=" + json.dumps(effort) in settings
+    assert type(profile).from_dict(before).as_dict() == before == profile.as_dict()
+
+
+@pytest.mark.parametrize("effort", ["max", "ultra", "automatic", "model_custom"])
+def test_direct_codex_adapter_preserves_named_and_custom_effort(tmp_path, effort):
+    env = environment(tmp_path, lambda _: process(), reasoning_profile=effort)
+    before = env.compiled.execution_profile.as_dict()
+    result, trace = execute(env)
+    assert result.terminal_status == "completed" and len(env.calls) == 1
+    command = env.calls[0]["argv"]
+    settings = [command[index + 1] for index, value in enumerate(command) if value == "-c"]
+    assert "model_reasoning_effort=" + json.dumps(effort) in settings
+    assert trace["effort"] == effort and env.compiled.execution_profile.as_dict() == before
+
+
+@pytest.mark.parametrize("revision", ["v3", "v4"])
+def test_historical_codex_effort_is_not_reclassified_during_profile_read(tmp_path, revision):
+    profile = native._compile_native_module(tmp_path, executor_adapter_revision=revision,
+                                             reasoning_profile="ultra").execution_profile
+    document = profile.as_dict()
+    restored = type(profile).from_dict(json.loads(json.dumps(document)))
+    assert restored.as_dict() == document and restored.release_sha256 == profile.release_sha256

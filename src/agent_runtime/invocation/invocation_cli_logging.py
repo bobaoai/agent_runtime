@@ -148,14 +148,21 @@ def parse_cli_log(trace: Mapping[str, Any]) -> dict:
         if row and value.get("tool_name") is not None and row["tool_name"] not in (None, value["tool_name"]):
             issue(f"permission_denial_tool_mismatch:{identity}", identity)
 
+    def progress(identity, name, position):
+        # A progress snapshot proves a tool was observed, not that its request
+        # or result was captured. Register the ID so an orphan stays unpaired.
+        # The exact snapshot remains in events, never in invented start/result fields.
+        row = call(identity, position)
+        if row is not None and row["tool_name"] is None:
+            row["tool_name"] = name
+
     def native_codex_item(event, item, position):
         kind, identity = item["type"], item.get("id")
         stage = event.get("type")
         if stage not in {"item.started", "item.updated", "item.completed"}:
             return
         if stage == "item.updated":
-            # The exact progress snapshot remains in events. It is neither a
-            # second request nor a result, and provides no invented start time.
+            progress(identity, kind, position)
             return
         fields = ("command",) if kind == "command_execution" else (
             ("changes",) if kind == "file_change" else ("query", "action"))
@@ -258,6 +265,8 @@ def parse_cli_log(trace: Mapping[str, Any]) -> dict:
                 continue
             if event.get("type") == "item.started":
                 request(item.get("id"), item.get("tool"), item.get("arguments"), position)
+            elif event.get("type") == "item.updated":
+                progress(item.get("id"), item.get("tool"), position)
             elif event.get("type") == "item.completed":
                 raw = item.get("result")
                 body = raw

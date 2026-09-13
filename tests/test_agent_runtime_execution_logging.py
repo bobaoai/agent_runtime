@@ -159,6 +159,38 @@ def test_codex_observed_command_events_preserve_reverse_completion_and_exact_out
     assert [row["event"] for row in parsed["events"]] == events
 
 
+@pytest.mark.parametrize("kind", ["command_execution", "file_change", "web_search", "mcp_tool_call"])
+@pytest.mark.parametrize("identity", ["progress_1", None])
+def test_codex_orphan_progress_is_incomplete_without_inventing_request_or_result(kind, identity):
+    item = {"type": kind, "id": identity, "status": "in_progress", "tool": "read"}
+    events = [{"type": "item.updated", "item": item}, {"type": "turn.completed"}]
+    parsed = parse_cli_log(trace(events, transport="codex_cli"))
+    assert not parsed["complete"]
+    assert [row["event"] for row in parsed["events"]] == events
+    if identity is None:
+        assert "missing_tool_call_id:0" in parsed["issues"]
+        assert parsed["tool_calls"] == []
+    else:
+        assert "unpaired_tool_call:progress_1" in parsed["issues"]
+        row, = parsed["tool_calls"]
+        assert row["tool_call_id"] == identity and row["status"] == "incomplete"
+        assert row["request"] is None and row["response"] is None
+        assert row["request_event_indices"] == row["response_event_indices"] == []
+
+
+def test_codex_progress_then_self_contained_completion_retains_real_completion():
+    item = {"type": "command_execution", "id": "c", "command": "echo ready",
+            "aggregated_output": "", "exit_code": None, "status": "in_progress"}
+    completed = {**item, "aggregated_output": "ready\n", "exit_code": 0, "status": "completed"}
+    events = [{"type": "item.updated", "item": item},
+              {"type": "item.completed", "item": completed}, {"type": "turn.completed"}]
+    parsed = parse_cli_log(trace(events, transport="codex_cli"))
+    assert parsed["complete"]
+    row, = parsed["tool_calls"]
+    assert row["status"] == "completed" and row["response"] == completed
+    assert row["request_event_indices"] == row["response_event_indices"] == [1]
+
+
 @pytest.mark.parametrize("kind,request_fields,status,limitation", [
     ("file_change", {"changes": [{"path": "a/added.txt", "kind": "add"},
                                   {"path": "c/modified.txt", "kind": "update"}]}, "completed", "provider_request_content_unavailable"),
@@ -217,11 +249,14 @@ def test_non_serializable_event_is_retained_without_poisoning_the_trace(raw):
     assert cli_stream_bytes(original, "stdout") == raw
 
 
-def test_codex_mcp_logs_preserve_real_command_results():
+@pytest.mark.parametrize("with_progress", [False, True])
+def test_codex_mcp_logs_preserve_real_command_results(with_progress):
     result = {"command_id": "unit", "allowed": True, "returncode": 0, "stdout": "153 passed\n", "stderr": ""}
     item = {"id": "call1", "type": "mcp_tool_call", "tool": "sandbox_command_execute",
             "arguments": {"command_id": "unit"}}
-    events = [{"type": "item.started", "item": item}, {"type": "item.completed",
+    events = [{"type": "item.started", "item": item},
+        *([{"type": "item.updated", "item": {**item, "status": "in_progress"}}] if with_progress else []),
+        {"type": "item.completed",
         "item": {**item, "status": "completed", "error": None,
                  "result": {"content": [{"type": "text", "text": json.dumps(result)}]}}}, {"type": "turn.completed"}]
     log = parse_cli_log(trace(events, transport="codex_cli"))
