@@ -42,10 +42,15 @@ class ModuleSelfTestResources:
             raise PermissionError("self-test does not expose external Gateway operations")
         selected = request.variants[0]
         profile = registry.get_execution_profile(selected.execution_profile_ref, selected.execution_profile_sha256)
+        profile.validate()
+        requirements = module.get_execution_requirements()
+        if requirements is not None:
+            requirements.assert_profile(profile)
         if (profile.transport_kind != "claude_cli" or profile.network_policy != "denied"
                 or profile.gateway_access_reasons or profile.semantic_input_delivery_mode != "inline"
-                or profile.attempt_workspace_policy != "own_draft_read_write"):
-            raise PermissionError("Profile is not admitted for temporary native-tool evaluation")
+                or profile.execution_mode not in {"agent", "tool_free"}
+                or profile.attempt_workspace_policy not in {"none", "own_draft_read_write"}):
+            raise PermissionError("Profile is not admitted for temporary inline evaluation")
         if (registry.get_workflow(workflow.release_ref, workflow.release_sha256) != workflow
                 or registry.get_execution_variant_policy(variant.release_ref, variant.release_sha256) != variant
                 or len(workflow.nodes) != 1 or workflow.initial_node_id != request.workflow_node_id):

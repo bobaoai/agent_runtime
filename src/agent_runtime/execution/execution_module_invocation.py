@@ -55,6 +55,7 @@ from ..contracts.registry_release_definition import (
     ExecutionProfileRelease,
     ExecutionVariantPolicyRelease,
     ModuleExecutionPurpose,
+    ModuleKind,
     OutputResolutionPolicy,
     ModuleRelease,
     WorkflowNodeKind,
@@ -1042,8 +1043,12 @@ def _run_module(
             variant_request.execution_profile_ref,
             variant_request.execution_profile_sha256,
         )
-        if profile.transport_kind not in module.compatible_transport_kinds:
+        if (module.module_kind is not ModuleKind.AGENT
+                and profile.transport_kind not in module.compatible_transport_kinds):
             raise ValueError("Execution Profile transport is incompatible with Module")
+        requirements = module.get_execution_requirements()
+        if requirements is not None:
+            requirements.assert_profile(profile)
         if module.declared_operation_ids:
             _assert_admitted_test_evaluation_profile(
                 module,
@@ -2025,41 +2030,25 @@ def _assert_admitted_test_evaluation_profile(
     module: ModuleRelease,
     profile: ExecutionProfileRelease,
 ) -> None:
-    """Admit the exact model-backed Test/Evaluation capability slices.
+    """Check common execution requirements and existing operation resources.
 
-    Registration validates the dimensions independently. The execution kernel
-    intentionally admits only reviewed conjunctions, so a newly representable
-    hybrid cannot become executable by accident.
+    The selected Adapter descriptor and its invocation validation decide actual
+    provider support. Native tools do not confer domain-operation authority.
     """
 
-    if module.reviewer_defaults is not None:
-        module.reviewer_defaults.assert_profile(profile)
+    profile.validate()
+    requirements = module.get_execution_requirements()
+    if requirements is not None:
+        requirements.assert_profile(profile)
     _, non_model_operations = partition_module_operation_ids(
         module.declared_operation_ids
     )
     if (
-        profile.execution_mode == "tool_free"
+        profile.execution_mode in {"tool_free", "agent"}
         and profile.semantic_input_delivery_mode == "inline"
-        and profile.attempt_workspace_policy == "none"
         and profile.network_policy == "denied"
-        and not profile.tool_policy
         and not profile.gateway_access_reasons
         and not non_model_operations
-    ):
-        return
-    if (
-        profile.execution_mode == "agent"
-        and profile.semantic_input_delivery_mode == "inline"
-        and profile.attempt_workspace_policy == "own_draft_read_write"
-        and profile.network_policy == "denied"
-        and bool(profile.tool_policy)
-        and not profile.gateway_access_reasons
-        and not non_model_operations
-        and profile.executor_adapter_id
-        == "claude_cli_native_tools_executor"
-        and profile.executor_adapter_revision == "v2"
-        and profile.transport_kind == "claude_cli"
-        and profile.provider_id == "anthropic"
     ):
         return
     if (
@@ -2070,15 +2059,11 @@ def _assert_admitted_test_evaluation_profile(
         and bool(profile.tool_policy)
         and bool(profile.gateway_access_reasons)
         and frozenset(profile.tool_policy) == non_model_operations
-        and profile.executor_adapter_id == "claude_agent_sdk_gateway_executor"
-        and profile.executor_adapter_revision == "v3"
-        and profile.transport_kind == "claude_agent_sdk"
-        and profile.provider_id == "anthropic"
     ):
         return
     raise NotImplementedError(
         "model-backed Test/Evaluation profile is outside the admitted "
-        "tool-free, draft-workspace, and Gateway-read slices"
+        "inline and Gateway-read resource boundaries"
     )
 
 

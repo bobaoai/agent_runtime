@@ -296,6 +296,10 @@ class _CodexCliExecutorBase:
                 tool_policy=self.expected_tool_policy,
             ),
         )
+        if self.descriptor.admission_state == "conformance_candidate":
+            raise PermissionError("Codex workspace candidate lacks required ambient-read isolation")
+        if self.shell_tool_enabled != ("shell" in prepared.profile.tool_policy):
+            raise PermissionError("Codex actual Shell capability differs from the explicit Profile tool_policy")
         try:
             return self._execute_prepared(request, host, prepared)
         except TerminalAdapterFailure as failure:
@@ -593,10 +597,17 @@ class CodexCliModuleExecutor(_CodexCliExecutorBase):
 
 
 class CodexCliAgentWorkspaceModuleExecutor(_CodexCliExecutorBase):
-    """Execute one Agent Module with an isolated mutable draft workspace."""
+    """Unadmitted workspace candidate; refuses execution until reads are confined.
+
+    The historical v2 Profile and descriptor identity remain readable. This
+    implementation cannot limit ambient reads and does not grant a usable public
+    execution path. Both direct execute and the kernel fail before workspace or
+    provider effects; selecting an empty tool_policy cannot implicitly enable Shell.
+    """
 
     executor_adapter_id = "codex_cli_agent_workspace_executor"
     executor_adapter_revision = "v2"
+    descriptor_admission_state = "conformance_candidate"
     expected_execution_mode = "agent"
     expected_attempt_workspace_policy = "own_draft_read_write"
     expected_tool_policy = ()

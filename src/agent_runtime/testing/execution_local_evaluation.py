@@ -9,7 +9,7 @@ from ..execution.execution_local_invocation import evaluate_local_workflow_modul
 
 def build_parser():
     """Declare the actual evaluation arguments used by help and generated docs."""
-    parser = argparse.ArgumentParser(description="Evaluate one registered Workflow; first ensure lightweight local Runtime setup. No PG or production authorization.")
+    parser = argparse.ArgumentParser(description="Evaluate one registered single-Module Workflow with its frozen requirements and an independent model. Supports empty or selected native tools. No PG or production authorization.")
     parser.add_argument("--root", required=True, type=Path, help="Root containing .runtime definitions; not a model read root.")
     parser.add_argument("--workflow", required=True, help="Registered single-node Workflow ID.")
     parser.add_argument("--version", help="Exact version; omit for the latest registered new definition.")

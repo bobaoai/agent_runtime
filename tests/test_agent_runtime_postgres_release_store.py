@@ -1013,3 +1013,37 @@ def test_postgres_abort_reopens_v1_only_after_target_is_absent(
             source_schema=source_schema,
             target_schema=target_schema,
         )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AGENT_RUNTIME_TEST_DATABASE_URL"),
+    reason="requires AGENT_RUNTIME_TEST_DATABASE_URL",
+)
+def test_postgres_mixed_requirements_and_historical_budgets_keep_original_records(tmp_path, postgres_release_test_schema):
+    from agent_runtime import ReviewerDefaults
+    from test_agent_runtime_reviewer_registration_cli import _source, _legacy_export
+    from test_agent_runtime_registry_module_policy_closure import _modern_export
+    source, _ = _source(tmp_path / "legacy")
+    old_exports = tuple(_legacy_export(source, version=version, defaults=snapshot)
+        for version, snapshot in (
+            ("legacy_plain", None), ("legacy_v2", ReviewerDefaults(version="v2")),
+            ("legacy_large", ReviewerDefaults(timeout_seconds=86401))))
+    modern = _modern_export(tmp_path / "modern")
+    store = PostgresRuntimeReleaseStore.from_dsn(
+        os.environ["AGENT_RUNTIME_TEST_DATABASE_URL"], schema=postgres_release_test_schema)
+    store.create_schema(installed_at_utc="2026-08-17T19:59:59Z")
+    for exported in (*old_exports, modern):
+        store.register_bundle(exported.origin_bundle)
+    fresh = PostgresRuntimeReleaseStore.from_dsn(
+        os.environ["AGENT_RUNTIME_TEST_DATABASE_URL"], schema=postgres_release_test_schema)
+    restored = fresh.load_release_registry()
+    before = restored.snapshot()
+    for exported in (*old_exports, modern):
+        module = exported.module_release
+        assert restored.get_module(module.release_ref, module.release_sha256).as_dict() == module.as_dict()
+        fresh.register_bundle(exported.origin_bundle)
+    assert fresh.load_release_registry().snapshot() == before
+    large = old_exports[-1].module_release
+    with pytest.raises(ValueError, match="86400"):
+        restored.get_module(large.release_ref, large.release_sha256).get_execution_requirements()
+    assert restored.get_module(modern.module_release.release_ref, modern.module_release.release_sha256) == modern.module_release

@@ -850,15 +850,14 @@ def _validate_execution_capabilities(
         raise ValueError(
             "Gateway semantic input delivery requires gateway_only network"
         )
-    native_workspace = (
+    native_tools_allowed = (
         execution_mode == "agent"
         and semantic_input_delivery_mode == "inline"
-        and attempt_workspace_policy == "own_draft_read_write"
         and network_policy == "denied"
     )
-    if not gateway_delivery and tool_policy and not native_workspace:
+    if not gateway_delivery and tool_policy and not native_tools_allowed:
         raise ValueError(
-            "native tools require an explicit agent workspace profile"
+            "native tools require an inline agent profile with denied network"
         )
     if not gateway_delivery and gateway_access_reasons:
         raise ValueError(

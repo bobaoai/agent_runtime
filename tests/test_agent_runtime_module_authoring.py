@@ -475,12 +475,13 @@ def test_loader_reads_only_the_selected_module_closure(tmp_path: Path) -> None:
 
 def test_ordinary_module_loads_exports_and_projects_non_review_schema(tmp_path, monkeypatch):
     from agent_runtime.registry import registry_reviewer_defaults
+    from agent_runtime.execution import execution_local_invocation
     project = _task_project(tmp_path, module_id="summarize_note")
     before = _source_hashes(project)
     def forbidden(*args, **kwargs):
         pytest.fail("ordinary authoring must not use Reviewer format or model defaults")
     monkeypatch.setattr(registry_reviewer_defaults, "_validate_reviewer_output_schema", forbidden)
-    monkeypatch.setattr(registry_reviewer_defaults, "reviewer_execution_profile", forbidden)
+    monkeypatch.setattr(execution_local_invocation, "_execution_profile_for_requirements", forbidden)
     ordinary = Module.from_registration(project, skill_id=SKILL_ID,
         module_id="summarize_note", execution_requirements=_requirements())
     exported = ordinary.export(module_version="v1")

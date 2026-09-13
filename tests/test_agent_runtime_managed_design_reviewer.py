@@ -8,8 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime import ModuleReviewer
-from agent_runtime.registry.registry_module_authoring import ModuleExport, _candidate
+from agent_runtime import (
+    ModuleReviewer, RuntimeModulePlugin, prepare_local_workflow_module,
+    register_runtime_module_plugin,
+)
+from agent_runtime.registry.registry_module_authoring import ModuleExport
+from agent_runtime.registry.registry_module_loading import load_module_registration
 from agent_runtime.contracts.execution_authorization_definition import (
     ExecutionAuthorizationContextEnvelope,
     ExecutionAuthorizationContextState,
@@ -31,7 +35,7 @@ from agent_runtime.contracts.invocation_adapter_definition import (
     OutputSubmission,
 )
 from agent_runtime.contracts.registry_release_definition import (
-    ModuleExecutionPurpose,
+    ModuleExecutionPurpose, ModuleEntryPolicy, OutputResolutionPolicy,
 )
 from agent_runtime.execution.execution_authorization_coordination import (
     ExecutionAuthorizationController,
@@ -49,9 +53,7 @@ from agent_runtime.execution.execution_module_invocation import (
 from agent_runtime.foundation.foundation_json_schema_validation import (
     validate_json_document_against_schema,
 )
-from agent_runtime.invocation.invocation_claude_module_invocation import (
-    ClaudeAgentSdkInlineModuleExecutor,
-)
+from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter
 from agent_runtime.invocation.invocation_prompt_assembly import (
     NATIVE_STRUCTURED_OUTPUT,
     build_inline_provider_prompt,
@@ -60,6 +62,7 @@ from agent_runtime.ledger.ledger_lineage_recording import (
     InMemoryModuleExecutionLedger,
 )
 from agent_runtime.registry import (
+    AgentModuleReleaseCandidate,
     BehaviorPolicyReleaseCandidate,
     EvaluationPolicyReleaseCandidate,
     ExecutionProfileReleaseSpec,
@@ -90,11 +93,9 @@ RUN_PROVIDER_INTEGRATION = os.environ.get("RUN_PROVIDER_INTEGRATION") == "1"
 
 
 def _required_check_ids() -> tuple[str, ...]:
-    source = ModuleReviewer.from_registration(
-        REPO_ROOT,
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
-    ).source
+    source = load_module_registration(
+        REPO_ROOT, skill_id=SKILL_ID, module_id=MODULE_ID,
+    )
     input_schema = json.loads(source.input_schema_document)
     return tuple(
         item["const"]
@@ -360,91 +361,58 @@ def _common_output_schema(schema_ref: str) -> str:
 
 
 def _compiled_reviewer():
+    """Current authoring requires an explicitly installed v4 source."""
     reviewer = ModuleReviewer.from_registration(
-        REPO_ROOT,
-        skill_id=SKILL_ID,
-        module_id=MODULE_ID,
+        REPO_ROOT, skill_id=SKILL_ID, module_id=MODULE_ID,
     )
     reviewer = ModuleReviewer(source=replace(
         reviewer.source,
         output_schema_document=_common_output_schema(reviewer.source.output_schema_ref),
     ))
-    behavior = compile_behavior_policy_release(
-        BehaviorPolicyReleaseCandidate(
-            policy_id="workflow_execution_isolated",
-            policy_version="v1",
-            context_isolation="workflow_execution_isolated",
-        )
-    )
-    evaluation = compile_evaluation_policy_release(
-        EvaluationPolicyReleaseCandidate(
-            policy_id="module_candidate",
-            policy_version="v1",
-            evaluation_mode="module_candidate",
-        )
-    )
-    retry = compile_retry_policy_release(
-        RetryPolicyReleaseCandidate(
-            policy_id="bounded_candidate",
-            policy_version="v1",
-            max_attempts=3,
-        )
-    )
-    profile = compile_execution_profile_release(
-        ExecutionProfileReleaseSpec(
-            execution_profile_id="profile_design_contract_reviewer_opus_5_xhigh_v1",
-            executor_adapter_id="claude_agent_sdk_inline_executor",
-            executor_adapter_revision="v2",
-            transport_kind="claude_agent_sdk",
-            provider_id="anthropic",
-            model_id="claude-opus-5",
-            reasoning_profile="xhigh",
-            execution_mode="tool_free",
-            semantic_input_delivery_mode="inline",
-            attempt_workspace_policy="none",
-            gateway_access_reasons=(),
-            output_constraint_mode=NATIVE_STRUCTURED_OUTPUT,
-            tool_policy=(),
-            network_policy="denied",
-            timeout_seconds=900,
-            release_version="v1",
-        )
-    )
-    exported = reviewer.export(
-        module_version="v1",
-        behavior_policy=behavior,
-        evaluation_policy=evaluation,
-        retry_policy=retry,
-        execution_profile=profile,
-    )
-    assert exported.execution_variant is not None
-    return reviewer, exported
+    return reviewer, reviewer.export(module_version="v1")
 
 
-def _registered_reviewer():
+def _registered_reviewer(tmp_path):
     reviewer, exported = _compiled_reviewer()
-    registry = RuntimeReleaseRegistry()
-    registry.register_bundle(exported.origin_bundle)
-    variant_schema = next(
-        asset
-        for asset in runtime_owned_policy_schema_assets()
-        if asset.release_ref == exported.execution_variant.policy_schema_ref
+    workflow = reviewer.to_workflow(exported).export()
+    runtime_root = tmp_path / "registered"
+    register_runtime_module_plugin(
+        RuntimeReleaseRegistry(),
+        RuntimeModulePlugin(plugin_id="design_reviewer_fixture", plugin_version="v1",
+                            release_bundle=workflow.origin_bundle),
+        root=runtime_root,
     )
-    registry.register_bundle(
-        RuntimeReleaseBundle(
-            schema_assets=(variant_schema,),
-            execution_profiles=(exported.execution_profile,),
-            execution_variant_policies=(exported.execution_variant,),
-        )
+    prepared, selection = prepare_local_workflow_module(
+        runtime_root, workflow.workflow_release.workflow_id, version="v1",
+        model_id="claude-opus-5", reasoning_profile="xhigh",
     )
-    return reviewer, exported, registry
+    binding = selection.policy_document()["bindings"][0]
+    profile = prepared.registry.get_execution_profile(
+        binding["execution_profile_release_ref"],
+        binding["execution_profile_release_sha256"],
+    )
+    return reviewer, exported, prepared.registry, profile
+
+
+def _legacy_output_schema(schema_ref):
+    """Explicit predecessor-schema fixture, not new Reviewer authoring."""
+    schema = json.loads(_common_output_schema(schema_ref))
+    fields = tuple(_legacy_review_output()["design_judgment"])
+    schema["properties"]["design_judgment"] = {
+        "type": "object", "additionalProperties": False,
+        "properties": {name: {"type": "string", "minLength": 1} for name in fields},
+        "required": list(fields),
+    }
+    schema["required"].append("design_judgment")
+    return json.dumps(schema, sort_keys=True, separators=(",", ":"))
 
 
 def _registered_legacy_reviewer():
-    reviewer = ModuleReviewer.from_registration(
-        REPO_ROOT, skill_id=SKILL_ID, module_id=MODULE_ID
-    )
-    source = reviewer.source
+    # Capture legacy task content without entering current v4 authoring.
+    source = load_module_registration(REPO_ROOT, skill_id=SKILL_ID, module_id=MODULE_ID)
+    output_ref = f"schema:{MODULE_ID}_output@legacy_fixture_v1"
+    source = replace(source, output_schema_ref=output_ref,
+                     output_schema_document=_legacy_output_schema(output_ref))
     behavior = compile_behavior_policy_release(BehaviorPolicyReleaseCandidate(
         policy_id="workflow_execution_isolated", policy_version="v1",
         context_isolation="workflow_execution_isolated"))
@@ -459,8 +427,24 @@ def _registered_legacy_reviewer():
         reasoning_profile="xhigh", execution_mode="tool_free", semantic_input_delivery_mode="inline",
         attempt_workspace_policy="none", gateway_access_reasons=(), output_constraint_mode=NATIVE_STRUCTURED_OUTPUT,
         tool_policy=(), network_policy="denied", timeout_seconds=900, release_version="v1"))
-    candidate = _candidate(source, module_version="v1", behavior_policy=behavior,
-        evaluation_policy=evaluation, retry_policy=retry)
+    candidate = AgentModuleReleaseCandidate(
+        module_id=source.module_id, module_version="legacy_fixture_v1",
+        owner_contract_ref=source.owner_contract_ref,
+        owner_contract_content=source.owner_contract_content,
+        input_schema_ref=source.input_schema_ref,
+        input_schema_document=source.input_schema_document,
+        output_schema_ref=source.output_schema_ref,
+        output_schema_document=source.output_schema_document,
+        instruction_source_ref=source.instruction_source_ref,
+        instruction_text=source.instruction_text,
+        declared_operation_ids=("model_execute",),
+        compatible_transport_kinds=("claude_agent_sdk", "codex_cli"),
+        behavior_policy_ref=behavior.release_ref, behavior_policy_sha256=behavior.release_sha256,
+        evaluation_policy_ref=evaluation.release_ref, evaluation_policy_sha256=evaluation.release_sha256,
+        retry_policy_ref=retry.release_ref, retry_policy_sha256=retry.release_sha256,
+        entry_policy=ModuleEntryPolicy.STANDALONE_ALLOWED,
+        output_resolution_policy=OutputResolutionPolicy.EVALUATED_SINGLE,
+    )
     compiled = compile_agent_module_release(candidate)
     variant_candidate = ExecutionVariantPolicyReleaseCandidate(
         policy_id=f"{MODULE_ID}_legacy_variant", policy_version="v1",
@@ -471,19 +455,18 @@ def _registered_legacy_reviewer():
             execution_profile_release_sha256=profile.release_sha256),))
     variant = compile_execution_variant_policy_release(variant_candidate)
     exported = ModuleExport(source=source, candidate=candidate, compiled=compiled,
-        behavior_policy=behavior, evaluation_policy=evaluation, retry_policy=retry,
-        execution_profile=profile, execution_variant_candidate=variant_candidate,
-        execution_variant=variant, execution_blocker_code=None)
+        behavior_policy=behavior, evaluation_policy=evaluation, retry_policy=retry)
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(exported.origin_bundle)
     variant_schema = next(asset for asset in runtime_owned_policy_schema_assets()
         if asset.release_ref == variant.policy_schema_ref)
     registry.register_bundle(RuntimeReleaseBundle(schema_assets=(variant_schema,),
         execution_profiles=(profile,), execution_variant_policies=(variant,)))
-    return exported, registry
+    assert compiled.module.get_execution_requirements() is None
+    return exported, registry, profile
 
 
-def _execution_input(exported, artifact_host: InMemoryCellArtifactStore):
+def _execution_input(exported, profile, artifact_host: InMemoryCellArtifactStore):
     payload = _review_input()
     input_schema = json.loads(exported.source.input_schema_document)
     validate_json_document_against_schema(payload, input_schema)
@@ -535,8 +518,8 @@ def _execution_input(exported, artifact_host: InMemoryCellArtifactStore):
             ModuleVariantRequest(
                 arm_key="opus_5_xhigh",
                 replicate_index=0,
-                execution_profile_ref=exported.execution_profile.release_ref,
-                execution_profile_sha256=exported.execution_profile.release_sha256,
+                execution_profile_ref=profile.release_ref,
+                execution_profile_sha256=profile.release_sha256,
                 prompt_envelope_ref=prompt_ref.artifact_ref,
                 prompt_envelope_sha256=prompt_ref.artifact_sha256,
             ),
@@ -633,26 +616,27 @@ def _authority(registry, request):
 
 
 class _StaticDesignReviewerAdapter:
-    def __init__(self, registry, artifact_host, output=None) -> None:
+    def __init__(self, registry, artifact_host, profile, output=None) -> None:
         self.registry = registry
         self.artifact_host = artifact_host
+        self.profile = profile
         self.output = _valid_review_output() if output is None else output
 
     @property
     def descriptor(self) -> AgentExecutionAdapterDescriptor:
         return AgentExecutionAdapterDescriptor(
             adapter_contract_version="v1",
-            adapter_id="claude_agent_sdk_inline_executor",
-            adapter_revision="v2",
-            provider_id="anthropic",
-            transport_family="sdk",
-            transport_kind="claude_agent_sdk",
+            adapter_id=self.profile.executor_adapter_id,
+            adapter_revision=self.profile.executor_adapter_revision,
+            provider_id=self.profile.provider_id,
+            transport_family="cli" if self.profile.transport_kind == "claude_cli" else "sdk",
+            transport_kind=self.profile.transport_kind,
             runtime_package_id="agent_runtime_core",
             runtime_package_version="0.0.0",
             supported_context_modes=("stateless",),
             supported_output_constraint_modes=(NATIVE_STRUCTURED_OUTPUT,),
             supported_read_isolation_modes=("entitled_refs",),
-            supported_execution_modes=("tool_free",),
+            supported_execution_modes=(self.profile.execution_mode,),
             supported_input_delivery_modes=("inline",),
             supported_network_policies=("denied",),
             supports_dynamic_operation_authorization=False,
@@ -703,10 +687,10 @@ class _StaticDesignReviewerAdapter:
         )
 
 
-def _run(adapter, exported, registry, artifact_host):
+def _run(adapter, exported, profile, registry, artifact_host):
     adapters = AgentExecutionAdapterRegistry()
     adapters.register(adapter)
-    request = _execution_input(exported, artifact_host)
+    request = _execution_input(exported, profile, artifact_host)
     result = run_module(
         request,
         release_registry=registry,
@@ -731,16 +715,18 @@ def _run(adapter, exported, registry, artifact_host):
 
 
 def test_registered_design_reviewer_runs_through_runtime_with_static_adapter(
+    tmp_path,
 ) -> None:
-    _, exported, registry = _registered_reviewer()
+    _, exported, registry, profile = _registered_reviewer(tmp_path)
     artifact_host = InMemoryCellArtifactStore(
         artifact_kind_by_schema_ref={
             exported.module_release.output_schema_ref: "design_review_result"
         }
     )
     result, payload = _run(
-        _StaticDesignReviewerAdapter(registry, artifact_host),
+        _StaticDesignReviewerAdapter(registry, artifact_host, profile),
         exported,
+        profile,
         registry,
         artifact_host,
     )
@@ -749,14 +735,17 @@ def test_registered_design_reviewer_runs_through_runtime_with_static_adapter(
     assert payload["verdict"] == "passed"
 
 
-def test_registered_legacy_reviewer_release_still_runs_without_new_export() -> None:
-    exported, registry = _registered_legacy_reviewer()
+def test_registered_legacy_reviewer_release_still_runs_without_new_export(monkeypatch) -> None:
+    def forbidden(*args, **kwargs):
+        pytest.fail("legacy execution must not enter new Reviewer export")
+    monkeypatch.setattr(ModuleReviewer, "export", forbidden)
+    exported, registry, profile = _registered_legacy_reviewer()
     artifact_host = InMemoryCellArtifactStore(
         artifact_kind_by_schema_ref={exported.module_release.output_schema_ref: "legacy_design_review_result"}
     )
     result, payload = _run(
-        _StaticDesignReviewerAdapter(registry, artifact_host, _legacy_review_output()),
-        exported, registry, artifact_host,
+        _StaticDesignReviewerAdapter(registry, artifact_host, profile, _legacy_review_output()),
+        exported, profile, registry, artifact_host,
     )
     assert result.attempts[0].status == "completed"
     assert payload["design_judgment"]["intended_result"]
@@ -769,19 +758,19 @@ def test_registered_legacy_reviewer_release_still_runs_without_new_export() -> N
 def test_registered_design_reviewer_runs_live_opus_5_through_runtime(
     tmp_path: Path,
 ) -> None:
-    _, exported, registry = _registered_reviewer()
+    _, exported, registry, profile = _registered_reviewer(tmp_path)
     artifact_host = InMemoryCellArtifactStore(
         artifact_kind_by_schema_ref={
             exported.module_release.output_schema_ref: "design_review_result"
         }
     )
-    executor = ClaudeAgentSdkInlineModuleExecutor(
+    executor = ClaudeAdapter(
         release_registry=registry,
         artifact_host=artifact_host,
         workspace_root=tmp_path / "workspaces",
-        max_turns=12,
+        cli_path=Path(os.environ["AGENT_RUNTIME_TEST_CLAUDE_BIN"]),
     )
-    result, payload = _run(executor, exported, registry, artifact_host)
+    result, payload = _run(executor, exported, profile, registry, artifact_host)
 
     assert result.attempts[0].status == "completed"
     assert payload["verdict"] == "passed", json.dumps(

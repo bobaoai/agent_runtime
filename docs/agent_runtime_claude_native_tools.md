@@ -1,10 +1,9 @@
-# Claude 原生工具执行
+# ClaudeAdapter 与 Claude CLI 执行
 
 ## 1. 使用方式
 
-`ClaudeCliNativeToolsModuleExecutor` 直接启动本机 Claude CLI。模型、effort、
-工具和超时来自 Execution Profile；同一个 Adapter 可用于不同 Reviewer 和其他相容 Module。
-本机提供 CLI 路径、工作区根和必要的只读运行依赖。
+ClaudeAdapter 消费 Runtime 已准备的规范化请求，按字段和资源组合 claude -p。工具、工作区、模型、effort、输出和超时各有准确来源，同一实现服务普通 Module 与 ModuleReviewer。
+参数、返回、失败和效果说明从实际类及方法的 docstring 自动导出，见 [ClaudeAdapter API](agent_runtime_reviewer_api.md#claudeadapter)。本页说明操作和验证，不维护另一份接口定义。
 
 ### 1.1 宿主需要准备的环境
 
@@ -19,7 +18,7 @@ Python 参数或对象，不要求创建新的配置文件格式。
 | Python、Git 等工具 | Adapter 的 `read_only_dependencies` | 真实安装目录，包含程序及必要库；当前 Adapter 将这些目录下的 `bin` 加入 PATH，不依赖 Agent 临时寻找程序 |
 | 本次运行位置 | Adapter 的 `workspace_root` | 宿主拥有且可写的专用运行根目录；Runtime 在其下创建 Attempt/work、materials 和 scratch，不把宿主整个仓库默认为可读材料 |
 | 审核材料与任务 | 公共执行入口的 `input_payload` 和授权内容读取接口 | 核心内容与明确辅助材料来自调用方；辅助材料由 Runtime 读取、核验并准备，不由 Adapter 扫描仓库 |
-| Module 与 Profile | `release_registry`、Workflow、Variant Policy | 通过 Registration Runbook 注册完整依赖；本次选择的 Module 必须声明支持 `claude_cli`，Provider 工具组合必须被 Adapter 接纳 |
+| 固定定义与本次执行选择 | Runtime 的 prepare_local_workflow_module 返回准确定义、Profile 和 Variant | 先通过 Registration Runbook 注册固定定义，再准备本次选择；相容性由 Runtime 按通用运行要求和真实 Adapter 判断，source 不声明 transport |
 | Runtime 数据库 | `PostgresRuntimeReleaseStore`、`PostgresRuntimeExecutionRecordStore`、`PostgresRuntimeExecutionQueryStore` 的 `from_dsn(..., schema=...)` | 宿主提供连接与注册/执行 schema；二者可在同一个 PG 数据库内。管理员先通过 Runtime 安装/迁移 API 准备结构，普通注册和调用不自动执行 DDL |
 | 宿主授权与内容存储 | `authorize`、`context_client`、`operation_client`、`artifact_host`、`record_store`、`content_store` 等公共入口参数 | 按当前 public API 提供真实绑定；测试里的 `_Host` 是替身，不是可以复制进生产的授权服务 |
 
@@ -29,43 +28,36 @@ Python 参数或对象，不要求创建新的配置文件格式。
 
 ```mermaid
 flowchart LR
-    H["宿主准备 CLI、依赖、PG/schema<br/>选择 Module/Profile、提供任务材料"] --> E["Runtime 公共执行入口"]
+    H["宿主提供 root、任务材料与适用资源"] --> E["Runtime 公共执行入口<br/>固定要求与独立模型选择"]
     E --> A["Runtime 准备工作区<br/>Claude Adapter 直接启动 CLI"]
     A --> R["Runtime 校验输出<br/>保存成功/失败、工具记录和用量"]
-    R --> P["写入宿主指定的 PG schema"]
+    R --> P["已授权持久存储或自测内存结果"]
     P --> Q["宿主使用 Runtime 查询 API<br/>按 execution_id 回读结果"]
 ```
 
-### 1.2 组装现有 Adapter
+### 1.2 使用 Runtime 准备结果
 
 ```python
 from pathlib import Path
-from agent_runtime.registry import ExecutionProfileReleaseSpec, compile_execution_profile_release
-from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeCliNativeToolsModuleExecutor
+from agent_runtime import prepare_local_workflow_module
+from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter
 
-profile = compile_execution_profile_release(ExecutionProfileReleaseSpec(
-    execution_profile_id="claude_cli_reviewer_sample", release_version="v1",
-    executor_adapter_id="claude_cli_native_tools_executor", executor_adapter_revision="v1",
-    transport_kind="claude_cli", provider_id="anthropic",
-    model_id="claude-opus-5[1m]", reasoning_profile="xhigh",
-    execution_mode="agent", semantic_input_delivery_mode="inline",
-    attempt_workspace_policy="own_draft_read_write", gateway_access_reasons=(),
-    output_constraint_mode="native_structured_output",
-    tool_policy=("read", "search", "shell"), network_policy="denied", timeout_seconds=1200,
-))
+prepared, selection = prepare_local_workflow_module(
+    project_root, workflow_id,
+    model_id=requested_model, reasoning_profile=requested_effort,
+)
 
-adapter = ClaudeCliNativeToolsModuleExecutor(
-    release_registry=registry, artifact_host=cell_artifacts,
+adapter = ClaudeAdapter(
+    release_registry=prepared.registry, artifact_host=cell_artifacts,
     workspace_root=Path(host_workspace_root), cli_path=Path(host_claude_cli),
     read_only_dependencies=tuple(Path(p) for p in host_test_dependencies),
 )
 adapters.register(adapter)
 ```
 
-示例中的 registry、cell_artifacts、adapters 和 host_* 由宿主提供。通过
-`run_registered_workflow_module` 或 `run_workflow_module` 使用该 Adapter；完整参数沿用现有公共入口。
-Profile 与对应 Variant Policy 按 [注册 runbook](agent_runtime_registration_runbook.md) 注册，
-Module 指令和 schema 不因更换 Profile 而修改。
+project_root、workflow_id 指向准确注册；requested_model/requested_effort 为本次选择，None 使用 Runtime 默认。cell_artifacts、adapters 和 host_* 是已有执行入口的真实资源。通过 run_registered_workflow_module 或 run_workflow_module 消费同一次准备结果，完整参数沿用公共 API。普通自测直接使用 agent-runtime-evaluate，无需手工实例化 Adapter 或提供 PG。
+
+新准备使用 claude_cli_adapter@v1。显式执行准确旧 Profile 时，可向同一个 ClaudeAdapter 传入 adapter_binding=("claude_cli_native_tools_executor", "v2")，仅服务原 v2 能力。旧 v2 保留 cwd=work、materials/<name> 和 scratch/ 的相对路径及原私有 work 写区，材料仍只读；新 v1 的草稿 cwd 和写区均为 scratch。未知 pair 拒绝；旧 Profile/Variant 不改写，也不自动升级。Python 旧类名已移除，调用方改为上述公开名称。
 
 ## 2. 参数与材料
 
@@ -75,19 +67,25 @@ Module 指令和 schema 不因更换 Profile 而修改。
 | search | Grep |
 | shell | Bash |
 
-可以选择这些工具的子集。model_id 原样传入 CLI，包含 Claude 支持的 `[1m]` 选择形式；不依赖
+可以选择全部子集，空集合明确产生 --tools 空字符串并关闭 MCP。tool_free 与 agent+空工具都不会隐含授予工具。attempt_workspace_policy=none 不提供模型可写草稿；own_draft_read_write 仅授予明确私有写区，工具和文件权限共同生效。
+
+model_id 原样传入 CLI，包含 Claude 支持的 `[1m]` 选择形式；不依赖
 API-key-only beta。CLI 不锁定某一个版本，代码检查所需选项，并在 trace 中记录实际版本。
 新 CLI 的实际行为仍需要相应测试，不能仅凭 `--help` 断言隔离或输出能力。
 
-Runtime 在 Attempt 的 work 目录运行模型，将授权输入按安全的 logical_name 放入只读 materials，
-提供路径索引。scratch 可用于补充测试；local_handle 只经过 host 查表。CLI 的 restricted 模式约束 Read/Grep 的
+当前 v1 在 Attempt 的私有目录运行模型；有草稿时 cwd 是 scratch，无草稿时不提供可写 scratch。旧 v2 按 §1.2 保留原 work 布局。授权输入按安全的 logical_name 放入只读 materials，
+提供路径索引。只有要求允许草稿时才提供可写 scratch；local_handle 只经过 host 查表。CLI 的 restricted 模式约束 Read/Grep 的
 实际路径，Bash 使用原生 sandbox；运行依赖显式只读提供，网络默认关闭。旧 draft 的隐含工具权限
 不会继续执行，需使用显式工具配置。
 
-所有 argv 由 Adapter 的 build_command 组装，实际调用也使用它；命令与配置记录在 trace 中。
+所有 argv 由同一 Adapter 转换逻辑组装，实际调用使用它；输入经 stdin，settings 仅来自已验证资源，调用方不透传任意参数/JSON。命令与生效配置记录在 trace 中。
 原生 Bash 中可使用 head、git diff、ls、grep 等普通命令，不设命令白名单。safe-mode 关闭自动加载的
 CLAUDE.md、Skills、Plugins 和 hooks，MCP 与会话持久化也关闭；原生工具会话的临时目录由 Runtime 独立创建，退出后清理。原始任务、工具记录、实际配置与
-结果通过现有私有 trace 和 Ledger 保存；执行失败与 Reviewer 的 non_pass 分开解释。
+结果通过现有私有 trace 和 Ledger 返回；已授权存储才持久保存，无 PG 自测不承诺跨进程恢复。执行失败与 Reviewer 的 non_pass 分开解释。
+
+目前 CLI 没有可信 Gateway/MCP 进程桥；显式要求该资源时调用前准确拒绝，不自动换 SDK 或丢弃工具。现有显式 SDK Gateway 路径保持。将来接桥仍由同一 Adapter 消费可信工具 session，不能直接透传 task 中的 mcp-config。
+
+输出方式来自准确 Profile：prompt_only_json 不传 --json-schema，native_structured_output 使用现有 schema projection；返回都按完整 canonical schema 校验，失败不自动切换方式。timeout 控制进程期限；max_attempts 留在 Runtime Policy，不被翻译成 CLI turn 或费用预算。
 
 私有 trace 中的 exit_code 保留操作系统实际返回值；无法取得时为 null。Runtime 中止读取时，
 stop_reason 单独说明事件观察停止、事件流错误、输出超限、超时或清理失败；cleanup_error 保留
@@ -98,14 +96,17 @@ stdout/stderr 保留有界原始输出，process_output_complete=false 表示它
 兼容 CalledProcessError 和 TimeoutExpired，不能将 Runtime 停止原因解释为进程退出码。
 
 CLI 使用 auto 模式处理其内置的确认判断，不使用 bypassPermissions；文件与网络窗口继续强制执行。
+CLI 明确返回的 permission_denied 或 permission_denials 会使 Attempt 失败。Bash 的普通工具错误则逐次记录为 failed；没有结构化权限信号时，Runtime 不从错误文本或模型描述编造权限原因，模型处理错误后仍可能完成任务。因此 completed 不表示每个工具都成功，也不证明所有 OS 拒绝都已归类为 policy_violation。资源限制的实际效果与拒绝原因的可观测性分别验证。
 实际 permissionMode 与请求值一致才继续。Git/Python 由宿主显式提供真实运行目录，避免命中系统启动
 代理；Git 不加载用户或系统配置。trace 同时保存 argv 与安全环境值，便于复现，不依赖 Agent 临时修环境。
 
 ## 3. 重复验证
 
-### 3.1 本地回归与工具测试
+### 3.1 字段组合回归与真实工具测试
 
-完整测试在同版本源码 checkout 中。普通本地回归：
+完整测试在同版本源码 checkout 中。离线组覆盖工具八个子集、合法 mode/workspace、两种输出、模型与 effort 独立变化、准确新旧 binding 和错误组合。真实 CLI 另验证无工具、只读无草稿、受限 scratch 和范围外读写/网络拒绝。Claude 2.1.267 的 -p 会静默忽略无效 settings，进程退出 0 或 --help 有参数均不能代替实际权限效果。
+
+普通本地回归：
 
 ```sh
 python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_claude_native_tools.py
@@ -146,7 +147,7 @@ AB 的注册和执行可以共用一个 PG 接口，同时分别使用 AB 自己
 
 已注册 Reviewer 与 PostgreSQL 回读用例另外要求 `RUN_AB_REVIEWER_PG=1`、
 `AGENT_RUNTIME_TEST_AB_ROOT`、`AGENT_RUNTIME_TEST_REVIEW_INPUT` 及 AB 配置所指的数据库环境变量。
-它复用已注册 Design Reviewer 的指令与 schema，编译支持 claude_cli 的测试 release 和 Workflow，
+它复用已注册 Design Reviewer 的指令与 schema，按当前定义与执行准备接口形成测试 Module/Workflow 和独立 CLI 选择，
 消费真实原始审核输入，使用测试授权 ports，写入样例 Profile/Variant 及执行记录，不修改现有 active pointer。该用例不是生产宿主授权实现。
 
 ```sh

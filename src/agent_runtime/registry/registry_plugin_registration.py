@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import ClassVar, Protocol
 
@@ -146,6 +147,105 @@ def register_runtime_module_plugin(
     return result
 
 
+def _registered_version(registry, kind, subject_id, version):
+    """Find an exact identity/version in the already restored catalog."""
+    records = getattr(registry.snapshot(), kind + "s")
+    matches = [record for record in records
+               if (getattr(record, kind + "_id"), getattr(record, kind + "_version"))
+               == (subject_id, version)]
+    if len(matches) > 1:
+        raise ValueError("Registered definition version has conflicting identities")
+    return matches[0] if matches else None
+
+
+def _export_from_registered_source(source, module, registry):
+    """Read an existing export without recompiling or resolving current defaults.
+
+    This value is used only by the shared Module.to_workflow constructor.
+    Its origin_bundle must not be used to recover historical Policy Schemas;
+    the registered exact closure supplies those independently.
+    """
+    from ..contracts.registry_release_definition import (
+        ModuleKind, PromptComponentKind, SchemaAssetRelease,
+    )
+    from .registry_module_authoring import ModuleExport
+    from .registry_release_compilation import (
+        AgentModuleReleaseCandidate, CompiledAgentModuleRelease, sha256_text,
+    )
+
+    module.validate()
+    if (module.module_kind is not ModuleKind.AGENT or module.module_id != source.module_id
+            or module.owner_contract_ref != source.owner_contract_ref
+            or module.owner_contract_sha256 != sha256_text(source.owner_contract_content)):
+        raise ValueError("Registered Module source collision: identity or owner changed")
+    schemas = []
+    for direction in ("input", "output"):
+        ref = getattr(module, direction + "_schema_ref")
+        stored = registry.get_schema_asset(ref, getattr(module, direction + "_schema_sha256"))
+        if getattr(source, direction + "_schema_ref") != ref:
+            raise ValueError("Registered Module source collision: schema reference changed")
+        observed = SchemaAssetRelease.build(
+            schema_asset_id=stored.schema_asset_id,
+            schema_asset_version=stored.schema_asset_version,
+            release_ref=ref,
+            schema_document=json.loads(getattr(source, direction + "_schema_document")),
+        )
+        if observed != stored:
+            raise ValueError("Registered Module source collision: schema content changed")
+        schemas.append(stored)
+    prompt = registry.get_prompt_bundle(module.prompt_bundle_ref, module.prompt_bundle_sha256)
+    components = tuple(registry.get_prompt_component(member.member_ref, member.member_sha256)
+                       for member in prompt.members)
+    instructions = [item for item in components if item.component_kind is PromptComponentKind.TASK_INSTRUCTION]
+    if len(instructions) != 1:
+        raise ValueError("Registered Module source has no unique task instruction")
+    instruction = instructions[0]
+    if (len(instruction.source_members) != 1
+            or instruction.source_members[0].member_ref != source.instruction_source_ref
+            or instruction.source_members[0].member_sha256 != sha256_text(source.instruction_text)
+            or instruction.formatted_content != source.instruction_text):
+        raise ValueError("Registered Module source collision: instruction or Skill changed")
+    behavior = registry.get_behavior_policy(module.behavior_policy_ref, module.behavior_policy_sha256)
+    evaluation = registry.get_evaluation_policy(module.evaluation_policy_ref, module.evaluation_policy_sha256)
+    retry = registry.get_retry_policy(module.retry_policy_ref, module.retry_policy_sha256)
+    candidate = AgentModuleReleaseCandidate(
+        module_id=module.module_id, module_version=module.module_version,
+        owner_contract_ref=module.owner_contract_ref, owner_contract_content=source.owner_contract_content,
+        input_schema_ref=module.input_schema_ref, input_schema_document=source.input_schema_document,
+        output_schema_ref=module.output_schema_ref, output_schema_document=source.output_schema_document,
+        instruction_source_ref=source.instruction_source_ref, instruction_text=source.instruction_text,
+        declared_operation_ids=module.declared_operation_ids,
+        compatible_transport_kinds=module.compatible_transport_kinds,
+        behavior_policy_ref=module.behavior_policy_ref, behavior_policy_sha256=module.behavior_policy_sha256,
+        evaluation_policy_ref=module.evaluation_policy_ref, evaluation_policy_sha256=module.evaluation_policy_sha256,
+        retry_policy_ref=module.retry_policy_ref, retry_policy_sha256=module.retry_policy_sha256,
+        entry_policy=module.entry_policy, output_resolution_policy=module.output_resolution_policy,
+        reviewer_defaults=module.reviewer_defaults, execution_requirements=module.execution_requirements,
+    )
+    return ModuleExport(
+        source=source, candidate=candidate,
+        compiled=CompiledAgentModuleRelease(
+            schema_assets=tuple(schemas), prompt_components=components,
+            prompt_bundle=prompt, module=module,
+        ),
+        behavior_policy=behavior, evaluation_policy=evaluation, retry_policy=retry,
+    )
+
+
+def _verify_reviewer_workflow(workflow, module):
+    """Keep an existing graph only when it is the requested exact one-node target."""
+    from ..contracts.registry_release_definition import WorkflowNodeKind
+    workflow.validate()
+    if len(workflow.nodes) != 1:
+        raise ValueError("Registered Reviewer Workflow must have one exact Module node")
+    node = workflow.nodes[0]
+    if (node.node_kind is not WorkflowNodeKind.MODULE
+            or workflow.initial_node_id != node.node_id
+            or (node.module_release_ref, node.module_release_sha256)
+            != (module.release_ref, module.release_sha256)):
+        raise ValueError("Registered Reviewer Workflow differs from the exact Module target")
+
+
 def register_reviewer(
     root: Path,
     *,
@@ -154,101 +254,95 @@ def register_reviewer(
     module_version: str,
     workflow_id: str | None = None,
     source_root: Path | None = None,
-    model_id: str | None = None,
-    reasoning_profile: str | None = None,
-    release_registry: RuntimeReleaseRegistry | None = None,
 ) -> RuntimeReleaseRegistrationResult:
-    """Register approved Reviewer source and its one-node Workflow under root.
+    """Register v4 Reviewer source and its exact one-node Workflow under root.
 
-    Runtime defaults provide isolated context, read/search/shell, read-only
-    materials, private scratch, denied tool network, a 1200-second attempt
-    budget and a limit of three attempts. Registration never selects a model.
+    A new definition uses ModuleReviewer's fixed environment and the generic
+    Module compiler. Registration never selects a model or accepts technical
+    Policy/Profile overrides. The source-specific entry checks common Reviewer
+    output format once; ordinary plugin registration remains role-neutral.
 
-    The single-node Workflow defaults to the same ID and version as the Module;
-    workflow_id overrides only its name. Module and Workflow are distinguished
-    by kind, not a review suffix. The shared construction is inherited from
-    Module.to_workflow; the node name is module.
-
-    Repeating a definition version retains its saved capabilities and policies.
-    Changed source needs a new approved definition version. Source operation
-    and transport declarations are preserved; execution preparation checks
-    compatibility with the independently selected model.
-    Registration does not install software, connect to PG, invoke a model,
-    activate releases or create request receipts.
-
-    New default-aware records require upgraded catalog readers. An older
-    Runtime can fail while loading a shared catalog containing even one new
-    record, regardless of its active selection. Upgrade affected readers before
-    registering such records in a shared store; retaining an old active pointer
-    is not a compatibility boundary. Never repair this by rewriting old records.
+    An existing version is compared with the captured owner, canonical schemas
+    and exact task instruction, then reused with its original dependencies.
+    Current defaults and Policy Schema factories never rewrite historical
+    definitions. New content requires a new version; no version is auto-created.
+    Does not install software, connect to PG or run a model.
 
     Args:
-        root: Host destination for .runtime/module/<id>/<version>.json and
-            .runtime/workflow/<workflow_id>/<version>.json. Existing files retain
-            historical bindings; those do not select new executions' models.
+        root: Local destination for .runtime/module and .runtime/workflow.
         skill_id: Exact kebab-case source Skill identity.
-        module_id: Exact snake_case Reviewer identity declared by the source.
-        module_version: Approved definition version; never generated on conflict.
-        workflow_id: Optional explicit Workflow name; None uses module_id.
-        source_root: Explicit authoring root, defaulting to root.
-        model_id: Retired registration parameter. Non-None is rejected before
-            IO; pass model choices to prepare_local_workflow_module instead.
-        reasoning_profile: Retired parameter, rejected like model_id.
-        release_registry: Optional exact policy lookup. Ordinary registration
-            uses saved definitions and Runtime-owned policies.
+        module_id: Exact snake_case Module identity.
+        module_version: Exact requested definition version.
+        workflow_id: Explicit Workflow name; None selects module_id. Existing
+            suffix-named graphs are neither renamed nor deleted.
+        source_root: Explicit authoring root; None uses root.
     Returns:
-        Native registration result containing fixed Module, Workflow, Prompt,
-        Schema and Policy/ReviewerDefaults dependencies. Submitted Profile and
-        Variant arrays are empty. A fresh read verifies both definitions.
-        Definition-only registration is complete, not blocked on a model.
+        Native RuntimeReleaseRegistrationResult with definition-only submitted
+        Module/Workflow/Prompt/Schema/Policy records. Profile and Variant arrays
+        are empty; the catalog may retain historical choices. Fresh local
+        readback verifies both targets and their exact fixed dependencies.
     Raises:
-        ModuleAuthoringError: Invalid source operation declaration.
-        ValueError: Model parameters supplied to registration, invalid source,
-            schema or policies, or immutable definition/version conflicts.
-        OSError: Native source/persistence failure; inspect saved facts and
-            repeat the same request instead of inventing a new version.
+        ValueError: Invalid v4 source, common format, changed source at an
+            existing version, graph target mismatch or Registry conflict.
+        OSError: Original source/file failure. A prior Registry transaction or
+            first file may already have succeeded. Retry the same request to
+            reuse its original Module and finish the missing Workflow.
+        TypeError: Unrecognized model/Policy parameters, before function IO.
     Effects:
-        Reads source, compiles and saves fixed definitions only. Does not select
-        or compile a model Profile, invoke a provider, discover credentials or
-        create an environment. Existing historical files are not cleaned up.
-        Model selection and its compatibility checks belong to execution.
+        Reads the captured source once and the existing local catalog. New
+        records are compiled/registered and saved by the existing APIs. Repeat
+        registration preserves original bytes/hash/order and historical bindings.
+        Does not install software, connect to PG, discover credentials, change
+        an active pointer, run a model or create a receipt/recovery service.
+        Explicit PG plugin registration remains a separate existing store API.
     """
-    if model_id is not None or reasoning_profile is not None:
-        raise ValueError("Model parameters belong to prepare_local_workflow_module, not Reviewer registration")
+    from ..foundation.foundation_contract_validation import validate_snake_case_name
+    from .registry_local_persistence import _restore_registry, _closure, load_runtime_registration
+    from .registry_module_loading import MODULE_REGISTRATION_SCHEMA_VERSION, load_reviewer_registration
+    from .registry_module_authoring import Module, ModuleReviewer
+    from .registry_release_compilation import compile_workflow_release
 
-    from .registry_local_persistence import _restore_registry, _bundle, load_runtime_registration
-    from .registry_module_authoring import ModuleReviewer
-
-    registry = _restore_registry(root)
-    if release_registry is not None:
-        registry.register_bundle(_bundle(release_registry.snapshot()))
-    reviewer = ModuleReviewer.from_registration(
-        Path(root) if source_root is None else Path(source_root), skill_id=skill_id, module_id=module_id)
-    try:
-        previous = load_runtime_registration(root, "module", module_id, module_version).release
-    except FileNotFoundError:
-        previous = None
-    options = {"release_registry": registry, "execution_profile": None}
-    if previous is not None:
-        options.update(
-            behavior_policy=registry.get_behavior_policy(previous.behavior_policy_ref, previous.behavior_policy_sha256),
-            evaluation_policy=registry.get_evaluation_policy(previous.evaluation_policy_ref, previous.evaluation_policy_sha256),
-            retry_policy=registry.get_retry_policy(previous.retry_policy_ref, previous.retry_policy_sha256),
-            reviewer_defaults=previous.reviewer_defaults,
-        )
-    exported = reviewer.export(module_version=module_version, **options)
-    workflow_export = reviewer.to_workflow(exported, workflow_id=workflow_id).export()
-    # Policy lookup may include independently registered model configurations.
-    # Only fixed definitions enter this registration's submitted catalog.
-    result = register_runtime_module_plugin(
-        RuntimeReleaseRegistry(),
-        RuntimeModulePlugin(module_id + "_reviewer", module_version, workflow_export.origin_bundle),
-        root=Path(root),
+    root = Path(root)
+    workflow_id = module_id if workflow_id is None else workflow_id
+    validate_snake_case_name("workflow_id", workflow_id)
+    source = load_reviewer_registration(
+        root if source_root is None else Path(source_root), skill_id=skill_id, module_id=module_id,
     )
-    for kind, expected in (("module", exported.module_release), ("workflow", workflow_export.workflow_release)):
+    if source.schema_version != MODULE_REGISTRATION_SCHEMA_VERSION:
+        raise ValueError("Reviewer registration requires a migrated v4 task source")
+    registry = _restore_registry(root)
+    previous = _registered_version(registry, "module", module_id, module_version)
+    if previous is None:
+        exported = ModuleReviewer(source).export(module_version=module_version)
+        fixed = exported.origin_bundle
+    else:
+        exported = _export_from_registered_source(source, previous, registry)
+        fixed = _closure(registry, previous, supplied_variants=())
+    module = exported.module_release
+    workflow = _registered_version(registry, "workflow", workflow_id, module_version)
+    if workflow is None:
+        # Workflow.export would call the restored export's origin_bundle and
+        # resolve today's Policy Schemas. Compile only the shared graph candidate.
+        graph = Module.to_workflow(exported, workflow_id=workflow_id)
+        workflow = compile_workflow_release(graph.candidate)
+    _verify_reviewer_workflow(workflow, module)
+    bundle = replace(fixed, workflows=(workflow,))
+    # The source command has no caller-selected bundle order. Give first and
+    # repeated registration the same stable record order without altering any
+    # record payload or ordered members inside a record.
+    bundle = RuntimeReleaseBundle(**{
+        field.name: tuple(sorted(getattr(bundle, field.name), key=lambda record: record.release_ref))
+        for field in fields(RuntimeReleaseBundle)
+    })
+    result = register_runtime_module_plugin(
+        registry, RuntimeModulePlugin(module_id + "_reviewer", module_version, bundle), root=root,
+    )
+    for kind, expected in (("module", module), ("workflow", workflow)):
         saved = load_runtime_registration(root, kind, getattr(expected, kind + "_id"), module_version)
-        if saved.release != expected:
-            raise ValueError("Saved registration differs from compiled result")
+        actual_fixed = _closure(saved.registry, saved.release, supplied_variants=())
+        expected_fixed = _closure(registry, expected, supplied_variants=())
+        if saved.release != expected or actual_fixed.as_dict() != expected_fixed.as_dict():
+            raise ValueError("Saved registration differs from the exact definition closure")
     return result
 
 

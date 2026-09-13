@@ -868,12 +868,15 @@ class RuntimeReleaseRegistry:
             target = origin_module
             if origin_workflow is not None:
                 node = next((node for node in origin_workflow.nodes if node.node_id == position_id), None)
-                if node is not None and node.module_release_ref is not None:
-                    target = self.get_module(node.module_release_ref, node.module_release_sha256)
-            if target is not None and target.reviewer_defaults is not None:
+                if node is None or node.node_kind is not WorkflowNodeKind.MODULE:
+                    raise ValueError("Variant position must identify an exact Workflow Module node")
+                target = self.get_module(node.module_release_ref, node.module_release_sha256)
+            if target.execution_requirements is not None:
+                target.execution_requirements.assert_profile(profile)
+            elif target.reviewer_defaults is not None:
+                # Historical bindings retain their original shape constraints;
+                # source transport lists do not decide new Agent compatibility.
                 target.reviewer_defaults.assert_profile(profile)
-                if profile.transport_kind not in target.compatible_transport_kinds:
-                    raise ValueError("Profile transport is absent from Reviewer compatibility")
 
     def _validate_module_closure(self, module: ModuleRelease) -> None:
         module.validate()
@@ -896,10 +899,16 @@ class RuntimeReleaseRegistry:
             module.retry_policy_ref,
             module.retry_policy_sha256,
         )
-        if module.reviewer_defaults is not None:
-            if (module.reviewer_defaults.context_isolation != behavior.policy_document()["context_isolation"]
-                    or module.reviewer_defaults.max_attempts != retry.policy_document()["max_attempts"]):
-                raise ValueError("Reviewer defaults differ from the exact Module policies")
+        # Restoring a historical definition does not ask whether today's
+        # executor can run it. In particular, do not call the execution getter
+        # for every old snapshot while restoring a whole catalog.
+        requirements = module.execution_requirements
+        if requirements is None:
+            requirements = module.reviewer_defaults
+        if requirements is not None:
+            if (requirements.context_isolation != behavior.policy_document()["context_isolation"]
+                    or requirements.max_attempts != retry.policy_document()["max_attempts"]):
+                raise ValueError("Module requirements differ from the exact Module policies")
         self.get_schema_asset(
             module.input_schema_ref,
             module.input_schema_sha256,

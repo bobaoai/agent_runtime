@@ -159,6 +159,7 @@ def _compile_native_module(
     gateway_access_reasons: tuple[str, ...] = (),
     tool_policy: tuple[str, ...] = (),
     network_policy: str = "denied",
+    output_constraint_mode: str = NATIVE_STRUCTURED_OUTPUT,
     output_schema_document: dict[str, object] = _OUTPUT_SCHEMA,
 ):
     del tmp_path
@@ -231,7 +232,7 @@ def _compile_native_module(
             semantic_input_delivery_mode=(semantic_input_delivery_mode),
             attempt_workspace_policy=attempt_workspace_policy,
             gateway_access_reasons=gateway_access_reasons,
-            output_constraint_mode=NATIVE_STRUCTURED_OUTPUT,
+            output_constraint_mode=output_constraint_mode,
             tool_policy=tool_policy,
             network_policy=network_policy,
             timeout_seconds=timeout_seconds,
@@ -285,7 +286,7 @@ def _evaluation_prompt(
         compiled_static_body=compiled.prompt_bundle.compiled_static_body,
         execution_specific_instructions=execution_specific_instructions,
         inputs=(),
-        output_constraint_mode=NATIVE_STRUCTURED_OUTPUT,
+        output_constraint_mode=compiled.execution_profile.output_constraint_mode,
     )
     return artifact_host.put_bytes(
         artifact_kind_id="prompt_envelope",
@@ -1521,18 +1522,76 @@ def test_run_module_rejects_codex_agent_draft_workspace_before_provider(
     request = _evaluation_request(compiled, prompt_ref, suffix="workspace")
     authority, _ = _evaluation_authority(registry, request)
 
-    with pytest.raises(NotImplementedError, match="outside the admitted"):
-        run_module(
-            request,
-            release_registry=registry,
-            adapters=adapters,
-            artifact_host=artifact_host,
-            ledger=InMemoryModuleExecutionLedger(),
-            authority=authority,
-            clock=lambda: _TEST_TIME,
+    original_profile = compiled.execution_profile.as_dict()
+    assert executor.descriptor.admission_state == "conformance_candidate"
+    result = run_module(
+        request,
+        release_registry=registry,
+        adapters=adapters,
+        artifact_host=artifact_host,
+        ledger=InMemoryModuleExecutionLedger(),
+        authority=authority,
+        clock=lambda: _TEST_TIME,
+    )
+    assert result.attempts[0].status == "failed"
+    assert result.attempts[0].failure_class == "authorization"
+    with pytest.raises(PermissionError, match="ambient-read isolation"):
+        executor.execute(
+            _direct_adapter_request(compiled, prompt_ref, suffix="workspace_direct"),
+            _RecordingHost(),
         )
 
     assert entered is False
+    assert not (tmp_path / "workspaces").exists()
+    assert compiled.execution_profile.as_dict() == original_profile
+
+
+@pytest.mark.parametrize("implicit_shell", [False, True])
+def test_codex_tool_free_adapter_checks_actual_shell_before_provider(tmp_path, implicit_shell):
+    compiled = _compile_native_module(tmp_path, output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE)
+    registry = _register_compiled_for_evaluation(compiled)
+    artifacts = InMemoryCellArtifactStore()
+    prompt = _evaluation_prompt(artifacts, compiled, suffix="shell_consistency")
+    calls = []
+    def invoke(**kwargs):
+        calls.append(kwargs)
+        assert "features.shell_tool=false" in kwargs["argv"]
+        return CodexCliInvocationResult(0, json.dumps({"type": "item.completed", "item": {
+            "type": "agent_message", "text": '{"value":"checked"}'}}), "")
+    executor = CodexCliModuleExecutor(release_registry=registry, artifact_host=artifacts,
+        workspace_root=tmp_path / "workspaces", invoker=invoke, codex_bin="controlled-codex")
+    executor.shell_tool_enabled = implicit_shell
+    request = _evaluation_request(compiled, prompt, suffix="shell_consistency")
+    authority, _ = _evaluation_authority(registry, request)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(executor)
+    result = run_module(request, release_registry=registry, adapters=adapters,
+        artifact_host=artifacts, ledger=InMemoryModuleExecutionLedger(), authority=authority, clock=lambda: _TEST_TIME)
+    if implicit_shell:
+        assert result.attempts[0].status == "failed"
+        assert result.attempts[0].failure_class == "authorization"
+        with pytest.raises(PermissionError, match="actual Shell capability"):
+            executor.execute(_direct_adapter_request(compiled, prompt, suffix="shell_direct"), _RecordingHost())
+        assert calls == [] and not (tmp_path / "workspaces").exists()
+    else:
+        assert _assert_completed_provider_run(result, artifacts) == {"value": "checked"}
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize("tool", ["read", "shell"])
+def test_codex_workspace_rejects_explicit_tool_mismatch_before_effects(tmp_path, tool):
+    compiled = _compile_native_module(tmp_path,
+        executor_adapter_id="codex_cli_agent_workspace_executor", executor_adapter_revision="v2",
+        execution_mode="agent", attempt_workspace_policy="own_draft_read_write", tool_policy=(tool,))
+    registry = _register_compiled_for_evaluation(compiled)
+    artifacts = InMemoryCellArtifactStore()
+    prompt = _evaluation_prompt(artifacts, compiled, suffix="wrong_tool")
+    calls = []
+    executor = CodexCliAgentWorkspaceModuleExecutor(release_registry=registry, artifact_host=artifacts,
+        workspace_root=tmp_path / "workspaces", invoker=lambda **kw: calls.append(kw), codex_bin="controlled-codex")
+    with pytest.raises(ValueError, match="tool policy differs"):
+        executor.execute(_direct_adapter_request(compiled, prompt, suffix="wrong_tool"), _RecordingHost())
+    assert calls == [] and not (tmp_path / "workspaces").exists()
 
 
 def test_run_module_rejects_implicit_claude_draft_tools(tmp_path: Path) -> None:
@@ -1565,10 +1624,11 @@ def test_run_module_rejects_implicit_claude_draft_tools(tmp_path: Path) -> None:
     adapters.register(executor)
     request = _evaluation_request(compiled, prompt_ref, suffix="claude_workspace")
     authority, _ = _evaluation_authority(registry, request)
-    with pytest.raises(NotImplementedError, match="outside the admitted"):
-        run_module(request, release_registry=registry, adapters=adapters,
-                   artifact_host=artifact_host, ledger=InMemoryModuleExecutionLedger(),
-                   authority=authority, clock=lambda: _TEST_TIME)
+    result = run_module(request, release_registry=registry, adapters=adapters,
+                        artifact_host=artifact_host, ledger=InMemoryModuleExecutionLedger(),
+                        authority=authority, clock=lambda: _TEST_TIME)
+    assert result.attempts[0].status == "failed"
+    assert result.attempts[0].failure_class == "authorization"
     with pytest.raises(PermissionError, match="explicit"):
         executor.execute(
             _direct_adapter_request(compiled, prompt_ref, suffix="claude_workspace"),

@@ -30,12 +30,13 @@ from test_agent_runtime_postgres_execution_ledger import postgres_test_schema
 
 
 def test_plain_export_and_registration_do_not_resolve_any_model(tmp_path, monkeypatch):
-    source, _ = _source(tmp_path / "source", compatible=False)
-    monkeypatch.setattr(authoring, "reviewer_execution_profile", lambda *a, **k: pytest.fail("No model selection"))
+    source, _ = _source(tmp_path / "source")
+    monkeypatch.setattr(local, "_execution_profile_for_requirements", lambda *a, **k: pytest.fail("No model selection"))
     reviewer = ModuleReviewer.from_registration(source, skill_id=SKILL_ID, module_id=MODULE_ID)
     exported = reviewer.export(module_version="v1")
-    assert exported.module_release.reviewer_defaults is not None
-    assert exported.execution_profile is exported.execution_variant is exported.execution_blocker_code is None
+    assert exported.module_release.reviewer_defaults is None
+    assert exported.module_release.get_execution_requirements() is not None
+    assert exported.origin_bundle.execution_profiles == exported.origin_bundle.execution_variant_policies == ()
     registered = _register(tmp_path / "host", source)
     assert registered.submitted_bundle.execution_profiles == registered.submitted_bundle.execution_variant_policies == ()
 
@@ -44,11 +45,129 @@ def test_plain_export_and_registration_do_not_resolve_any_model(tmp_path, monkey
 def test_registration_model_parameters_fail_before_writes(tmp_path, name):
     source, _ = _source(tmp_path / "source")
     root = tmp_path / "host"
-    with pytest.raises(ValueError, match="prepare_local_workflow_module"):
+    with pytest.raises(TypeError, match="unexpected keyword"):
         _register(root, source, **{name: "explicit"})
     assert not root.exists()
     result = _cli(root, source, "v1", "--" + name.replace("_", "-"), "explicit")
     assert result.returncode == 2 and not root.exists()
+
+
+@pytest.mark.parametrize("mode,tools,workspace", [
+    ("tool_free", (), "none"), ("agent", (), "none"),
+    ("agent", (), "own_draft_read_write"), ("agent", ("read",), "none"),
+    ("agent", ("search", "read"), "own_draft_read_write"),
+    ("agent", ("shell",), "none"), ("agent", ("read", "search", "shell"), "own_draft_read_write"),
+])
+@pytest.mark.parametrize("output_mode", ["prompt_only_json", "native_structured_output"])
+def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mode, tools, workspace, output_mode):
+    from agent_runtime import Module, evaluate_local_workflow_module
+    from agent_runtime.registry import registry_reviewer_defaults
+    from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID as TASK_SKILL
+
+    source = _task_project(tmp_path / "source", module_id="summarize_note")
+    requirements = _requirements(execution_mode=mode, tool_policy=tools,
+        attempt_workspace_policy=workspace, output_constraint_mode=output_mode,
+        timeout_seconds=70, max_attempts=2)
+    monkeypatch.setattr(registry_reviewer_defaults, "_validate_reviewer_output_schema",
+                        lambda *a: pytest.fail("ordinary Module cannot use Reviewer-specific validation"))
+    module = Module.from_registration(source, skill_id=TASK_SKILL, module_id="summarize_note",
+                                      execution_requirements=requirements)
+    exported = module.export(module_version="v1")
+    workflow = Module.to_workflow(exported).export()
+    root = tmp_path / "host"
+    register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
+        "ordinary_example", "v1", workflow.origin_bundle), root=root)
+    before = _files(root)
+    saved, variant = prepare_local_workflow_module(root, "summarize_note")
+    assert saved.release.workflow_id == "summarize_note"
+    selected = saved.registry.snapshot().execution_profiles[0]
+    requirements.assert_profile(selected)
+    assert (selected.executor_adapter_id, selected.executor_adapter_revision) == ("claude_cli_adapter", "v1")
+    assert selected.model_id == "claude-opus-5[1m]" and selected.reasoning_profile == "xhigh"
+    assert exported.module_release.reviewer_defaults is None
+    assert not exported.origin_bundle.execution_profiles
+    assert variant.policy_document()["bindings"][0]["position_id"] == saved.release.nodes[0].node_id
+    calls = []
+    adapter_type = claude.ClaudeAdapter
+    native = output_mode == "native_structured_output"
+    def process(**kwargs):
+        kwargs["launch_guard"](lambda: calls.append(kwargs))
+        argv = kwargs["argv"]
+        assert argv[argv.index("--tools") + 1] == ",".join(claude.NATIVE_TOOLS[tool] for tool in tools)
+        assert kwargs["timeout_seconds"] == 70
+        init = _init(tuple(claude.NATIVE_TOOLS[tool] for tool in tools))
+        if not native:
+            init["tools"] = [tool for tool in init["tools"] if tool != "StructuredOutput"]
+        terminal = _result(structured_output={"summary": "the actual ordinary output"})
+        if not native:
+            terminal["result"] = json.dumps(terminal.pop("structured_output"))
+        lines = [json.dumps(event) for event in (init, terminal)]
+        for line in lines:
+            assert kwargs["on_stdout_line"](line)
+        completed = subprocess.CompletedProcess(argv, 0, "\n".join(lines), "")
+        completed.stdout_bytes, completed.stderr_bytes = completed.stdout.encode(), b""
+        return completed
+    monkeypatch.setattr(claude, "ClaudeAdapter", lambda **kw: adapter_type(**kw, process_runner=process))
+    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path))
+    assert record["status"] == "completed", record["failure_detail"]
+    assert record["output"] == {"summary": "the actual ordinary output"}
+    assert record["execution_log"]["complete"] and len(calls) == 1
+    assert _files(root) == before
+
+
+@pytest.mark.parametrize("field,value", [("model_id", ""), ("reasoning_profile", ""),
+                                         ("reasoning_profile", "none"), ("reasoning_profile", "ultra")])
+def test_explicit_invalid_model_fields_do_not_become_defaults(field, value):
+    from test_agent_runtime_module_authoring import _requirements
+    with pytest.raises(ValueError):
+        local._execution_profile_for_requirements(_requirements(), **{field: value})
+
+
+def test_requested_gateway_requires_cli_bridge_before_resources_or_provider():
+    from test_agent_runtime_module_authoring import _requirements
+    requirements = _requirements(semantic_input_delivery_mode="gateway_read", attempt_workspace_policy="none",
+        tool_policy=("read_source",), network_policy="gateway_only",
+        gateway_access_reasons=("external_fact_verification",))
+    with pytest.raises(ValueError, match="trusted CLI Gateway/MCP bridge"):
+        local._execution_profile_for_requirements(requirements)
+
+
+@pytest.mark.parametrize("saved_variants", [0, 1, 2])
+def test_missing_requirements_never_infer_defaults_from_historical_bindings(tmp_path, saved_variants):
+    from test_agent_runtime_registered_module_execution import _environment as legacy_environment, _selection
+    env = legacy_environment(tmp_path)
+    assert env.module.get_execution_requirements() is None
+    if saved_variants == 2:
+        _selection(env)
+    variants = env.registry.snapshot().execution_variant_policies if saved_variants else ()
+    assert len(variants) == saved_variants
+    bundle = local._closure(env.registry, env.kwargs["workflow"], supplied_variants=variants)
+    root = tmp_path / "saved"
+    register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin("historical", "v1", bundle), root=root)
+    before = _files(root)
+    with pytest.raises(ValueError, match="requires frozen Module execution requirements"):
+        prepare_local_workflow_module(root, env.kwargs["workflow"].workflow_id)
+    assert _files(root) == before
+    assert env.host.calls == len(env.calls) == 0
+
+
+def test_explicit_historical_binding_still_executes_and_replays(tmp_path):
+    from test_agent_runtime_registered_module_execution import _environment as legacy_environment
+    env = legacy_environment(tmp_path)
+    root = tmp_path / "saved"
+    register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
+        "historical", "v1", local._closure(env.registry, env.kwargs["workflow"],
+            supplied_variants=(env.kwargs["variant_policy"],))), root=root)
+    before = _files(root)
+    host = {key: value for key, value in env.kwargs.items()
+            if key not in {"release_registry", "workflow", "variant_policy"}}
+    first = local.run_local_workflow_module(root, env.kwargs["workflow"].workflow_id,
+        input_payload={"value": "example"}, idempotency_key="old_explicit_request", **host)
+    repeat = local.run_local_workflow_module(root, env.kwargs["workflow"].workflow_id,
+        input_payload={"value": "example"}, idempotency_key="old_explicit_request", **host)
+    assert first.attempts[0].status == "completed"
+    assert repeat.attempts == first.attempts and env.host.calls == len(env.calls) == 1
+    assert _files(root) == before
 
 
 def test_old_saved_model_is_preserved_but_does_not_select_new_invocations(tmp_path):
@@ -73,9 +192,9 @@ def test_external_policy_lookup_does_not_copy_model_configuration_to_new_root(tm
     _register(tmp_path / "old", source)
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(_prepared_bundle(tmp_path / "old", model_id="not-a-registration-default"))
-    result = _register(tmp_path / "new", source, release_registry=registry)
-    assert not result.submitted_bundle.execution_profiles
-    assert not load_runtime_registration(tmp_path / "new", "workflow", MODULE_ID).registry.snapshot().execution_profiles
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        _register(tmp_path / "new", source, release_registry=registry)
+    assert not (tmp_path / "new").exists()
 
 
 def test_new_default_affects_only_new_preparations_not_fixed_files(tmp_path, monkeypatch):
@@ -83,9 +202,9 @@ def test_new_default_affects_only_new_preparations_not_fixed_files(tmp_path, mon
     root = tmp_path / "host"
     _register(root, source)
     before = _files(root)
-    original = local.reviewer_execution_profile
+    original = local._execution_profile_for_requirements
     old, _ = prepare_local_workflow_module(root, MODULE_ID)
-    monkeypatch.setattr(local, "reviewer_execution_profile",
+    monkeypatch.setattr(local, "_execution_profile_for_requirements",
         lambda defaults, **kw: original(defaults, **{**kw, "model_id": kw.get("model_id") or "model-b"}))
     _register(root, source)
     new, _ = prepare_local_workflow_module(root, MODULE_ID)
@@ -105,7 +224,7 @@ def test_unsupported_transport_has_no_fallback_or_store_write(tmp_path, transpor
             pytest.fail("No writes for an unsupported model transport")
         def load_release_registry(self):
             pytest.fail("No reads for an unsupported model transport")
-    with pytest.raises(ValueError, match="Unsupported Reviewer model transport"):
+    with pytest.raises(ValueError, match="Unsupported model transport"):
         prepare_local_workflow_module(root, MODULE_ID, transport_kind=transport, release_store=Store())
     assert _files(root) == before
 
@@ -131,7 +250,7 @@ def _invoke(preparation, tmp_path, calls, *, key, verdict="passed", records=None
         return subprocess.CompletedProcess(kwargs["argv"], 0, "", "")
     tmp_path.mkdir(parents=True, exist_ok=True)
     adapters = AgentExecutionAdapterRegistry()
-    adapters.register(claude.ClaudeCliNativeToolsModuleExecutor(
+    adapters.register(claude.ClaudeAdapter(
         release_registry=saved.registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
         cli_path=_fake_cli(tmp_path), process_runner=process))
     contents = contents if contents is not None else _Contents()
@@ -167,7 +286,7 @@ def test_prepared_selection_runs_once_and_preserves_ledger_identity(tmp_path, mo
     _register(root, source, "v2")
     source.rename(source.with_name("unavailable_source"))
     monkeypatch.setattr(local, "load_runtime_registration", lambda *a, **k: pytest.fail("No reload at dispatch"))
-    monkeypatch.setattr(local, "reviewer_execution_profile", lambda *a, **k: pytest.fail("No model reselection"))
+    monkeypatch.setattr(local, "_execution_profile_for_requirements", lambda *a, **k: pytest.fail("No model reselection"))
     calls = []
     result, records, contents = _invoke(prepared, tmp_path / "run", calls, key="new_request", verdict=verdict)
     assert len(calls) == 1, _diagnostics(result, contents)

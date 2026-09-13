@@ -29,7 +29,7 @@ def environment(tmp_path, monkeypatch):
     executable = _fake_cli(tmp_path)
     calls, handles = [], []
     output = {"verdict": "passed", "check_results": [], "findings": [], "safe_next_step": "done"}
-    adapter_type = claude.ClaudeCliNativeToolsModuleExecutor
+    adapter_type = claude.ClaudeAdapter
     resources_type = local.ModuleSelfTestResources
     controls = {}
     def resources(**kwargs):
@@ -61,7 +61,7 @@ def environment(tmp_path, monkeypatch):
             return execute(request, host)
         adapter.execute = invoke
         return adapter
-    monkeypatch.setattr(claude, "ClaudeCliNativeToolsModuleExecutor", make_adapter)
+    monkeypatch.setattr(claude, "ClaudeAdapter", make_adapter)
     monkeypatch.setattr(local, "ModuleSelfTestResources", resources)
     temporary_directory = local.tempfile.TemporaryDirectory
     monkeypatch.setattr(local.tempfile, "TemporaryDirectory",
@@ -127,7 +127,7 @@ def test_closed_resources_reject_late_output(environment):
 
 
 def test_wrong_transport_stops_before_provider(environment):
-    with pytest.raises(ValueError, match="Unsupported Reviewer model transport"):
+    with pytest.raises(ValueError, match="Unsupported model transport"):
         invoke(environment, transport_kind="codex_cli")
     assert environment[2] == []
 
@@ -279,7 +279,7 @@ def test_installed_console_executes_without_checkout_or_pg(tmp_path):
     output = {"verdict": "passed", "check_results": [], "findings": [], "safe_next_step": "done"}
     events = " ".join(shlex.quote(json.dumps(event)) for event in (_init(), _result(structured_output=output)))
     executable.write_text("#!/bin/sh\ncase \"$1\" in\n--version|--help) "
-        "printf '%s\\n' '2.1.999 --safe-mode --restricted --tools --settings --effort --strict-mcp-config --json-schema';;\n"
+        "printf '%s\\n' '2.1.999 --safe-mode --restricted --tools --settings --effort --strict-mcp-config --json-schema --add-dir';;\n"
         "*) /bin/cat >/dev/null; printf '%s\\n' " + events + ";;\nesac\n")
     executable.chmod(0o700)
     payload = tmp_path / "input.json"

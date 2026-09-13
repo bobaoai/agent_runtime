@@ -274,7 +274,7 @@ def _run_real_native_streams(tmp_path, monkeypatch, raw, stderr=b"", *, timeout=
         if timeout:
             options["timeout_seconds"] = 1
         return run_cli_process(**options)
-    adapter = native.claude.ClaudeCliNativeToolsModuleExecutor(
+    adapter = native.claude.ClaudeAdapter(
         release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
         cli_path=native._fake_cli(tmp_path), process_runner=actual_process)
     adapters = native.AgentExecutionAdapterRegistry()
@@ -351,12 +351,12 @@ def send_once():
         os.kill(os.getpid(),signal.SIGINT)
 with pytest.MonkeyPatch.context() as patch:
     adapter_results=[]
-    original_execute=claude.ClaudeCliNativeToolsModuleExecutor.execute
+    original_execute=claude.ClaudeAdapter.execute
     def observe_result(*args,**kwargs):
         value=original_execute(*args,**kwargs)
         adapter_results.append(value)
         return value
-    patch.setattr(claude.ClaudeCliNativeToolsModuleExecutor,'execute',observe_result)
+    patch.setattr(claude.ClaudeAdapter,'execute',observe_result)
     if phase=='output_validation':
         original=claude.Draft202012Validator
         class InterruptingValidator:

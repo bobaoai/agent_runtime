@@ -316,7 +316,10 @@ def test_registered_configuration_is_checked_before_provider(tmp_path, case):
     elif case == "variant_bytes":
         changes["variant_policy"] = replace(env.kwargs["variant_policy"], policy_id="tampered")
     elif case == "wrong_node":
-        changes["variant_policy"] = _selection(env, position="other_node")
+        with pytest.raises(ValueError, match="exact Workflow Module node"):
+            _selection(env, position="other_node")
+        assert env.host.calls == len(env.calls) == 0
+        return
     elif case == "wrong_origin":
         changes["variant_policy"] = _selection(env, origin="standalone_module")
     else:
@@ -324,7 +327,7 @@ def test_registered_configuration_is_checked_before_provider(tmp_path, case):
                                           attempt_workspace_policy="own_draft_read_write")
         env.registry.register_bundle(RuntimeReleaseBundle(execution_profiles=(compiled.execution_profile,)))
         changes["variant_policy"] = _selection(env, profile=compiled.execution_profile)
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, PermissionError)):
         _run(env, **changes)
     assert env.host.calls == len(env.calls) == 0
 

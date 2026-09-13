@@ -2,18 +2,17 @@
 
 本 Runbook 面向把已批准 Module 或 Workflow 接入 Agent Runtime 的宿主开发者。它随
 `agent-runtime-core` 分发，说明如何使用当前 package 的 public API 完成 source loading、release
-compilation、persistent registration、exact resolution 和 active selection。
+compilation、定义保存和准确回读。注册后的执行选择由 Runtime 单独准备。
 
 Runtime Design Contract 定义稳定语义，public Python API 定义当前可执行接口。本 Runbook 不创造新的
 release 类型、权限规则或持久化协议；当文字与 public API 不一致时，停止 registration 并报告 package
 drift。
 
 接口定义见从源码自动生成的 [Reviewer API reference](agent_runtime_reviewer_api.md)。
-先读其中的 ModuleReviewer 类说明，确定固定定义、独立执行参数和存储归属；再按本 Runbook
+先读其中的 Module 和 ModuleReviewer 类说明，确定固定定义、独立执行参数和存储归属；再按本 Runbook
 完成一次注册。注册只保存固定定义；每次审核独立选择模型，提交本次输入与执行 key。
 当前单节点执行入口的参数、授权依赖、重放限制和失败处理也在该接口参考中。
-测试用途不要求复制 Reviewer；切换 Profile 是否需要新的 Module，取决于 Module 内容是否改变及
-兼容声明是否满足，具体规则以类说明和现有 Registry 合同为准。
+测试用途不要求复制 Reviewer。Module 内容不变时切换模型只形成新的执行选择；相容性由 Runtime 根据通用运行要求、实际 Adapter 和本次资源判断，source 不再声明 transport。
 
 <a id="local-runtime-setup"></a>
 
@@ -72,19 +71,16 @@ Reviewer 通过继承使用。方法消费准确 export，不重新读取 source
 先手写 Policy、Profile 或 bundle。软件安装使用宿主明确的标准安装命令，与注册分开。
 该命令的前置 setup 只准备本地 Runtime 环境；不会安装依赖、登录 Provider、创建 PG schema 或调用模型。
 
-新 source 的 runtime_module_registration_v3 允许省略三个 Policy 引用；v2 仍要求完整声明。
-显式引用保持原限制，注册原样保存 operation 和 transport 声明。
-执行准备时才检查所选模型是否相容；注册不替作者补 transport，也不要求本机有模型 CLI 或登录。
-重复注册保持固定定义与默认能力，不受 Runtime 模型预设变化影响。
-register-reviewer 不接受 --model-id 或 --reasoning-profile，误传退出 2；Python 注册 API 的同名旧参数
-非 None 时在写入前明确拒绝。模型参数交给下方执行准备接口。
+新注册使用 runtime_module_registration_v4 的八个任务字段：source 身份、owner 路径和输入输出 schema 引用及路径。prompt 仍来自同一 source 目录。Policy、模型、transport 和工具参数由 Runtime 的定义或执行责任提供，调用者无需写入 source。
+v2/v3 可按既有合同读取历史内容；当前高层 authoring 不把这些旧技术字段静默忽略，新的 source 必须由负责人明确迁到 v4。
+注册无需 CLI 或登录。重复同版本核对原任务内容并返回原定义及依赖，不重新应用当前 Reviewer 预设；真实 source 变化仍需新版本。同版本 Module 已保存而 Workflow 保存失败时，重试原请求复用 Module 并补齐图，再准确回读。
+register-reviewer 不接受 --model-id 或 --reasoning-profile，误传退出 2；Python 注册 API 已移除这两个参数和 release_registry，误传由签名在操作 IO 前返回 TypeError。模型参数交给下方执行准备接口。
 切换模型后的新调用使用新执行身份；历史执行按原 execution ID 查询 Ledger，不读取当前默认来重跑。
 
 stdout 包含真实注册 records、保存路径和 readback=verified。失败返回非零退出码，stderr 返回
 error_type、原生 error_code（若存在）和 detail；保留错误，不随机换版本或换模型继续。
 
-**客户端兼容与升级顺序。** 新默认记录包含参与 hash 的 reviewer_defaults 或
-model_defaults_version。不认识这些字段的旧 Runtime 会因 hash 不匹配而拒绝读取。
+**客户端兼容与升级顺序。** 新 Module 记录包含参与 hash 的 execution_requirements；执行选择还可能包含 model_defaults_version。不认识这些字段的旧 Runtime 会因 hash 不匹配而拒绝读取。
 PostgreSQL 的 load_release_registry 会解码整个 catalog，所以即使调用者仍选旧 Module、
 未切换 active pointer，共享 catalog 中的一条新记录也可能使旧客户端无法加载。
 本地 register 同样需要恢复已有 catalog；单个旧版本文件可读，不证明整个混合目录可读。
@@ -123,8 +119,7 @@ CLI register 使用既有内存 Registry 校验并保存结果，不自行连接
 已保存明确绑定的兼容行为，不用于新的 definition-only 注册流程。多节点图继续使用既有图执行入口。
 
 这些接口的实际参数、返回和错误见[源码生成的 API 手册](agent_runtime_reviewer_api.md#load_runtime_registration)。
-普通 source 注册使用上面的 CLI 和 Runtime 默认解析。下方显式 Policy/Profile 的 Python 示例
-保留为底层接口和既有宿主的兼容说明；调用新 CLI 时无需手工执行这些组装步骤。
+正常 Reviewer source 注册使用上面的 CLI。下方 Python 示例演示把相同固定定义注册到已经授权的 PG store，仍无需手工组装 Policy 或 Profile。
 
 先使用当前宿主选定的 Python 确认安装来源，并打开同一安装包里的说明：
 
@@ -148,46 +143,39 @@ ID、hash、数据库或授权替身。表中的名称是后续 Python 示例使
 | 输入 | 提供方与内容 |
 | --- | --- |
 | `project_root`、`skill_id`、`module_id`、`module_version` | Source owner 提供准确、已审的 Skill/Module source 与批准版本；根目录为 Path，两个 ID 对应真实注册文件 |
-| `behavior_binding`、`evaluation_binding`、`retry_binding` | Runtime 环境维护者提供已批准 Policy 的 `(release_ref, release_sha256)` 元组；与 source 引用一致 |
-| `profile_binding` | 环境维护者提供本次固定且相容的 Profile `(release_ref, release_sha256)`，用于编译前的兼容核对 |
 | `database_url`、`registry_schema` | 宿主提供本次获准使用的 Registry 连接与 schema；凭据不写入任务材料、日志或本手册 |
 | `plugin_id`、`plugin_version` | 注册操作者提供本次明确的发布包身份；与 Reviewer 的 Module 版本分开 |
-| 已配置的宿主执行入口 | 宿主集成维护者提供对应 Module 的准确 Workflow、Variant、Profile 和授权/存储绑定，以及命令或已绑定函数 |
+| 需要外部授权的宿主执行入口 | 宿主提供实际授权/存储资源；Runtime prepare 返回准确 Workflow、Variant 和 Profile，宿主不另选一份模型配置 |
 | 本次审核输入、输出 validator | Source owner 按该 Reviewer 的真实输入 schema 提供；输出由该对象的 schema 与语义 validator 判断 |
 
-先确认测试入口支持本次 Profile 和操作声明，再写 Registry，可以避免注册完成后才发现无法测试。
-固定环境只需配置一次。每次新审核提交新材料和新执行 key，保持未改变的 Module release。
-缺少任何必要输入时停在对应提供方，不临时选模型、修改声明或编译样例版本。
+source 注册与执行准备分开验证。注册完成后使用 Runtime prepare 核对该 Module 的通用要求及所选 Adapter；具体资源在执行前校验。每次新审核提交新材料和新执行 key，保持未改变的定义。注册时不要求提前提供模型、CLI 或生产授权。
 
 <a id="register-reviewer"></a>
 
-### 0.2 底层显式注册示例（兼容接口）
+### 0.2 将固定定义注册到已授权 PG
 
 本段会写入明确提供的 Registry，仅在本次注册已授权且上表输入齐备后执行。它注册 Module 及其
 固定依赖，不生成 Workflow，不设置 active pointer，也不调用模型。具体接口见
-[加载 source](agent_runtime_reviewer_api.md#modulereviewerfrom_registration)、
+[加载 Reviewer source](agent_runtime_reviewer_api.md#load_reviewer_registration)、
 [export](agent_runtime_reviewer_api.md#modulereviewerexport) 和
 [origin_bundle](agent_runtime_reviewer_api.md#moduleexportorigin_bundle)。
 
 <!-- example:register-reviewer:start -->
 ```python
-from agent_runtime import ModuleReviewer, RuntimeModulePlugin, register_runtime_module_plugin
+from agent_runtime import (
+    ModuleReviewer, RuntimeModulePlugin, load_reviewer_registration,
+    register_runtime_module_plugin,
+)
 from agent_runtime.registry import PostgresRuntimeReleaseStore
 
 store = PostgresRuntimeReleaseStore.from_dsn(database_url, schema=registry_schema)
 if store.installed_schema_release().state != "ready":
     raise RuntimeError("Registry schema is not ready; return to the schema owner")
-registry = store.load_release_registry()
-reviewer = ModuleReviewer.from_registration(
+source = load_reviewer_registration(
     project_root, skill_id=skill_id, module_id=module_id,
 )
-exported = reviewer.export(
-    module_version=module_version,
-    behavior_policy=registry.get_behavior_policy(*behavior_binding),
-    evaluation_policy=registry.get_evaluation_policy(*evaluation_binding),
-    retry_policy=registry.get_retry_policy(*retry_binding),
-    execution_profile=registry.get_execution_profile(*profile_binding),
-)
+reviewer = ModuleReviewer(source)
+exported = reviewer.export(module_version=module_version)
 plugin = RuntimeModulePlugin(
     plugin_id=plugin_id, plugin_version=plugin_version,
     release_bundle=exported.origin_bundle,
@@ -210,11 +198,8 @@ print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
 重复提交使用原生幂等注册；同一 ref 的内容冲突应返回发布负责人，不覆盖已有记录或临时改个版本绕过。
 数据库结构未就绪时停止，本段不会自动建表或迁移。
 
-`origin_bundle` 刻意不含 Profile 和 Variant。上段的 Profile 是读取已批准配置做兼容核对；它没有
-重新注册 Profile，也没有把 export 附带的 standalone Variant 当成 Workflow Variant。
-将 Module 用于宿主执行时，由宿主集成维护者按[Workflow 组装](#5-可选-workflow-assembly)和
-[注册操作](#8-registerresolve-与-active-pointer)固定真实 Workflow/Variant。缺少这个绑定，就仍未具备
-首次测试的条件；不能用测试夹具构造的授权对象代替。
+`origin_bundle` 不含 Profile 和 Variant。此底层示例只注册 Module；需要当前本地 evaluation 入口时，以 Module.to_workflow(exported).export() 的 origin_bundle 注册真实 Workflow，或直接使用 0.1 的 register-reviewer CLI 一次完成。
+[Workflow 组装](#5-可选-workflow-assembly)仍允许明确命名和多节点图。注册依赖闭合不等于执行资源已准备；普通自测和外部授权执行按下一节分别进入。
 
 <a id="test-reviewer"></a>
 
@@ -339,8 +324,7 @@ log = repository.read_execution_log(execution_id, include_private_content=True)
 该接口与持久查询共用同一实现。权限、缺失内容和 hash 不符保留原错误，不扫描目录寻找替代日志。
 历史 trace 未记录新日志格式时明确不完整，不补造数据。Provider 原生调用与 Gateway 授权操作分开展示。
 
-Runtime `0.2.0.dev1` 的 Claude 原生工具 Adapter revision 为 `v2`。新的执行准备生成相应 Profile/Variant；
-已注册 Module/Workflow 不改变。旧 Profile 可以查询，但不能把 v1 精确绑定静默替换成 v2。
+当前新的执行准备使用 ClaudeAdapter 的 claude_cli_adapter@v1，已注册 Module/Workflow 不因此改变。旧 claude_cli_native_tools_executor@v2 绑定按其原能力通过同一实现显式执行，原 Profile/Variant 内容保持；不能把旧 revision 静默换成新 revision。准确接口与迁移说明见 [Claude Adapter](agent_runtime_reviewer_api.md#claudeadapter)。
 独立 CLI 审核的助引日志可由 Runtime 的 [parse_cli_log](agent_runtime_reviewer_api.md#parse_cli_log) 解释，
 其来源仍是独立 CLI，不因此成为 managed Runtime execution。业务接受规则由 Portable validator 判断。
 
@@ -354,10 +338,10 @@ source owner，Profile/Adapter/入口不相容找宿主集成维护者，Registr
 
 - 已批准的 Module 或 Workflow meaning；
 - 精确的 Skill、Module registration、prompt、input/output schemas 和 owner contract；
-- Module 所需的 Behavior、Evaluation、Retry Policy releases；
-- 需要执行时使用的 exact Execution Profile release；
+- 普通 Module 的明确通用运行要求，或 ModuleReviewer 的固定默认环境；
+- 新导出自动得到的 Policy 依赖，无需调用者另传；
 - 明确提供的 Runtime Release Store；
-- PostgreSQL store 使用的 host-supplied DSN 和 schema name。
+- 只有使用 PostgreSQL store 时才需要宿主明确提供 DSN 和 schema name；本地文件注册无需 PG。
 
 Registration 不负责创作这些输入，也不解析 credential。它不会调用 provider、执行 Reviewer、设置产品
 权限或写入业务数据库。
@@ -368,7 +352,7 @@ Registration 不负责创作这些输入，也不解析 credential。它不会�
 flowchart LR
     I["Installed agent-runtime-core"] --> D["Read packaged README<br/>Registry Design Contract · this Runbook"]
     D --> S["Module.from_registration<br/>or ModuleReviewer.from_registration"]
-    S --> E["Module.export<br/>path-free immutable closure"]
+    S --> E["Module.export<br/>固定定义与 Policy 闭包，无模型"]
     E --> W["Optional Workflow.from_graph().export()"]
     E --> P["RuntimeModulePlugin"]
     W --> P
@@ -376,7 +360,7 @@ flowchart LR
     G -->|ready| R["register_runtime_module_plugin"]
     G -->|not ready| B["Return Registry deployment/migration owner"]
     R --> X["Resolve exact ref + hash from a new store connection"]
-    X --> A["Optional separate active-pointer change"]
+    X --> A["Runtime prepare<br/>本次准确模型与执行选择"]
 ```
 
 ## 3. 读取随包文档与 public API
@@ -405,6 +389,7 @@ Registration 只使用公开导出：
 from agent_runtime import (
     Module,
     ModuleReviewer,
+    load_reviewer_registration,
     ReleaseSubjectKind,
     RuntimeModulePlugin,
     RuntimeReleaseBundle,
@@ -422,17 +407,15 @@ package version 不足以证明相同 code identity。
 
 ## 4. 加载并编译 Module
 
-Reviewer 使用当前公开 loader：
+Reviewer source 使用专用格式入口，构造和 export 由继承的 Module 实现：
 
 ```python
-reviewer = ModuleReviewer.from_registration(
-    project_root,
-    skill_id=skill_id,
-    module_id=module_id,
-)
+source = load_reviewer_registration(project_root, skill_id=skill_id, module_id=module_id)
+reviewer = ModuleReviewer(source)
+exported = reviewer.export(module_version=module_version)
 ```
 
-其他 role 使用其已实现的 `Module` subclass。当前 loader 只读取调用方明确提供的 project root 下的固定
+普通 Agent 直接使用 Module.from_registration(..., execution_requirements=requirements)，可接受自己的非审核 schema；无需创建一个 Reviewer 或新 subclass。固定环境类型可以继承 Module。当前 loader 只读取调用方明确提供的 project root 下的固定
 authoring closure：
 
 ```text
@@ -444,9 +427,7 @@ authoring closure：
     └── output.schema.json
 ```
 
-调用 `.export(...)` 时显式提供 Module version，以及 exact Behavior、Evaluation、Retry Policy 和可选
-Execution Profile releases。返回的 `ModuleExport` 包含 path-free Module origin closure；source path 不进入
-release identity，也不参与 production resolution。
+调用 export 只提供 module_version；Runtime 从固定要求派生 Policy，返回的 ModuleExport 只包含定义与依赖，不包含 Profile、Variant 或执行 blocker。source 目录绝对路径不进入 release identity，也不参与执行时的定义回读。
 
 Module release 与 Execution Profile 分开。Profile 或 provider 变化通过新的 Profile 与 Variant Policy
 release 表达，不要求重写未变化的 Module。
@@ -467,8 +448,7 @@ mutation 前失败。
 
 ## 6. 形成 RuntimeModulePlugin
 
-使用 `ModuleExport.origin_bundle` 或 `WorkflowExport.origin_bundle` 取得 target-independent closure，再把
-需要的 Execution Profile 与 Execution Variant Policy releases 合并进一个 `RuntimeReleaseBundle`。
+使用 ModuleExport.origin_bundle 或 WorkflowExport.origin_bundle 取得固定定义闭包，直接作为 release_bundle 注册。执行准备另生成本次 Profile 和 Variant。既有低层 bundle API 仍可接收显式准确执行选择，但它们不是 source 注册的默认输入。
 同一 ref 只能对应同一内容；不得手工改变 compiler 返回的 Prompt、Schema、Policy、Module 或 Workflow
 records。
 
@@ -481,8 +461,7 @@ plugin = RuntimeModulePlugin(
 plugin.validate()
 ```
 
-In-memory `RuntimeReleaseRegistry` 只用于 isolated conformance。只有目标 `PostgresRuntimeReleaseStore`
-成功写入并从新连接 round-trip，才能形成 persistent registration evidence。
+RuntimeReleaseRegistry 提供内存校验；root 文件保存及新进程 load 形成本地持久注册证据。使用 PG 时，只有目标 PostgresRuntimeReleaseStore 写入及新连接准确回读才能证明 PG 注册完成。两种证据分别报告。
 
 ## 7. PostgreSQL schema preflight
 
@@ -510,7 +489,9 @@ store.create_schema(installed_at_utc=installed_at_utc)
 `resume_schema_migration(...)`。Registration 不能把 schema installation 或 migration 当成 fallback；未经
 明确 DDL 授权时只返回 Registry deployment/migration owner。
 
-## 8. Register、resolve 与 active pointer
+<a id="8-registerresolve-与-active-pointer"></a>
+
+## 8. 注册、准确回读与已有 PG pointer
 
 Persistent registration 只调用 public sink：
 
@@ -525,7 +506,7 @@ Registration 事务性写入整个 dependency-closed bundle。任一 dependency�
 注册后，使用同一 PostgreSQL schema 的新 store connection 按 exact ref/hash 解析 Module 或 Workflow，
 并与 export 比较。Production resolution 不再读取 authoring source。
 
-设置 active pointer 是独立操作：
+本地 .runtime 和新的 CLI 没有 active 操作，未指定版本就是最近成功注册的新版本。下面仅说明原 PG 公共接口中仍存在、需独立授权的 pointer 操作；它不参与本地最新版本选择：
 
 ```python
 pointer = store.set_active_release(
@@ -541,18 +522,17 @@ pointer = store.set_active_release(
 
 ## 9. 完成检查
 
-一次 persistent registration 至少验证：
+一次注册按实际使用的 store 验证：
 
 1. package version、import origin、随包文档与所需 public API 均可解析；
 2. Module source closure 完整，owner、prompt 和 schemas 均绑定 exact content；
-3. Policy、Profile、Module 与 Workflow dependency refs/hashes 闭合；
-4. PostgreSQL schema preflight 为 `ready`；
+3. 固定 Module/Workflow、Prompt、Schema 和 Policy 的准确依赖闭合，新增定义不带模型；
+4. 使用 PG 时 schema preflight 为 ready，本地文件注册无需这个前置；
 5. registration、identical replay 和 conflicting-ref refusal 均符合原生结果；
-6. 新连接能够按 exact ref/hash 解析已注册 release；
+6. PG 新连接或本地新进程能够准确回读已注册 release；
 7. active pointer 只有在单独请求后才改变；
 8. registration 后删除或改变 authoring source 不会改变已注册 release；
 9. generated inspection 与持久 store 的 exact records 一致；
 10. 没有 provider invocation、业务数据库写入或 Runtime core 对宿主包的 import。
 
-只报告实际运行过的验证。没有 PostgreSQL binding 时可以形成 `conformance_only`，不能把它表述为
-persistent registration。
+只报告实际运行过的验证。纯内存是 conformance_only，本地文件回读是本地持久注册，PG 新连接回读是 PG 持久注册；一种证据不替代另一种。

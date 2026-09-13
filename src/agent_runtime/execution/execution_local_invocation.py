@@ -10,6 +10,7 @@ import uuid
 
 from ..contracts.registry_release_definition import (
     ExecutionVariantPolicyRelease, ModuleExecutionPurpose, WorkflowNodeKind,
+    ExecutionProfileRelease, ModuleExecutionRequirements,
 )
 from ..registry.registry_local_persistence import (
     LoadedRuntimeRegistration, _closure, load_runtime_registration,
@@ -18,8 +19,8 @@ from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from ..registry.registry_release_compilation import (
     ExecutionVariantPolicyReleaseCandidate, ExecutionVariantProfileBindingCandidate,
     compile_execution_variant_policy_release, runtime_owned_policy_schema_assets,
+    ExecutionProfileReleaseSpec, compile_execution_profile_release, content_version,
 )
-from ..registry.registry_reviewer_defaults import content_version, reviewer_execution_profile
 from .execution_module_invocation import (
     _assert_admitted_test_evaluation_profile, _prepare_registered_workflow_module,
     AgentExecutionAdapterRegistry, run_registered_workflow_module, run_workflow_module,
@@ -29,12 +30,42 @@ from .execution_self_test_binding import ModuleSelfTestResources
 from ..ledger.ledger_lineage_recording import InMemoryModuleExecutionLedger
 
 
+def _execution_profile_for_requirements(
+    requirements: ModuleExecutionRequirements, *, transport_kind: str | None = None,
+    model_id: str | None = None, reasoning_profile: str | None = None,
+) -> ExecutionProfileRelease:
+    """Derive one current invocation Profile from frozen general requirements.
+
+    Model selection happens here, independently of task definition and saved
+    historical bindings. None uses claude_cli, claude-opus-5[1m], xhigh; explicit
+    empty/unsupported values fail. This pure check opens no executable/resources.
+    """
+    from ..invocation.invocation_claude_cli_execution import _execution_expectation
+
+    requirements.validate()
+    if transport_kind is not None and transport_kind != "claude_cli":
+        raise ValueError(f"Unsupported model transport: {transport_kind}; no automatic fallback")
+    spec = ExecutionProfileReleaseSpec(
+        execution_profile_id="claude_cli",
+        executor_adapter_id="claude_cli_adapter", executor_adapter_revision="v1",
+        transport_kind="claude_cli", provider_id="anthropic",
+        model_id="claude-opus-5[1m]" if model_id is None else model_id,
+        reasoning_profile="xhigh" if reasoning_profile is None else reasoning_profile,
+        **{name: getattr(requirements, name) for name in ModuleExecutionRequirements._profile_fields},
+        model_defaults_version="v1" if model_id is None and reasoning_profile is None else None,
+    )
+    profile = compile_execution_profile_release(replace(spec, release_version=content_version(asdict(spec))))
+    requirements.assert_profile(profile)
+    _execution_expectation(profile)
+    return profile
+
+
 def prepare_local_workflow_module(
     root: Path, workflow_id: str, *, version: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
     reasoning_profile: str | None = None, release_store=None,
 ) -> tuple[LoadedRuntimeRegistration, ExecutionVariantPolicyRelease]:
-    """Resolve a fixed single-node Reviewer Workflow and this invocation's model.
+    """Resolve a fixed single-node Module Workflow and this invocation's model.
 
     Args:
         root: Registered host root. Only saved definitions are read; this is
@@ -48,7 +79,7 @@ def prepare_local_workflow_module(
         model_id: Independent model override; None uses claude-opus-5[1m].
         reasoning_profile: Independent effort override; None uses xhigh.
             Omitted model fields use the Runtime preset, never saved bindings.
-            Tools/network/workspace/budgets come from frozen ReviewerDefaults.
+            Tools/network/workspace/budgets come from frozen Module requirements.
         release_store: Optional explicit existing store providing register_bundle
             and load_release_registry, such as PostgresRuntimeReleaseStore.
             Its schema must already be ready. Writes and verifies exact releases
@@ -64,7 +95,7 @@ def prepare_local_workflow_module(
     Raises:
         FileNotFoundError: Missing saved Workflow/version.
         ValueError: Invalid saved data, unsupported transport, missing fixed
-            Reviewer capabilities, unsupported graph or Profile/Module boundary.
+            Module requirements, unsupported graph or Profile/Module boundary.
         ModuleAuthoringError: Native Registry compatibility failure where raised.
         Exception: Store failures retain their native contract. No model has
             run when preparation fails; prior store writes may have committed.
@@ -84,12 +115,13 @@ def prepare_local_workflow_module(
         raise ValueError("local preparation requires one Workflow Module entry node")
     node = workflow.nodes[0]
     module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
-    if module.reviewer_defaults is None:
-        raise ValueError("Independent model preparation requires frozen Reviewer capabilities")
+    requirements = module.get_execution_requirements()
+    if requirements is None:
+        raise ValueError("Independent model preparation requires frozen Module execution requirements; historical Profiles are not defaults")
     saved.registry.assert_module_execution_allowed(module, ModuleExecutionPurpose.EVALUATION)
     saved.registry.assert_workflow_execution_allowed(workflow, ModuleExecutionPurpose.EVALUATION)
     fixed = _closure(saved.registry, workflow, supplied_variants=())
-    profile = reviewer_execution_profile(module.reviewer_defaults, transport_kind=transport_kind,
+    profile = _execution_profile_for_requirements(requirements, transport_kind=transport_kind,
         model_id=model_id, reasoning_profile=reasoning_profile)
     try:
         _assert_admitted_test_evaluation_profile(module, profile)
@@ -140,7 +172,8 @@ def evaluate_local_workflow_module(
         input_payload: Exact JSON input validated against the registered schema.
         version: Exact version; None resolves the latest new definition once.
         transport_kind: Independent execution transport; None uses Runtime's
-            default. This self-test currently admits claude_cli native tools.
+            default. claude_cli supports empty or selected native tool sets,
+            inline input, and no write area or a private draft as defined.
         model_id: Independent concrete model ID; None uses Runtime's default.
             The Adapter verifies observed model identity, allowing the known
             CLI [1m] selector. It does not infer model families from aliases.
@@ -181,7 +214,7 @@ def evaluate_local_workflow_module(
         Its private temporary workspace is removed on exit. The caller may
         explicitly save the returned result; Runtime does not save it by default.
     """
-    from ..invocation.invocation_claude_cli_execution import ClaudeCliNativeToolsModuleExecutor
+    from ..invocation.invocation_claude_cli_execution import ClaudeAdapter
     from ..ledger.ledger_execution_logging import read_execution_log
 
     saved, selection = prepare_local_workflow_module(root, workflow_id, version=version,
@@ -192,12 +225,16 @@ def evaluate_local_workflow_module(
     workflow = saved.release
     node = workflow.nodes[0]
     module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
+    binding = selection.policy_document()["bindings"][0]
+    selected_profile = saved.registry.get_execution_profile(
+        binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
     artifacts = InMemoryCellArtifactStore()
     ledger = InMemoryModuleExecutionLedger()
     with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:
         workspace = Path(directory).resolve()
-        adapter = ClaudeCliNativeToolsModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
-            workspace_root=workspace, cli_path=executable)
+        adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
+            workspace_root=workspace, cli_path=executable,
+            adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
         adapters = AgentExecutionAdapterRegistry()
         adapters.register(adapter)
         request, module, profile, _, _ = _prepare_registered_workflow_module(
@@ -215,7 +252,7 @@ def evaluate_local_workflow_module(
             output = None
             if attempt.status == "completed":
                 if len(result.outputs) != 1:
-                    raise ValueError("Reviewer evaluation requires one schema-valid output")
+                    raise ValueError("Module evaluation requires one schema-valid output")
                 item = result.outputs[0]
                 output = content(item.output_ref, item.output_sha256)
             return {"module_release_ref": module.release_ref, "module_release_sha256": module.release_sha256,

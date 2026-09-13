@@ -87,8 +87,9 @@ def prepare_registered_invocation_context(
         raise ValueError("Execution Profile targets another Executor revision")
     if profile.transport_kind != expectation.transport_kind:
         raise ValueError("Execution Profile transport differs from Executor transport")
-    if profile.transport_kind not in module.compatible_transport_kinds:
-        raise ValueError("Execution Profile transport is incompatible with Module")
+    requirements = module.get_execution_requirements()
+    if requirements is not None:
+        requirements.assert_profile(profile)
     if profile.execution_mode != expectation.execution_mode:
         raise ValueError("Execution Profile execution mode differs from Executor mode")
     if (
