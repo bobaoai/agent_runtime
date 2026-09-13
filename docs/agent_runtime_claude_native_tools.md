@@ -83,7 +83,7 @@ API-key-only beta。CLI 不锁定某一个版本，代码检查所需选项，�
 CLAUDE.md、Skills、Plugins 和 hooks，MCP 与会话持久化也关闭；原生工具会话的临时目录由 Runtime 独立创建，退出后清理。原始任务、工具记录、实际配置与
 结果通过现有私有 trace 和 Ledger 返回；已授权存储才持久保存，无 PG 自测不承诺跨进程恢复。执行失败与 Reviewer 的 non_pass 分开解释。
 
-目前 CLI 没有可信 Gateway/MCP 进程桥；显式要求该资源时调用前准确拒绝，不自动换 SDK 或丢弃工具。现有显式 SDK Gateway 路径保持。将来接桥仍由同一 Adapter 消费可信工具 session，不能直接透传 task 中的 mcp-config。
+目前 CLI 没有可信 Gateway/MCP 进程桥；显式要求该资源时调用前准确拒绝，不丢弃工具。Runtime 不提供 Claude SDK 执行路径或 fallback。将来接桥仍由同一 Adapter 消费可信工具 session，不能直接透传 task 中的 mcp-config。
 
 输出方式来自准确 Profile：prompt_only_json 不传 --json-schema，native_structured_output 使用现有 schema projection；返回都按完整 canonical schema 校验，失败不自动切换方式。timeout 控制进程期限；max_attempts 留在 Runtime Policy，不被翻译成 CLI turn 或费用预算。
 

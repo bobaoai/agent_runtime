@@ -33,7 +33,6 @@ RUNTIME_REQUIRED_SUPPORTING_PLANE_IDS = (
     "conformance",
 )
 RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS = (
-    "claude_agent_sdk",
     "claude_cli",
     "codex_cli",
     "html",
@@ -283,14 +282,6 @@ RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
         technology_id="postgresql",
         implementation_source_paths=(
             "src/agent_runtime/inspection/inspection_postgres_querying.py",
-        ),
-    ),
-    RuntimeImplementationBindingRegistration(
-        implementation_binding_id="invocation_claude_agent_sdk",
-        logical_responsibility_id="invocation",
-        technology_id="claude_agent_sdk",
-        implementation_source_paths=(
-            "src/agent_runtime/invocation/invocation_claude_module_invocation.py",
         ),
     ),
     RuntimeImplementationBindingRegistration(
@@ -620,13 +611,6 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "schema",
         "projection",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
-    ),
-    _source(
-        "invocation",
-        "claude_module",
-        "invocation",
-        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
-        implementation_binding_id="invocation_claude_agent_sdk",
     ),
     _source(
         "invocation",

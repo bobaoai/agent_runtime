@@ -116,10 +116,9 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
     assert configuration["project"]["readme"] == "README.md"
     assert configuration["project"]["dependencies"] == ["jsonschema>=4.23"]
     assert configuration["project"]["optional-dependencies"] == {
-        "claude": ["claude-agent-sdk>=0.2.128"],
         "postgres": ["psycopg[binary]>=3.2"],
         "temporal": ["temporalio>=1.31"],
-        "test": ["build>=1.2", "claude-agent-sdk>=0.2.128", "psycopg[binary]>=3.2",
+        "test": ["build>=1.2", "psycopg[binary]>=3.2",
                  "pytest>=8", "setuptools>=77", "temporalio>=1.31"],
     }
     assert configuration["project"]["scripts"] == {
@@ -167,12 +166,91 @@ def test_runtime_source_imports_only_stdlib_or_runtime_owned_modules() -> None:
             else:
                 continue
             for module_name in imported_modules:
-                if module_name == "src" or module_name.startswith("src."):
+                if (module_name == "src" or module_name.startswith("src.")
+                        or module_name == "claude_agent_sdk"
+                        or module_name.startswith("claude_agent_sdk.")):
                     violations.append(
                         f"{path.relative_to(RUNTIME_ROOT)}:{node.lineno}:{module_name}"
                     )
 
     assert violations == []
+
+
+def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -> None:
+    wheel = _build_runtime_wheel(tmp_path)
+    result = _run_isolated_python_with_dependencies(
+        """
+        import contextlib
+        import importlib.abc
+        import importlib.util
+        import io
+        import json
+        from pathlib import Path
+        import sys
+
+        sys.meta_path = [finder for finder in sys.meta_path
+            if not getattr(finder, '__module__', type(finder).__module__).startswith(
+                '__editable___agent_runtime_core')]
+        attempted = []
+        class RejectClaudeSdk(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == 'claude_agent_sdk' or fullname.startswith('claude_agent_sdk.'):
+                    attempted.append(fullname)
+                    raise AssertionError('Runtime must not import Claude Agent SDK')
+        sys.meta_path.insert(0, RejectClaudeSdk())
+        sys.path.insert(0, sys.argv[1])
+        import agent_runtime
+        assert agent_runtime.__file__.startswith(sys.argv[1] + '/')
+        from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter
+        from agent_runtime.invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
+        from agent_runtime.execution.execution_content_staging import InMemoryCellArtifactStore
+        from agent_runtime.registry.registry_release_registration import RuntimeReleaseRegistry
+        from agent_runtime.registry.registry_release_compilation import (
+            ExecutionProfileReleaseSpec, compile_execution_profile_release)
+        from agent_runtime.registry.registry_local_persistence import main as registry_main
+        from agent_runtime.testing.execution_local_evaluation import main as evaluation_main
+
+        assert importlib.util.find_spec(
+            'agent_runtime.invocation.invocation_claude_module_invocation') is None
+        for entry in (registry_main, evaluation_main):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                try:
+                    entry(['--help'])
+                except SystemExit as exc:
+                    assert exc.code == 0
+                else:
+                    raise AssertionError('CLI help did not exit')
+            assert 'usage:' in output.getvalue().lower()
+        profile = compile_execution_profile_release(ExecutionProfileReleaseSpec(
+            execution_profile_id='claude_cli_probe',
+            executor_adapter_id='claude_cli_adapter', executor_adapter_revision='v1',
+            transport_kind='claude_cli', provider_id='anthropic',
+            model_id='claude-opus-5', reasoning_profile='high',
+            execution_mode='tool_free', semantic_input_delivery_mode='inline',
+            attempt_workspace_policy='none', tool_policy=(), network_policy='denied',
+            gateway_access_reasons=(), timeout_seconds=60,
+            output_constraint_mode='prompt_only_json'))
+        adapter = ClaudeAdapter(release_registry=RuntimeReleaseRegistry(),
+            artifact_host=InMemoryCellArtifactStore(), workspace_root=Path.cwd(),
+            cli_path=Path(sys.executable))  # Render only; this program is never launched.
+        argv = adapter.build_command(profile=profile, settings={}, output_schema=None)
+        assert argv[argv.index('--tools') + 1] == ''
+        assert '--json-schema' not in argv
+        assert CodexCliModuleExecutor.executor_adapter_id == 'codex_cli_agent_executor'
+        assert not attempted
+        assert not any(name == 'claude_agent_sdk' or name.startswith('claude_agent_sdk.')
+                       for name in sys.modules)
+        print(json.dumps({'sdk_import_attempts': attempted, 'cli_help_checked': 2,
+                          'claude_command_rendered': True}))
+        """,
+        str(wheel),
+        cwd=tmp_path,
+    )
+    assert result == {
+        "sdk_import_attempts": [],
+        "cli_help_checked": 2,
+        "claude_command_rendered": True,
+    }
 
 
 def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
@@ -182,6 +260,9 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
 
     with zipfile.ZipFile(wheel_path) as wheel:
         members = tuple(sorted(wheel.namelist()))
+        metadata = next(name for name in members if name.endswith(".dist-info/METADATA"))
+        assert "claude-agent-sdk" not in wheel.read(metadata).decode("utf-8").lower()
+    assert "agent_runtime/invocation/invocation_claude_module_invocation.py" not in members
     package_members = tuple(
         member for member in members if not member.startswith("agent_runtime_core-")
     )

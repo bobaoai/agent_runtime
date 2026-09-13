@@ -22,12 +22,10 @@ classifiers = [
 Repository = "https://github.com/bobaoai/agent_runtime"
 
 [project.optional-dependencies]
-claude = ["claude-agent-sdk>=0.2.128"]
 temporal = ["temporalio>=1.31"]
 postgres = ["psycopg[binary]>=3.2"]
 test = [
   "build>=1.2",
-  "claude-agent-sdk>=0.2.128",
   "psycopg[binary]>=3.2",
   "pytest>=8",
   "setuptools>=77",

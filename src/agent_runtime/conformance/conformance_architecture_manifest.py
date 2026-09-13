@@ -158,10 +158,6 @@ RUNTIME_DEPENDENCY_DEBT_HIGH_WATER = frozenset(
             "agent_runtime.contracts.durability_topology_definition",
         ),
         (
-            "src/agent_runtime/invocation/invocation_claude_module_invocation.py",
-            "agent_runtime.contracts.ledger_lineage_definition",
-        ),
-        (
             "src/agent_runtime/invocation/invocation_prompt_assembly.py",
             "agent_runtime.contracts.execution_module_definition",
         ),

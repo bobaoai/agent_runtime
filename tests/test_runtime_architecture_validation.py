@@ -51,8 +51,17 @@ def test_architecture_axes_are_registered_independently() -> None:
     assert responsibility_ids == architecture.RUNTIME_REQUIRED_LOGICAL_RESPONSIBILITY_IDS
     assert {"contracts", "testing"}.issubset(directory_ids)
     assert {"foundation", "conformance"}.issubset(directory_ids)
-    assert {"postgresql", "temporal", "claude_agent_sdk", "codex_cli", "html"}.issubset(
+    assert {"postgresql", "temporal", "claude_cli", "codex_cli", "html"}.issubset(
         technology_ids
+    )
+    assert "claude_agent_sdk" not in technology_ids
+    assert all(
+        row.implementation_binding_id != "invocation_claude_agent_sdk"
+        for row in architecture.RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS
+    )
+    assert all(
+        not row.source_path.endswith("/invocation_claude_module_invocation.py")
+        for row in architecture.RUNTIME_SOURCE_FILE_REGISTRATIONS
     )
     assert not set(responsibility_ids).intersection(technology_ids)
     assert {"provider", "postgres", "review"}.isdisjoint(responsibility_ids)

@@ -222,7 +222,6 @@ def test_provider_adapters_hold_lease_around_provider_entry_and_classify_conflic
     )
     expected_provider_entry = {
         "invocation_codex_module_invocation.py": "_invoker",
-        "invocation_claude_module_invocation.py": "consume",
     }
     for file_name, provider_name in expected_provider_entry.items():
         tree = ast.parse((invocation_root / file_name).read_text(encoding="utf-8"))

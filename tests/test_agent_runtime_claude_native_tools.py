@@ -20,18 +20,20 @@ from agent_runtime.execution.execution_module_invocation import run_module
 from test_agent_runtime_native_structured_output import (
     _compile_native_module, _register_compiled_for_evaluation, _evaluation_prompt,
     _evaluation_request, _evaluation_authority, _assert_completed_provider_run, _TEST_TIME,
+    _unsupported_positional_output_schema,
 )
 
 
 def _environment(tmp_path, *, tools=("read", "search", "shell"), model="claude-opus-5[1m]", effort="xhigh", material=None, instructions="",
                  mode="agent", workspace="own_draft_read_write", output_mode="native_structured_output",
-                 binding=("claude_cli_adapter", "v1")):
+                 binding=("claude_cli_adapter", "v1"), output_schema_document=None):
     compiled = _compile_native_module(
         tmp_path, output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="claude_fields", executor_adapter_id=binding[0],
         executor_adapter_revision=binding[1], transport_kind="claude_cli", provider_id="anthropic",
         model_id=model, reasoning_profile=effort, execution_mode=mode,
         attempt_workspace_policy=workspace, tool_policy=tools, output_constraint_mode=output_mode,
+        **({"output_schema_document": output_schema_document} if output_schema_document is not None else {}),
     )
     registry = _register_compiled_for_evaluation(compiled)
     cell = InMemoryCellArtifactStore()
@@ -701,6 +703,28 @@ def test_schema_mode_mismatch_cannot_create_cli_argv(tmp_path):
         workspace_root=tmp_path / "attempts", cli_path=_fake_cli(tmp_path))
     with pytest.raises(ValueError, match="schema presence"):
         adapter.build_command(profile=env[0].execution_profile, settings={}, output_schema=None)
+
+
+def test_claude_projection_failure_prevents_provider_invocation(tmp_path, monkeypatch):
+    """Canonical projection refusal precedes CLI preflight and Provider calls."""
+    env = _environment(tmp_path, tools=(), mode="tool_free", workspace="none",
+                       output_schema_document=_unsupported_positional_output_schema())
+    calls = []
+    def no_process(*args, **kwargs):
+        pytest.fail("schema projection failure must precede any CLI process")
+    monkeypatch.setattr(claude.subprocess, "run", no_process)
+    def unused_provider(call):
+        calls.append(call)
+        pytest.fail("unsupported schema reached Provider")
+        yield
+    run, artifacts = _run(env, tmp_path, unused_provider)
+    attempt = run.attempts[0]
+    assert calls == [] and run.outputs == ()
+    assert attempt.status == "failed" and attempt.failure_class == "schema"
+    detail = json.loads(artifacts.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+    assert detail["failure_code"] == "native_output_schema_projection_unsupported"
+    assert detail["retryable"] is False
+    assert not (tmp_path / "attempts").exists()
 
 
 def test_historical_v2_runs_unchanged_profile_through_same_core(tmp_path):

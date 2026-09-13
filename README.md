@@ -120,7 +120,7 @@ Concrete technologies are registered separately as implementation bindings:
 flowchart LR
     REGISTRY["Agent Registry"] -. "release persistence" .-> POSTGRES["PostgreSQL"]
     LEDGER["Agent Execution Ledger"] -. "facts and content" .-> POSTGRES
-    INVOCATION["Agent Invocation"] -. "provider adapter" .-> CLAUDE["Claude Agent SDK"]
+    INVOCATION["Agent Invocation"] -. "provider adapter" .-> CLAUDE["Claude CLI"]
     INVOCATION -. "provider adapter" .-> CODEX["Codex CLI"]
     DURABILITY["Agent Workflow Durability"] -. "durable coordination" .-> TEMPORAL["Temporal"]
     POSTGRES -. "authorized read-only queries" .-> INSPECTION["Agent Run Inspection"]
@@ -129,6 +129,11 @@ flowchart LR
 
 This diagram shows the currently registered bindings. The generated
 architecture projection is the exhaustive current set.
+
+The Runtime distribution uses Claude CLI and Codex CLI. It does not import or
+depend on Claude Agent SDK and no longer provides its SDK executor classes.
+Previously recorded SDK Profile identities remain readable as historical data;
+they do not select a CLI implementation or recreate a removed executor.
 
 PostgreSQL, Temporal, provider SDKs, CLIs, and renderers are replaceable
 implementations. None is a peer logical responsibility or execution authority.
@@ -570,7 +575,7 @@ or keep a parallel shadow trace.
 | Dimension | Question answered | Current values or examples |
 | --- | --- | --- |
 | Execution purpose | Why is this run being performed? | `test`, `evaluation`, `workflow`, `standalone`, `replay` |
-| Provider transport | How is the adapter reached? | `transport_kind`: `in_process_test`, `claude_agent_sdk`, `codex_cli`; `transport_family`: `in_process`, `sdk`, `cli`, `api` |
+| Provider transport | How is the adapter reached? | Bundled model transports: `claude_cli`, `codex_cli`; test doubles use their declared binding. Generic transport families remain `in_process`, `sdk`, `cli`, `api` |
 | Capability profile | What may the model do and receive? | `execution_mode`, semantic input delivery, Attempt workspace, Gateway tools, and network policy |
 | Runtime execution gate | May this exact request execute now? | Purpose gate, exact registered releases, Module operations, exact profile, registered adapter identity and capability coverage, and — for model operations — committed AR09 authorization evidence must all pass; Workflow/Standalone entry additionally resolves its active pointer |
 
@@ -583,9 +588,9 @@ purposes are not admitted by the current public entry point.
 | Purpose and Module shape | Capability profile | Registered transport | Current result |
 | --- | --- | --- | --- |
 | `test` or `evaluation`, no protected operation | Exact registered profile | `in_process` transport family only; a provider transport requires a declared model operation | Admitted without authorization evidence, subject to exact release and adapter checks |
-| `test` or `evaluation`, exactly one model operation (`invoke_model` or `model_execute`) and no other operation | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible, explicitly registered Claude SDK or Codex CLI adapter | Admitted with a required `ModuleExecutionAuthority`; a Product `DENY` or closed fence fails the Attempt with zero Provider invocation |
-| `test` or `evaluation`, exactly one model operation and no other operation | `agent` + `inline` + workspace `own_draft_read_write` + empty Gateway tool policy + network `denied` | Exact Claude SDK inline-draft adapter revision | Admitted. Every exposed Read/Write/Edit is checked against the Attempt root; the model receives no governed Gateway resource and no general network |
-| `test` or `evaluation`, exactly one model operation plus one or more declared Gateway read operations | `agent` + `gateway_read` + workspace `none` + exact non-empty tool policy and access reason + network `gateway_only` | Claude SDK Gateway adapter with dynamic-operation authorization support | Admitted. Model dispatch is authorized first; every tool call then requires a fresh Stack-A decision and Runtime receipt before the resource callable is entered |
+| `test` or `evaluation`, exactly one model operation (`invoke_model` or `model_execute`) and no other operation | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible Claude CLI or Codex CLI adapter | Admitted with explicit execution authority or Runtime-hosted self-test resources; self-tests do not synthesize production decisions |
+| `test` or `evaluation`, exactly one model operation and no other operation | `agent` + `inline` + workspace `none` or `own_draft_read_write` + an explicit subset of `read/search/shell` + network `denied` | ClaudeAdapter | Admitted within the CLI's implemented resource window. Materials remain read-only and permitted draft writes use the bounded scratch area |
+| `test` or `evaluation`, exactly one model operation plus one or more declared Gateway read operations | `agent` + `gateway_read` + workspace `none` + exact non-empty tool policy and access reason + network `gateway_only` | No bundled CLI Gateway adapter | The generic operation protocol and in-memory conformance tests remain; a real CLI Gateway bridge is not provided. No SDK fallback is available |
 | `test` or `evaluation`, any other protected-operation/profile conjunction | Any | Any | Rejected before Provider invocation, including `hybrid`, Gateway-plus-draft, attachments, direct egress, Codex workspace/Gateway, or a descriptor without dynamic authorization support |
 | Workflow-bound `evaluation`, `test`, `workflow`, or `replay` through `run_workflow_module()` | Same exact reviewed capability conjunctions as above | Same registered adapters | Admitted for one Variant per durable dispatch. Module Run/Variant and Attempt claim precede Provider entry; operation authorization precedes each effect; terminal Attempt/calls/usage/outputs are atomically finalized. Model and Gateway calls retain their AR09 evidence and immutable tool content refs. A committed invocation replays without a Provider call, and a missing direct-output resolution is healed from the committed Attempt bundle. |
 | `standalone` through either entry point | Any | Any | Not admitted by the current public entry points |
@@ -601,31 +606,34 @@ input closure; evaluation and selection remain downstream Runtime records.
 
 | Capability profile | Semantic input | Attempt workspace | Model-visible tools | Agent network | Adapter status | Model-backed `run_module()` admission |
 | --- | --- | --- | --- | --- | --- | --- |
-| Tool-free inline | `inline` | `none` | None | `denied` | Claude SDK and Codex CLI implemented | `test` / `evaluation` admitted |
-| Agent with private drafts | `inline` | `own_draft_read_write` | Draft-only local capabilities | `denied` | Claude SDK admitted; Codex CLI adapter is implemented but its sandbox does not prove Attempt-only reads | Claude SDK `test` / `evaluation` admitted; Codex not admitted |
-| Agent with governed reads | `gateway_read` | `none` | Exact registered Runtime Gateway tools | `gateway_only` | Claude SDK implemented with per-tool Runtime callback | `test` / `evaluation` admitted |
+| Tool-free inline | `inline` | `none` | None | `denied` | Claude CLI and Codex CLI implemented | `test` / `evaluation` admitted |
+| Agent with private drafts | `inline` | `own_draft_read_write` | Explicit native read/search/shell subset | `denied` | Claude CLI implemented; Codex workspace remains an unadmitted candidate | Claude CLI `test` / `evaluation` admitted; Codex workspace not admitted |
+| Agent with governed reads | `gateway_read` | `none` | Exact registered Runtime Gateway tools | `gateway_only` | Generic protocol only; no bundled CLI Gateway implementation | Requires an applicable implementation; not provided by the bundled CLIs |
 | Agent with direct sandboxed egress | Profile-specific | Profile-specific | Profile-specific | `direct_sandboxed` | No current public-entry slice | Not admitted |
 
 In the tool-free and Gateway-read profiles, workspace `none` means the model receives no
 writable Attempt draft capability; the Runtime may still create an isolated
 Attempt directory as an execution boundary. An empty tool policy means no
 model-visible tools. Network `denied` means no Agent-initiated general outbound
-or tool network access; the registered SDK/CLI transport may still connect to
+or tool network access; the registered CLI transport may still connect to
 its model Provider control plane. Transport connectivity is not an Agent
 capability. In the Gateway slice, `gateway_only` exposes only the exact
 Profile/Module tool intersection; `DENY`, a closed fence, mismatched Attempt
 lineage, or a missing receipt prevents the governed resource call and taints
-the Attempt even if the Provider SDK swallows the callback error; exact
-request/response lineage is retained on the terminal Attempt.
+the Attempt even if the calling adapter catches the callback error; exact
+request/response lineage is retained on the terminal Attempt. This existing
+kernel-wide refusal behavior still needs alignment with the operation-scoped
+failure rules in the Invocation Design; removing the SDK does not change it.
 
-Opt-in live smoke tests exercise both Claude Agent SDK and Codex CLI through
-this exact entry point: both transports cover tool-free execution, while the
-Claude cases additionally cover the admitted workspace and Gateway slices.
+Opt-in live smoke tests cover the remaining CLI implementations. The Codex
+test below covers the tool-free path. Claude CLI's native-tool cases and their
+environment prerequisites are documented in
+`docs/agent_runtime_claude_native_tools.md`; none invokes Claude Agent SDK.
 
 ```bash
 RUN_PROVIDER_INTEGRATION=1 python -m pytest \
   tests/test_agent_runtime_native_structured_output.py \
-  -k 'live_codex or live_claude'
+  -k 'live_codex'
 ```
 
 The development version remains appropriate because a Product host must still

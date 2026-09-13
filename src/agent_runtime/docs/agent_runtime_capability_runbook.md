@@ -565,7 +565,7 @@ Case：`live_module_transport_case`；证据来源：`environment_gate`。
 
 前置环境：
 
-- 设置 RUN_PROVIDER_INTEGRATION=1，准备既有测试所用 Codex/Claude executable、SDK 和有效登录。
+- 设置 RUN_PROVIDER_INTEGRATION=1，准备本节测试使用的 Codex CLI 和有效登录。Claude 原生工具用例的命令及环境要求见 `agent_runtime_claude_native_tools.md`，同样需要显式开启；Runtime 不依赖 Claude Agent SDK。
 - 真实调用可能计费并消耗额度；先检查测试中的模型、超时、工具和环境设置，不自动登录。
 
 样例代码位置及单例命令：
