@@ -280,8 +280,8 @@ class LocalCommandSession:
 
         Unknown IDs, nonzero exits and timeouts return per-call failures with a
         local_call_id; they are not domain decisions. Resource/integrity faults
-        and process cleanup faults remain visible here and invalidate validate_completion even if the
-        caller handles the tool error. No invocation of a missing command is
+        and process cleanup faults remain visible here and invalidate completion
+        even if the caller handles the tool error. No invocation of a missing command is
         invented, and no unknown exit code is replaced by zero.
         """
         with self._condition:
@@ -351,7 +351,8 @@ class LocalCommandSession:
                 self._verify_materials()
             except Exception as exc:
                 self._set_fatal(exc)
-                response["failure"] = {"error_type": type(exc).__name__, "message": str(exc), "stop_reason": "resource_invalid"}
+                response["failure"] = {**(response["failure"] or {}), "error_type": type(exc).__name__,
+                                       "message": str(exc), "stop_reason": "resource_invalid"}
             row = {"tool_call_id": identity, "tool_name": LOCAL_COMMAND_TOOL_NAME, "source_kind": "runtime_local",
                    "request": {"command_id": command_id}, "response": response,
                    "status": "completed" if response["failure"] is None and response["returncode"] == 0 else "failed"}
@@ -361,7 +362,8 @@ class LocalCommandSession:
                     self._records.append(copy.deepcopy(row))
                 except Exception as exc:
                     self._set_fatal(exc)
-                    response["failure"] = {"error_type": type(exc).__name__, "message": str(exc), "stop_reason": "record_failure"}
+                    response["failure"] = {**(response["failure"] or {}), "error_type": type(exc).__name__,
+                                           "message": str(exc), "stop_reason": "record_failure"}
                 finally:
                     self._running -= 1
                     self._condition.notify_all()

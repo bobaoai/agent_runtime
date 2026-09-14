@@ -266,7 +266,7 @@ def test_scratch_parent_replacement_cannot_create_an_external_directory(tmp_path
         assert response["failure"] is not None
 
 
-@pytest.mark.parametrize("failure_kind", ["cleanup_error", "timeout", "interrupted", "cleanup_reason_only"])
+@pytest.mark.parametrize("failure_kind", ["cleanup_error", "timeout", "interrupted", "cleanup_reason_only", "closed_interrupted"])
 def test_command_cleanup_failure_invalidates_completion_and_keeps_evidence(tmp_path, monkeypatch, failure_kind):
     from agent_runtime.invocation import invocation_local_command_execution as implementation
     from agent_runtime.invocation.invocation_process_execution import CliProcessError, CliProcessTimeout, CliProcessInterrupted
@@ -275,13 +275,15 @@ def test_command_cleanup_failure_invalidates_completion_and_keeps_evidence(tmp_p
                  cleanup_error="output pipe did not close")
     if failure_kind == "timeout":
         failure = CliProcessTimeout([sys.executable], 1, **facts)
-    elif failure_kind == "interrupted":
+    elif failure_kind in {"interrupted", "closed_interrupted"}:
         failure = CliProcessInterrupted(**facts)
     else:
         if failure_kind == "cleanup_reason_only":
             facts["cleanup_error"] = None
         failure = CliProcessError(cmd=[sys.executable], stop_reason="cleanup_error", message="cleanup failed", **facts)
     def failed_capture(**_):
+        if failure_kind == "closed_interrupted":
+            env.host.close()
         raise failure
     monkeypatch.setattr(implementation, "run_cli_process", failed_capture)
     with env.session as session:
@@ -289,7 +291,7 @@ def test_command_cleanup_failure_invalidates_completion_and_keeps_evidence(tmp_p
         with pytest.raises(type(failure)) as caught:
             session.validate_completion()
         assert caught.value is failure
-        assert response["failure"]["stop_reason"] == failure.stop_reason
+        assert response["failure"]["stop_reason"] == ("resource_invalid" if failure_kind == "closed_interrupted" else failure.stop_reason)
         assert response["failure"]["cleanup_error"] == facts["cleanup_error"]
         assert not response["process_output_complete"] and response["returncode"] == -9
         assert base64.b64decode(response["raw_streams"]["stdout"]["data"]) == b"out\xff"
