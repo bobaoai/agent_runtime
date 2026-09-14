@@ -1,4 +1,29 @@
-"""Prepare saved definitions for an independently selected model execution."""
+"""Runtime run profile
+
+从库外调用 Runtime，先看一次运行的完整组成，不需要逐个搜索实现文件。
+这里的总览不是新的 Profile 对象；ExecutionProfileRelease 只是其中的执行配置。
+
+| 运行部分 | 谁提供或决定 | Runtime 负责人及边界 |
+| --- | --- | --- |
+| Module：任务 prompt、输入/输出 schema、任务归属 | 任务 owner 提供 source；普通 Module 明确自己的运行要求 | Registry 验证、导出、注册版本，不判断业务结果 |
+| ModuleReviewer：固定运行底座 | Runtime 的 ModuleReviewer 提供默认 ModuleExecutionRequirements；不同 Reviewer 提供不同任务内容 | Registry 保留通用 Module 的继承行为；下游不按 Reviewer 名称重新组装或增加配置 |
+| Workflow：节点、版本与连接 | 调用者组装；单节点默认与 Module 同名，也可明确命名 | Registry 保存图；Execution 固定本次准确版本，未指定版本时使用最新注册定义 |
+| root、Python、程序与资源 | 宿主给 root、现有登录及明确材料/额外依赖；Python 固定为启动 Runtime 的 sys.executable | Foundation 做轻量 setup/配置读取；Invocation 使用当前 Python 环境，只读开放其运行库，不另选解释器；root 本身不是模型读取许可 |
+| ExecutionProfileRelease 与 Variant | 调用者可给模型、transport、effort；未给时用 Runtime 默认；固定能力来自 Module | Execution.prepare 生成本次具体 Profile 与节点绑定；Registry 承载准确内容；调用者不手拼 Profile，root 不固定绑定模型 |
+| Provider 与工具调用 | 上一步已经固定的 Profile 和明确资源 | Invocation 的 Adapter 组装 CLI、映射工具、执行声明命令并采集原始流；不重新选择任务或模型，不接管 Provider 自带系统提示 |
+| Attempt、重试与输出提交 | 准确请求、预算及实际执行事实 | Execution 管理生命周期和技术完成条件；命令非零/正常权限拒绝不是自动的整体失败；任务 owner 判断业务是否通过 |
+| 日志、恢复与查询 | 宿主明确提供存储与授权；普通自测不需要 PG | Ledger 保存事实，Durability 按既有记录协调恢复，Inspection 只读呈现；无持久存储时返回本次完整记录，不承诺进程结束后恢复 |
+
+调用顺序：任务 source → Registry 的 Module/Workflow → Execution.prepare 的具体配置 →
+Invocation 的 CLI/工具调用 → Execution 接受技术结果 → Ledger/Inspection 返回事实 → 任务 owner 校验业务结果。
+
+完整参数在本页的 Module、ModuleReviewer、ModuleExecutionRequirements、ExecutionProfileRelease、
+ExecutionVariantPolicyRelease、prepare_local_workflow_module、evaluate_local_workflow_module 和 CLI 章节中，
+由各自真实定义导出。ModuleReviewer 的默认字段也直接取自该类，不从历史 ReviewerDefaults 猜测当前配置。
+
+Runtime CLI 负责 setup、注册、执行和查询。Portable CLI 负责准备审核对象并校验审核结果；宿主接入只
+提供资源与调用入口，不复制 Adapter、模型选择或日志解析。注册定义与本次执行配置分开保存。
+"""
 
 from dataclasses import asdict, replace
 import importlib.metadata
@@ -222,13 +247,17 @@ def evaluate_local_workflow_module(
             optional config's read_only_dependencies for a Module with tools.
             Unused defaults are not exposed to tool-free Modules. Explicit
             dependencies still require the selected Adapter's actual support.
+            These are additional libraries. Shell-capable execution always uses
+            the current Runtime Python environment as read-only runtime support;
+            no Python selection parameter or fallback environment is provided.
         commands: Tuple of command_id, argv, cwd and timeout_seconds dictionaries.
             IDs are unique within this call. cwd selects source or scratch and
             their relative subdirectories. argv is fixed by the caller; timeout
             cannot exceed the Module budget. A relative executable path in
             argv[0] resolves against that cwd; a bare program name uses the
-            command's fixed PATH. Claude's local command tool records
-            actual process results for these IDs; ordinary native Bash remains
+            command's fixed PATH. python/python3 use the current sys.executable, preserving its
+            virtual-environment entry rather than replacing it with a symlink target.
+            Claude's local command tool records actual process results for these IDs; ordinary native Bash remains
             available independently. Required/expected business outcomes belong
             to the task input and its validator, not these resource definitions.
     Returns:

@@ -31,6 +31,7 @@ API_SOURCES = {
     "src/agent_runtime/registry/registry_plugin_registration.py": ("register_runtime_module_plugin", "register_reviewer"),
     "src/agent_runtime/contracts/registry_release_definition.py": (
         "ModuleExecutionRequirements", "ModuleRelease", "ReviewerDefaults",
+        "ExecutionProfileRelease", "ExecutionVariantPolicyRelease",
     ),
     "src/agent_runtime/contracts/invocation_adapter_definition.py": (
         "OperationAuthorizationDenied", "AuthorizedAgentExecutionHost",
@@ -126,6 +127,12 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
         declaration = [*decorators, f"class {name}({bases}):" if bases else f"class {name}:"]
         declaration.extend("    " + field for field in (fields or ["..."]))
         lines.extend(["```python", *declaration, "```", "", _doc(node, name), ""])
+        for item in node.body:
+            if (isinstance(item, ast.Assign) and any(isinstance(target, ast.Name)
+                    and target.id == "_default_execution_requirements" for target in item.targets)):
+                lines.extend(["### Default execution requirements", "",
+                    "Generated from this class's fixed preset; not a separate configuration.", "",
+                    "```python", ast.unparse(item), "```", ""])
         for method in node.body:
             if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
                 not method.name.startswith("_") or method.name == "__init__"
@@ -203,8 +210,11 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
         "Other Runtime APIs are outside this reference. Signatures, fields, descriptions and error",
         "constant values below come directly from this source tree; no Runtime modules are executed.",
         "", "For registration steps, see the [Registration runbook](agent_runtime_registration_runbook.md).",
-        "", "## Contents", "",
+        "",
     ]
+    overview_source = project_root / "src/agent_runtime/execution/execution_local_invocation.py"
+    overview_tree = ast.parse(overview_source.read_text(encoding="utf-8"))
+    lines.extend(["## " + _doc(overview_tree, "Runtime run profile"), "", "## Contents", ""])
     symbols = [name for names in API_SOURCES.values() for name in names]
     lines.extend(f"- [{name}](#{name.lower()})" for name in symbols)
     lines.extend(["- [CLI commands](#cli-commands)", "- [Evaluation CLI](#evaluation-cli)", "- [Error constants](#error-constants)", ""])

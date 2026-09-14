@@ -7,10 +7,12 @@ import json
 import os
 from pathlib import Path
 import socket
+import site
 import subprocess
 import sys
 import threading
 import time
+import venv
 from types import SimpleNamespace
 
 import pytest
@@ -104,7 +106,7 @@ def test_real_command_identity_exit_and_byte_output_are_kept(tmp_path):
         assert ok["allowed"] and ok["returncode"] == 0 and ok["process_output_complete"]
         assert base64.b64decode(ok["raw_streams"]["stdout"]["data"]) == b"out\xff"
         assert base64.b64decode(ok["raw_streams"]["stderr"]["data"]) == b"err\xfe"
-        assert ok["cwd"] == str(env.scratch) and ok["argv"][0] == str(Path(sys.executable).resolve())
+        assert ok["cwd"] == str(env.scratch) and ok["argv"][0] == str(Path(sys.executable).absolute())
         assert nonzero["returncode"] == 7 and nonzero["process_output_complete"] and nonzero["failure"] is None
         assert [row["status"] for row in session.records] == ["completed", "failed"]
         assert [row["response"]["local_call_id"] for row in session.records] == ["local_command_1", "local_command_2"]
@@ -155,9 +157,67 @@ def test_relative_executable_uses_the_declared_command_directory(tmp_path, cwd, 
         response = session.invoke("script")
         session.validate_completion()
         assert response["returncode"] == 0 and response["stdout"] == "relative-script-ok\n"
-        assert response["argv"] == [str(env.materials / "source" / script_path)]
+        assert Path(response["argv"][0]).samefile(env.materials / "source" / script_path)
         assert response["declared_argv"] == [program] and response["declared_cwd"] == cwd
         assert response["cwd"] == str(env.materials / cwd)
+
+
+@pytest.mark.parametrize("program", ["python", "python3", sys.executable])
+def test_python_default_is_the_running_runtime_environment(tmp_path, program):
+    definition = command("python", "import sys;print(sys.prefix)")
+    definition["argv"][0] = program
+    env = session_fixture(tmp_path, [definition])
+    with env.session as session:
+        response = session.invoke("python")
+        assert response["returncode"] == 0, response
+        assert response["stdout"].strip() == sys.prefix
+        assert response["argv"][0] == str(Path(sys.executable).absolute())
+        assert session.mcp_config["mcpServers"]["runtime_commands"]["command"] == str(Path(sys.executable).absolute())
+        assert session._environment["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).absolute().parent)
+
+
+def test_current_python_venv_dependency_survives_direct_and_shell_launch(tmp_path):
+    from agent_runtime.invocation import invocation_local_command_execution as implementation
+    environment = tmp_path / "runtime_python"
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
+    python = environment / "bin/python"
+    assert python.is_symlink()
+    library = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    (library / "runtime_venv_probe.py").write_text("VALUE = 'only-in-current-runtime-venv'\n")
+    # The parent Runtime really starts in the new venv. Existing test libraries
+    # only support this parent fixture; the sandboxed commands must import the
+    # marker from that venv's own site-packages without a PYTHONPATH override.
+    paths = [str(Path(implementation.__file__).parents[2]), str(Path(__file__).parent), *site.getsitepackages()]
+    child = """import json,sys
+from pathlib import Path
+sys.path[:0]=PATHS
+from test_agent_runtime_local_commands import session_fixture, command
+case=Path(CASE)
+case.mkdir()
+code="import sys,runtime_venv_probe; print(sys.prefix); print(runtime_venv_probe.VALUE)"
+definitions=[command('direct',code), command('alias',code)]
+definitions[1]['argv'][0]='python'
+definitions.append({'command_id':'shell','argv':['/bin/sh','-c','python -I -B -c '+__import__('shlex').quote(code)],'cwd':'source','timeout_seconds':5})
+env=session_fixture(case,definitions)
+with env.session as session:
+ results=[session.invoke(item['command_id']) for item in definitions]
+ session.validate_completion()
+ for result in results:
+  assert result['returncode']==0,result
+  assert result['stdout'].splitlines()==[sys.prefix,'only-in-current-runtime-venv'],result
+ assert results[0]['argv'][0]==sys.executable
+ print(json.dumps({'prefix':sys.prefix,'results':results}))
+""".replace("PATHS", repr(paths)).replace("CASE", repr(str(tmp_path / "case")))
+    process = subprocess.run([str(python), "-I", "-B", "-c", child], capture_output=True, text=True, timeout=30)
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert json.loads(process.stdout)["prefix"] == str(environment)
+
+
+def test_missing_current_python_does_not_fall_back(tmp_path, monkeypatch):
+    from agent_runtime.invocation import invocation_process_execution as implementation
+    monkeypatch.setattr(implementation.sys, "executable", str(tmp_path / "missing/python"))
+    with pytest.raises(FileNotFoundError, match="Current Runtime Python"):
+        session_fixture(tmp_path, [command("unreachable", "print('must not run')")])
 
 
 def test_relative_executable_still_cannot_escape_readable_resources(tmp_path):

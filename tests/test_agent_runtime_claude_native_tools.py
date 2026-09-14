@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from dataclasses import fields
 from itertools import combinations
 from pathlib import Path
@@ -289,6 +290,11 @@ def test_actual_cli_settings_keep_resource_boundaries(tmp_path, binding):
         material_root = call["cwd"].parent
         assert str(material_root / "materials") in fs["denyWrite"]
         assert fs["allowWrite"] == [str(call["cwd"]), call["environment"]["TMPDIR"]]
+        python_roots = {str(Path(sys.prefix).resolve()), str(Path(sys.base_prefix).resolve())}
+        assert python_roots <= set(fs["allowRead"])
+        assert python_roots <= set(fs["denyWrite"])
+        assert python_roots <= set(settings["permissions"]["additionalDirectories"])
+        assert call["environment"]["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).absolute().parent)
         assert sandbox["network"] == {"allowedDomains": [], "strictAllowlist": True,
             "allowAllUnixSockets": False, "allowLocalBinding": False}
         yield _init()
@@ -748,6 +754,8 @@ def test_tool_free_uses_same_adapter_with_explicit_empty_tools(tmp_path, output_
     native = output_mode == "native_structured_output"
     def events(call):
         assert call["argv"][call["argv"].index("--tools") + 1] == ""
+        settings = json.loads(call["argv"][call["argv"].index("--settings") + 1])
+        assert settings["permissions"]["additionalDirectories"] == [str(call["cwd"] / "materials")]
         init = _init(())
         if not native:
             init["tools"] = []

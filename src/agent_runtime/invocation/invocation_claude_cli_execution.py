@@ -20,7 +20,10 @@ from ..contracts.invocation_adapter_definition import (
 )
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_context_preparation import InvocationExecutionExpectation, prepare_registered_invocation_context
-from .invocation_process_execution import run_cli_process, CliProcessInterrupted, _capture_cli_interrupts
+from .invocation_process_execution import (
+    run_cli_process, CliProcessInterrupted, _capture_cli_interrupts,
+    _runtime_python_executable, _runtime_python_read_roots,
+)
 from .invocation_cli_logging import captured_cli_streams, parse_cli_log, decode_cli_event
 from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
 from .invocation_result_assembly import (
@@ -130,6 +133,11 @@ class ClaudeAdapter:
         before execution, including any Runtime resource description.
         read_only_dependencies are trusted existing paths, never task-supplied
         strings; temporary self-tests require these roots in their exact live binding.
+        Shell-capable calls use the Python environment running Runtime: its bin
+        directory leads PATH and its installation roots are read-only. These
+        fixed runtime resources are separate from optional additional dependencies;
+        no Python selector or fallback is exposed. Tool-free calls gain no such
+        additional directories or task tools.
         This constructor resolves paths only. It neither logs in nor calls Claude.
 
         Args:
@@ -445,10 +453,13 @@ class ClaudeAdapter:
                     if not target.exists():
                         target.write_bytes(body)
                     material_hashes[str(target)] = item.input_sha256
+                python = _runtime_python_executable() if "shell" in profile.tool_policy else None
+                python_roots = _runtime_python_read_roots() if python is not None else ()
+                read_dependencies = tuple(dict.fromkeys((*python_roots, *self._dependencies)))
                 private_paths = (cli_temporary, self._workspace_root, Path.home() / ".codex", Path.home() / ".claude",
                                  Path.home() / ".claude.json", Path.home() / "Library/Keychains")
                 if any(private.resolve().is_relative_to(dep) or dep.is_relative_to(private.resolve())
-                       for private in private_paths for dep in self._dependencies):
+                       for private in private_paths for dep in read_dependencies):
                     raise PermissionError("Read-only dependencies overlap private Provider state or credentials")
                 if resources_body is not None and parse_local_resources(resources_body)["commands"]:
                     stage = "local_command_preparation"
@@ -458,13 +469,13 @@ class ClaudeAdapter:
                     expected_tools.add(LOCAL_COMMAND_CLI_TOOL_NAME)
                 settings = {
                     "permissions": {"blockReadsOutsideWorkingDirectories": True,
-                        "additionalDirectories": [str(materials), *map(str, self._dependencies)]},
+                        "additionalDirectories": [str(materials), *map(str, read_dependencies)]},
                     "sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True, "failIfUnavailable": True,
                         "allowUnsandboxedCommands": False,
                         "filesystem": {"denyRead": ["/"],
                             "allowRead": [str(cwd), str(materials), str(cli_temporary), "/bin", "/usr/bin", "/usr/lib",
-                                          "/System", "/Library", "/dev", *map(str, self._dependencies)],
-                            "denyWrite": [str(materials), *map(str, self._dependencies),
+                                          "/System", "/Library", "/dev", *map(str, read_dependencies)],
+                            "denyWrite": [str(materials), *map(str, read_dependencies),
                                 "/tmp/claude", "/private/tmp/claude",
                                 str(Path.home() / ".npm/_logs"), str(Path.home() / ".claude")]
                                 if writable_draft else ["/"],
@@ -487,7 +498,8 @@ class ClaudeAdapter:
                 environment = {key: value for key, value in os.environ.items() if key in
                     {"HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}}
                 bins = [str(dep / "bin") for dep in self._dependencies if (dep / "bin").is_dir()]
-                environment.update(PATH=os.pathsep.join([*bins, "/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
+                python_bins = [str(python.parent)] if python is not None else []
+                environment.update(PATH=os.pathsep.join(dict.fromkeys([*python_bins, *bins, "/usr/bin", "/bin", "/usr/sbin", "/sbin"])),
                     TMPDIR=str(cli_temporary), CLAUDE_CODE_TMPDIR=str(cli_temporary),
                     PYTHONDONTWRITEBYTECODE="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
                     GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")

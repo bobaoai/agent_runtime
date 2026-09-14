@@ -21,7 +21,9 @@ from .invocation_local_resource_preparation import (
     validate_local_resources, assert_local_materials_unchanged,
     LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256, LOCAL_RESOURCES_MEDIA_TYPE, LOCAL_RESOURCES_LOGICAL_NAME,
 )
-from .invocation_process_execution import run_cli_process, CliProcessInterrupted
+from .invocation_process_execution import (
+    run_cli_process, CliProcessInterrupted, _runtime_python_executable, _runtime_python_read_roots,
+)
 from .invocation_tool_definition import ProviderToolDefinition
 
 
@@ -38,6 +40,12 @@ class LocalCommandSession:
     close. Native Bash remains separate; only supplied command_id values run
     here. No Product authority, Gateway receipt or model result is manufactured.
     MCP is imported only by the optional stdio proxy, after dependency preflight.
+
+    Default Python is the interpreter running Runtime. python/python3 and the
+    MCP proxy use that entry without resolving away its virtual environment;
+    native child scripts receive its bin directory first in PATH. Its current
+    environment and standard library are read-only runtime support. Additional
+    dependencies cannot select another default Python and there is no selector.
 
     records are trusted local observations, with an Attempt-local local_call_id
     also returned in every accepted tool-call response. They are not Provider
@@ -67,6 +75,8 @@ class LocalCommandSession:
         self._dependencies = tuple(Path(path).resolve(strict=True) for path in read_only_dependencies)
         if [str(path) for path in self._dependencies] != resource["read_only_dependencies"]:
             raise SelfTestResourceUnavailableError("Local command dependencies differ from the frozen resource input")
+        self._python = _runtime_python_executable()
+        self._python_roots = _runtime_python_read_roots()
         self._request, self._host, self._adapter = request, host, adapter
         self._profile = profile
         self._artifacts, self._workspace = artifact_host, Path(workspace_root).resolve(strict=True)
@@ -92,19 +102,20 @@ class LocalCommandSession:
         self._verify_materials()
         self._private = Path(tempfile.mkdtemp(prefix="rc-", dir="/tmp")).resolve()
         try:
-            readable = (self._source, self._scratch, *self._dependencies)
+            dependencies = (*self._python_roots, *self._dependencies)
+            readable = (self._source, self._scratch, *dependencies)
             if any(self._private.is_relative_to(path) or path.is_relative_to(self._private) for path in readable):
                 raise PermissionError("Command control directory overlaps model-visible resources")
             protected = (self._workspace, Path.home() / ".codex", Path.home() / ".claude",
                          Path.home() / ".claude.json", Path.home() / "Library/Keychains")
             if any(path.resolve().is_relative_to(dep) or dep.is_relative_to(path.resolve())
-                   for path in protected for dep in self._dependencies):
+                   for path in protected for dep in dependencies):
                 raise PermissionError("Command dependencies overlap private execution or credential resources")
             self._socket_path = self._private / "commands.sock"
             self._profile_path = self._private / "sandbox.sb"
             self._profile_path.write_text(self._sandbox_profile(), encoding="utf-8")
             bins = [str(path / "bin") for path in self._dependencies if (path / "bin").is_dir()]
-            self._environment = {"PATH": os.pathsep.join([*bins, "/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
+            self._environment = {"PATH": os.pathsep.join(dict.fromkeys([str(self._python.parent), *bins, "/usr/bin", "/bin", "/usr/sbin", "/sbin"])),
                 "HOME": str(self._scratch), "TMPDIR": str(self._scratch), "LANG": "en_US.UTF-8",
                 "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
                 "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_OPTIONAL_LOCKS": "0"}
@@ -163,7 +174,7 @@ class LocalCommandSession:
     def mcp_config(self) -> dict:
         """Return this installation's explicit stdio proxy and private endpoint."""
         proxy = Path(__file__).with_name("invocation_local_command_mcp.py").resolve(strict=True)
-        return {"mcpServers": {LOCAL_COMMAND_SERVER_NAME: {"type": "stdio", "command": sys.executable,
+        return {"mcpServers": {LOCAL_COMMAND_SERVER_NAME: {"type": "stdio", "command": str(self._python),
             "args": ["-I", "-B", str(proxy), str(self._socket_path)],
             "alwaysLoad": True,
             "timeout": (max(item["timeout_seconds"] for item in self._commands.values()) + 15) * 1000}}}
@@ -197,7 +208,8 @@ class LocalCommandSession:
         assert_local_materials_unchanged(self._body, materials_root=self._source.parent)
 
     def _sandbox_profile(self):
-        reads = {str(path.resolve()) for path in (*map(Path, _SYSTEM_READ_ROOTS), self._source, self._scratch, *self._dependencies)}
+        reads = {str(path.resolve()) for path in (*map(Path, _SYSTEM_READ_ROOTS), self._source, self._scratch,
+                                                *self._python_roots, *self._dependencies)}
         permitted = " ".join(f"(subpath {json.dumps(path)})" for path in sorted(reads))
         # Private state and credential homes are not in the read set. An explicit
         # dependency cannot override the control/credential deny rules.
@@ -224,7 +236,9 @@ class LocalCommandSession:
         if not cwd.is_dir() or not cwd.is_relative_to(root):
             raise PermissionError("Command cwd escaped its declared local root")
         argv = list(command["argv"])
-        if Path(argv[0]).is_absolute():
+        if argv[0] in {"python", "python3"}:
+            executable = self._python
+        elif Path(argv[0]).is_absolute():
             executable = argv[0]
         elif os.sep in argv[0]:
             executable = cwd / argv[0]
@@ -232,9 +246,10 @@ class LocalCommandSession:
             executable = shutil.which(argv[0], path=self._environment["PATH"])
         if not executable:
             raise FileNotFoundError("Declared command executable is unavailable")
-        executable = Path(executable).resolve(strict=True)
-        roots = (*map(Path, _SYSTEM_READ_ROOTS), self._source, self._scratch, *self._dependencies)
-        if not executable.is_file() or not os.access(executable, os.X_OK) or not any(executable.is_relative_to(path.resolve()) for path in roots):
+        executable = Path(executable).absolute()
+        target = executable.resolve(strict=True)
+        roots = (*map(Path, _SYSTEM_READ_ROOTS), self._source, self._scratch, *self._python_roots, *self._dependencies)
+        if not target.is_file() or not os.access(executable, os.X_OK) or not any(target.is_relative_to(path.resolve()) for path in roots):
             raise PermissionError("Declared command executable is outside its readable executable resources")
         argv[0] = str(executable)
         return argv, cwd

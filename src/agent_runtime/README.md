@@ -1,5 +1,25 @@
 # Agent Runtime
 
+## 第一次使用：先看运行配置与职责
+
+Runtime 把任务定义、运行环境、执行配置和执行记录分开管理。外部调用者不需要从生产代码里
+拼装这些部分，也不需要为每个 Reviewer 另配一套底座。
+
+| 组成 | 负责方 | 外部调用者需要知道什么 |
+| --- | --- | --- |
+| Module / ModuleReviewer / Workflow | Registry；任务 owner 提供 prompt、schema 与业务含义 | Module 是通用任务定义；ModuleReviewer 继承固定默认能力；单节点 Workflow 默认与 Module 同名 |
+| root、Python、程序、材料及依赖 | Foundation 做 setup；Invocation 使用运行资源；宿主提供资源与授权 | Python 默认固定为启动 Runtime 的当前环境；root 不自动授权读取整个项目，也不绑定模型 |
+| Execution Profile / Variant | Execution.prepare 生成，Registry 承载准确定义 | Module 决定能力要求，模型与 transport 独立选择；无需调用者手拼 Profile |
+| CLI 与工具、Attempt 和结果 | Invocation 负责实际调用及原始记录；Execution 负责执行生命周期 | 工具错误与整次执行失败分开；业务是否通过由任务 owner 校验 |
+| 记录、恢复与查询 | Ledger / Durability / Inspection | 普通自测不依赖 PG；未请求持久化时返回本次记录，不承诺跨进程恢复 |
+
+**完整运行配置、默认值、接口字段与责任边界**见[由代码导出的 Runtime run profile](docs/agent_runtime_reviewer_api.md#runtime-run-profile)。
+该页先给整体组成，再列真实的 Module、ModuleReviewer 默认、ExecutionProfileRelease、Variant、
+执行入口和 CLI 参数。完整值来自代码与 docstring，不是另一份手工 Profile 配置。
+
+`agent-runtime-evaluate --help` 同时显示职责摘要和当前 Python 路径。Runtime CLI 管注册、执行和查询；
+Portable CLI 管审核对象的准备与结果校验，两套 CLI 保持分开。宿主不复制模型启动或日志解析逻辑。
+
 ## 按任务开始 / Start by task
 
 使用 Runtime 时先按任务找操作步骤，不必先知道类名或搜索生产源码。
@@ -8,13 +28,13 @@
 | --- | --- |
 | 在指定 root 使用 Runtime 工具 | [轻量运行前 setup](docs/agent_runtime_registration_runbook.md#local-runtime-setup)；现有命令自动完成，无需另装 Skill |
 | 注册新的 Reviewer / register a new reviewer | [准备资料与注册](docs/agent_runtime_registration_runbook.md#new-reviewer) |
-| 用宿主环境首次测试 Reviewer / test a reviewer | [固定测试配置与实际调用](docs/agent_runtime_registration_runbook.md#test-reviewer) |
+| 用宿主环境首次测试 Reviewer / test a reviewer | [从已注册定义执行测试](docs/agent_runtime_registration_runbook.md#test-reviewer) |
 | 查询审核结果、执行日志或失败 / inspect a review | [按执行 ID 查询](docs/agent_runtime_registration_runbook.md#inspect-reviewer) |
-| 查接口参数、返回值和错误 | [自动生成的 Reviewer API reference](docs/agent_runtime_reviewer_api.md) |
+| 查完整运行配置、接口参数、返回值和错误 | [自动生成的 Module 与执行 API reference](docs/agent_runtime_reviewer_api.md) |
 | 开发 Runtime，运行回归测试 | [开发者能力与测试样例](docs/agent_runtime_capabilities.md) |
 
-注册、测试和查询使用同一个已明确的软件版本及固定 release 绑定。宿主项目提供自己的配置和
-操作入口；例如在 Analyst Billie 中查项目的治理/运行说明，不能把测试 fixture 当作正式配置。
+注册保存 Module/Workflow 定义；执行时由 Runtime 固定准确版本并准备本次配置，不要求先给宿主
+root 绑定模型或 Profile。宿主提供资源、授权和薄操作入口，不能把测试 fixture 当作正式配置。
 本目录提供任务发现与操作导航，不证明某个宿主或 Profile 已完成集成。
 
 Agent Runtime is a reusable management and execution layer for stateful AI
@@ -142,7 +162,7 @@ implementations. None is a peer logical responsibility or execution authority.
 
 | Logical responsibility | Owns | Does not own |
 | --- | --- | --- |
-| Registry | Compile, validate, register, and activate immutable Module and Workflow releases | Workflow execution or business meaning |
+| Registry | Compile, validate, register, and load immutable Module and Workflow releases | Workflow execution or business meaning |
 | Execution | Start and advance Workflow executions; stage admitted content; coordinate authorization, Evaluation, and Resolution | Product Entitlements, provider implementation, or canonical execution facts |
 | Invocation | Assemble admitted model context and invoke one registered model or tool profile | Workflow routing, release selection, or canonical records |
 | Durability | Coordinate acknowledged commands, waits, retries, replay, and recovery | Prompt, output, usage, or product data storage |

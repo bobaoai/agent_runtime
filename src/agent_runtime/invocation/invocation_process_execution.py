@@ -7,11 +7,30 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 from threading import Event, Thread, current_thread, main_thread
 from typing import Callable
 
 
 DEFAULT_PROCESS_OUTPUT_BYTES = 16 * 1024 * 1024
+
+
+def _runtime_python_executable() -> Path:
+    """Return this process's Python entry, preserving virtual-environment links."""
+    if not sys.executable:
+        raise FileNotFoundError("Current Runtime Python executable is unavailable")
+    executable = Path(sys.executable).absolute()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise FileNotFoundError("Current Runtime Python executable is unavailable")
+    return executable
+
+
+def _runtime_python_read_roots() -> tuple[Path, ...]:
+    """Current environment and standard library; no discovery or alternative."""
+    roots = tuple(dict.fromkeys(Path(value).resolve(strict=True) for value in (sys.prefix, sys.base_prefix)))
+    if any(not path.is_dir() or path == Path(path.anchor) for path in roots):
+        raise ValueError("Current Runtime Python must have concrete installation directories")
+    return roots
 
 
 class _CliInterruptState:

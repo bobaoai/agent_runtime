@@ -46,6 +46,8 @@ def test_checked_in_documents_equal_source():
         "single-node", "authorize", "PermissionError", "origin_bundle",
         "Module.to_workflow", "@staticmethod", "--workflow-id",
         "ClaudeAdapter.__init__", "adapter_binding", "read_only_dependencies",
+        "## Runtime run profile", "ExecutionProfileRelease", "ExecutionVariantPolicyRelease",
+        "Default execution requirements", "_default_execution_requirements = ModuleExecutionRequirements",
     ):
         assert fragment in body
     assert all(name in body for name in ERROR_CONSTANTS)
@@ -53,6 +55,23 @@ def test_checked_in_documents_equal_source():
     assert "from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter" in body
     assert "from agent_runtime import ClaudeAdapter" not in body
     assert "/Users/" not in body and "/private/tmp/" not in body
+
+
+def test_run_profile_is_exported_from_entry_docstring(source):
+    path = source / "src/agent_runtime/execution/execution_local_invocation.py"
+    text = path.read_text()
+    path.write_text(text.replace("Runtime run profile", "Runtime run profile — source probe", 1))
+    assert "## Runtime run profile — source probe" in render_api_reference(source).decode()
+
+
+def test_evaluation_help_exposes_ownership_and_current_python():
+    import sys
+    from agent_runtime.testing.execution_local_evaluation import build_parser
+    help_text = build_parser().format_help()
+    for word in ("Registry", "Foundation", "Execution", "Invocation", "Ledger", "Durability", "Inspection"):
+        assert word in help_text
+    assert sys.executable in help_text
+    assert "No Python selector or fallback" in help_text
 
 
 def test_generation_is_repeatable_and_only_writes_declared_outputs(source):

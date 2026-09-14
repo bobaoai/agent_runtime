@@ -9,7 +9,20 @@ from ..execution.execution_local_invocation import evaluate_local_workflow_modul
 
 def build_parser():
     """Declare the actual evaluation arguments used by help and generated docs."""
-    parser = argparse.ArgumentParser(description="Evaluate one registered single-Module Workflow with its frozen requirements and an independent model. Supports empty or selected native tools. No PG or production authorization.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate one registered single-Module Workflow with its frozen requirements and an independent model. Supports empty or selected native tools. No PG or production authorization.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=("Runtime ownership:\n"
+                "  Registry: Module/ModuleReviewer requirements and Workflow versions.\n"
+                "  Foundation: root setup and host resource locators.\n"
+                "  Execution: exact Profile/Variant, Attempts, retries and technical completion.\n"
+                "  Invocation: CLI assembly, native tools, declared commands and raw capture.\n"
+                "  Ledger / Durability / Inspection: facts, recovery and read-only views.\n"
+                "  Task owner: input meaning and business acceptance; no host-side Adapter.\n"
+                f"Current Runtime Python (fixed default): {sys.executable}\n"
+                "No Python selector or fallback. Read-only Python runtime support does not add tools.\n"
+                "Full run profile and API fields: start at agent_runtime/README.md\n"
+                "Portable review CLIs prepare/validate review objects; they are separate from Runtime CLIs."))
     parser.add_argument("--root", required=True, type=Path, help="Root containing .runtime definitions; not a model read root.")
     parser.add_argument("--workflow", required=True, help="Registered single-node Workflow ID.")
     parser.add_argument("--version", help="Exact version; omit for the latest registered new definition.")
@@ -18,7 +31,7 @@ def build_parser():
     parser.add_argument("--model", help="Independent concrete model ID; required for codex_cli, otherwise omit for Runtime default.")
     parser.add_argument("--effort", help="Independent reasoning effort; required for codex_cli, otherwise omit for Runtime default.")
     parser.add_argument("--cli-path", type=Path, help="Installed executable; overrides root/.runtime/config.json provider_cli_paths, then PATH is used if unconfigured. Codex uses the host's standard file-based login.")
-    parser.add_argument("--resources", type=Path, help="Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}]. Paths are relative to this file; command cwd is source/scratch-relative and argv is not rewritten. Empty dependencies clear host defaults. No models, credentials or production grants here.")
+    parser.add_argument("--resources", type=Path, help="Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}]. Resource paths are relative to this file; command cwd is source/scratch-relative. python/python3 use current Runtime Python; other arguments are not interpolated. Empty dependencies clear additional host defaults, not the current Python runtime. No models, credentials or production grants here.")
     return parser
 
 

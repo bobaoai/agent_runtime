@@ -525,7 +525,13 @@ class RetryPolicyRelease(_PolicyRelease):
 
 @dataclass(frozen=True)
 class ExecutionVariantPolicyRelease(_PolicyRelease):
-    """Immutable ordered Execution Profile selection for one exact origin."""
+    """Immutable ordered Execution Profile selection for one exact origin.
+
+    Runtime preparation supplies the position-to-Profile mapping for this
+    execution. It is not a Module task definition or a model binding imposed
+    by the host root. Callers of the local prepare/evaluate entry do not need
+    to construct this policy themselves.
+    """
 
     record_type: ClassVar[str] = "execution_variant_policy_release"
     release_prefix: ClassVar[str] = "execution-variant-policy"
@@ -875,7 +881,18 @@ def _validate_execution_capabilities(
 
 @dataclass(frozen=True)
 class ExecutionProfileRelease:
-    """Immutable provider and execution configuration available to Variants."""
+    """Immutable provider and execution configuration available to Variants.
+
+    Execution preparation combines the Module's frozen requirements with an
+    independent transport/model/effort choice and the Adapter's supported fields.
+    Invocation consumes the resulting exact configuration; it does not select
+    another model or change capabilities. Registry owns its content identity.
+
+    This record contains the fields below, not the whole host environment.
+    Host root, credentials, current Runtime Python and per-call materials are
+    resources supplied separately. They are not Reviewer prompt fields and do
+    not require a second caller-maintained Profile configuration.
+    """
 
     record_type: ClassVar[str] = "execution_profile_release"
 
