@@ -555,7 +555,10 @@ class ClaudeAdapter:
                     stage = "provider_invocation"
         except (Exception, CliProcessInterrupted) as exc:
             trace.update(stage=stage, error=str(exc))
-            if isinstance(exc, (subprocess.CalledProcessError, subprocess.TimeoutExpired, CliProcessInterrupted)):
+            # Command validation propagates another process's failure. Its bytes
+            # are in local_command_calls; keep the Provider's captured log intact.
+            if stage != "local_command_validation" and isinstance(exc, (
+                    subprocess.CalledProcessError, subprocess.TimeoutExpired, CliProcessInterrupted)):
                 trace.update(captured_cli_streams(exc))
                 for stream in ("stdout", "stderr"):
                     value = getattr(exc, stream) or ""

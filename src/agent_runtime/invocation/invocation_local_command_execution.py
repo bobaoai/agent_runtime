@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import importlib.util
 import json
@@ -18,7 +19,7 @@ import time
 from ..contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
 from .invocation_cli_logging import captured_cli_streams
 from .invocation_local_resource_preparation import (
-    validate_local_resources, assert_local_materials_unchanged,
+    validate_local_resources, assert_local_materials_unchanged, _directory,
     LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256, LOCAL_RESOURCES_MEDIA_TYPE, LOCAL_RESOURCES_LOGICAL_NAME,
 )
 from .invocation_process_execution import (
@@ -50,7 +51,7 @@ class LocalCommandSession:
     records are trusted local observations, with an Attempt-local local_call_id
     also returned in every accepted tool-call response. They are not Provider
     tool_use_id values. Ordinary command failures remain per-call results;
-    validate_completion rethrows resource/integrity/recording failures.
+    validate_completion rethrows resource/integrity/recording/cleanup failures.
     """
 
     def __init__(self, *, request, profile, host, adapter, artifact_host, workspace_root: Path,
@@ -225,13 +226,33 @@ class LocalCommandSession:
         relative = PurePosixPath(command["cwd"])
         root = self._source if relative.parts[0] == "source" else self._scratch
         path = root.joinpath(*relative.parts[1:])
-        cursor = root
-        for part in relative.parts[1:]:
-            cursor = cursor / part
-            if cursor.is_symlink():
-                raise PermissionError("Command cwd must not traverse a symlink")
-            if root == self._scratch:
-                cursor.mkdir(mode=0o700, exist_ok=True)
+        # Native Bash can change scratch concurrently. Every mkdir is relative
+        # to an already-open directory, never a previously checked pathname.
+        # Replacing a parent with a symlink cannot redirect this trusted write.
+        try:
+            with _directory(root) as root_fd:
+                descriptor = os.dup(root_fd)
+                try:
+                    for part in relative.parts[1:]:
+                        if root == self._scratch:
+                            try:
+                                os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                            except FileExistsError:
+                                pass
+                        child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                        os.close(descriptor)
+                        descriptor = child
+                    # Reject a changed pathname; process-side access is still
+                    # bounded by the command sandbox after this preflight.
+                    with _directory(path) as current:
+                        if not os.path.samestat(os.fstat(descriptor), os.fstat(current)):
+                            raise PermissionError("Command cwd changed during preparation")
+                finally:
+                    os.close(descriptor)
+        except OSError as exc:
+            if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                raise PermissionError("Command cwd must be a directory without symlinks") from exc
+            raise
         cwd = path.resolve(strict=True)
         if not cwd.is_dir() or not cwd.is_relative_to(root):
             raise PermissionError("Command cwd escaped its declared local root")
@@ -259,7 +280,7 @@ class LocalCommandSession:
 
         Unknown IDs, nonzero exits and timeouts return per-call failures with a
         local_call_id; they are not domain decisions. Resource/integrity faults
-        also remain visible here and invalidate validate_completion even if the
+        and process cleanup faults remain visible here and invalidate validate_completion even if the
         caller handles the tool error. No invocation of a missing command is
         invented, and no unknown exit code is replaced by zero.
         """
@@ -318,7 +339,12 @@ class LocalCommandSession:
                     value = getattr(exc, stream, "") or ""
                     response[stream] = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
             response["failure"] = {"error_type": type(exc).__name__, "message": str(exc),
-                                   "stop_reason": getattr(exc, "stop_reason", None)}
+                                   "stop_reason": getattr(exc, "stop_reason", None),
+                                   "cleanup_error": getattr(exc, "cleanup_error", None)}
+            if response["failure"]["stop_reason"] == "cleanup_error" or response["failure"]["cleanup_error"]:
+                # A successful Provider terminal cannot turn an unconfirmed
+                # process/pipe cleanup into a completed Runtime invocation.
+                self._set_fatal(exc)
         finally:
             try:
                 self._validate_host()
@@ -342,7 +368,7 @@ class LocalCommandSession:
         return copy.deepcopy(response)
 
     def validate_completion(self):
-        """Re-raise a real resource/integrity failure; never require every command."""
+        """Reject resource/integrity/cleanup failures; never require every command."""
         with self._condition:
             if self._running:
                 raise RuntimeError("Local command result is still in flight")

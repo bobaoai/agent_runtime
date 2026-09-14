@@ -242,6 +242,64 @@ def test_scratch_subdirectory_symlink_cannot_escape(tmp_path):
         assert response["failure"]["error_type"] == "PermissionError"
 
 
+def test_scratch_parent_replacement_cannot_create_an_external_directory(tmp_path, monkeypatch):
+    env = session_fixture(tmp_path, [command("nested", "print('must not run')", cwd="scratch/nested/test_output")])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_mkdir = os.mkdir
+    replaced = []
+    with env.session as session:
+        (env.scratch / "nested/test_output").rmdir()
+        def replace_parent_before_mkdir(path, mode=0o777, *, dir_fd=None):
+            if Path(path).name == "test_output" and not replaced:
+                # Same interleaving for both implementations: native scratch
+                # work replaces the parent immediately before the actual mkdir.
+                (env.scratch / "nested").rename(env.scratch / "moved_nested")
+                (env.scratch / "nested").symlink_to(outside)
+                replaced.append(True)
+            return original_mkdir(path, mode, dir_fd=dir_fd)
+        monkeypatch.setattr(os, "mkdir", replace_parent_before_mkdir)
+        response = session.invoke("nested")
+        assert replaced
+        assert list(outside.iterdir()) == []
+        assert env.host.launches == 0 and response["allowed"] is False
+        assert response["failure"] is not None
+
+
+@pytest.mark.parametrize("failure_kind", ["cleanup_error", "timeout", "interrupted", "cleanup_reason_only"])
+def test_command_cleanup_failure_invalidates_completion_and_keeps_evidence(tmp_path, monkeypatch, failure_kind):
+    from agent_runtime.invocation import invocation_local_command_execution as implementation
+    from agent_runtime.invocation.invocation_process_execution import CliProcessError, CliProcessTimeout, CliProcessInterrupted
+    env = session_fixture(tmp_path, [command("broken", "print('not launched by this fault double')")])
+    facts = dict(returncode=-9, output="out\ufffd", stderr="err\ufffd", stdout_bytes=b"out\xff", stderr_bytes=b"err\xfe",
+                 cleanup_error="output pipe did not close")
+    if failure_kind == "timeout":
+        failure = CliProcessTimeout([sys.executable], 1, **facts)
+    elif failure_kind == "interrupted":
+        failure = CliProcessInterrupted(**facts)
+    else:
+        if failure_kind == "cleanup_reason_only":
+            facts["cleanup_error"] = None
+        failure = CliProcessError(cmd=[sys.executable], stop_reason="cleanup_error", message="cleanup failed", **facts)
+    def failed_capture(**_):
+        raise failure
+    monkeypatch.setattr(implementation, "run_cli_process", failed_capture)
+    with env.session as session:
+        response = session.invoke("broken")
+        with pytest.raises(type(failure)) as caught:
+            session.validate_completion()
+        assert caught.value is failure
+        assert response["failure"]["stop_reason"] == failure.stop_reason
+        assert response["failure"]["cleanup_error"] == facts["cleanup_error"]
+        assert not response["process_output_complete"] and response["returncode"] == -9
+        assert base64.b64decode(response["raw_streams"]["stdout"]["data"]) == b"out\xff"
+        assert base64.b64decode(response["raw_streams"]["stderr"]["data"]) == b"err\xfe"
+        assert session.records[0]["response"] == response
+    # Completion cannot become valid merely because IPC/control cleanup finished.
+    with pytest.raises(type(failure)):
+        session.validate_completion()
+
+
 @pytest.mark.parametrize("boundary", ["source_write", "outside_read", "network"])
 def test_command_itself_is_sandboxed(tmp_path, boundary):
     outside = tmp_path / "outside"
@@ -500,13 +558,21 @@ def test_private_protocol_rejects_noncanonical_or_oversized_messages(tmp_path, r
         assert env.host.launches == 0
 
 
-def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monkeypatch):
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monkeypatch, cleanup_failure):
     from agent_runtime import Module, RuntimeModulePlugin, register_runtime_module_plugin
     from agent_runtime.registry import RuntimeReleaseRegistry
     from agent_runtime.execution import execution_local_invocation as local, execution_module_invocation as kernel
     from agent_runtime.invocation import invocation_claude_cli_execution as claude
     from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID
     from test_agent_runtime_claude_native_tools import _fake_cli, _init, _result, _tool_use, _tool_result
+    if cleanup_failure:
+        from agent_runtime.invocation import invocation_process_execution as capture
+        original_stop = capture._stop_process_group
+        def report_cleanup_failure(process):
+            original_stop(process)  # No actual process leak in this fault test.
+            raise RuntimeError("injected cleanup confirmation failure")
+        monkeypatch.setattr(capture, "_stop_process_group", report_cleanup_failure)
     source = _task_project(tmp_path / "registration", module_id="summarize_note")
     module = Module.from_registration(source, skill_id=SKILL_ID, module_id="summarize_note",
         execution_requirements=_requirements(timeout_seconds=30, max_attempts=1))
@@ -537,7 +603,7 @@ def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monk
             assert fields["on_stdout_line"](json.dumps(event))
         response = exchange(endpoint, {"method": "invoke", "command_id": "unit"})
         assert response["returncode"] == 0 and response["stdout"] == "real command\n"
-        completion = [_tool_result("provider_command", content=json.dumps(response)),
+        completion = [_tool_result("provider_command", failed=cleanup_failure, content=json.dumps(response)),
                       _result(structured_output={"summary": "checked"})]
         for event in completion:
             assert fields["on_stdout_line"](json.dumps(event))
@@ -556,13 +622,25 @@ def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monk
     record = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
         material_root=tree, material_files=({"relative_path": "candidate.py", "sha256": hashlib.sha256(original).hexdigest(), "executable": False},),
         read_only_dependencies=(Path(sys.base_prefix).resolve(),), commands=(command("unit", "print('real command')"),))
-    assert record["status"] == "completed", record["failure_detail"]
-    assert record["output"] == {"summary": "checked"} and record["managed_runtime"] is True
+    assert record["status"] == ("failed" if cleanup_failure else "completed"), record["failure_detail"]
+    assert record["output"] == (None if cleanup_failure else {"summary": "checked"})
+    assert record["managed_runtime"] is True
     assert record["persistence"] == "not_requested" and len(seen) == 1
     trace = record["provider_trace"]
+    # Provider and command are different processes. A command cleanup error
+    # must not replace the already-captured Provider stream with command bytes.
+    provider_events = [json.loads(line) for line in trace["stdout"].splitlines()]
+    assert provider_events[-1]["structured_output"] == {"summary": "checked"}
+    assert trace["process_output_complete"] and trace["exit_code"] == 0
+    assert base64.b64decode(trace["raw_streams"]["stdout"]["data"]).decode() == trace["stdout"]
     assert hashlib.sha256(seen[0]["prompt"].encode()).hexdigest() == trace["prompt_envelope_sha256"]
     assert trace["local_command_calls"][0]["response"]["stdout"] == "real command\n"
     assert trace["local_command_calls"][0]["response"]["local_call_id"] == "local_command_1"
+    if cleanup_failure:
+        response = trace["local_command_calls"][0]["response"]
+        assert response["failure"]["cleanup_error"] == "injected cleanup confirmation failure"
+        assert response["returncode"] == 0 and not response["process_output_complete"]
+        assert record["execution_log"]["tool_calls"][0]["response"] == response
     assert not Path(trace["cwd"]).exists()
     assert (tree / "candidate.py").read_bytes() == original
 
