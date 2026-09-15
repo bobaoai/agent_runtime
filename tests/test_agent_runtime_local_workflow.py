@@ -698,11 +698,19 @@ def test_graph_factory_callback_uses_real_ipc_and_is_not_inherited_by_next_node(
         records = resources.node_records()
         assert requested == ['produce', 'second'] and factory.closed
         assert factory.calls == [('inspect_note', {'value': 41})]
-        call, = records[0]['execution_log']['tool_calls']
+        from agent_runtime import read_execution_log
+        results = {item.module_run.module_run_id: item
+                   for item in resources.ledger.results_for_execution(resources.execution.workflow_execution_id)}
+        assert all(row['execution_log']['complete'] is None for row in records)
+        logs = [read_execution_log(results[row['module_run_id']].module_run,
+                                  attempts=results[row['module_run_id']].attempts,
+                                  read_content=resources.artifact_host.read_bytes, include_private_content=True)
+                for row in records]
+        call, = logs[0]['tool_calls']
         assert call['provider_tool_call_id'] == 'graph_call'
         assert call['response']['result'] == {'answer': 42}
-        assert records[0]['execution_log']['complete'] and records[1]['execution_log']['complete']
-        assert records[1]['execution_log']['tool_calls'] == []
+        assert logs[0]['complete'] and logs[1]['complete']
+        assert logs[1]['tool_calls'] == []
 
 
 @pytest.mark.parametrize('user_cancel', [True, False])

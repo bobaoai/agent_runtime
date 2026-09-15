@@ -141,7 +141,8 @@ from .registry.registry_module_authoring import (
 from .registry.registry_module_loading import load_reviewer_registration
 from .registry.registry_local_persistence import LoadedRuntimeRegistration, load_runtime_registration, save_runtime_registration
 from .foundation.foundation_environment_setup import load_runtime_config, setup_runtime
-from .execution.execution_local_invocation import evaluate_local_workflow_module, prepare_local_workflow, prepare_local_workflow_module, run_local_workflow_module
+from .execution.execution_local_invocation import prepare_local_workflow, prepare_local_workflow_module, run_local_workflow_module
+from .testing.conformance_local_evaluation import evaluate_local_workflow_module
 from .execution.execution_workflow_evaluation import WorkflowSelfTestResources, LocalWorkflowModuleBridge
 from .registry.registry_workflow_authoring import (
     WORKFLOW_MODULE_CLOSURE_INVALID,
@@ -183,8 +184,7 @@ from .ledger.ledger_workflow_execution_recording import (
     WorkflowExecutionLedgerRecorder,
 )
 
-from .ledger.ledger_execution_logging import read_execution_log
-from .invocation.invocation_cli_logging import parse_cli_log
+from .inspection.inspection_execution_logging import read_execution_log, parse_cli_log
 
 __all__ = [
     "read_execution_log",

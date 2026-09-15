@@ -256,7 +256,7 @@ def test_registration_commands_setup_before_business_dispatch(tmp_path, monkeypa
 
 
 def test_evaluation_setup_before_invocation_and_failure_stops(tmp_path, monkeypatch, capsys):
-    from agent_runtime.testing import execution_local_evaluation as cli
+    from agent_runtime.testing import conformance_local_evaluation as cli
     events = []
     payload = tmp_path / "input.json"
     payload.write_text("{}")
@@ -279,7 +279,7 @@ def test_evaluation_setup_before_invocation_and_failure_stops(tmp_path, monkeypa
 
 def test_argument_errors_and_help_do_not_run_setup(tmp_path, monkeypatch):
     from agent_runtime.registry import registry_local_persistence as registry
-    from agent_runtime.testing import execution_local_evaluation as evaluation
+    from agent_runtime.testing import conformance_local_evaluation as evaluation
     monkeypatch.setattr(setup, "setup_runtime", lambda root: pytest.fail("must parse first"))
     for main in (registry.main, evaluation.main):
         with pytest.raises(SystemExit) as help_result:

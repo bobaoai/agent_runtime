@@ -1,4 +1,4 @@
-"""Read complete private tool logs from existing Ledger facts and content."""
+"""Read original execution facts and private content without interpreting tools."""
 from __future__ import annotations
 
 import base64
@@ -10,56 +10,28 @@ from ..contracts.ledger_lineage_definition import ModuleRunRecord, ModuleAttempt
 from ..contracts.ledger_record_definition import RuntimeExecutionTrace, WorkflowAttemptRecord, ToolCallRecord
 
 
-def read_execution_log(
+def _read_execution_archive(
     source: ModuleRunRecord | RuntimeExecutionTrace,
     *,
     attempts: tuple[ModuleAttemptRecord, ...] = (),
     read_content: Callable[[str, str], bytes],
     include_private_content: bool = False,
 ) -> dict:
-    """Read one authorized Runtime result/trace without executing or writing.
+    """Read every requested Attempt's original archive from the existing Ledger.
 
-    Args:
-        source: Exact ModuleRunRecord from the kernel, or RuntimeExecutionTrace
-            from an authorized Ledger query. Their existing identities bind the
-            log; a model-authored dictionary is not accepted as execution truth.
-        attempts: All exact terminal Attempts for a ModuleRunRecord. A durable
-            RuntimeExecutionTrace already carries these; leave attempts empty.
-        read_content: The corresponding authorized private content reader,
-            called with the exact ref and SHA-256. Returned bytes are verified.
-            For a Workflow trace it must be bound to that execution's store.
-        include_private_content: False returns metadata without reading content.
-            True returns the full saved provider trace, original encoded streams,
-            normalized per-call data and explicit completeness issues. This flag
-            expresses the caller's already-authorized disclosure choice.
-    Returns:
-        runtime_execution_log_v1 with workflow_execution_id, all attempts and
-        complete. Each attempt retains its Module/Variant/Attempt identity,
-        terminal status, private provider_log, tool_calls, issues and complete.
-        failure_class and failure-detail ref/hash remain metadata; failure_detail
-        includes the actual saved diagnostic only when private content is enabled.
-        This preserves final cancellation/cleanup facts alongside the Provider log.
-        Native calls retain original event indices and never acquire a grant;
-        Gateway calls retain their exact request/response refs and bytes.
-        Codex native records preserve actual public completion fields, including
-        aggregated command output. Missing patch bodies or search result content
-        are explicit issues, not reconstructed from an Agent's final answer.
-        Missing/legacy logs are explicitly incomplete, not proof of zero calls.
-        Unknown shell exit codes and tool-level times are not inferred. Reading
-        an in-memory source does not make it durably saved or recoverable later.
-        New local command views retain the actual parent-process returncode and
-        bytes in runtime_local rows. Exact CLI correlations carry Provider IDs
-        and event indices; paired calls are counted once. provider_tool_calls
-        preserves the original CLI-only observations separately when recorded.
-        This function consumes that stored interpretation, never reparses history.
-    Raises:
-        ValueError: Invalid source, crossed identities, duplicate attempts or
-            a content hash mismatch. Native reader/storage failures propagate;
-            no empty successful log is substituted for missing required content.
-    Effects:
-        Reads only requested private content, with no store mutation, Provider
-        call, grant, credential discovery or filesystem traversal. Snapshot/UI
-        consumers may abbreviate presentation without changing returned bodies.
+    The exact typed source and authorized content reader retain their existing
+    identity and content checks. Private content is opt-in; metadata-only reads
+    never call read_content. All provider traces, encoded streams, local command
+    and callback records, and failure diagnostics remain unchanged.
+
+    Returns the existing runtime_execution_log_v1 shape. tool_calls contains
+    only recorded Gateway facts when private content is requested; it is not a
+    complete native-tool list. complete stays None because this reader does not
+    parse Provider events or create a detailed view. Inspection owns that work.
+
+    Reading performs no writes, execution, grants or retries. Storage failures,
+    crossed identities and content-hash errors retain their original exceptions.
+    The caller must capture temporary content before its store is destroyed.
     """
     if type(include_private_content) is not bool:
         raise ValueError("include_private_content must be a boolean")
@@ -118,7 +90,7 @@ def read_execution_log(
             "provider_log": None, "tool_calls": None,
             "complete": None, "issues": ["private_content_not_requested"]}
         if include_private_content:
-            row.update(tool_calls=[], complete=False, issues=[])
+            row.update(tool_calls=[], issues=[])
             if attempt.failure_detail_ref is not None:
                 row["failure_detail"] = value(content(attempt.failure_detail_ref, attempt.failure_detail_sha256))
             if attempt.provider_trace_ref is None:
@@ -131,23 +103,6 @@ def read_execution_log(
                     if identity in trace and trace[identity] != row[identity]:
                         raise ValueError("Provider log crossed its recorded Attempt identity")
                 row["provider_log"] = trace
-                parsed = trace.get("tool_log")
-                if parsed is None:
-                    row["issues"].append("normalized_provider_log_not_recorded")
-                else:
-                    if (not isinstance(parsed, dict) or parsed.get("schema_version") != "runtime_cli_log_v1"
-                            or type(parsed.get("complete")) is not bool
-                            or not isinstance(parsed.get("issues"), list)
-                            or not isinstance(parsed.get("tool_calls"), (list, type(None)))):
-                        raise ValueError("Invalid stored Provider log view")
-                    row["issues"].extend(parsed["issues"])
-                    if not parsed["complete"] and not parsed["issues"]:
-                        row["issues"].append("provider_log_incomplete")
-                    row["tool_calls"].extend(parsed["tool_calls"] or [])
-                    if "provider_tool_calls" in parsed:
-                        if not isinstance(parsed["provider_tool_calls"], list):
-                            raise ValueError("Invalid stored original Provider tool view")
-                        row["provider_tool_calls"] = parsed["provider_tool_calls"]
             for call in gateways[attempt.attempt_id]:
                 call.validate()
                 if call.request_ref is None or call.response_ref is None:
@@ -163,17 +118,12 @@ def read_execution_log(
                     "request_bytes_base64": base64.b64encode(request).decode("ascii"),
                     "response_bytes_base64": base64.b64encode(response).decode("ascii"),
                     "status": getattr(call, "status_id", "completed")})
-            ids = [call["tool_call_id"] for call in row["tool_calls"]]
-            if len(ids) != len(set(ids)):
-                row["issues"].append("overlapping_tool_call_ids")
-            row["complete"] = not row["issues"]
         rows.append(row)
     tool_calls = [{**call, "module_run_id": row["module_run_id"], "variant_id": row["variant_id"],
                    "attempt_id": row["attempt_id"]} for row in rows for call in (row["tool_calls"] or [])]
     return {"schema_version": "runtime_execution_log_v1", "workflow_execution_id": execution_id,
             "tool_calls": tool_calls if include_private_content else None,
-            "attempts": rows, "complete": (bool(rows) and all(row["complete"] is True for row in rows))
-            if include_private_content else None}
+            "attempts": rows, "complete": None}
 
 
-__all__ = ["read_execution_log"]
+__all__ = []

@@ -104,7 +104,7 @@ class PostgresWorkflowInspectionRepository:
         bodies are opt-in and checked against both execution identity and hash.
         This method never invokes a Provider or writes any database state.
         """
-        from ..ledger.ledger_execution_logging import read_execution_log
+        from .inspection_execution_logging import read_execution_log
         trace = self.load_trace(workflow_execution_id)
         if trace.workflow_execution_id != workflow_execution_id:
             raise ValueError("Execution log query returned another execution")

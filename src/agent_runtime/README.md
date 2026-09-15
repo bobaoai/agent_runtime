@@ -305,8 +305,8 @@ Conformance ships with the standalone wheel so the published package carries
 its own assurance tools; shipping it does not place it on the execution call
 path. `agent_runtime.testing` is a stable public facade for shipped evaluation
 and Adapter-conformance entry points, not a temporary compatibility slice.
-Each file below that directory retains its registered Registry, Execution, or
-Durability owner.
+Each file below that directory retains its registered logical responsibility or
+supporting-plane owner; explicit test composition does not enter ordinary execution.
 
 `agent_runtime.foundation` contains responsibility-neutral validation and JSON
 Schema traversal primitives. It imports no Runtime responsibility. Schema
@@ -319,13 +319,13 @@ semantic surfaces while migration is in progress. They are listed in
 `RUNTIME_MIGRATION_DEBT_PATHS`; the generated architecture report, not this
 illustrative tree, is the exhaustive current source map.
 
-Before a public cutover, Conformance freezes every downstream Runtime import at
-symbol level. The current trading-platform baseline is stored in
-`review_artifacts/agent_runtime_code_design_basis/downstream_consumer_manifest.json`;
-it records a `replace` or `retire` disposition for every observed import site.
-Those values are derived defaults used to freeze the surface, not owner
-decisions. Compatibility-facade retirement remains blocked until every site is
-explicitly marked `owner_decision`.
+Before retiring a compatibility facade, use Conformance's
+`build_downstream_consumer_manifest` to capture the affected host's import sites,
+then `validate_downstream_consumer_retirement_readiness` to check the owner's
+decisions. The generated `keep`, `replace` or `retire` defaults identify work;
+they do not authorize a cutover. Each site requires an explicit `owner_decision`.
+These functions live in `conformance/conformance_consumer_manifesting.py`; a
+historical work document is not a package dependency or a current consumer inventory.
 
 Package initializers temporarily re-export some predecessor types for existing
 downstream callers. Those re-exports are compatibility-only, must not be used
@@ -661,9 +661,17 @@ facts with explicit capture or content limitations. A valid business `non_pass`
 or `blocked` response remains a completed technical execution, not a reason to
 retry the model. Tool, Provider, Attempt and business outcomes stay distinct.
 
-Claude's current binding is `claude_cli_adapter@v2`. Its complete stdin prompt,
+Ordinary execution extracts basic metadata and the final result, and archives
+raw logs; it does not parse tool behavior to decide success or retry. Inspection's
+`read_execution_log` parses detailed tool events only when private content is
+requested. Historical traces that already contain `tool_log` retain their saved
+interpretation. A log gap affects the view's completeness, not the recorded
+Attempt status. The explicit evaluation API and CLI request this detailed view
+before their temporary resources close; a behavioral assessment remains separate.
+
+Claude's current binding is `claude_cli_adapter@v3`. Its complete stdin prompt,
 including relative resource locations, is frozen before the Prompt Envelope is
-stored. Old Claude v1 and `claude_cli_native_tools_executor@v2` records remain
+stored. Old Claude v1/v2 and `claude_cli_native_tools_executor@v2` records remain
 readable, and committed requests replay without an Adapter; new executions use
 an explicitly prepared current Profile. Hosts must migrate their current entry
 points before adopting this package rather than reinterpret saved bindings.
@@ -672,7 +680,7 @@ The existing evaluation CLI accepts `--resources FILE` for an explicitly frozen
 file tree, read-only dependency directories and task-supplied command IDs. On
 macOS, Claude can use its ordinary Read/Grep/Bash tools and, when commands are
 supplied, an additional Runtime-owned local MCP tool. The `cli_tools` extra is
-required only for this command bridge. Each selected command runs in its own
+required for the local command or task-callback bridge. Each selected command runs in its own
 actual OS sandbox under the same live resource guard; it supplies real argv,
 cwd, returncode and captured bytes. Ordinary Bash is not restricted to this
 command list, and the list does not define a business verdict or domain grant.

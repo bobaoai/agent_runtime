@@ -1339,7 +1339,7 @@ def test_run_module_records_registered_codex_transport_failure(
     assert run.resolution is None
     attempt = run.attempts[0]
     from agent_runtime import read_execution_log
-    from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+    from agent_runtime.foundation.foundation_json_encoding import cli_stream_bytes
     def no_private_read(*_args):
         raise AssertionError("metadata-only inspection must not read private content")
     public = read_execution_log(run.module_run, attempts=run.attempts, read_content=no_private_read)

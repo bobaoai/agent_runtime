@@ -34,8 +34,8 @@ Reviewer，也不以 `ReviewerDefaults` 快照作为进入条件。Runtime 根�
 
 当前已交付入口支持 Claude CLI，以及显式选择 Codex 的无工具、inline、workspace none、network
 denied 组合。Codex 不会把有工具 Module 降为无工具；完整相容性以当前安装的 CLI 和自动 API 文档
-为准。新材料路径、工程命令等超出该入口当前公开参数时，报告准确缺口，交 Runtime 维护者处理，
-不临时增加参数、拼执行器或假定其他 API 的能力已经接入本命令。
+为准。普通路径可通过 `--resources` 提供明确材料与工程命令，格式和支持条件见 §6.2。
+请求超出当前公开参数时，报告准确缺口，交 Runtime 维护者处理，不临时拼执行器或增加参数。
 
 只有 Module、尚无可用 Workflow 时，使用 `agent-runtime-registration` 处理已授权注册；本 Skill
 不临时拼图或复制 Reviewer。样例路径仅支持 CLI 列出的固定图，并要求在指定 root 注册样例和调用
@@ -69,6 +69,8 @@ denied 组合。Codex 不会把有工具 Module 降为无工具；完整相容�
 保留 CLI 原始结果，报告实际 Module、Workflow 版本与 hash、本次模型和 effort、执行状态、
 输出或 failure detail，以及实际可取得的用量。使用返回的 `execution_log` 查看每个 Attempt 已采集的
 原始流、工具记录和完整性说明；未知或缺失的记录如实保留，不能由 Agent 补写执行日志。
+这个详细视图由自测入口显式调用 Inspection 取得。普通模型运行负责 metadata、最终 result 与原文
+归档，工具日志的解析缺口不改变其已记录终态；行为或证据是否合格按本次明确的评价要求判断。
 样例从 `execution.nodes` 和 `child_executions` 读取逐次记录，结合 `stop_reason` 与 `failure` 判断
 进度。准确字段和继续条件见 §6.1 的同版本 API；没有错误码时保留实际异常类型和诊断。
 
@@ -77,6 +79,7 @@ denied 组合。Codex 不会把有工具 Module 降为无工具；完整相容�
 Reviewer 返回有效 `non_pass` 是材料需要修改的结论，不是技术重试理由。
 
 本命令返回 `persistence=not_requested`，指执行事实不写持久存储，不排除前置 setup 补齐环境文件。
+已注册定义仍留在 `.runtime`，不随本次临时执行资源清理。
 正常退出时清理本次临时资源；若返回私有资源保留或清理失败，按 Runtime 的错误说明交给环境负责人，
 不自行删除恢复目录。execution ID 不能用于之后查询持久历史；明确保存 stdout 可以保留测试证据，
 但不构成 PG Ledger 或可恢复请求回执。完整执行日志可能含私有材料，只交给本次已授权的读取者。
@@ -154,8 +157,13 @@ agent-runtime-evaluate --root /path/to/host --workflow registered_workflow_id \
 提供材料按其 schema 约定使用，Runtime 负责当前已支持的隔离、工具映射、私有状态和启动条件。
 操作者不另拼 read/search/shell 或 Read/Grep/Bash 配置，也不按本次任务擅自改默认能力。
 
+已有明确材料或工程命令时，普通路径增加 `--resources /path/to/resources.json`。文件中的材料根、
+准确文件清单、只读依赖和命令项使用同版本 `--help` 或 API 中的真实 schema；路径相对该资源文件
+解析，命令工作目录相对本次 source/scratch。命令项供 Agent 按 ID 选择本次提供的命令，不把普通
+Bash 限制成该列表，也不把整个 root 变成模型材料。不要把模型、凭据或生产授权写进该文件。
+
 需要留存时，将本次 stdout 捕获到调用者明确的新证据文件，保留 stderr 和退出码；未请求时直接返回。
-不添加当前 CLI 不支持的持久保存、材料挂载或测试命令参数。
+仅使用当前 CLI 已公开的参数，不追加未支持的持久保存或执行配置开关。
 
 ### 6.3 执行随包多 Agent 样例
 
@@ -184,4 +192,5 @@ Runtime 内部技术重试由原有策略决定。再次启动 CLI 是新的测�
 超时、丢失响应或中断后先报告已有事实和不确定部分，不自动重跑整条命令。输入或模型明确变化，
 并获得新测试请求时，再启动相应调用；历史持久执行按宿主日志查询入口读取原记录。
 
-测试结束交出实际执行事实、语义校验结果和剩余限制。自测成功不等于生产部署或对象的发布批准。
+测试结束交出实际执行事实、语义校验结果和剩余限制。固定样例只证明所列路径，不代替完整能力
+目录的验收；自测成功也不等于生产部署或对象的发布批准。

@@ -37,6 +37,7 @@ from ..contracts.invocation_adapter_definition import (
     SelfTestResourceUnavailableError,
 )
 from ..contracts.registry_release_definition import ExecutionProfileRelease
+from ..foundation.foundation_json_encoding import cli_stream_bytes, decode_cli_event
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_tool_definition import ModuleArtifactHost
 from .invocation_prompt_assembly import (
@@ -60,9 +61,7 @@ from .invocation_result_assembly import (
     provider_adapter_descriptor,
     raise_terminal_failure,
 )
-from .invocation_cli_logging import (
-    captured_cli_streams, cli_stream_bytes, decode_cli_event, parse_cli_log,
-)
+from .invocation_cli_logging import captured_cli_streams
 from .invocation_process_execution import (
     CliProcessError, CliProcessInterrupted, _capture_cli_interrupts, run_cli_process,
 )
@@ -239,58 +238,50 @@ def _parse_usage(events: list[dict]) -> tuple[dict, list[str]]:
 
 
 def _parse_codex_stream(raw: bytes) -> dict:
-    """Interpret the public one-shot turn; item errors are not stream errors.
+    """Read one turn's terminal, final message and reported usage.
 
     thread/turn start markers may be absent in legacy injected streams. When
-    present they must unambiguously precede this turn's items and terminal.
-    All malformed bytes and contradictory events remain in the private trace.
+    present they must unambiguously precede this turn's response and terminal.
+    Tool items and unrelated malformed lines do not determine the run result;
+    the raw stream remains available for explicit Inspection.
+    Top-level error events can report retries and remain in that raw stream.
+    Process exit, the unique turn terminal and final output determine success.
     """
-    events, issues, terminals, fatal = [], [], [], []
-    thread_started = turn_started = seen_item = False
+    issues, terminals = [], []
+    thread_started = turn_started = seen_response = False
     final_text = None
     for index, line in enumerate(raw.splitlines()):
         if not line.strip():
             continue
         try:
             event = decode_cli_event(line.decode("utf-8"))
-        except (UnicodeError, ValueError) as exc:
-            issues.append(f"invalid_event:{index}:{type(exc).__name__}")
+        except (UnicodeError, ValueError):
             continue
-        events.append(event)
         kind = event.get("type")
         if kind == "thread.started":
-            if thread_started or turn_started or seen_item or terminals:
+            if thread_started or turn_started or seen_response or terminals:
                 issues.append(f"unexpected_thread_start:{index}")
             thread_started = True
         elif kind == "turn.started":
-            if turn_started or seen_item or terminals:
+            if turn_started or seen_response or terminals:
                 issues.append(f"unexpected_turn_start:{index}")
             turn_started = True
         elif kind in {"turn.completed", "turn.failed"}:
             terminals.append(event)
             if kind == "turn.failed" and not isinstance(event.get("error"), dict):
                 issues.append(f"invalid_failure_terminal:{index}")
-        elif kind == "error":
-            # This is a fatal stream event, unlike item.details.type == error.
-            fatal.append(event)
-        elif isinstance(kind, str) and kind.startswith("item."):
+        elif kind == "item.completed":
             item = event.get("item")
-            if not isinstance(item, dict):
-                issues.append(f"invalid_item:{index}")
-            elif item.get("type") != "error":
-                # Public nonfatal diagnostic items can precede turn.started.
-                # They are not task activity and cannot establish a turn's
-                # execution order; retain them without interpreting their prose.
-                seen_item = True
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                seen_response = True
                 if terminals:
-                    issues.append(f"item_after_terminal:{index}")
-                if kind == "item.completed" and item.get("type") == "agent_message":
-                    final_text = item.get("text")
+                    issues.append(f"response_after_terminal:{index}")
+                final_text = item.get("text")
     if len(terminals) != 1:
         issues.append("terminal_event_missing_or_duplicated")
-    usage, usage_issues = _parse_usage(events)
+    usage, usage_issues = _parse_usage(terminals)
     return {"terminal": terminals[0] if len(terminals) == 1 else None,
-            "fatal_errors": fatal, "issues": issues, "final_text": final_text,
+            "issues": issues, "final_text": final_text,
             "usage": usage, "usage_issues": usage_issues}
 
 
@@ -315,43 +306,6 @@ def _public_stdout(text: str) -> str:
                 continue
         rows.append(line)
     return "\n".join(rows)
-
-
-def _undeclared_tool_effects(tool_log: dict) -> list[dict]:
-    """Find positive execution evidence in unambiguous native tool records.
-
-    Used only for the admitted empty-tools configuration. A denied request or
-    an unknown result is not evidence of execution. These observations never
-    create Runtime operation grants or infer resource effects from prose.
-    """
-    events = {row["index"]: row["event"] for row in tool_log.get("events", [])}
-    effects = []
-    for call in tool_log.get("tool_calls") or []:
-        if call.get("source_kind") != "provider_native" or call.get("status") == "incomplete":
-            continue
-        for index in call.get("response_event_indices", []):
-            event = events.get(index, {})
-            item = event.get("item", {})
-            if event.get("type") != "item.completed" or not isinstance(item, dict):
-                continue
-            kind = item.get("type")
-            if item.get("id") != call.get("tool_call_id"):
-                continue
-            if kind == "command_execution":
-                executed = item.get("status") != "declined" and type(item.get("exit_code")) is int
-            elif kind == "mcp_tool_call":
-                executed = (call.get("status") == "completed" and item.get("status") == "completed"
-                            and item.get("error") is None and item.get("tool") == call.get("tool_name"))
-            elif kind == "file_change":
-                executed = item.get("status") == "completed"
-            elif kind == "web_search":
-                executed = call.get("status") == "completed"
-            else:
-                executed = False
-            if executed:
-                effects.append({"tool_call_id": call["tool_call_id"], "tool_kind": kind,
-                                "response_event_index": index, "failure_code": "ADAPTER_POLICY_VIOLATION"})
-    return effects
 
 
 class _CodexCliExecutorBase:
@@ -462,7 +416,11 @@ class _CodexCliExecutorBase:
         Returns:
             AgentExecutionResult with a schema-valid output or typed failed/cancelled
             status. Business verdicts remain Module-owned. Actual CLI version, captured
-            streams and normalized tool observations stay in the private Attempt trace.
+            streams and terminal metadata stay in the private Attempt trace.
+            Inspection derives detailed tool views on request; those views do not
+            determine ordinary execution failure or retry.
+            CLI error notifications may be transient; process exit and the unique
+            turn terminal are checked before validating the final output.
         Raises:
             ValueError: Invalid request/Profile or incompatible injected invoker.
             PermissionError: Missing live resource/operation evidence or unsupported
@@ -547,20 +505,6 @@ class _CodexCliExecutorBase:
         }
         parsed = _parse_codex_stream(b"")
 
-        def retain_tool_log():
-            if "tool_log" in trace:
-                return
-            try:
-                trace["tool_log"] = parse_cli_log(trace)
-                if profile.execution_mode == "tool_free" and not profile.tool_policy:
-                    trace["undeclared_tool_effects"] = _undeclared_tool_effects(trace["tool_log"])
-            except Exception as exc:
-                trace["tool_log"] = {
-                    "schema_version": "runtime_cli_log_v1", "complete": False,
-                    "issues": ["normalization_failed:" + type(exc).__name__],
-                    "events": [], "tool_calls": None,
-                }
-
         def capture(process, *, complete):
             nonlocal parsed
             trace.update(captured_cli_streams(process))
@@ -577,15 +521,10 @@ class _CodexCliExecutorBase:
             parsed = _parse_codex_stream(cli_stream_bytes(trace, "stdout"))
             trace["provider_terminal"] = parsed["terminal"]
             trace["provider_stream_issues"] = parsed["issues"]
-            trace["provider_fatal_errors"] = parsed["fatal_errors"]
             trace["usage_issues"] = parsed["usage_issues"]
-            retain_tool_log()
 
         def fail(failure_class, failure_code, message, *, retry="retry_denied", cause=None,
                  terminal_status="failed"):
-            retain_tool_log()
-            if trace.get("undeclared_tool_effects"):
-                retry = "retry_denied"
             trace["adapter_failure"] = {
                 "failure_class": failure_class, "failure_code": failure_code,
                 "message": message, "retry_disposition_id": retry,
@@ -700,14 +639,10 @@ class _CodexCliExecutorBase:
         if result.returncode != 0:
             fail("provider", "codex_cli_nonzero_exit", f"Codex CLI failed with return code {result.returncode}",
                  retry="retry_allowed")
-        if parsed["fatal_errors"]:
-            fail("provider", "codex_cli_error_result", "Codex emitted a fatal stream error", retry="retry_allowed")
         if parsed["issues"]:
             fail("provider", "codex_cli_result_missing_or_invalid", "; ".join(parsed["issues"]))
         if parsed["terminal"]["type"] == "turn.failed":
             fail("provider", "codex_cli_error_result", "Codex reported a failed turn", retry="retry_allowed")
-        if trace.get("undeclared_tool_effects"):
-            fail("policy_violation", "ADAPTER_POLICY_VIOLATION", "Codex executed a tool under an empty-tools Profile")
         if parsed["usage_issues"]:
             fail("schema", "codex_cli_usage_invalid", "; ".join(parsed["usage_issues"]))
         try:
@@ -740,7 +675,6 @@ class _CodexCliExecutorBase:
                  else "output_authorization_refused", str(exc), cause=exc)
         except Exception as exc:
             fail("unknown", "ADAPTER_CONFORMANCE_FAILED", "Codex output could not be staged", cause=exc)
-        retain_tool_log()
         trace_ref, trace_sha256 = commit_attempt_trace_json(
             self._artifact_host, request, trace
         )

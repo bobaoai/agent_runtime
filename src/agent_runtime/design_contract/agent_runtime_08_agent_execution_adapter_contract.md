@@ -22,8 +22,10 @@ Adapter 都已经实现它。
 ## 0. Intent Capsule
 
 Invocation 消费已解析的 Module、Execution Profile、本次输入和宿主资源，准备环境并执行一次
-Provider invocation，返回输出、实际运行信息、工具记录和失败。Execution 拥有 Attempt 生命周期
-与最终提交，Registry 拥有不可变定义，宿主提供程序、认证来源和资源，Provider 执行所配置的工具限制。
+Provider invocation，处理基本运行信息与最终结果，并归档原始公开日志和实际资源执行记录。
+Execution 拥有 Attempt 生命周期与最终提交，Registry 拥有不可变定义，宿主提供程序、认证来源和
+资源，Provider 执行所配置的工具限制。详细工具日志由 Inspection 按需解析；行为评价由明确的
+Evaluation 承担，不是普通模型运行的隐含步骤。
 
 本合同同时适用于普通 Module 和 ModuleReviewer。后者只在定义端提供默认运行要求。本文不决定
 业务审核结论、Workflow 路由、生产授权政策、数据库内容或软件发布，也不建立 Profile 选择服务、
@@ -44,8 +46,10 @@ flowchart TD
     S --> CLI["Claude / Codex CLI<br/>或显式选择的 SDK / API"]
     CLI --> T["Provider 执行或拒绝工具<br/>Agent 可在原边界内继续"]
     T --> CLI
-    CLI --> R["Adapter 解析终态与最终输出<br/>保留原始日志和逐次工具事实"]
-    R --> L["Execution 校验并提交<br/>Ledger 保存，Inspection 读取"]
+    CLI --> R["Adapter 解析基本 metadata 与最终结果<br/>归档原始日志和实际资源记录"]
+    R --> L["Execution 校验并提交<br/>Ledger 保存事实"]
+    L -->|明确查询| Q["Inspection 按需解析详细日志"]
+    Q -->|明确评价| V["Evaluation 判断所测行为"]
 ```
 
 工具执行期间的循环属于同一次 Provider invocation。它不自动创建 Runtime Attempt，也不改变已经
@@ -73,7 +77,9 @@ flowchart TD
 | 通用 Module 运行要求与 Reviewer 默认环境 | Runtime 定义端 | 固定能力与 Policy 依赖；下游消费同一通用合同 |
 | 本次模型、Profile、Variant 与 Attempt | Execution，Registry 保存已确定的 release | 完整执行配置与身份；Invocation 不再次选择 |
 | 程序、依赖、认证来源、材料和可用存储 | 宿主与对应资源 owner | 明确安装配置及本次可用资源 |
-| 配置转换、进程调用、事件与输出解析 | Invocation / Provider Adapter | 实际请求、结果和可观察事实 |
+| 配置转换、进程调用、基本运行信息与最终结果解析 | Invocation / Provider Adapter | 实际请求、最终结果、原始日志和实际资源记录 |
+| 详细日志解析、请求与结果关联、完整性说明 | Inspection | 按需返回只读统一视图，不改变执行结果 |
+| 所测行为是否符合明确要求 | Evaluation / 任务 owner | 消费所需日志或探针事实，给出评价结果 |
 | 工具权限与资源限制的执行 | 所选 Provider、沙箱或资源 Gateway | 操作结果或拒绝；不把拒绝改成许可 |
 | 最终提交、恢复、事实保存与读取 | Execution、Durability、Ledger、Inspection | 按原职责提交和展示结果 |
 
@@ -188,8 +194,9 @@ Runtime 将已声明限制配置到可信的 Provider、沙箱或资源接口，
 不要求 CLI 暴露全部内部判断或每一次 OS 拒绝，也不从 stderr 文本推断未经证明的原因。
 
 可写目录限制不自动构成读取隔离；关闭 Web 工具不自动限制 Shell 的联网。若任务明确要求的
-某项隔离无法通过已交付机制实现，调用前报告不支持。运行中取得可靠证据表明实际权限被扩大、
-限制失效或冻结材料被改变，则按 §13 拒收输出。这与被正确阻止的工具尝试是两个不同结果。
+某项隔离无法通过已交付机制实现，调用前报告不支持。实际资源接口的授权、身份、生命周期和
+冻结材料完整性检查仍按原合同执行。普通运行不扫描工具日志来推断越界效果，也不根据初始化
+事件的工具清单重新裁决本次权限。配置是否真正生效由明确的能力测试验证，不将测试嵌入每次调用。
 
 ## 7. Request, Input and Context
 
@@ -288,9 +295,10 @@ ClaudeAdapter 按规范化字段和已准备资源组合 `claude -p`，而不是
 [settings](https://code.claude.com/docs/en/configuration) 和
 [sandboxing](https://code.claude.com/docs/en/sandboxing)。
 
-Adapter 收集初始化事件、工具请求和结果、最终 result、stdout 与 stderr。Bash 的错误可能只有
-工具失败正文，没有可靠的底层权限原因；保留原结果即可。结构化 permission denial 也是一次
-拒绝事实，不自动变成 Runtime 整次失败。若 CLI 自身终止或返回执行失败，则按实际终态处理。
+Adapter 保存 stdout、stderr 及可取得的公开事件，提取实际模型、用量和最终 result。工具请求、
+结果与错误保留在日志中，普通运行不逐条配对或评价。非结果日志格式未知不等于最终输出无效；
+缺失、重复或无效的最终结果仍按整体结果合同处理。若 CLI 自身终止或返回执行失败，则按实际
+终态处理。Inspection 读取日志时才解释工具事件，未知的权限原因不从 Bash 错误文字补造。
 
 ## 10. Codex CLI Adaptation
 
@@ -305,7 +313,7 @@ Codex 通过相同规范化请求进入其 Adapter，实际转换为 `codex exec
 | 工具网络 | sandbox 网络配置，并分别限制 web、apps、MCP 等额外入口 | 某一类工具的网络开关不代表所有工具都被限制 |
 | 非交互权限处理 | approval 配置与实际资源限制 | 不等待无人响应的确认；禁止自动扩大本次既定权限 |
 | 项目及个人上下文 | 独立状态与明确 config、项目指令、Skills、plugins、hooks 来源 | 仅跳过 user config 或 rules 不证明所有 ambient 内容已消失 |
-| 输出与日志 | `--json`、`--output-schema`、最终响应输出及 stderr | 事件用于归一记录，最终内容仍验证原 schema |
+| 输出与日志 | `--json`、`--output-schema`、最终响应输出及 stderr | 提取基本终态、用量与结果，详细事件保存后按需读取；最终内容仍验证原 schema |
 | 一次性运行与恢复 | `--ephemeral` 或明确的兼容 resume | 不从 `--last` 自动选择历史；完整执行重试归 Execution |
 
 这些参数分工参见 [Codex exec](https://learn.chatgpt.com/docs/developer-commands#codex-exec) 与
@@ -323,7 +331,7 @@ Codex 的命令失败、工具错误、turn failure、进程退出和最终响�
 
 | 结果层次 | Runtime 保存和判断什么 |
 | --- | --- |
-| 单次工具调用 | 请求、真实结果或错误，以及能取得的调用身份；失败后可在同一 invocation 内继续 |
+| 单次工具调用 | 运行时保存原始记录；Inspection 按需解释，Evaluation 按明确要求判断；失败后可在同一 invocation 内继续 |
 | Provider invocation | 实际程序、配置、进程及 Provider 终态；退出 0 不代替其他检查 |
 | Runtime Attempt | 合法返回、原 schema 与必要的结构性完成检查、执行身份和结果提交条件 |
 | 业务任务 | Module / Workflow owner 定义的结论；有效 non_pass 或 blocked 不等于技术故障 |
@@ -338,6 +346,12 @@ Runtime 通过同一日志接口提供实际 stdout、stderr、已收到的公�
 逐次工具请求和结果。标准化记录关联准确 Attempt、Provider 调用 ID 和原始事件位置；并行或乱序
 结果不能互相覆盖。工具失败与后续重试分别保留，不由模型补写审计记录。
 
+采集、查询与评价各有用途。Invocation 归档原始内容，不为普通运行生成详细工具视图或从中决定
+失败与重试。Inspection 在调用者请求详细日志时生成视图，解析缺口只影响该视图的完整性；旧版
+Invocation 已保存在 trace 中的 `tool_log` 按 [Inspection §7](agent_runtime_06_standalone_package_and_lifecycle_contract.md#7-execution-inspection)
+保留原解释，不产生新的视图存储。Evaluation 可以调用同一读取接口并使用明确提供的测试工具，验证任务需要的
+行为或证据。模型运行成功不证明行为测试通过，日志解析失败也不能改写已取得的模型运行结果。
+
 未知的内部退出码、时间、权限原因、token 分量或工具结果明确保持未知。Provider 未返回的信息
 不从模型描述或普通错误文本补造。CLI 总体输出、Runtime 实际发送的请求、已交付材料和工具
 实际读取是不同观察；不把它们合称为 Provider 全部隐藏上下文或完整内部推理。
@@ -348,7 +362,8 @@ cache_creation_tokens 是可空子集，不再次累加。未提供的用量保�
 日志清理前保存已采集内容；超时、取消、解析失败与工具拒绝也返回这些记录。流中断、截断、缺失、
 记录失败和脱敏造成的差异明确标注。原始受保护内容仅供有访问资格的调用者读取；共享记录保留
 身份、引用、用量和有界分类，凭据等秘密脱敏。原始日志与脱敏展示分别标明，不能同时声称字节
-完全一致。缺失日志是否影响完成，按本次明确的证据要求判断，不能用摘要冒充完整记录。
+完全一致。必要归档写入失败按存储接口报告，不能冒充保存成功；日志内容缺口由 Inspection 明示，
+是否影响评价结论由本次明确的证据要求决定，不能用摘要冒充完整记录。
 
 ### 11.3 存储、恢复与版本
 
@@ -391,13 +406,13 @@ cache_creation_tokens 是可空子集，不再次累加。未提供的用量保�
 | 工具报错、路径无权访问、网络被拒绝或 Provider 正常拒绝一次操作 | 保存真实工具结果；Agent 可在相同边界内继续；不自动使 Attempt failed |
 | 调用前无法表达所需工具或隔离，或必要资源缺失 | 不启动 Provider，返回能力或环境错误 |
 | CLI / Provider 整体失败、超时、取消或无合法最终输出 | 返回对应 failed / cancelled 结果，保留已有日志与用量 |
-| 可靠证据显示实际越界效果、权限被扩大、冻结材料被修改，或执行身份失效 | 拒绝接受输出，按实际原因记录执行失效；不掩盖已发生效果 |
+| 实际资源接口报告授权、执行身份或资源边界失效，或冻结材料完整性检查失败 | 按所属接口拒绝接受输出并保存实际失败，不从工具日志另行推断 |
 | 外部授权失效、fence 关闭或资源 owner 要求终止 | 按原授权合同停止或隔离结果，保留真正的失败 owner |
 | 输出通过技术校验，但业务结论是 non_pass / blocked | 保留有效业务结果，不用技术重试追求通过 |
 
 因此，“拒绝一次工具”与“Runtime 无法继续接受本次结果”没有自动等价关系。明确的
-permission_denied 事件也先按它表示的作用范围处理；Provider 宣布整个 invocation 失败时才按其
-整体终态处理。Runtime 不新增全量 OS 拒绝检测承诺，不把全部 Bash 错误作为安全违规。
+permission_denied 事件在普通运行中归档；Provider 宣布整个 invocation 失败时才按其整体终态处理。
+Runtime 不新增工具行为巡检或全量 OS 拒绝检测承诺，不把 Bash 错误作为安全违规。
 
 ### 13.2 错误含义与后续动作
 
@@ -406,7 +421,7 @@ permission_denied 事件也先按它表示的作用范围处理；Provider 宣�
 | ADAPTER_BINDING_UNAVAILABLE | 程序、Adapter 或必要依赖不可用 | 修复明确依赖，不自动替换 Provider |
 | ADAPTER_CAPABILITY_UNSUPPORTED | 所选实现不能表达请求的能力或 schema | 调整被授权的执行选择，或交给 Adapter owner 实现 |
 | ADAPTER_REQUEST_INVALID / input_too_large | 输入、绑定或预算无法形成合法请求 | 修正准确输入或由任务 owner 决定交付方案；不静默裁剪 |
-| ADAPTER_POLICY_VIOLATION | 实际执行边界失效、可靠观察到的越界效果或受保护对象漂移 | 拒收本次输出并保留事实；正常工具拒绝不归入此整次失败 |
+| ADAPTER_POLICY_VIOLATION | 实际资源边界检查失败或受保护对象漂移 | 拒收本次输出并保留事实；不根据工具日志推导，正常工具拒绝不归入此整次失败 |
 | ADAPTER_OUTPUT_INVALID | 最终输出无法解析或不满足原 schema / 必要结构性完成条件 | 保存失败及 Provider 用量，交由既有 repair policy 决定后续 |
 | ADAPTER_CONFORMANCE_FAILED | Adapter 违反调用、结果或必要记录合同 | 返回实现 owner；不把故障包装为业务结论 |
 | authentication、quota、rate_limit、transport、provider、timeout、cancelled | Provider 或进程的实际失败类别 | 保留实际作用范围及可得重试依据，不从包装异常猜测 |
@@ -424,6 +439,10 @@ Adapter 管理一次 Provider invocation，不暗中重新启动完整 Module。
 Execution 在最终提交时验证身份、必要输出条件及适用 fence。已提交结果通过原记录重放；
 进程崩溃后尚未确认的效果不假定为未发生。Durability 与 Ledger 保留既有恢复职责，Invocation
 不另建请求回执、全局恢复服务或并行日志。
+
+Provider 退出并完成资源清理后，Adapter 使用已经取得的结果和失败事实完成一次交接。运行中的
+正常取消仍由进程控制处理；保存诊断期间不进行取消查询或重复分类循环。归档中保留已发生的
+错误，不能为了覆盖极晚到达的信号反复改写同一结果或增加诊断身份机制。
 
 ## 14. Dependencies and Verification
 
@@ -445,8 +464,9 @@ Execution 在最终提交时验证身份、必要输出条件及适用 fence。�
    Provider 终止和外部 fence 关闭分别证明正确的停止或拒收行为。
 6. 验证任务必需命令的真实结果、对应候选和覆盖情况；另有命令白名单要求时独立验证其限制。
    日志缺少必要内部结果时明确未能证明，不用模型自报替代。
-7. 工具并发、乱序、错误、重试、超时和取消均保留准确原始事件与统一记录；未知信息不补造，
-   脱敏与日志不完整明确标记，存储失败不冒充持久化成功。
+7. Invocation 在工具并发、乱序、错误、重试、超时和取消时保留已收到的原始事件与实际资源记录，
+   供 Inspection 按需派生统一视图；视图的配对、完整性和只读验证归 Inspection §11。
+   未知信息不补造，脱敏与捕获缺口明确标记，存储失败不冒充持久化成功。
 8. 相同请求重放不调用 Provider；配置改变不覆盖旧记录。无 PG 自测、明确持久化和真实外部
    资源分别验证，不为普通自测要求生产授权。
 9. CLI 安装或 Adapter 转换升级后，检查实际输入、初始化、代表性工具和输出；正式支持范围来自

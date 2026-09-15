@@ -325,7 +325,13 @@ class WorkflowSelfTestResources:
                 raise PermissionError("node request changed after resource binding")
 
     def node_records(self, *, committed_only=False):
-        """Read actual node facts in graph-visit order, without reparsing Provider logs."""
+        """Read node facts and all-Attempt raw archives in graph-visit order.
+
+        execution_log contains original provider_log content and actual Ledger
+        Gateway rows; native events are unparsed and complete is None. An
+        explicit Inspection/Evaluation reads detailed views from the real
+        Ledger result and content reader before temporary content is cleared.
+        """
         with self._lock:
             snapshot = deepcopy(tuple(self._records.items()))
         # Kernel guards take the Ledger lock before checking parent resources.
@@ -336,9 +342,14 @@ class WorkflowSelfTestResources:
             row['dispatch']['transition_sequence'], row['dispatch']['current_state_id'], row['dispatch']['retry_sequence'])))
 
     def execution_record(self):
-        """Return local node logs, initial/wait bindings and committed Outcomes.
+        """Return node raw archives, initial/wait bindings and committed Outcomes.
 
-        Capture this view before final cleanup. Each Outcome is read through
+        Capture this view before final cleanup. Every node retains all Attempt
+        provider logs and actual Gateway bodies; execution_log.complete stays
+        None because this method does not derive native tool views. Explicit
+        Inspection uses read_execution_log with the real Ledger result and
+        authorized content reader before temporary content is cleared.
+        Each Outcome is read through
         Execution's original identity/result validation and serialized with its
         existing as_dict(), including wait/failure routing and its content hash.
         Missing Outcomes stay absent, not synthesized from cursor events.

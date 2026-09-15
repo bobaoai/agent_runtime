@@ -37,6 +37,7 @@ non_goals:
 inputs:
   - host-accepted exact inspection query
   - Registry release/active-pointer facts and Ledger execution facts
+  - authorized private content referenced by exact Ledger records
   - registered projection specification
 outputs:
   - Runtime inspection snapshot
@@ -59,6 +60,7 @@ verification_hooks:
   - Registry/Ledger source completeness and consistency tests
   - deterministic projection and offline-export hash tests
   - no-write and incomplete-source failure tests
+  - on-demand tool-log parsing, metadata-only privacy and historical-view compatibility tests
 ```
 
 ## 1. Primary System Flow
@@ -165,8 +167,16 @@ Inspection 只展示 Ledger 已提交 facts。Provider session、Temporal histor
 不替代已保存正文。失败、拒绝、超时、中断与后续重试均可区分，不只展示最后一次成功结果。
 
 视图分别标明 Gateway 授权操作和 Provider 原生调用。日志只是执行事实，不能把原生事件提升为 grant
-或外部批准。Provider 格式由 Invocation 解析，Inspection 使用 Runtime 提供的统一结果；Portable 只
-定义其审核所需的事实与接受规则，宿主不另行转换工具日志。
+或外部批准。Invocation 保存原始公开日志和实际资源执行记录；Inspection 在请求详细日志时解析
+Provider 格式，关联逐次请求与结果并返回统一视图。原始内容通过 Ledger 记录中的准确引用/hash
+及调用者已获授权的内容读取接口取得，不扫描 Provider 状态或运行目录寻找替代内容。
+旧版 Invocation 曾在 Attempt 的私有 trace 中保存 `tool_log`，该字段属于已有归档内容，不是
+Inspection 的持久快照或新的视图存储。读取含此字段的历史记录时保留原解释；未存此字段时从已有
+原文派生，不新增或回写该字段。查询不改写源记录，也不反向改变 Attempt 的状态或重试决定。只查询基本
+metadata 时不读取或解析私有日志。Portable 只定义其审核所需的事实与接受规则，宿主不另行转换工具日志。
+
+工具错误、拒绝、缺失结果及解析不完整是日志视图中的事实，不是 Inspection 宣布整次运行失败的
+依据。Evaluation 可以明确请求这些事实并判断所测行为，普通模型运行不隐式执行这类评价。
 
 普通自测读取 Runtime 的当次内存 Ledger 和私有内容，沿用相同的日志投影，明确无持久化的保存边界；
 持久查询读取已经提交的对应 Ledger 和内容存储。日志不完整、正文缺失、格式不受支持、hash 不符或
@@ -215,6 +225,7 @@ Allowed dependencies：
 - parent T1 domain boundary；
 - Registry T2 public exact-release and active-pointer query results；
 - Ledger T2 public execution-fact query results；
+- Ledger 记录中按准确引用/hash 绑定、由调用者授权的私有内容读取接口；
 - code-owned projection specifications and replaceable renderer/export adapters。
 
 Prohibited dependencies：
@@ -235,7 +246,11 @@ Prohibited dependencies：
 6. current query produces new snapshot without mutating predecessor；
 7. offline export hash/parity and rebuildability；
 8. no-write guards for Registry、Ledger and Execution stores；
-9. renderer/transport replacement does not change snapshot semantics。
+9. renderer/transport replacement does not change snapshot semantics；
+10. metadata-only 查询不读取私有内容；详细日志按需解析，Gateway 操作与原生调用分开，
+    并发、乱序、错误及缺失事件保留真实内容与完整性说明；
+11. 旧 trace 的 `tool_log` 保留原解释；缺正文、不支持格式及 hash 不符明确返回，
+    查询不改写原始日志、Attempt 状态或重试决定。
 
 ## 12. References
 

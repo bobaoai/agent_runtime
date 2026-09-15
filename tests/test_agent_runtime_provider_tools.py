@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from agent_runtime import evaluate_local_workflow_module
 from agent_runtime.contracts.registry_release_definition import WorkflowEdge
 from agent_runtime.execution import InMemoryCellArtifactStore
 from agent_runtime.execution.execution_local_invocation import _run_prepared_workflow_node
@@ -190,7 +191,7 @@ def callback_run(tmp_path, monkeypatch, factory, *, payload=None, missing_observ
         result.stdout_bytes, result.stderr_bytes = raw, b""
         return result
     monkeypatch.setattr(claude, "ClaudeAdapter", lambda **fields: adapter_type(**fields, process_runner=process))
-    return local.evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+    return evaluate_local_workflow_module(root, "summarize_note", input_payload={},
         cli_path=_fake_cli(tmp_path), tool_session_factory=factory)
 
 
@@ -337,8 +338,12 @@ def test_callback_executes_only_the_prepared_child_through_kernel(tmp_path, monk
     assert child_record["workflow_release_sha256"] == child.release.release_sha256
     assert child_record["workflow_execution_id"] != result["workflow_execution_id"]
     assert child_record["attempt_id"] != result["attempt_id"]
-    assert child_record["execution_log"]["complete"]
-    assert child_record["provider_trace"]["initialization"]["mcp_servers"] == []
+    assert child_record["execution_log"]["complete"] is None
+    assert child_record["execution_log"]["attempts"][0]["provider_log"]["raw_streams"]
+    from agent_runtime import parse_cli_log
+    initialization = next(row["event"] for row in parse_cli_log(child_record["provider_trace"])["events"]
+                          if row["event"].get("subtype") == "init")
+    assert initialization["mcp_servers"] == []
     call, = result["execution_log"]["tool_calls"]
     assert call["response"]["result"]["child_execution_id"] == child_record["workflow_execution_id"]
 

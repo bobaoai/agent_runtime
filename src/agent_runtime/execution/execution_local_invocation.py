@@ -10,12 +10,14 @@
 | Workflow：节点、版本与连接 | 调用者组装；单节点默认与 Module 同名，也可明确命名 | Registry 保存图；Execution 固定本次准确版本，未指定版本时使用最新注册定义 |
 | root、Python、程序与资源 | 宿主给 root、现有登录及明确材料/额外依赖；Python 固定为启动 Runtime 的 sys.executable | Foundation 做轻量 setup/配置读取；Invocation 使用当前 Python 环境，只读开放其运行库，不另选解释器；root 本身不是模型读取许可 |
 | ExecutionProfileRelease 与 Variant | 调用者可给模型、transport、effort；未给时用 Runtime 默认；固定能力来自 Module | Execution.prepare 生成本次具体 Profile 与节点绑定；Registry 承载准确内容；调用者不手拼 Profile，root 不固定绑定模型 |
-| Provider 与工具调用 | 上一步已经固定的 Profile 和明确资源 | Invocation 的 Adapter 组装 CLI、映射工具、执行声明命令并采集原始流；不重新选择任务或模型，不接管 Provider 自带系统提示 |
+| Provider 与工具调用 | 上一步已经固定的 Profile 和明确资源 | Invocation 的 Adapter 组装 CLI、执行声明资源接口，取得基本 metadata、最终结果并归档原始流；不分析工具日志判断整次行为 |
 | Attempt、重试与输出提交 | 准确请求、预算及实际执行事实 | Execution 管理生命周期和技术完成条件；命令非零/正常权限拒绝不是自动的整体失败；任务 owner 判断业务是否通过 |
-| 日志、恢复与查询 | 宿主明确提供存储与授权；普通自测不需要 PG | Ledger 保存事实，Durability 按既有记录协调恢复，Inspection 只读呈现；无持久存储时返回本次完整记录，不承诺进程结束后恢复 |
+| 日志、恢复与查询 | 宿主明确提供存储与授权；普通自测不需要 PG | Ledger 保留全部 Attempt 原始事实，Durability 按既有记录协调恢复；Inspection 仅在明确查询时解析详细视图，不改运行状态 |
 
 调用顺序：任务 source → Registry 的 Module/Workflow → Execution.prepare 的具体配置 →
-Invocation 的 CLI/工具调用 → Execution 接受技术结果 → Ledger/Inspection 返回事实 → 任务 owner 校验业务结果。
+Invocation 的 CLI/工具调用 → Execution 接受技术结果 → Ledger 返回原始事实。
+显式 Evaluation 再组合 Inspection 取得详细日志，由任务 owner 判断业务结果；无持久存储时在清理前
+返回当次原文，不承诺进程结束后恢复。
 
 完整参数在本页的 Module、ModuleReviewer、ModuleExecutionRequirements、ExecutionProfileRelease、
 ExecutionVariantPolicyRelease、prepare_local_workflow_module、evaluate_local_workflow_module 和 CLI 章节中，
@@ -29,9 +31,6 @@ from dataclasses import asdict, replace
 import importlib.metadata
 import json
 from pathlib import Path
-import shutil
-import tempfile
-import uuid
 
 from ..contracts.registry_release_definition import (
     ExecutionVariantPolicyRelease, ModuleExecutionPurpose, WorkflowNodeKind,
@@ -235,170 +234,6 @@ def _prepare_loaded_workflow(saved, *, transport_kind, model_id, reasoning_profi
     return LoadedRuntimeRegistration(workflow, registry), variant
 
 
-def evaluate_local_workflow_module(
-    root: Path, workflow_id: str, *, input_payload: dict, version: str | None = None,
-    transport_kind: str | None = None, model_id: str | None = None,
-    reasoning_profile: str | None = None, cli_path: Path | str | None = None,
-    material_root: Path | None = None, material_files: tuple[dict, ...] = (),
-    read_only_dependencies: tuple[Path, ...] | None = None, commands: tuple[dict, ...] = (),
-    tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None,
-) -> dict:
-    """Evaluate a registered single-node Workflow using temporary test resources.
-
-    Args:
-        root: Root containing .runtime definitions; never a model/tool read root.
-        workflow_id: Workflow to load, including single-Module Workflows.
-        input_payload: Exact JSON input validated against the registered schema.
-        version: Exact version; None resolves the latest new definition once.
-        transport_kind: Independent execution transport; None uses Runtime's
-            default. claude_cli supports empty or selected native tool sets,
-            inline input, and no write area or a private draft as defined.
-            codex_cli supports tool_free, inline, empty tools, workspace none
-            and denied tool network. It requires explicit model_id and effort;
-            unsupported requirements are rejected, never reduced to fit.
-        model_id: Independent concrete model ID; None uses the Claude default.
-            Codex requires an explicit model. Claude verifies observed model
-            identity, allowing its known CLI [1m] selector. Codex retains the
-            requested identity and available Provider facts without inventing
-            an unreported actual response model. Model names do not select transport.
-        reasoning_profile: Independent effort; None uses Runtime's default.
-            Required for codex_cli; no default is inferred from another Provider.
-        cli_path: Explicit installed provider executable; otherwise use the
-            selected transport's root/.runtime/config.json provider_cli_paths
-            value, then host PATH when that value is absent. No login or
-            installation is performed. Model selection does not come from config.
-            Relative paths are resolved from the caller's working directory
-            before entering the temporary Attempt directory.
-            Codex uses file-based auth from the host's standard CODEX_HOME/auth.json
-            (default ~/.codex/auth.json), never from task JSON or a fallback account.
-        material_root: Explicit source directory for the frozen file list below,
-            never implicitly the host root. Only listed ordinary files are read.
-        material_files: Tuple of dictionaries with relative_path, sha256 and
-            executable. Bytes and executable bits must match the supplied list;
-            relative structure is preserved in the Attempt's read-only source
-            copy. Paths cannot traverse symlinks or escape material_root.
-            These auxiliary files are not silently appended as inline task text.
-        read_only_dependencies: Explicit tuple of trusted dependency directories,
-            including an empty tuple to clear host defaults. None uses the
-            optional config's read_only_dependencies for a Module with tools.
-            Unused defaults are not exposed to tool-free Modules. Explicit
-            dependencies still require the selected Adapter's actual support.
-            These are additional libraries. Shell-capable execution always uses
-            the current Runtime Python environment as read-only runtime support;
-            no Python selection parameter or fallback environment is provided.
-        commands: Tuple of command_id, argv, cwd and timeout_seconds dictionaries.
-            IDs are unique within this call. cwd selects source or scratch and
-            their relative subdirectories. argv is fixed by the caller; timeout
-            cannot exceed the Module budget. A relative executable path in
-            argv[0] resolves against that cwd; a bare program name uses the
-            command's fixed PATH. python/python3 use the current sys.executable, preserving its
-            virtual-environment entry rather than replacing it with a symlink target.
-            Claude's local command tool records actual process results for these IDs; ordinary native Bash remains
-            available independently. Required/expected business outcomes belong
-            to the task input and its validator, not these resource definitions.
-        tool_session_factory: Optional trusted in-process factory with read-only
-            definitions and open_session(request). Definitions are frozen into
-            the prompt and live resources before opening the session. Only the
-            exact non-native tool_policy set is accepted. No import locator or
-            serialized factory is read from task data, config or resources JSON.
-        user_cancel_requested: Optional trusted callback for real user/workflow
-            cancellation, also passed to the underlying running CLI process.
-        resource_cancel_requested: Optional trusted callback for parent resource
-            closure. Stops the process as resource_closed, not user cancellation.
-    Returns:
-        JSON-compatible execution facts and output. provider_trace retains the
-        observed response models and diagnostics. persistence is not_requested;
-        execution_log contains every Attempt's full private provider trace,
-        original encoded streams, per-call view and explicit completeness issues,
-        assembled by read_execution_log before temporary resources are cleared.
-        input_bindings and input_closure_sha256 identify the exact staged task
-        and optional resource package; their temporary content refs are not
-        cross-process recovery handles. Actual command and Provider observations
-        remain separate facts, correlated only where the returned IDs prove it.
-        Missing or unpaired events never become a successful empty tool list.
-        execution_trace is the actual in-memory Run/Variant/Attempt result, not
-        a durable Workflow Ledger. The subject owner still validates its verdict.
-        Each call is a new test; there is no cross-process replay/history promise.
-        Failed Attempts retain failure_detail.failure_code: model mismatch or
-        missing model evidence uses claude_cli_model_identity_mismatch or
-        claude_cli_model_identity_unavailable; closed resources use
-        self_test_resources_unavailable. Executable/dependency faults retain
-        ADAPTER_BINDING_UNAVAILABLE rather than pretending resources expired.
-        Temporary-resource cleanup failure uses claude_cli_cleanup_failed while
-        preserving the received trace. User cancellation uses claude_cli_interrupted
-        and denies retry. Interrupted capture retains prior_stop_reason; a failure
-        already received by the Adapter remains in provider_log.adapter_failure.
-        Each execution_log Attempt includes its final private failure_detail.
-        Codex uses codex_cli_interrupted/codex_cli_cleanup_failed for the same
-        interruption/cleanup distinction. If CLI authentication replaces its
-        temporary auth reference, cleanup fails and preserves the separate
-        private state; its recovery locator is in the private failure detail.
-        The caller must inspect that state before reuse. This is local temporary
-        recovery, not durable credential backup or automatic writeback.
-    Raises:
-        FileNotFoundError: Missing registration, version or provider executable.
-        ValueError: Unsupported graph/Profile, input or resource configuration.
-        jsonschema.exceptions.ValidationError: Input violates its registered schema.
-        PermissionError: The requested operation is outside bounded test resources.
-        Exception: Existing provider/environment errors retain their contracts.
-    Effects:
-        Reads fixed definitions, stages input in memory, calls the admitted
-        Adapter through the existing Workflow Module kernel, and returns facts.
-        Does not access PostgreSQL, discover storage credentials, write .runtime,
-        manufacture production authorization, or persist a request receipt.
-        Its private temporary workspace is removed on exit. The caller may
-        explicitly save the returned result; Runtime does not save it by default.
-    """
-    from ..invocation.invocation_claude_cli_execution import ClaudeAdapter
-    from ..invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
-    from ..ledger.ledger_execution_logging import read_execution_log
-    from ..foundation.foundation_environment_setup import load_runtime_config
-    from ..invocation.invocation_local_resource_preparation import capture_local_resources, parse_local_resources
-
-    saved, selection = prepare_local_workflow_module(root, workflow_id, version=version,
-        transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile)
-    workflow = saved.release
-    node = workflow.nodes[0]
-    module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
-    binding = selection.policy_document()["bindings"][0]
-    selected_profile = saved.registry.get_execution_profile(
-        binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
-    config = load_runtime_config(root)
-    dependencies = read_only_dependencies
-    if dependencies is None:
-        dependencies = config["read_only_dependencies"] if selected_profile.tool_policy else ()
-    if type(dependencies) is not tuple:
-        raise ValueError("read_only_dependencies must be a tuple or None for host defaults")
-    resource_body = capture_local_resources(profile=selected_profile, material_root=material_root,
-        material_files=material_files, read_only_dependencies=dependencies, commands=commands)
-    dependencies = (() if resource_body is None else
-        tuple(Path(value) for value in parse_local_resources(resource_body)["read_only_dependencies"]))
-    program = {"claude_cli": "claude", "codex_cli": "codex"}[selected_profile.transport_kind]
-    executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(selected_profile.transport_kind)
-    if executable is None:
-        executable = shutil.which(program)
-    if executable is None:
-        raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path or host PATH")
-    executable = Path(executable).resolve(strict=True)
-    artifacts = InMemoryCellArtifactStore()
-    ledger = InMemoryModuleExecutionLedger()
-    with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:
-        workspace = Path(directory).resolve()
-        if selected_profile.transport_kind == "claude_cli":
-            adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
-                workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
-                adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
-        else:
-            adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
-                workspace_root=workspace, codex_bin=str(executable))
-        _, record = _run_prepared_workflow_node(registry=saved.registry, workflow=workflow,
-            selection=selection, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
-            artifact_host=artifacts, ledger=ledger, workspace_root=workspace, adapter=adapter,
-            local_resources=resource_body, tool_session_factory=tool_session_factory,
-            user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested)
-        return record
-
-
 def _run_prepared_workflow_node(
     *, registry, workflow, selection, input_payload, idempotency_key,
     artifact_host, ledger, workspace_root, adapter, node_id=None,
@@ -415,11 +250,14 @@ def _run_prepared_workflow_node(
     exact shared objects. No root lookup, model selection or registration occurs.
     Omit all identities only for the existing single-node convenience entry.
 
-    Returns (ModuleRunResult, JSON-compatible evaluation facts including logs).
-    Closes this node's resource binding after capturing its logs; the caller
+    Returns (ModuleRunResult, JSON-compatible facts with every Attempt's raw
+    archive). execution_log preserves provider content and actual Gateway facts;
+    complete is None until Inspection is explicitly requested. No native-tool
+    parsing or behavior evaluation occurs here.
+    Closes this node's resource binding after capturing its archive; the caller
     owns the workspace and shared-store lifecycle. No PG or production grant.
     """
-    from ..ledger.ledger_execution_logging import read_execution_log
+    from ..ledger.ledger_execution_logging import _read_execution_archive
     from ..invocation.invocation_tool_definition import tool_definition_records
 
     for name, callback in (("user_cancel_requested", user_cancel_requested), ("resource_cancel_requested", resource_cancel_requested)):
@@ -484,7 +322,7 @@ def _run_prepared_workflow_node(
                 "failure_detail": content(attempt.failure_detail_ref, attempt.failure_detail_sha256)
                     if attempt.failure_detail_ref is not None else None,
                 "usage": attempt.usage.as_dict(), "execution_trace": asdict(result),
-                "execution_log": read_execution_log(result.module_run, attempts=result.attempts, read_content=artifact_host.read_bytes,
+                "execution_log": _read_execution_archive(result.module_run, attempts=result.attempts, read_content=artifact_host.read_bytes,
                                                      include_private_content=True),
                 "self_test_binding": json.loads(resources._body),
                 "provider_trace": content(attempt.provider_trace_ref, attempt.provider_trace_sha256)

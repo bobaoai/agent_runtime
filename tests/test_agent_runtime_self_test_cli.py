@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import tempfile
 import shlex
 import subprocess
 import sys
@@ -16,7 +17,7 @@ from agent_runtime.execution import execution_local_invocation as local
 from agent_runtime.execution.execution_module_invocation import run_workflow_module
 from agent_runtime.invocation import invocation_claude_cli_execution as claude
 from agent_runtime.contracts.invocation_adapter_definition import AuthorizedAgentExecutionRequest
-from agent_runtime.testing.execution_local_evaluation import main
+from agent_runtime.testing.conformance_local_evaluation import main
 from test_agent_runtime_claude_native_tools import _fake_cli, _init, _result
 from test_agent_runtime_reviewer_registration_cli import _source, _register, _files, MODULE_ID
 
@@ -63,8 +64,8 @@ def environment(tmp_path, monkeypatch):
         return adapter
     monkeypatch.setattr(claude, "ClaudeAdapter", make_adapter)
     monkeypatch.setattr(local, "ModuleSelfTestResources", resources)
-    temporary_directory = local.tempfile.TemporaryDirectory
-    monkeypatch.setattr(local.tempfile, "TemporaryDirectory",
+    temporary_directory = tempfile.TemporaryDirectory
+    monkeypatch.setattr(tempfile, "TemporaryDirectory",
         lambda *args, **kw: temporary_directory(*args, **{**kw, "dir": tmp_path}))
     for name in ("PLATFORM_DATABASE_URL", "AGENT_RUNTIME_TEST_DATABASE_URL", "DDM_REVIEW_EXECUTOR"):
         monkeypatch.delenv(name, raising=False)
@@ -174,7 +175,7 @@ def test_cli_success_non_pass_and_execution_failure(environment, tmp_path, capsy
 
 
 def test_cli_interrupt_is_not_a_verdict(monkeypatch, tmp_path, capsys):
-    from agent_runtime.testing import execution_local_evaluation as cli
+    from agent_runtime.testing import conformance_local_evaluation as cli
     def interrupted(*args, **kw):
         raise KeyboardInterrupt
     monkeypatch.setattr(cli, "evaluate_local_workflow_module", interrupted)

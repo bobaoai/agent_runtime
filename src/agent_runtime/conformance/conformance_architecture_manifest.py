@@ -35,6 +35,7 @@ RUNTIME_ALLOWED_DEPENDENCY_TARGETS = MappingProxyType(
         ),
         "public_facade": frozenset(
             {
+                "conformance",
                 "foundation",
                 "registry",
                 "invocation",

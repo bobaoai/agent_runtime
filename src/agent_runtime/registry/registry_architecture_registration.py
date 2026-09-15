@@ -620,6 +620,8 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     _source("invocation", "local_command", "mcp",
             "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
     _source("ledger", "execution", "logging",
+            "designDoc/agent_runtime_00_execution_charter.md"),
+    _source("inspection", "execution", "logging",
             "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md"),
     _source(
         "invocation",
@@ -795,6 +797,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
 
 
 RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
+    RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/foundation/foundation_json_encoding.py",
+        supporting_plane_id="foundation", source_directory_id="foundation",
+        subject="json", nominalized_action="encoding",
+        owner_contract_ref="designDoc/agent_runtime_00_execution_charter.md",
+    ),
     RuntimeSupportingSourceFileRegistration(
         source_path="src/agent_runtime/testing/conformance_agent_examples.py",
         supporting_plane_id="conformance", source_directory_id="testing",

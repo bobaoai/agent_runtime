@@ -1,10 +1,9 @@
-"""Installed command for a bounded, non-persistent registered Workflow test."""
+"""Argument and resource parsing shared by the installed evaluation CLI."""
 import argparse
 import json
 from pathlib import Path
 import sys
 
-from ..execution.execution_local_invocation import evaluate_local_workflow_module
 
 
 def build_parser(*, require_workflow=True, require_input=True):
@@ -21,8 +20,11 @@ def build_parser(*, require_workflow=True, require_input=True):
                 "  Registry: Module/ModuleReviewer requirements and Workflow versions.\n"
                 "  Foundation: root setup and host resource locators.\n"
                 "  Execution: exact Profile/Variant, Attempts, retries and technical completion.\n"
-                "  Invocation: CLI assembly, native tools, declared commands and raw capture.\n"
-                "  Ledger / Durability / Inspection: facts, recovery and read-only views.\n"
+                "  Invocation: CLI assembly, basic metadata/final result and raw capture.\n"
+                "  Ledger: raw facts and original content from every Attempt.\n"
+                "  Durability: recovery under the existing execution contract.\n"
+                "  Inspection: private detailed views on request; no execution-state changes.\n"
+                "  Explicit evaluation: execute, inspect and return facts for owner judgment.\n"
                 "  Task owner: input meaning and business acceptance; no host-side Adapter.\n"
                 f"Current Runtime Python (fixed default): {sys.executable}\n"
                 "No Python selector or fallback. Read-only Python runtime support does not add tools.\n"
@@ -67,42 +69,3 @@ def _resource_arguments(path: Path | None) -> dict:
         else:
             result[field] = tuple(locator(item) for item in value) if field == "read_only_dependencies" else tuple(value)
     return result
-
-
-def main(argv=None):
-    """Evaluate once and emit execution JSON on stdout without saving to PG.
-
-    Exit 0: completed execution with schema-valid output, including a valid
-    non_pass verdict. The subject owner applies its own semantic validator.
-    Exit 1: input, execution or environment failure; stderr preserves the error
-    type and available native error_code. Failed Attempts remain in stdout JSON.
-    Exit 2: invalid arguments, including unsupported persistence options; no model
-    is called. Exit 130: user interruption; captured Attempt logs remain in the
-    returned execution JSON when invocation had started. No verdict is manufactured.
-    Each invocation is a new temporary test. No cross-process recovery or stored
-    history is promised. Explicit stdout capture belongs to the calling operator.
-    Before evaluation, lightweight Runtime setup fills missing setup metadata
-    and bundled operator Skills under the explicit root. Ready setup makes no
-    writes; registered definitions and persistent execution stores are unchanged.
-    """
-    args = build_parser().parse_args(argv)
-    try:
-        from ..foundation.foundation_environment_setup import setup_runtime
-        setup_runtime(args.root)
-        payload = json.loads(args.input.read_text(encoding="utf-8"))
-        record = evaluate_local_workflow_module(args.root, args.workflow, input_payload=payload,
-            version=args.version, transport_kind=args.transport, model_id=args.model,
-            reasoning_profile=args.effort, cli_path=args.cli_path, **_resource_arguments(args.resources))
-        print(json.dumps(record, ensure_ascii=False, allow_nan=False))
-        return 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
-    except KeyboardInterrupt:
-        print(json.dumps({"error_type": "KeyboardInterrupt", "detail": "Evaluation interrupted"}), file=sys.stderr)
-        return 130
-    except Exception as exc:
-        print(json.dumps({"error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", None),
-                          "detail": str(exc)}, ensure_ascii=False), file=sys.stderr)
-        return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

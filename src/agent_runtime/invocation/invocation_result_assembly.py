@@ -191,71 +191,57 @@ def finalize_adapter_result(*, artifact_host: ModuleArtifactHost,
     the final status after cleanup and cancellation without replacing that trace.
     Both cleanup failure and cancellation deny retry and suppress output. A
     simultaneous cleanup failure remains explicit in the cancellation diagnostic.
-    The interruption flag is monotonic. A signal during diagnostic commit adds
-    a cancellation diagnostic without overwriting the preceding failure or trace;
-    this bounded second pass never retries the model or resource cleanup.
+    The cancellation check after cleanup is the final observation for this
+    handoff. Diagnostic persistence does not query cancellation or reclassify
+    the result again; at most one diagnostic is committed.
     An unavailable cancellation control produces ADAPTER_BINDING_UNAVAILABLE
     while retaining the received trace and usage. It is neither proof of user
     cancellation nor a cleanup failure; successful outputs are withheld.
     """
     if result.failure is not None and result.failure.detail_ref is not None:
         raise ValueError("finalization requires a deferred failure detail")
+    status, failure = result.terminal_status, result.failure
+    content = pending_failure_detail
+    interrupted = status == "cancelled"
     control_error = None
-    observed_interruption = False
-    def query_interruption():
-        nonlocal control_error, observed_interruption
-        if observed_interruption or control_error is not None:
-            return observed_interruption
+    if not interrupted:
         try:
-            observed_interruption = interruption_requested()
+            interrupted = interruption_requested()
         except Exception as exc:
             control_error = exc
-        return observed_interruption
-    for _ in range(2):
-        status, failure = result.terminal_status, result.failure
-        content = pending_failure_detail
-        interrupted = status == "cancelled" or query_interruption()
-        control_failure = control_error is not None
-        if control_failure:
-            status = "failed"
-            failure = AgentExecutionFailure(failure_class="dependency_unavailable",
-                retry_disposition_id="retry_denied", failure_scope_id="attempt_only")
-            diagnostic = f"{type(control_error).__name__}: {control_error}"
-            if cleanup_error is not None:
-                diagnostic += f"; cleanup error: {type(cleanup_error).__name__}: {cleanup_error}"
-            content = build_provider_failure_detail(failure_class=failure.failure_class,
-                failure_code="ADAPTER_BINDING_UNAVAILABLE",
-                message="Adapter cancellation control failed; preceding execution facts remain in the provider trace",
-                provider_response="", provider_error_message=diagnostic,
-                transport_exit_code=None, retryable=False)
-        elif interrupted or status == "cancelled" or cleanup_error is not None:
-            cancelled = interrupted or status == "cancelled"
-            status = "cancelled" if cancelled else "failed"
-            failure = AgentExecutionFailure(failure_class="cancelled" if cancelled else "transport",
-                retry_disposition_id="retry_denied", failure_scope_id="attempt_only")
-            content = build_provider_failure_detail(failure_class=failure.failure_class,
-                failure_code=interruption_code if cancelled else cleanup_failure_code,
-                message=("Adapter interrupted" if cancelled else "Adapter resource cleanup failed")
-                        + "; preceding execution facts remain in the provider trace",
-                provider_response="", provider_error_message=None if cleanup_error is None else str(cleanup_error),
-                transport_exit_code=None, retryable=False)
-        finalized = result
-        if failure is not None:
-            if content is None:
-                raise ValueError("failed result requires its actual diagnostic content")
-            detail = artifact_host.commit_failure_detail(module_run_id=request.module_run_id,
-                variant_id=request.variant_id, attempt_id=request.attempt_id, failure_class=failure.failure_class,
-                content=content, media_type="application/json")
-            finalized = replace(result, terminal_status=status, outputs=(), failure=replace(failure,
-                detail_ref=detail.detail_ref, detail_sha256=detail.detail_sha256))
-            finalized.validate()
-        if status == "cancelled":
-            return finalized
-        if not query_interruption():
-            if control_error is not None and not control_failure:
-                continue  # A late control error must not return the earlier success.
-            return finalized
-    raise AssertionError("interruption flag must be monotonic")
+    if control_error is not None:
+        status = "failed"
+        failure = AgentExecutionFailure(failure_class="dependency_unavailable",
+            retry_disposition_id="retry_denied", failure_scope_id="attempt_only")
+        diagnostic = f"{type(control_error).__name__}: {control_error}"
+        if cleanup_error is not None:
+            diagnostic += f"; cleanup error: {type(cleanup_error).__name__}: {cleanup_error}"
+        content = build_provider_failure_detail(failure_class=failure.failure_class,
+            failure_code="ADAPTER_BINDING_UNAVAILABLE",
+            message="Adapter cancellation control failed; preceding execution facts remain in the provider trace",
+            provider_response="", provider_error_message=diagnostic,
+            transport_exit_code=None, retryable=False)
+    elif interrupted or cleanup_error is not None:
+        status = "cancelled" if interrupted else "failed"
+        failure = AgentExecutionFailure(failure_class="cancelled" if interrupted else "transport",
+            retry_disposition_id="retry_denied", failure_scope_id="attempt_only")
+        content = build_provider_failure_detail(failure_class=failure.failure_class,
+            failure_code=interruption_code if interrupted else cleanup_failure_code,
+            message=("Adapter interrupted" if interrupted else "Adapter resource cleanup failed")
+                    + "; preceding execution facts remain in the provider trace",
+            provider_response="", provider_error_message=None if cleanup_error is None else str(cleanup_error),
+            transport_exit_code=None, retryable=False)
+    if failure is None:
+        return result
+    if content is None:
+        raise ValueError("failed result requires its actual diagnostic content")
+    detail = artifact_host.commit_failure_detail(module_run_id=request.module_run_id,
+        variant_id=request.variant_id, attempt_id=request.attempt_id, failure_class=failure.failure_class,
+        content=content, media_type="application/json")
+    finalized = replace(result, terminal_status=status, outputs=(), failure=replace(failure,
+        detail_ref=detail.detail_ref, detail_sha256=detail.detail_sha256))
+    finalized.validate()
+    return finalized
 
 
 def raise_terminal_failure(

@@ -1,5 +1,6 @@
 """Real stream capture and complete log projection, without model/PG access."""
 import base64
+import hashlib
 from dataclasses import replace
 import json
 import os
@@ -10,7 +11,8 @@ import sys
 import pytest
 
 from agent_runtime import parse_cli_log, read_execution_log
-from agent_runtime.invocation.invocation_cli_logging import captured_cli_streams, cli_stream_bytes
+from agent_runtime.invocation.invocation_cli_logging import captured_cli_streams
+from agent_runtime.foundation.foundation_json_encoding import cli_stream_bytes
 from agent_runtime.invocation.invocation_process_execution import run_cli_process, CliProcessInterrupted
 import test_agent_runtime_claude_native_tools as native
 
@@ -212,10 +214,8 @@ def test_ambiguous_call_never_reports_trustworthy_success(extra, issue):
 
 
 def test_codex_observed_command_events_preserve_reverse_completion_and_exact_output():
-    # CLI 0.153.4 real smoke: review_artifacts/cli_native_smoke_r1/events.jsonl,
-    # whole-file SHA-256 07517305284645aa3855b9e0f68958c6036a1d6b6caea19b83675deb9bc0b0c7.
-    # Commands and input response are the original event fields; second output
-    # is shortened here solely to keep this synthetic interleaving case small.
+    # Public CLI 0.153.4 command event fields with synthetic reverse completion.
+    # Both commands and their complete fixture outputs are defined below.
     one = {"id": "item_1", "type": "command_execution", "command": "/bin/zsh -c 'cat input.json'",
            "aggregated_output": "", "exit_code": None, "status": "in_progress"}
     two = {**one, "id": "item_2", "command": "/bin/zsh -c 'cat .agents/skills/add-fixture/SKILL.md'"}
@@ -564,8 +564,8 @@ def test_deep_final_result_keeps_exact_streams_tool_history_and_usage(tmp_path, 
 
 
 @pytest.mark.parametrize("outcome,phase", [
-    ("success", "output_validation"), ("success", "normalization"), ("success", "trace_finalization"),
-    ("success", "cleanup"), ("timeout", "normalization"), ("timeout", "failure_detail"),
+    ("success", "output_validation"), ("success", "trace_finalization"),
+    ("success", "cleanup"), ("timeout", "failure_detail"),
     ("timeout", "trace_finalization"), ("timeout", "cleanup"),
     ("timeout", "process_cleanup"),
 ])
@@ -577,7 +577,7 @@ import pytest
 from agent_runtime import read_execution_log
 from agent_runtime.invocation import invocation_claude_cli_execution as claude
 from agent_runtime.invocation import invocation_process_execution as capture
-from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+from agent_runtime.foundation.foundation_json_encoding import cli_stream_bytes
 from test_agent_runtime_execution_logging import native,use,reply,_run_real_native_streams
 previous=signal.getsignal(signal.SIGINT)
 assert previous is signal.default_int_handler
@@ -606,13 +606,6 @@ with pytest.MonkeyPatch.context() as patch:
                 send_once()
                 return self.delegate.validate(value)
         patch.setattr(claude,'Draft202012Validator',InterruptingValidator)
-    elif phase=='normalization':
-        name='parse_cli_log'
-        original=getattr(claude,name)
-        def interrupt(*args,**kwargs):
-            send_once()
-            return original(*args,**kwargs)
-        patch.setattr(claude,name,interrupt)
     else:
         owner=(capture if phase=='process_cleanup' else claude.tempfile.TemporaryDirectory
                if phase=='cleanup' else native.InMemoryCellArtifactStore)
@@ -625,7 +618,7 @@ with pytest.MonkeyPatch.context() as patch:
         patch.setattr(owner,name,interrupt)
     run,cell=_run_real_native_streams(Path.cwd(),patch,raw,stderr,timeout=outcome=='timeout')
 assert len(adapter_results)==1
-assert adapter_results[0].failure.retry_disposition_id=='retry_denied'
+assert adapter_results[0].failure.retry_disposition_id==('retry_allowed' if phase=='failure_detail' else 'retry_denied')
 assert adapter_results[0].outputs==()
 log=read_execution_log(run.module_run,attempts=run.attempts,read_content=cell.read_bytes,include_private_content=True)
 attempt=log['attempts'][0]
@@ -636,7 +629,8 @@ assert attempt['provider_log']['result']['usage']==events[-1]['usage']
 assert attempt['tool_calls'][0]['tool_call_id']=='before_interrupt'
 detail=json.loads(cell.read_bytes(run.attempts[0].failure_detail_ref,run.attempts[0].failure_detail_sha256))
 assert detail==attempt['failure_detail']
-assert detail['failure_class']=='cancelled' and detail['retryable'] is False
+assert detail['failure_class']==('timeout' if phase=='failure_detail' else 'cancelled')
+assert detail['retryable'] is (phase=='failure_detail')
 if outcome=='timeout':
     if phase=='process_cleanup':
         assert attempt['provider_log']['stop_reason']=='cancelled'
@@ -652,25 +646,37 @@ print(json.dumps({'status':attempt['status'],'complete':log['complete'],'restore
     process = subprocess.run([sys.executable, "-c", driver, phase, outcome], cwd=tmp_path, capture_output=True, text=True,
         timeout=15, env={**os.environ, "PYTHONPATH": os.pathsep.join((str(project / "src"), str(project / "tests")))})
     assert process.returncode == 0, process.stderr
-    assert json.loads(process.stdout) == {"status": "cancelled", "complete": outcome == "success", "restored": True}
+    assert json.loads(process.stdout) == {"status": "failed" if phase == "failure_detail" else "cancelled",
+                                        "complete": outcome == "success", "restored": True}
 
 
 @pytest.mark.parametrize("outcome", ["success", "timeout"])
 def test_unexpected_normalizer_failure_preserves_original_trace(tmp_path, monkeypatch, outcome):
+    from agent_runtime.inspection import inspection_execution_logging as inspection
+    from agent_runtime.ledger.ledger_execution_logging import _read_execution_archive
+    calls = []
     def broken_parser(trace):
+        calls.append(trace)
         raise RuntimeError("unexpected parser failure")
-    monkeypatch.setattr(native.claude, "parse_cli_log", broken_parser)
+    monkeypatch.setattr(inspection, "parse_cli_log", broken_parser)
     def events(call):
         yield native._init()
         if outcome == "timeout":
             raise subprocess.TimeoutExpired("fixture", 1)
         yield native._result()
     run, cell = native._run(native._environment(tmp_path), tmp_path, events)
+    archive = _read_execution_archive(run.module_run, attempts=run.attempts,
+                                     read_content=cell.read_bytes, include_private_content=True)
+    assert calls == []
+    assert archive["complete"] is None
+    assert "tool_log" not in archive["attempts"][0]["provider_log"]
+    assert archive["attempts"][0]["complete"] is None
     log = read_execution_log(run.module_run, attempts=run.attempts, read_content=cell.read_bytes,
                              include_private_content=True)
     attempt = log["attempts"][0]
     assert attempt["status"] == ("completed" if outcome == "success" else "failed")
     assert not attempt["complete"] and "normalization_failed:RuntimeError" in attempt["issues"]
+    assert len(calls) == len(run.attempts)
     assert json.loads(cli_stream_bytes(attempt["provider_log"], "stdout").splitlines()[0]) == native._init()
 
 
@@ -683,7 +689,7 @@ from pathlib import Path
 import pytest
 from agent_runtime import read_execution_log
 from agent_runtime.invocation import invocation_claude_cli_execution as claude
-from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+from agent_runtime.foundation.foundation_json_encoding import cli_stream_bytes
 from test_agent_runtime_execution_logging import native,use,reply,_run_real_native_streams
 outcome,cancel=sys.argv[1:]
 events=[native._init(),use('before_cleanup','Read',file_path='material.txt'),reply('before_cleanup'),
@@ -804,3 +810,83 @@ def test_private_trace_is_committed_before_cli_temporary_cleanup(tmp_path, monke
     log = read_execution_log(run.module_run, attempts=run.attempts,
                              read_content=cell.read_bytes, include_private_content=True)
     assert log["attempts"][0]["provider_log"]["raw_streams"]
+
+
+@pytest.mark.parametrize("stored_kind", ["none", "valid", "incomplete", "invalid"])
+def test_saved_tool_view_is_not_reinterpreted(tmp_path, monkeypatch, stored_kind):
+    from agent_runtime.inspection import inspection_execution_logging as inspection
+
+    events = [native._init(), use("old_call", "Read", file_path="material.txt"), reply("old_call"), native._result()]
+    run, cell = native._run(native._environment(tmp_path), tmp_path, lambda _: (e for e in events))
+    attempt = run.attempts[0]
+    original = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    saved = parse_cli_log(original)
+    if stored_kind == "none":
+        saved = None
+    elif stored_kind == "incomplete":
+        saved.update(complete=False, issues=["original_saved_issue"])
+    elif stored_kind == "invalid":
+        saved = {"schema_version": "unknown"}
+    trace = {**original, "tool_log": saved}
+    body = json.dumps(trace).encode()
+    modified = replace(attempt, provider_trace_ref="artifact:stored_tool_view",
+                       provider_trace_sha256=hashlib.sha256(body).hexdigest())
+    def read(ref, digest):
+        return body if ref == modified.provider_trace_ref else cell.read_bytes(ref, digest)
+    monkeypatch.setattr(inspection, "parse_cli_log",
+                        lambda _: pytest.fail("saved interpretation must not be reparsed"))
+    if stored_kind == "invalid":
+        with pytest.raises(ValueError, match="Invalid stored Provider log view"):
+            read_execution_log(run.module_run, attempts=(modified,), read_content=read, include_private_content=True)
+    else:
+        view = read_execution_log(run.module_run, attempts=(modified,), read_content=read, include_private_content=True)
+        assert view["attempts"][0]["provider_log"] == trace
+        assert view["complete"] is (stored_kind == "valid")
+        if stored_kind == "none":
+            assert view["attempts"][0]["issues"] == ["normalized_provider_log_not_recorded"]
+        if stored_kind == "incomplete":
+            assert view["attempts"][0]["issues"] == ["original_saved_issue"]
+    assert body == json.dumps(trace).encode()
+
+
+def test_raw_archive_retains_all_attempt_content_and_gateway_bodies(tmp_path, monkeypatch):
+    from agent_runtime.contracts.ledger_lineage_definition import ModuleToolCallObservation
+    from agent_runtime.inspection import inspection_execution_logging as inspection
+    from agent_runtime.ledger.ledger_execution_logging import _read_execution_archive
+
+    events = [native._init(), use("native_call", "Read", file_path="material.txt"), reply("native_call"), native._result()]
+    run, cell = native._run(native._environment(tmp_path), tmp_path, lambda _: (e for e in events))
+    original = run.attempts[0]
+    original_trace = json.loads(cell.read_bytes(original.provider_trace_ref, original.provider_trace_sha256))
+    content = {}
+    attempts = []
+    # Two explicit stored-record fixtures test archive retrieval, not a claim
+    # that this test ran a two-Attempt Provider execution.
+    for number in (1, 2):
+        identity = f"archive_attempt_{number}"
+        trace = {**original_trace, "attempt_id": identity}
+        trace["local_command_calls"] = [{"original_record": number, "result": "retained exactly"}]
+        body = json.dumps(trace).encode()
+        ref = f"artifact:archive_trace_{number}"
+        digest = hashlib.sha256(body).hexdigest()
+        content[ref] = body
+        attempts.append(replace(original, attempt_id=identity, provider_trace_ref=ref, provider_trace_sha256=digest))
+    request, response = b'{"query":"explicit Gateway fixture"}', b'{"rows":[1,2]}'
+    content["artifact:gateway_request"], content["artifact:gateway_response"] = request, response
+    gateway = ModuleToolCallObservation("gateway_call", "read_source", "artifact:gateway_request",
+        hashlib.sha256(request).hexdigest(), "artifact:gateway_response", hashlib.sha256(response).hexdigest())
+    attempts[0] = replace(attempts[0], tool_calls=(gateway,))
+    def read(ref, digest):
+        return content[ref] if ref in content else cell.read_bytes(ref, digest)
+    monkeypatch.setattr(inspection, "parse_cli_log", lambda _: pytest.fail("raw archive must not parse tools"))
+    archive = _read_execution_archive(run.module_run, attempts=tuple(attempts), read_content=read, include_private_content=True)
+    assert archive["complete"] is None and len(archive["attempts"]) == 2
+    for number, row in enumerate(archive["attempts"], 1):
+        assert row["complete"] is None
+        assert row["provider_log"]["raw_streams"] == original_trace["raw_streams"]
+        assert row["provider_log"]["local_command_calls"] == [{"original_record": number, "result": "retained exactly"}]
+    actual, = archive["tool_calls"]
+    assert actual["source_kind"] == "gateway"
+    assert base64.b64decode(actual["request_bytes_base64"]) == request
+    assert base64.b64decode(actual["response_bytes_base64"]) == response
+    assert actual["request"] == json.loads(request) and actual["response"] == json.loads(response)

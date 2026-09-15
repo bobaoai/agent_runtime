@@ -9,9 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_runtime import read_execution_log
+from agent_runtime import parse_cli_log, read_execution_log
 from agent_runtime.invocation import invocation_codex_module_invocation as codex
-from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+from agent_runtime.foundation.foundation_json_encoding import cli_stream_bytes
 from agent_runtime.invocation.invocation_process_execution import (
     CliProcessError, CliProcessInterrupted, CliProcessTimeout,
 )
@@ -94,9 +94,28 @@ def test_no_message_can_override_missing_or_ambiguous_terminal(tmp_path, events)
     assert cli_stream_bytes(trace, "stdout") == raw_events(events)
 
 
+@pytest.mark.parametrize("tool_event", [{"type": "item.completed", "item": None},
+    {"type": "item.started", "item": "unknown shape"},
+    {"type": "item.completed", "item": {"id": "tool", "type": "mcp_tool_call", "unknown": True}}])
+@pytest.mark.parametrize("after_terminal", [False, True])
+def test_tool_items_do_not_determine_turn_order_or_require_a_parser(tmp_path, monkeypatch, tool_event, after_terminal):
+    from agent_runtime.inspection import inspection_execution_logging as inspection
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(True)
+        raise AssertionError("ordinary execution must not parse detailed logs")
+    monkeypatch.setattr(inspection, "parse_cli_log", forbidden)
+    events = [{"type": "thread.started"}, {"type": "turn.started"}, message(), terminal()]
+    events.insert(len(events) if after_terminal else 0, tool_event)
+    env = environment(tmp_path, lambda _: process(events))
+    result, trace = execute(env)
+    assert result.terminal_status == "completed" and env.host.staged
+    assert cli_stream_bytes(trace, "stdout") == raw_events(events)
+    assert not trace["provider_stream_issues"] and "tool_log" not in trace and calls == []
+
+
 @pytest.mark.parametrize("events,code", [
     ([message(), {"type": "turn.failed", "error": {"message": "stopped"}}], 0),
-    ([message(), terminal(), {"type": "error", "message": "fatal stream error"}], 0),
     ([message(), terminal()], 8),
 ])
 def test_process_and_provider_failure_deny_output_independently(tmp_path, events, code):
@@ -106,6 +125,41 @@ def test_process_and_provider_failure_deny_output_independently(tmp_path, events
     assert trace["returncode"] == code
     assert cli_stream_bytes(trace, "stderr") == b"actual diagnostic"
     assert detail(env, result)["transport_exit_code"] == code
+
+
+@pytest.mark.parametrize("end,exit_code,bad_output,expected_failure", [
+    (terminal(), 0, False, None),
+    ({"type": "turn.failed", "error": {"message": "stopped"}}, 0, False, "codex_cli_error_result"),
+    (terminal(), 7, False, "codex_cli_nonzero_exit"),
+    (None, 0, False, "codex_cli_result_missing_or_invalid"),
+    (terminal(), 0, True, "codex_cli_output_schema_violation"),
+])
+def test_top_level_error_preserves_the_actual_terminal_and_exit_result(tmp_path, end, exit_code, bad_output, expected_failure):
+    """Codex 0.153.4 emits transient StreamError as top-level JSONL error.
+
+    At upstream commit 3d2ee51ca2d5db578f328aa75e20aa22c0197c9a,
+    app-server/src/bespoke_event_handling.rs sets will_retry=true; exec/src/
+    event_processor_with_jsonl_output.rs omits that flag from the error event.
+    exec/src/lib.rs determines failure from !will_retry or the turn terminal.
+    These fixtures exercise the format without invoking a model or matching prose.
+    """
+    diagnostic = {"type": "error", "message": "Unclassified provider diagnostic"}
+    answer = message()
+    if bad_output:
+        answer["item"]["text"] = '{"unexpected":true}'
+    events = [{"type": "thread.started"}, {"type": "turn.started"}, diagnostic, answer]
+    if end is not None:
+        events.append(end)
+    env = environment(tmp_path, lambda _: process(events, returncode=exit_code))
+    result, trace = execute(env)
+    assert cli_stream_bytes(trace, "stdout") == raw_events(events)
+    assert trace["returncode"] == exit_code and len(env.calls) == 1
+    if expected_failure is None:
+        assert result.terminal_status == "completed" and result.failure is None
+        assert json.loads(env.host.staged["result"]) == {"value": "ok"}
+    else:
+        assert result.terminal_status == "failed" and not result.outputs and not env.host.staged
+        assert detail(env, result)["failure_code"] == expected_failure
 
 
 @pytest.mark.parametrize("value", ["non_pass", "blocked", "passed"])
@@ -136,7 +190,7 @@ def test_startup_diagnostic_before_turn_is_not_prior_task_activity(tmp_path):
     assert result.terminal_status == "completed" and len(env.calls) == 1
     assert trace["provider_stream_issues"] == []
     assert cli_stream_bytes(trace, "stdout") == raw_events(events)
-    assert advisory in [row["event"] for row in trace["tool_log"]["events"]]
+    assert advisory in [row["event"] for row in parse_cli_log(trace)["events"]]
 
 
 @pytest.mark.parametrize("value", [True, -1, "12", "unknown", [], {}])
@@ -230,7 +284,7 @@ def test_private_raw_stream_is_distinct_from_bounded_redacted_display(tmp_path, 
     assert cli_stream_bytes(trace, "stderr") == (err if not legacy else err.decode(errors="replace").encode())
 
 
-@pytest.mark.parametrize("phase", ["normalize", "stage", "tool_log"])
+@pytest.mark.parametrize("phase", ["normalize", "stage"])
 def test_post_capture_processing_failure_preserves_existing_evidence(tmp_path, monkeypatch, phase):
     def broken(*_args, **_kwargs):
         raise RuntimeError("synthetic processing failure")
@@ -238,19 +292,13 @@ def test_post_capture_processing_failure_preserves_existing_evidence(tmp_path, m
     env = environment(tmp_path, lambda _: process())
     if phase == "normalize":
         monkeypatch.setattr(codex, "normalize_codex_native_output", broken)
-    elif phase == "stage":
-        monkeypatch.setattr(env.host, "stage_output_bytes", broken)
     else:
-        monkeypatch.setattr(codex, "parse_cli_log", broken)
+        monkeypatch.setattr(env.host, "stage_output_bytes", broken)
     result, trace = execute(env)
     assert cli_stream_bytes(trace, "stdout") == raw_events([message(), terminal()])
     assert result.input_tokens == 12
-    if phase == "tool_log":
-        assert trace["tool_log"]["issues"] == ["normalization_failed:RuntimeError"]
-        assert trace["tool_log"]["tool_calls"] is None
-    else:
-        assert result.terminal_status == "failed" and not result.outputs
-        assert detail(env, result)["failure_code"] == "ADAPTER_CONFORMANCE_FAILED"
+    assert result.terminal_status == "failed" and not result.outputs
+    assert detail(env, result)["failure_code"] == "ADAPTER_CONFORMANCE_FAILED"
 
 
 @pytest.mark.parametrize("failed", [False, True])
@@ -450,18 +498,17 @@ print(json.dumps({{'status':result.terminal_status,'failure':result.failure.fail
      "status": "completed"},
     {"id": "call", "type": "web_search", "query": "fixture query", "action": {"type": "search"}},
 ])
-def test_successful_undeclared_capability_is_not_a_valid_tool_free_result(tmp_path, item):
+def test_tool_events_do_not_override_the_final_result(tmp_path, item):
     events = ([{"type": "item.started", "item": {**item, "status": "in_progress"}}]
               if item["type"] == "mcp_tool_call" else [])
     events += [{"type": "item.completed", "item": item}, message(), terminal()]
     env = environment(tmp_path, lambda _: process(events))
     result, trace = execute(env)
-    assert result.failure.failure_class == "policy_violation" and not result.outputs
-    assert detail(env, result)["failure_code"] == "ADAPTER_POLICY_VIOLATION"
-    assert result.failure.retry_disposition_id == "retry_denied"
-    assert trace["undeclared_tool_effects"][0]["tool_call_id"] == "call"
+    assert result.terminal_status == "completed" and result.failure is None
+    assert "tool_log" not in trace and "undeclared_tool_effects" not in trace
+    assert cli_stream_bytes(trace, "stdout") == raw_events(events)
     assert trace["provider_terminal"]["type"] == "turn.completed"
-    assert not env.host.staged and len(env.calls) == 1
+    assert env.host.staged and len(env.calls) == 1
 
 
 @pytest.mark.parametrize("status,exit_code", [("declined", None), ("failed", None)])
@@ -472,8 +519,8 @@ def test_refused_or_unknown_command_execution_does_not_prove_a_tool_effect(tmp_p
         {"type": "item.completed", "item": item}, message(), terminal()]))
     result, trace = execute(env)
     assert result.terminal_status == "completed"
-    assert trace["undeclared_tool_effects"] == []
-    assert trace["tool_log"]["tool_calls"][0]["status"] == "failed"
+    assert "undeclared_tool_effects" not in trace
+    assert parse_cli_log(trace)["tool_calls"][0]["status"] == "failed"
 
 
 def test_ambiguous_tool_records_do_not_create_execution_facts(tmp_path):
@@ -483,9 +530,10 @@ def test_ambiguous_tool_records_do_not_create_execution_facts(tmp_path):
     env = environment(tmp_path, lambda _: process([event, event, message(), terminal()]))
     result, trace = execute(env)
     assert result.terminal_status == "completed"
-    assert trace["undeclared_tool_effects"] == []
-    assert not trace["tool_log"]["complete"]
-    assert trace["tool_log"]["tool_calls"][0]["status"] == "incomplete"
+    assert "undeclared_tool_effects" not in trace
+    inspected = parse_cli_log(trace)
+    assert not inspected["complete"]
+    assert inspected["tool_calls"][0]["status"] == "incomplete"
 
 
 def test_actual_extra_tool_and_later_provider_failure_both_remain_visible(tmp_path):
@@ -495,10 +543,10 @@ def test_actual_extra_tool_and_later_provider_failure_both_remain_visible(tmp_pa
               {"type": "turn.failed", "error": {"message": "provider stopped"}}]
     env = environment(tmp_path, lambda _: process(events))
     result, trace = execute(env)
-    assert result.failure.failure_class == "provider" and result.failure.retry_disposition_id == "retry_denied"
+    assert result.failure.failure_class == "provider" and result.failure.retry_disposition_id == "retry_allowed"
     assert trace["provider_terminal"]["type"] == "turn.failed"
-    assert trace["undeclared_tool_effects"][0]["failure_code"] == "ADAPTER_POLICY_VIOLATION"
-    assert trace["tool_log"]["tool_calls"][0]["response"]["exit_code"] == 1
+    assert "undeclared_tool_effects" not in trace
+    assert parse_cli_log(trace)["tool_calls"][0]["response"]["exit_code"] == 1
     assert not result.outputs and len(env.calls) == 1
 
 
@@ -509,18 +557,20 @@ def test_declined_command_with_exit_code_is_a_visible_conflict_not_inferred_exec
         {"type": "item.completed", "item": item}, message(), terminal()]))
     result, trace = execute(env)
     assert result.terminal_status == "completed"
-    assert trace["undeclared_tool_effects"] == []
-    assert "conflicting_tool_results:call" in trace["tool_log"]["issues"]
-    assert trace["tool_log"]["tool_calls"][0]["status"] == "incomplete"
+    assert "undeclared_tool_effects" not in trace
+    inspected = parse_cli_log(trace)
+    assert "conflicting_tool_results:call" in inspected["issues"]
+    assert inspected["tool_calls"][0]["status"] == "incomplete"
 
 
-def test_invalid_stdout_bytes_are_retained_and_not_silently_ignored(tmp_path):
+def test_non_result_stdout_bytes_are_archived_without_rejecting_the_final_result(tmp_path):
     raw = b"\xff\xfe\n" + raw_events([message(), terminal()])
     env = environment(tmp_path, lambda _: process(raw=raw))
     result, trace = execute(env)
-    assert result.failure.failure_class == "provider" and not env.host.staged
+    assert result.terminal_status == "completed" and env.host.staged
     assert cli_stream_bytes(trace, "stdout") == raw and trace["byte_capture_exact"]
-    assert trace["provider_stream_issues"][0].startswith("invalid_event:0:")
+    assert not trace["provider_stream_issues"]
+    assert not parse_cli_log(trace)["complete"]
 
 
 # Codex rust-v0.153.4, commit 3d2ee51ca2d5db578f328aa75e20aa22c0197c9a:

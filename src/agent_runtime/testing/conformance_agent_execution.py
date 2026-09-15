@@ -164,7 +164,9 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
     Returns:
         Actual Workflow/node records, child execution records, final output,
         resource cleanup and observed stop reason. Full raw logs are retained in
-        the returned Runtime records; evaluation receives selected actual facts.
+        the returned Runtime records. This explicit example requests Inspection
+        for node and child logs before cleanup; evaluation receives selected
+        actual facts. Ordinary graph dispatch does not parse native tool logs.
         Business acceptance is separate from status=completed. A focused example
         never declares full Runtime conformance or cross-process recovery.
 
@@ -190,6 +192,7 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
         prepare_local_workflow, prepare_local_workflow_module, _run_prepared_workflow_node,
     )
     from ..execution.execution_workflow_evaluation import WorkflowSelfTestResources, LocalWorkflowModuleBridge
+    from ..inspection.inspection_execution_logging import read_execution_log
     from ..foundation.foundation_environment_setup import setup_runtime, load_runtime_config
     from ..invocation.invocation_claude_cli_execution import ClaudeAdapter
     from ..invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
@@ -241,6 +244,16 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
     children, child_lock = [], Lock()
     event_snapshots = []
 
+    def inspected(record):
+        result, = (
+            item for item in ledger.results_for_execution(record["workflow_execution_id"])
+            if item.module_run.module_run_id == record["module_run_id"]
+        )
+        return {**record, "execution_log": read_execution_log(
+            result.module_run, attempts=result.attempts,
+            read_content=artifacts.read_bytes, include_private_content=True,
+        )}
+
     response = {}
     with _retain_cleanup_result(response), tempfile.TemporaryDirectory(prefix="agent-runtime-example-") as directory:
         with WorkflowSelfTestResources(registry=saved.registry, workflow=saved.release, selection=selection,
@@ -281,6 +294,7 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
                             adapter=adapter(child.registry, chosen, artifacts, Path(child_directory)),
                             user_cancel_requested=resources.user_cancel_requested,
                             resource_cancel_requested=session.closed.is_set)
+                        record = inspected(record)
                     with child_lock:
                         children.append({"parent_attempt_id": session.request.attempt_id,
                                          "input_payload": deepcopy(payload["input_payload"]), "record": record})
@@ -315,7 +329,7 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
                         child_evidence = [{"parent_attempt_id": row["parent_attempt_id"],
                             "input_payload": deepcopy(row["input_payload"]), "execution": _evidence(row["record"])} for row in children]
                     return {"criteria": list(_CRITERIA), "evidence": {
-                        "task": deepcopy(task), "tested_agent": _evidence(_latest(records, "tested_agent")),
+                        "task": deepcopy(task), "tested_agent": _evidence(inspected(_latest(records, "tested_agent"))),
                         "child_executions": child_evidence}}
                 raise ValueError("example input mapping has no such node")
 
@@ -363,6 +377,7 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
                 progress = None
                 failure = {"error_type": type(exc).__name__, "detail": str(exc)}
             record = resources.execution_record()
+            record["nodes"] = tuple(inspected(node) for node in record["nodes"])
             status = record["snapshot"]["runtime_status_id"] if failure is None else "failed"
             final_node = "selector" if example_name == EXAMPLE_NAMES[0] else "evaluation_agent"
             final = [row for row in record["nodes"] if row["dispatch"]["current_state_id"] == final_node]

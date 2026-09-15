@@ -18,13 +18,14 @@ from ..contracts.invocation_adapter_definition import (
     AuthorizedAgentExecutionHost, AuthorizedAgentExecutionRequest, AgentExecutionResult, OutputSubmission,
     SelfTestResourceUnavailableError, AgentExecutionAdapterDescriptor,
 )
+from ..foundation.foundation_json_encoding import decode_cli_event
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_context_preparation import InvocationExecutionExpectation, prepare_registered_invocation_context
 from .invocation_process_execution import (
     run_cli_process, CliProcessInterrupted, _capture_cli_interrupts,
     _runtime_python_executable, _runtime_python_read_roots,
 )
-from .invocation_cli_logging import captured_cli_streams, parse_cli_log, decode_cli_event
+from .invocation_cli_logging import captured_cli_streams
 from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
 from .invocation_result_assembly import (
     TerminalAdapterFailure, commit_attempt_trace_json, completed_adapter_result,
@@ -38,7 +39,7 @@ from .invocation_local_resource_preparation import (
     LOCAL_RESOURCES_LOGICAL_NAME, parse_local_resources, materialize_local_resources,
     assert_local_materials_unchanged, validate_local_resources, LocalResourceError,
 )
-from .invocation_local_command_execution import LocalCommandSession, LOCAL_COMMAND_CLI_TOOL_NAME, LOCAL_COMMAND_SERVER_NAME
+from .invocation_local_command_execution import LocalCommandSession, LOCAL_COMMAND_CLI_TOOL_NAME
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError, lease_attempt_workspace, prepare_attempt_workspace,
 )
@@ -62,7 +63,7 @@ def _execution_expectation(profile, adapter_binding=_CURRENT_BINDING) -> Invocat
     if profile.transport_kind != "claude_cli" or profile.provider_id != "anthropic":
         raise ValueError("ClaudeAdapter requires the anthropic claude_cli transport")
     if profile.gateway_access_reasons or profile.semantic_input_delivery_mode in {"gateway_read", "hybrid"}:
-        raise ValueError("ClaudeAdapter lacks a trusted CLI Gateway/MCP bridge; no automatic SDK fallback")
+        raise ValueError("ClaudeAdapter does not support production Gateway access or gateway_read/hybrid input")
     if profile.execution_mode not in {"agent", "tool_free"}:
         raise ValueError("ClaudeAdapter supports agent and tool_free execution")
     if profile.semantic_input_delivery_mode != "inline" or profile.network_policy != "denied":
@@ -93,17 +94,20 @@ class ClaudeAdapter:
 
     Agent and tool_free requests independently select an empty tool set or a
     subset of read/search/shell, no model write area or a private draft, and
-    prompt_only_json or native_structured_output. Frozen permissions are never
+    prompt_only_json or native_structured_output. Agent mode also supports
+    explicitly supplied self-test callbacks through its trusted tool-session
+    factory; that local bridge does not provide production Gateway access.
+    Frozen permissions are never
     inferred from task text, model choice or old saved Profile records. Unsupported
     combinations, including Gateway requests without a CLI bridge, fail before
     provider invocation. The canonical output schema is always validated.
 
-    A tool error or permission denial remains a per-call observation. The Agent
-    can continue within the same configured capabilities and return a valid final
-    response. Initialization outside those capabilities, accurately paired proof
-    of an undeclared tool completing, and protected-material changes still
-    invalidate the Attempt. Missing or ambiguous tool results remain unknown;
-    Shell error text and model summaries never supply an invented policy cause.
+    Tool events and initialization capability descriptions remain in the raw
+    streams. Inspection interprets them on demand; explicit Evaluation judges
+    behavior. This adapter validates the final response and actual Runtime
+    resources without deriving failures or retry decisions from tool logs.
+    Protected-material changes and actual resource failures still invalidate
+    the Attempt.
 
     Concrete model IDs and the CLI [1m] selector are supported. Initialization
     and response-model evidence must agree with the Profile; terminal usage for
@@ -111,11 +115,10 @@ class ClaudeAdapter:
     Auxiliary CLI models never stand in for the requested response model.
     Unresolved aliases, missing evidence and mismatches cannot report success.
 
-    Default SIGINT capture spans provider execution, output validation and log
-    preparation, serialization and resource cleanup. Cancellation before handoff
-    returns the captured Attempt as cancelled, reusing an already committed trace
-    unchanged. Logs are not replaced by a bare interruption error. A signal after
-    final handoff does not undo that result. Custom handlers are not overridden.
+    Default SIGINT capture spans provider execution, output validation, raw
+    archival and resource cleanup. One check after cleanup selects the handoff
+    result using the already committed trace. Diagnostic persistence performs
+    no further cancellation checks. Custom handlers are not overridden.
     """
 
     def __init__(self, *, release_registry: RuntimeReleaseRegistry, artifact_host: ModuleArtifactHost,
@@ -177,7 +180,19 @@ class ClaudeAdapter:
         self.descriptor.validate()
 
     def bind_tool_session_factory(self, factory, definitions):
-        """Bind this Adapter instance to the exact trusted request preparation."""
+        """Attach the self-test callback factory selected during preparation.
+
+        factory supplies definitions and open_session(request); definitions is
+        the exact JSON tool table already frozen for this request. Preparation
+        calls this method, never model-authored task data. It retains the factory
+        and a private copy of the table, but opens no session or CLI process.
+
+        Returns None. A different factory on this Adapter raises PermissionError;
+        a table that differs from factory.definitions raises ValueError. Execution
+        separately validates the exact Profile tools and live resource binding
+        before opening a session. Native tools need no callback factory, and this
+        binding neither issues a domain grant nor enables production Gateway input.
+        """
         from .invocation_tool_definition import tool_definition_records
         if self._tool_factory is not None and self._tool_factory is not factory:
             raise PermissionError("Adapter already belongs to another callback factory")
@@ -239,7 +254,7 @@ class ClaudeAdapter:
 
     def execute(self, request: AuthorizedAgentExecutionRequest,
                 host: AuthorizedAgentExecutionHost) -> AgentExecutionResult:
-        """Resolve exact releases, enforce fields/resources, execute and retain logs.
+        """Execute with exact resources and archive raw streams and final metadata.
 
         Args:
             request: AuthorizedAgentExecutionRequest with exact Module/Profile,
@@ -247,8 +262,9 @@ class ClaudeAdapter:
             host: Trusted operation authorization or live self-test resource host.
         Returns:
             AgentExecutionResult with validated output or an actual typed failure;
-            original streams, observed model, tool facts and limits stay in its
-            trace. Execution completion is not a business approval or verdict.
+            original streams, observed model and actual Runtime resource records
+            stay in its trace. Detailed log parsing belongs to Inspection;
+            execution completion is not a business approval or behavior verdict.
         Raises:
             ValueError: Invalid request, unsupported configuration or identity.
             PermissionError: Missing/expired authorization or live resources.
@@ -306,9 +322,8 @@ class ClaudeAdapter:
 
     def _execute(self, request, host, prepared, cleanup, *, cancellation) -> AgentExecutionResult:
         profile = prepared.profile
-        tools = [NATIVE_TOOLS[name] for name in profile.tool_policy if name in NATIVE_TOOLS]
         result: dict = {}
-        trace: dict = {"transport": "claude_cli", "native_tool_events": [], "public_events": [],
+        trace: dict = {"transport": "claude_cli",
                        "model": profile.model_id, "effort": profile.reasoning_profile,
                        "module_run_id": request.module_run_id, "variant_id": request.variant_id,
                        "attempt_id": request.attempt_id}
@@ -334,33 +349,10 @@ class ClaudeAdapter:
             return {"input_tokens": total, "output_tokens": outgoing,
                     "cache_read_tokens": read, "cache_creation_tokens": created}, invalid
 
-        def retain_tool_log():
-            if "tool_log" in trace:
-                return
-            try:
-                trace["tool_log"] = parse_cli_log(trace)
-            except Exception as exc:
-                # A failed derived view must never prevent the original streams
-                # from reaching the existing private trace commit.
-                trace["tool_log"] = {"schema_version": "runtime_cli_log_v1", "complete": False,
-                    "issues": ["normalization_failed:" + type(exc).__name__], "tool_calls": None, "events": []}
-
-        def inspect_tool_boundary():
-            nonlocal policy_refusal
-            retain_tool_log()
-            for call in trace["tool_log"].get("provider_tool_calls", trace["tool_log"].get("tool_calls")) or ():
-                response = call.get("response")
-                if (call.get("source_kind") == "provider_native" and call.get("status") == "completed"
-                        and call.get("tool_name") not in expected_tools
-                        and len(call.get("request_event_indices", ())) == 1
-                        and isinstance(response, dict) and isinstance(response.get("tool_result"), dict)):
-                    policy_refusal = policy_refusal or "CLI completed an undeclared tool"
-
         def fail(failure_class, failure_code, message, *, retry="retry_denied", cause=None, terminal_status="failed"):
             trace["adapter_failure"] = {"failure_class": failure_class, "failure_code": failure_code,
                 "message": message, "retry_disposition_id": retry, "terminal_status": terminal_status}
             usage, _ = usage_fields()
-            retain_tool_log()
             raise_terminal_failure(
                 artifact_host=self._artifacts, request=request, profile=profile,
                 failure_class=failure_class, failure_code=failure_code, message=message,
@@ -376,54 +368,29 @@ class ClaudeAdapter:
                              if profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT else None)
         except NativeOutputSchemaProjectionError as exc:
             fail("schema", "native_output_schema_projection_unsupported", str(exc), cause=exc)
-        expected_tools = set(tools) | ({"StructuredOutput"} if native_schema is not None else set())
-
         def observe(line: str) -> bool:
-            nonlocal result, policy_refusal, event_error
+            nonlocal result, event_error
             if not line.strip():
                 return True
             try:
                 event = decode_cli_event(line)
-            except ValueError as exc:
-                event_error = str(exc)
-                return False
+            except ValueError:
+                # Raw non-result diagnostics are archived by the process runner.
+                return True
             kind, subtype = event.get("type"), event.get("subtype")
             if kind == "system" and subtype == "init":
-                trace["initialization"] = {key: event.get(key) for key in
-                    ("model", "tools", "permissionMode", "skills", "plugins", "slash_commands", "mcp_servers", "claude_code_version")}
-                servers = event.get("mcp_servers", [])
-                expected_servers = ({LOCAL_COMMAND_SERVER_NAME} if local_commands is not None else set()) | (
-                    {ProviderToolSessionBridge.server_name} if provider_tools is not None else set())
-                servers_valid = (isinstance(servers, list) and len(servers) == len(expected_servers)
-                    and all(isinstance(server, dict) and server.get("status") == "connected" for server in servers)
-                    and {server.get("name") for server in servers} == expected_servers)
-                if set(event.get("tools", [])) != expected_tools or not servers_valid or any(event.get(key) for key in
-                    ("skills", "plugins", "slash_commands")) or (
-                    event.get("permissionMode") != argv[argv.index("--permission-mode") + 1]
-                ):
-                    policy_refusal = "CLI initialized capabilities outside the Profile"
-            elif kind == "system" and subtype == "permission_denied":
-                trace["public_events"].append(event)
+                trace["initialization"] = {key: event.get(key) for key in ("model", "claude_code_version")}
             elif kind == "result":
                 if result:
                     event_error = "CLI returned multiple terminal results"
                 result = event
                 trace["result"] = event
             message = event.get("message")
-            if isinstance(message, dict):
-                if kind == "assistant" and message.get("model"):
-                    models = trace.setdefault("response_models", [])
-                    if message["model"] not in models:
-                        models.append(message["model"])
-                for block in message.get("content", []):
-                    if not isinstance(block, dict):
-                        continue
-                    if block.get("type") == "tool_use":
-                        trace["native_tool_events"].append({"type": "tool_use", "id": block.get("id"),
-                            "name": block.get("name"), "input": block.get("input")})
-                    elif block.get("type") == "tool_result":
-                        trace["native_tool_events"].append(block)
-            return policy_refusal is None and event_error is None
+            if kind == "assistant" and isinstance(message, dict) and message.get("model"):
+                models = trace.setdefault("response_models", [])
+                if message["model"] not in models:
+                    models.append(message["model"])
+            return event_error is None
 
         stage = "workspace_preparation"
         try:
@@ -499,12 +466,10 @@ class ClaudeAdapter:
                     local_commands = cleanup.enter_context(LocalCommandSession(request=request, profile=profile, host=host, adapter=self,
                         artifact_host=self._artifacts, workspace_root=self._workspace_root, resources_body=resources_body,
                         source_root=materials / "source", scratch_root=scratch, read_only_dependencies=self._dependencies))
-                    expected_tools.add(LOCAL_COMMAND_CLI_TOOL_NAME)
                 if self._tool_factory is not None:
                     stage = "provider_tool_preparation"
                     provider_tools = cleanup.enter_context(ProviderToolSessionBridge(request=request, host=host,
                         factory=self._tool_factory, definitions=self._tool_definitions, timeout_seconds=profile.timeout_seconds))
-                    expected_tools.update(provider_tools.cli_tools)
                 settings = {
                     "permissions": {"blockReadsOutsideWorkingDirectories": True,
                         "additionalDirectories": [str(materials), *map(str, read_dependencies)]},
@@ -627,7 +592,6 @@ class ClaudeAdapter:
                     trace["stream_error"] = exc.stream_error
             if event_error:
                 trace["event_error"] = event_error
-            inspect_tool_boundary()
             if isinstance(exc, SelfTestResourceUnavailableError):
                 fail("authorization", "self_test_resources_unavailable", str(exc), cause=exc)
             if policy_refusal:
@@ -654,7 +618,6 @@ class ClaudeAdapter:
             if event_error and trace.get("stop_reason") in (None, "observer_stopped"):
                 fail("provider", "claude_cli_result_missing_or_invalid", event_error, cause=exc)
             fail("transport", "claude_cli_process_failed", str(exc), cause=exc)
-        inspect_tool_boundary()
         if policy_refusal:
             trace["policy_refusal_reason"] = policy_refusal
             fail("policy_violation", "ADAPTER_POLICY_VIOLATION", policy_refusal)
@@ -711,7 +674,6 @@ class ClaudeAdapter:
             # the resource boundary prevents the output becoming consumable.
             fail("authorization", "self_test_resources_unavailable" if request.self_test_binding_ref is not None
                  else "output_authorization_refused", str(exc), cause=exc)
-        retain_tool_log()
         trace_ref, trace_sha256 = commit_attempt_trace_json(self._artifacts, request, trace)
         return completed_adapter_result(profile=profile, request=request, outputs=(submission,),
             tool_operation_ref_ids=(), trace_ref=trace_ref, trace_sha256=trace_sha256,

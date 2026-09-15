@@ -462,7 +462,7 @@ def test_optional_control_does_not_replace_a_missing_required_launch_guard(tmp_p
 
 
 @pytest.mark.parametrize("failure_on", [1, 2])
-def test_late_optional_control_failure_keeps_observed_codex_result(tmp_path, failure_on):
+def test_codex_handoff_checks_control_once_and_keeps_observed_result(tmp_path, failure_on):
     env = cases.environment(tmp_path, lambda _: cases.process())
     env.request = self_test_request(env.request)
     queries = []
@@ -478,10 +478,13 @@ def test_late_optional_control_failure_keeps_observed_codex_result(tmp_path, fai
             return False
     env.host = Host()
     result, trace = cases.execute(env)
-    assert result.terminal_status == "failed" and not result.outputs
-    assert result.failure.failure_class == "dependency_unavailable"
-    assert cases.detail(env, result)["failure_code"] == "ADAPTER_BINDING_UNAVAILABLE"
-    assert "trusted cancellation control unavailable" in cases.detail(env, result)["provider_error_message"]
+    if failure_on == 1:
+        assert result.terminal_status == "failed" and not result.outputs
+        assert result.failure.failure_class == "dependency_unavailable"
+        assert cases.detail(env, result)["failure_code"] == "ADAPTER_BINDING_UNAVAILABLE"
+        assert "trusted cancellation control unavailable" in cases.detail(env, result)["provider_error_message"]
+    else:
+        assert result.terminal_status == "completed" and result.failure is None
     assert result.input_tokens == 12 and result.output_tokens == 5
     assert cases.cli_stream_bytes(trace, "stdout") == cases.raw_events([cases.message(), cases.terminal()])
-    assert len(env.calls) == 1 and len(queries) == failure_on
+    assert len(env.calls) == len(queries) == 1

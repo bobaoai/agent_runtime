@@ -258,8 +258,8 @@ agent-runtime-evaluate --root /path/to/workspace --workflow registered_workflow 
 和同版本 `--help`。调用者提供源工具生成的冻结清单，不把整个宿主 root 隐含交给模型。
 材料复制保持相对目录结构，实际完整 prompt 在保存 envelope 前形成。
 
-当前该资源组合使用 macOS 的 Claude v2。明确 commands 时需安装当前包的 `cli_tools` 可选依赖；
-无 commands 时不加载它。Runtime 的本地 MCP 命令工具取得真实进程退出码与原始输出，普通
+当前该资源组合使用 macOS 的 Claude v3。明确 commands 或任务 callback 时需安装当前包的
+`cli_tools` 可选依赖；没有这两类工具时不加载它。Runtime 的本地 MCP 命令工具取得真实进程退出码与原始输出，普通
 Read/Grep/Bash 仍可使用，未被限制成该命令清单。是否已完成全部必做命令由任务 owner 校验。
 统一日志按真实返回 ID 关联父进程和 CLI 观察；没有配对证据就明确不完整，不能凭命令名猜测。
 
@@ -366,6 +366,12 @@ log = repository.read_execution_log(execution_id, include_private_content=True)
 该接口与持久查询共用同一实现。权限、缺失内容和 hash 不符保留原错误，不扫描目录寻找替代日志。
 历史 trace 未记录新日志格式时明确不完整，不补造数据。Provider 原生调用与 Gateway 授权操作分开展示。
 
+普通运行只处理基本 metadata 与最终 result，归档原始流和 Runtime 实际资源记录，不配对或评价
+工具日志。`read_execution_log(..., include_private_content=True)` 才按需生成详细工具视图；
+默认 False 不读私有正文。旧 trace 已保存的 `tool_log` 保留原解释，新 trace 从原文派生，不回写
+历史。日志缺口只影响视图完整性，不改变 Attempt 状态或重试。显式 evaluation CLI 在临时资源
+清理前调用同一读取接口，返回各次 Attempt 的完整已采集原文与详细视图，再由任务 owner 判断。
+
 工具拒绝与整次执行失败分别记录。Claude 实时拒绝、工具结果与最终拒绝摘要可关联同一准确
 tool_use_id；缺少或冲突的身份保持不完整。Codex 日志保留实际命令、聚合输出、可得退出码和
 Provider 终态；命令失败不自动使整个 turn 失败。文件变更事件只报告路径与变更种类，搜索事件
@@ -376,8 +382,8 @@ Provider 终态；命令失败不自动使整个 turn 失败。文件变更事�
 package version。Adapter revision 表示参数转换与能力合同；本次结果判定修正未改变这些参数。
 旧 Profile、Variant、已提交结果和已保存日志保持原样，不用新 parser 覆盖历史记录。
 
-当前新的执行准备使用 ClaudeAdapter 的 claude_cli_adapter@v2，已注册 Module/Workflow 不因此改变。
-旧 claude_cli_adapter@v1 和 claude_cli_native_tools_executor@v2 记录仍可读，committed 请求可重放；
+当前新的执行准备使用 ClaudeAdapter 的 claude_cli_adapter@v3，已注册 Module/Workflow 不因此改变。
+旧 claude_cli_adapter@v1/v2 和 claude_cli_native_tools_executor@v2 记录仍可读，committed 请求可重放；
 新包不再启动旧绑定。当前调用者先迁移到公共准备接口，再采用新包；旧 Profile/Variant 不被改写。
 准确接口与迁移说明见 [Claude Adapter](agent_runtime_reviewer_api.md#claudeadapter)。
 独立 CLI 审核的助引日志可由 Runtime 的 [parse_cli_log](agent_runtime_reviewer_api.md#parse_cli_log) 解释，

@@ -9,13 +9,14 @@ from threading import Event, Thread
 
 import pytest
 
+from agent_runtime import evaluate_local_workflow_module
 from agent_runtime import Module, RuntimeModulePlugin, prepare_local_workflow_module, register_runtime_module_plugin
 from agent_runtime.execution import execution_local_invocation as local
 from agent_runtime.execution import execution_module_invocation as kernel
 from agent_runtime.contracts.invocation_adapter_definition import AuthorizedAgentExecutionRequest
 from agent_runtime.invocation import invocation_codex_module_invocation as codex
 from agent_runtime.registry import RuntimeReleaseRegistry
-from agent_runtime.testing.execution_local_evaluation import main
+from agent_runtime.testing.conformance_local_evaluation import main
 from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID
 from test_agent_runtime_reviewer_registration_cli import _files
 
@@ -89,7 +90,7 @@ def environment(tmp_path, monkeypatch):
 
 
 def invoke(environment, **changes):
-    return local.evaluate_local_workflow_module(environment[0], "summarize_note", input_payload={},
+    return evaluate_local_workflow_module(environment[0], "summarize_note", input_payload={},
         transport_kind="codex_cli", model_id="gpt-6-astra", reasoning_profile="xhigh",
         cli_path=Path(sys.executable), **changes)
 
@@ -133,14 +134,14 @@ def test_codex_invalid_nonempty_effort_precedes_store_resources_and_process(envi
     class Store:
         register_bundle = forbidden
         load_release_registry = forbidden
-    monkeypatch.setattr(local.tempfile, "TemporaryDirectory", forbidden)
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", forbidden)
     monkeypatch.setattr(private_state, "prepare_codex_environment", forbidden)
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     selection = dict(transport_kind="codex_cli", model_id="gpt-6-astra", reasoning_profile=effort)
     with pytest.raises(ValueError, match="effort|reasoning_profile"):
         prepare_local_workflow_module(root, "summarize_note", release_store=Store(), **selection)
     with pytest.raises(ValueError, match="effort|reasoning_profile"):
-        local.evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+        evaluate_local_workflow_module(root, "summarize_note", input_payload={},
             cli_path=Path(sys.executable), **selection)
     assert touched == resources == calls == adapters == []
     assert _files(root) == before
@@ -174,7 +175,10 @@ def test_public_codex_log_preserves_orphan_progress_without_inventing_execution(
     assert "unpaired_tool_call:c" in attempt["issues"]
     row, = attempt["tool_calls"]
     assert row["status"] == "incomplete" and row["request"] is None and row["response"] is None
-    assert event in [entry["event"] for entry in attempt["provider_log"]["tool_log"]["events"]]
+    from agent_runtime import parse_cli_log
+    assert "tool_log" not in attempt["provider_log"]
+    view = parse_cli_log(attempt["provider_log"])
+    assert event in [entry["event"] for entry in view["events"]]
 
 
 def test_public_codex_cli_resolves_relative_executable_before_actual_attempt_cwd(environment, tmp_path, monkeypatch, capsys):

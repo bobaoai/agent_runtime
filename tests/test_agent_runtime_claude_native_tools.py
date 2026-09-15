@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agent_runtime import parse_cli_log
 from agent_runtime.invocation import invocation_claude_cli_execution as claude
 from agent_runtime.invocation.invocation_process_execution import CliProcessError, CliProcessTimeout
 from agent_runtime.contracts.registry_release_definition import ExecutionProfileRelease, OutputResolutionPolicy
@@ -62,10 +63,10 @@ def test_legacy_self_test_host_without_optional_cancel_port_keeps_guard(tmp_path
 
 
 @pytest.mark.parametrize("failure_on", [1, 2])
-def test_late_optional_control_failure_keeps_observed_claude_result(tmp_path, failure_on):
+def test_claude_handoff_checks_control_once_and_keeps_observed_result(tmp_path, failure_on):
     import test_agent_runtime_native_structured_output as native
     from test_agent_runtime_codex_environment import self_test_request
-    from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+    from agent_runtime.foundation.foundation_json_encoding import cli_stream_bytes
     compiled, registry, cell, _, _ = _environment(tmp_path, tools=(), mode="tool_free", workspace="none")
     prompt = native._evaluation_prompt(cell, compiled, suffix="late_control")
     request = self_test_request(native._direct_adapter_request(compiled, prompt, suffix="late_control"))
@@ -91,13 +92,66 @@ def test_late_optional_control_failure_keeps_observed_claude_result(tmp_path, fa
     adapter = claude.ClaudeAdapter(release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
                                   cli_path=_fake_cli(tmp_path), process_runner=process)
     result = adapter.execute(request, Host())
-    assert result.terminal_status == "failed" and not result.outputs
-    assert result.failure.failure_class == "dependency_unavailable"
-    assert native._direct_failure_detail(result, cell)["failure_code"] == "ADAPTER_BINDING_UNAVAILABLE"
+    if failure_on == 1:
+        assert result.terminal_status == "failed" and not result.outputs
+        assert result.failure.failure_class == "dependency_unavailable"
+        assert native._direct_failure_detail(result, cell)["failure_code"] == "ADAPTER_BINDING_UNAVAILABLE"
+    else:
+        assert result.terminal_status == "completed" and result.failure is None
     assert result.input_tokens == 7 and result.output_tokens == 3
     trace = json.loads(cell.read_bytes(result.cell_local_trace_ref, result.cell_local_trace_sha256))
     assert cli_stream_bytes(trace, "stdout") == raw
-    assert len(calls) == 1 and len(queries) == failure_on
+    assert len(calls) == len(queries) == 1
+
+
+@pytest.mark.parametrize("during_handoff", ["control_error", "late_control_error", "late_cancel", "cleanup_error"])
+def test_failed_result_handoff_saves_one_diagnostic_and_keeps_trace(tmp_path, monkeypatch, during_handoff):
+    from agent_runtime.invocation.invocation_result_assembly import (
+        TerminalAdapterFailure, finalize_adapter_result, raise_terminal_failure,
+    )
+    import test_agent_runtime_native_structured_output as native
+    compiled, _, cell, _, _ = _environment(tmp_path, tools=(), mode="tool_free", workspace="none")
+    prompt = native._evaluation_prompt(cell, compiled, suffix="failure_handoff")
+    request = native._direct_adapter_request(compiled, prompt, suffix="failure_handoff")
+    trace = {"transport": "claude_cli", "stdout": "original provider diagnostic",
+             "adapter_failure": {"failure_class": "dependency_unavailable", "message": "original failure"}}
+    with pytest.raises(TerminalAdapterFailure) as pending:
+        raise_terminal_failure(artifact_host=cell, request=request, profile=compiled.execution_profile,
+            failure_class="dependency_unavailable", failure_code="ADAPTER_BINDING_UNAVAILABLE",
+            message="original failure", provider_response="original provider diagnostic",
+            retry_disposition_id="retry_denied", trace=trace, input_tokens=7, output_tokens=3,
+            defer_failure_detail=True)
+    original = pending.value.result
+    queries, commits = [], []
+    cancelled = False
+    def interruption():
+        queries.append(True)
+        if during_handoff == "control_error" or (during_handoff == "late_control_error" and len(queries) > 1):
+            raise RuntimeError("control unavailable")
+        return cancelled
+    commit = cell.commit_failure_detail
+    def save(**fields):
+        nonlocal cancelled
+        commits.append(fields)
+        cancelled = during_handoff == "late_cancel"
+        return commit(**fields)
+    monkeypatch.setattr(cell, "commit_failure_detail", save)
+    result = finalize_adapter_result(artifact_host=cell, request=request, result=original,
+        pending_failure_detail=pending.value.pending_failure_detail, interruption_requested=interruption,
+        cleanup_error=OSError("cleanup failed") if during_handoff == "cleanup_error" else None,
+        interruption_code="claude_cli_interrupted", cleanup_failure_code="claude_cli_cleanup_failed")
+    assert len(queries) == len(commits) == 1
+    assert result.terminal_status == "failed" and result.outputs == ()
+    assert result.failure.failure_class == ("transport" if during_handoff == "cleanup_error" else "dependency_unavailable")
+    assert result.cell_local_trace_ref == original.cell_local_trace_ref
+    assert result.cell_local_trace_sha256 == original.cell_local_trace_sha256
+    assert json.loads(cell.read_bytes(result.cell_local_trace_ref, result.cell_local_trace_sha256)) == trace
+    assert (result.input_tokens, result.output_tokens) == (7, 3)
+    diagnostic = native._direct_failure_detail(result, cell)
+    assert diagnostic["failure_code"] == ("claude_cli_cleanup_failed" if during_handoff == "cleanup_error"
+                                          else "ADAPTER_BINDING_UNAVAILABLE")
+    if during_handoff in {"late_control_error", "late_cancel"}:
+        assert diagnostic["message"] == "original failure"
 
 
 def _environment(tmp_path, *, tools=("read", "search", "shell"), model="claude-opus-5[1m]", effort="xhigh", material=None, instructions="",
@@ -423,7 +477,7 @@ def test_materials_checked_on_process_completion_and_exception(tmp_path, damage,
 
 
 @pytest.mark.parametrize("surface", ["tools", "skills", "plugins", "slash_commands", "mcp_servers", "permissionMode"])
-def test_unexpected_init_stops_stream(tmp_path, surface):
+def test_init_capability_descriptions_do_not_stop_the_run(tmp_path, surface):
     reached = []
     def events(call):
         initial = _init()
@@ -434,9 +488,35 @@ def test_unexpected_init_stops_stream(tmp_path, surface):
         yield initial
         reached.append(True)
         yield _result()
-    run, _ = _run(_environment(tmp_path), tmp_path, events)
-    assert run.attempts[0].failure_class == "policy_violation"
-    assert reached == []
+    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    _assert_completed_provider_run(run, cell)
+    assert reached == [True]
+    attempt = run.attempts[0]
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert "tool_log" not in trace and "policy_refusal_reason" not in trace
+    assert json.loads(trace["stdout"].splitlines()[0])[surface]
+
+
+@pytest.mark.parametrize("event", ["not-json", {"type": "future_event", "value": [1, 2]},
+    {"type": "assistant", "message": {"content": None}},
+    {"type": "user", "message": {"content": {"type": "tool_result", "unknown": True}}}])
+def test_non_result_events_are_archived_without_a_tool_parser(tmp_path, monkeypatch, event):
+    from agent_runtime.inspection import inspection_execution_logging as inspection
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(True)
+        raise AssertionError("ordinary execution must not parse detailed logs")
+    monkeypatch.setattr(inspection, "parse_cli_log", forbidden)
+    def events(call):
+        yield _init()
+        yield event
+        yield _result()
+    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    _assert_completed_provider_run(run, cell)
+    attempt = run.attempts[0]
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert calls == [] and "tool_log" not in trace
+    assert (event if isinstance(event, str) else json.dumps(event)) in trace["stdout"]
 
 
 @pytest.mark.parametrize("source", ["event", "result", "combined"])
@@ -462,11 +542,13 @@ def test_cli_permission_denial_allows_later_tools_and_output(tmp_path, source, b
     assert attempt.usage.input_tokens == 7 and attempt.usage.output_tokens == 3
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
     assert "policy_refusal_reason" not in trace
-    calls = {item["tool_call_id"]: item for item in trace["tool_log"]["tool_calls"]}
+    assert "tool_log" not in trace
+    inspected = parse_cli_log(trace)
+    calls = {item["tool_call_id"]: item for item in inspected["tool_calls"]}
     assert len(calls) == 2 and calls["denied"]["status"] == "failed"
     assert calls["allowed"]["status"] == "completed"
-    assert trace["tool_log"]["complete"]
-    assert bool(trace["public_events"]) is (source != "result")
+    assert inspected["complete"]
+    assert any(row["event"].get("subtype") == "permission_denied" for row in inspected["events"]) is (source != "result")
 
 
 @pytest.mark.parametrize("source", ["event", "result", "tool_result"])
@@ -481,8 +563,9 @@ def test_unidentified_tool_denial_retains_events_without_inventing_a_call(tmp_pa
     _assert_completed_provider_run(run, cell)
     attempt = run.attempts[0]
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
-    assert not trace["tool_log"]["complete"] and trace["tool_log"]["tool_calls"] == []
-    recorded = [item["event"] for item in trace["tool_log"]["events"]]
+    inspected = parse_cli_log(trace)
+    assert not inspected["complete"] and inspected["tool_calls"] == []
+    recorded = [item["event"] for item in inspected["events"]]
     if source == "result":
         assert recorded[-1]["permission_denials"] == [{"tool_name": "Read"}]
     else:
@@ -520,7 +603,7 @@ def test_normal_denial_does_not_mask_later_execution_failure(tmp_path, ending, e
     attempt = run.attempts[0]
     assert attempt.failure_class == expected and not run.outputs
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
-    assert trace["public_events"] == [_denial("denied")]
+    assert _denial("denied") in [row["event"] for row in parse_cli_log(trace)["events"]]
     assert "permission_denied" in trace["stdout"]
     if ending != "material":
         assert "policy_refusal_reason" not in trace
@@ -528,7 +611,7 @@ def test_normal_denial_does_not_mask_later_execution_failure(tmp_path, ending, e
 
 @pytest.mark.parametrize("outcome", ["denied", "error", "completed", "missing", "missing_id",
                                      "wrong_id", "duplicate_request", "conflicting_results"])
-def test_undeclared_tool_request_requires_unambiguous_success_evidence(tmp_path, outcome):
+def test_tool_event_outcomes_do_not_override_a_valid_final_result(tmp_path, outcome):
     continued = []
     def events(call):
         yield _init(("Read",))
@@ -550,15 +633,13 @@ def test_undeclared_tool_request_requires_unambiguous_success_evidence(tmp_path,
     assert continued == [True]
     attempt = run.attempts[0]
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
-    assert any(item.get("id") == "extra" for item in trace["native_tool_events"])
-    if outcome == "completed":
-        assert attempt.failure_class == "policy_violation" and not run.outputs
-        assert trace["policy_refusal_reason"] == "CLI completed an undeclared tool"
-    else:
-        _assert_completed_provider_run(run, cell)
-        assert "policy_refusal_reason" not in trace
-        if outcome not in {"denied", "error"}:
-            assert trace["tool_log"]["complete"] is False
+    _assert_completed_provider_run(run, cell)
+    assert "tool_log" not in trace and "native_tool_events" not in trace
+    assert "policy_refusal_reason" not in trace
+    inspected = parse_cli_log(trace)
+    assert any(item["tool_call_id"] == "extra" for item in inspected["tool_calls"])
+    if outcome not in {"completed", "denied", "error"}:
+        assert inspected["complete"] is False
 
 
 @pytest.mark.parametrize("verdict", ["non_pass", "blocked"])
@@ -654,24 +735,27 @@ def test_failure_preserves_captured_public_output_and_source_usage(tmp_path, fai
     assert attempt.status == "failed" and not run.outputs
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
     assert json.dumps(source) in trace["stdout"]
-    assert trace["process_output_complete"] is False
+    assert trace["process_output_complete"] is (failure == "invalid_event")
     assert attempt.usage.input_tokens is None and attempt.usage.output_tokens is None
     if failure == "invalid_event":
         assert "invalid-json-line" in trace["stdout"]
 
 
 @pytest.mark.parametrize("bad_event", ["invalid-json", _result()])
-def test_stream_event_error_keeps_provider_failure_and_usage(tmp_path, bad_event):
+def test_terminal_validation_is_separate_from_unrelated_log_errors(tmp_path, bad_event):
     def events(call):
         yield _init()
         yield _result()
         yield bad_event
     run, cell = _run(_environment(tmp_path), tmp_path, events)
     attempt = run.attempts[0]
-    assert attempt.status == "failed" and not run.outputs
-    assert attempt.failure_class == "provider"
-    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
-    assert detail["failure_code"] == "claude_cli_result_missing_or_invalid"
+    if isinstance(bad_event, str):
+        _assert_completed_provider_run(run, cell)
+    else:
+        assert attempt.status == "failed" and not run.outputs
+        assert attempt.failure_class == "provider"
+        detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+        assert detail["failure_code"] == "claude_cli_result_missing_or_invalid"
     assert attempt.usage.input_tokens == 7 and attempt.usage.output_tokens == 3
 
 
@@ -709,14 +793,15 @@ def test_capture_primary_reason_is_not_replaced_by_late_invalid_event(tmp_path, 
     def events(call):
         yield _init()
         yield _result()
-        assert call["on_stdout_line"]("late-invalid-json") is False
+        assert call["on_stdout_line"]("late-invalid-json") is True
         raise CliProcessError(0, call["argv"], stop_reason=primary_reason, message="primary capture failure",
             output="late-invalid-json", stderr="provider diagnostic")
     run, cell = _run(_environment(tmp_path), tmp_path, events)
     attempt = run.attempts[0]
     assert attempt.failure_class == "transport" and not run.outputs
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
-    assert trace["stop_reason"] == primary_reason and trace["event_error"]
+    assert trace["stop_reason"] == primary_reason and "event_error" not in trace
+    assert "late-invalid-json" in trace["stdout"]
     assert trace["exit_code"] == 0 and trace["stderr"] == "provider diagnostic"
     assert attempt.usage.input_tokens == 7
 
@@ -820,7 +905,8 @@ def test_claude_adapter_executes_each_agent_field_combination(tmp_path, tools, w
     assert (trace["executor_adapter_id"], trace["executor_adapter_revision"]) == ("claude_cli_adapter", "v3")
     assert hashlib.sha256(trace["actual_prompt"].encode()).hexdigest() == trace["prompt_envelope_sha256"]
     assert trace["execution_profile_ref"] == run.variants[0].execution_profile_ref
-    assert trace["tool_log"]["complete"]
+    assert "tool_log" not in trace
+    assert parse_cli_log(trace)["complete"]
 
 
 @pytest.mark.parametrize("output_mode", ["prompt_only_json", "native_structured_output"])
@@ -922,8 +1008,9 @@ def test_shell_error_text_does_not_invent_a_policy_denial(tmp_path, detail):
     attempt = run.attempts[0]
     assert attempt.failure_class is None
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
-    assert trace["tool_log"]["complete"] is True
-    call = trace["tool_log"]["tool_calls"][0]
+    inspected = parse_cli_log(trace)
+    assert inspected["complete"] is True
+    call = inspected["tool_calls"][0]
     assert call["status"] == "failed"
     assert call["response"]["tool_result"]["content"] == detail
     assert trace["result"]["permission_denials"] == []
@@ -1034,19 +1121,16 @@ def test_live_claude_native_tools_in_ab(tmp_path):
     assert output["value"] == "tested"
     attempt = run.attempts[0]
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
-    used = {event["name"] for event in trace["native_tool_events"] if event["type"] == "tool_use"}
+    calls = parse_cli_log(trace)["tool_calls"]
+    used = {call["tool_name"] for call in calls}
     assert {"Read", "Grep", "Bash"} <= used
-    shell_commands = [event["input"]["command"] for event in trace["native_tool_events"]
-                      if event["type"] == "tool_use" and event["name"] == "Bash"]
+    shell_commands = [call["request"]["command"] for call in calls if call["tool_name"] == "Bash"]
     assert any("head " in command for command in shell_commands)
     assert any("git diff" in command for command in shell_commands)
-    git_calls = {event["id"] for event in trace["native_tool_events"]
-                 if event["type"] == "tool_use" and event["name"] == "Bash"
-                 and "git diff" in event["input"]["command"] and "cd " in event["input"]["command"]}
+    git_calls = [call for call in calls if call["tool_name"] == "Bash"
+                 and "git diff" in call["request"]["command"] and "cd " in call["request"]["command"]]
     assert git_calls
-    assert any(event["type"] == "tool_result" and event.get("tool_use_id") in git_calls
-               and "diff --git" in str(event.get("content")) and "@@ " in str(event.get("content"))
-               for event in trace["native_tool_events"])
+    assert any("diff --git" in str(call["response"]) and "@@ " in str(call["response"]) for call in git_calls)
     print(json.dumps({"attempt": attempt.attempt_id, "tools": sorted(used), "cli_version": trace["cli_version"]}))
 
 
@@ -1077,7 +1161,8 @@ def test_live_claude_rejects_ab_sibling_read(tmp_path, capture_exit):
     (root / ("captured_denial_trace.json" if capture_exit else "denied_trace.json")).write_text(json.dumps(trace, ensure_ascii=False, indent=2))
     assert _assert_completed_provider_run(run, cell) == {"value": "blocked"}
     assert "policy_refusal_reason" not in trace
-    results = [e for e in trace["native_tool_events"] if e["type"] == "tool_result"]
+    results = [call["response"]["tool_result"] for call in parse_cli_log(trace)["tool_calls"]
+               if isinstance(call["response"], dict) and "tool_result" in call["response"]]
     assert any("not permitted" in str(e["content"]).lower() for e in results)
     assert all("outside_attempt_sentinel" not in str(e["content"]) for e in results)
 
@@ -1137,9 +1222,10 @@ def test_live_claude_resource_boundaries_in_ab(tmp_path, boundary):
             attempt = run.attempts[0]
             trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
             (root / f"boundary_{boundary}_trace.json").write_text(json.dumps(trace, ensure_ascii=False, indent=2))
-            uses = [event for event in trace["native_tool_events"] if event["type"] == "tool_use"]
-            assert any(event["name"] == "Bash" and event["input"].get("command") == command for event in uses)
-            results = [event for event in trace["native_tool_events"] if event["type"] == "tool_result"]
+            calls = parse_cli_log(trace)["tool_calls"]
+            assert any(call["tool_name"] == "Bash" and (call["request"] or {}).get("command") == command for call in calls)
+            results = [call["response"]["tool_result"] for call in calls
+                       if isinstance(call["response"], dict) and "tool_result" in call["response"]]
             assert results, "an attempted command without its result is not boundary evidence"
             assert all("outside_link_sentinel" not in str(event["content"])
                        and "outside_network_sentinel" not in str(event["content"]) for event in results)
@@ -1177,11 +1263,14 @@ def test_live_runtime_continues_after_file_tool_denial(tmp_path, tool):
     attempt = run.attempts[0]
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
     (root / f"file_denial_{tool}.json").write_text(json.dumps(trace, ensure_ascii=False, indent=2))
-    assert _assert_completed_provider_run(run, cell) == {"value": "blocked"}
+    # The registered schema permits an optional note; verify the required verdict
+    # without narrowing the model's valid output to one exact dictionary.
+    assert _assert_completed_provider_run(run, cell)["value"] == "blocked"
     assert "policy_refusal_reason" not in trace
-    assert any(event.get("subtype") == "permission_denied" for event in trace["public_events"])
-    assert "RUNTIME_OUTSIDE_FILE_SENTINEL" not in json.dumps(trace["native_tool_events"])
-    calls = trace["tool_log"]["tool_calls"]
+    inspected = parse_cli_log(trace)
+    assert any(row["event"].get("subtype") == "permission_denied" for row in inspected["events"])
+    calls = inspected["tool_calls"]
+    assert "RUNTIME_OUTSIDE_FILE_SENTINEL" not in json.dumps([call["response"] for call in calls])
     assert any(item["status"] == "failed" and item["tool_name"] == claude.NATIVE_TOOLS[tool] for item in calls)
     assert any(item["status"] == "completed" and item["tool_name"] == claude.NATIVE_TOOLS[tool]
                and str((item["request"] or {}).get("file_path", (item["request"] or {}).get("path", "")))

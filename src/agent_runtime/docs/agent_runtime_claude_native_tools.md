@@ -15,7 +15,8 @@ Python 参数或对象，不要求创建新的配置文件格式。
 | --- | --- | --- |
 | Runtime 与 Python | 安装同一候选版本的 Runtime；运行同版本源码中的 sample | 实际 import 来源与源码一致；安装所选用例需要的 pytest、jsonschema、psycopg 等依赖。直接 Claude CLI 路径不要求 Claude Agent SDK |
 | Claude CLI 与现有登录 | Adapter 的 `cli_path` | 可执行文件的准确路径；认证检查使用这个文件，不自动发起登录 |
-| Python、Git 等工具 | Adapter 的 `read_only_dependencies` | 真实安装目录，包含程序及必要库；当前 Adapter 将这些目录下的 `bin` 加入 PATH，不依赖 Agent 临时寻找程序 |
+| Python 运行环境 | 启动 Runtime 的 `sys.executable` | 使用当前解释器及其只读运行库，不另选 Python 或创建环境 |
+| Git 等额外工具与依赖 | Adapter 的 `read_only_dependencies` | 真实安装目录，包含程序及必要库；Adapter 将这些目录下的 `bin` 加入 PATH，不依赖 Agent 临时寻找程序 |
 | 本次运行位置 | Adapter 的 `workspace_root` | 宿主拥有且可写的专用运行根目录；Runtime 在其下创建 Attempt/work、materials 和 scratch，不把宿主整个仓库默认为可读材料 |
 | 审核材料与任务 | 公共执行入口的 `input_payload` 和授权内容读取接口 | 核心内容与明确辅助材料来自调用方；辅助材料由 Runtime 读取、核验并准备，不由 Adapter 扫描仓库 |
 | 固定定义与本次执行选择 | Runtime 的 prepare_local_workflow_module 返回准确定义、Profile 和 Variant | 先通过 Registration Runbook 注册固定定义，再准备本次选择；相容性由 Runtime 按通用运行要求和真实 Adapter 判断，source 不声明 transport |
@@ -57,9 +58,9 @@ adapters.register(adapter)
 
 project_root、workflow_id 指向准确注册；requested_model/requested_effort 为本次选择，None 使用 Runtime 默认。cell_artifacts、adapters 和 host_* 是已有执行入口的真实资源。通过 run_registered_workflow_module 或 run_workflow_module 消费同一次准备结果，完整参数沿用公共 API。普通自测直接使用 agent-runtime-evaluate，无需手工实例化 Adapter 或提供 PG。
 
-新准备使用 claude_cli_adapter@v2，完整实际输入在 Prompt Envelope 保存前固定。旧
-claude_cli_adapter@v1 和 claude_cli_native_tools_executor@v2 的记录仍按原 bytes/hash 读取，
-已提交请求通过原记录重放；新包不再执行这两个旧 pair，也不将其改写成新绑定。当前宿主入口先迁移
+新准备使用 claude_cli_adapter@v3，完整实际输入在 Prompt Envelope 保存前固定。旧
+claude_cli_adapter@v1/v2 和 claude_cli_native_tools_executor@v2 的记录仍按原 bytes/hash 读取，
+已提交请求通过原记录重放；新包不执行这些旧 pair，也不将其改写成新绑定。当前宿主入口先迁移
 到公共准备接口，再采用新包；需要再次执行时明确准备新的 Profile。新调用的草稿 cwd 和写区均为 scratch。
 
 ## 2. 参数与材料
@@ -76,36 +77,40 @@ model_id 原样传入 CLI，包含 Claude 支持的 `[1m]` 选择形式；不依
 API-key-only beta。CLI 不锁定某一个版本，代码检查所需选项，并在 trace 中记录实际版本。
 新 CLI 的实际行为仍需要相应测试，不能仅凭 `--help` 断言隔离或输出能力。
 
-当前 v2 在 Attempt 的私有目录运行模型；有草稿时 cwd 是 scratch，无草稿时不提供可写 scratch。授权输入按安全的 logical_name 放入只读 materials，
+当前 v3 在 Attempt 的私有目录运行模型；有草稿时 cwd 是 scratch，无草稿时不提供可写 scratch。授权输入按安全的 logical_name 放入只读 materials，
 提供路径索引。只有要求允许草稿时才提供可写 scratch；local_handle 只经过 host 查表。CLI 的 restricted 模式约束 Read/Grep 的
 实际路径，Bash 使用原生 sandbox；运行依赖显式只读提供，网络默认关闭。旧 draft 的隐含工具权限
 不会继续执行，需使用显式工具配置。
 
 所有 argv 由同一 Adapter 转换逻辑组装，实际调用使用它；输入经 stdin，settings 仅来自已验证资源，调用方不透传任意参数/JSON。命令与生效配置记录在 trace 中。
-原生 Bash 中可使用 head、git diff、ls、grep 等普通命令，不设命令白名单。未提供记录型命令时，safe-mode 关闭自动加载的
-CLAUDE.md、Skills、Plugins 和 hooks，MCP 与会话持久化也关闭；提供 commands 的分支使用下述显式 MCP 配置。原生工具会话的临时目录由 Runtime 独立创建，退出后清理。原始任务、工具记录、实际配置与
+原生 Bash 中可使用 head、git diff、ls、grep 等普通命令，不设命令白名单。未提供记录型命令或任务 callback 时，safe-mode 关闭自动加载的
+CLAUDE.md、Skills、Plugins 和 hooks，MCP 与会话持久化也关闭；提供 commands 或 callback 时使用显式 MCP 配置。原生工具会话的临时目录由 Runtime 独立创建，退出后清理。原始任务、工具记录、实际配置与
 结果通过现有私有 trace 和 Ledger 返回；已授权存储才持久保存，无 PG 自测不承诺跨进程恢复。执行失败与 Reviewer 的 non_pass 分开解释。
 
-目前 CLI 没有可信 Gateway/MCP 进程桥；显式要求该资源时调用前准确拒绝，不丢弃工具。Runtime 不提供 Claude SDK 执行路径或 fallback。将来接桥仍由同一 Adapter 消费可信工具 session，不能直接透传 task 中的 mcp-config。
+当前 CLI 支持 Runtime 本地命令与明确自测 callback 的进程桥；callback 的定义和资源由可信
+tool-session factory 提供，不从任务 JSON 加载服务。该能力不等于生产领域 Gateway 已接通：
+当前生产 Gateway/hybrid 输入请求仍在调用前报告不支持。Runtime 不提供 Claude SDK 执行路径或
+fallback，也不直接透传任务中的 mcp-config。准确边界见 ClaudeAdapter 的 docstring。
 
 输出方式来自准确 Profile：prompt_only_json 不传 --json-schema，native_structured_output 使用现有 schema projection；返回都按完整 canonical schema 校验，失败不自动切换方式。timeout 控制进程期限；max_attempts 留在 Runtime Policy，不被翻译成 CLI turn 或费用预算。
 
 私有 trace 中的 exit_code 保留操作系统实际返回值；无法取得时为 null。Runtime 中止读取时，
-stop_reason 单独说明事件观察停止、事件流错误、输出超限、超时或清理失败；cleanup_error 保留
-附加清理诊断。即使 exit_code 为 0，中止或不完整捕获仍形成失败，不提交成功输出。
-stream_error 和 event_error 保留附加的流处理或事件解析诊断，不覆盖已确定的 stop_reason。
+stop_reason 单独说明进程中止、输出超限、超时或清理失败；cleanup_error 保留附加清理诊断。
+exit_code 为 0 不代替 Provider 整体终态、最终结果和 canonical schema 检查。
+普通运行只解释这些必要结果条件；未知非结果日志不使合法最终输出失效，也不从工具错误推断
+权限原因。附加流处理诊断不覆盖已确定的进程停止原因。
 stdout/stderr 保留有界原始输出，process_output_complete=false 表示它们不能视为完整轨迹。
 自定义 process_runner 仍可使用标准 subprocess 异常；Runtime runner 的停止和超时异常分别
 兼容 CalledProcessError 和 TimeoutExpired，不能将 Runtime 停止原因解释为进程退出码。
 
 CLI 使用 auto 模式处理其内置的确认判断，不使用 bypassPermissions；文件与网络窗口继续强制执行。
 CLI 返回的 permission_denied、permission_denials 和普通工具错误逐次保留。Agent 可以在原有
-权限范围内处理错误并继续形成有效结果；它们本身不使 Attempt 失败。未声明工具的请求与实际
-执行分别判断：被拒绝的请求可以继续，准确配对的结果证明未声明能力成功执行时拒收输出。
-初始化实际能力冲突、材料真实改变、Provider 整体失败、超时、取消和输出无效仍按各自原因失败。
-缺少或矛盾的工具事件明确标为不完整，不从错误正文或模型描述编造 ID、权限原因或实际效果。
+权限范围内处理错误并继续形成有效结果；它们本身不使 Attempt 失败。启动前按 Profile 配置工具、
+网络和工作区，普通运行不比较初始化工具清单或扫描工具日志来拒收输出。材料完整性、实际
+资源授权、Provider 整体失败、超时、运行中取消和输出无效仍按各自合同处理。
+Inspection 在明确请求详细日志时标明缺少或矛盾的事件，不从错误正文或模型描述编造 ID、权限原因或实际效果。
 因此 completed 不表示每个工具都成功；业务 non_pass/blocked 也可以是正常完成的审核结果。
-实际 permissionMode 与请求值一致才继续。Git/Python 由宿主显式提供真实运行目录，避免命中系统启动
+配置效果由明确的能力测试验证。Git/Python 使用实际运行环境，避免命中系统启动
 代理；Git 不加载用户或系统配置。trace 同时保存 argv 与安全环境值，便于复现，不依赖 Agent 临时修环境。
 
 ### 2.1 明确的本地工程资源与命令记录
@@ -120,14 +125,20 @@ command_id 选择本次已经提供的命令；原生 Read/Grep/Bash 保留。�
 在 macOS sandbox-exec 内执行该命令，保存实际 argv/cwd/returncode、stdout/stderr 与原始 bytes。
 IPC 代理和控制目录不进入模型或命令可读范围。这是本地资源工具，不是领域 Gateway 或生产 grant。
 
-该分支需要 `cli_tools` 可选依赖，使用 restricted、空 setting-sources、strict 单 server MCP，
-以及明确的 memory/hooks/plugins 限制。safe-mode 会关闭 MCP，因此不用于带 commands 的分支；
-普通无 commands 路径继续 safe-mode。首次接入或 CLI/配置变化时须真实核对初始化与允许/拒绝效果，
-不能仅凭 help 声称 MCP/OAuth 与隔离成立；实际管理配置冲突仍拒绝，不增加绕过开关。
+命令与 callback 进程桥需要 `cli_tools` 可选依赖，使用 restricted、空 setting-sources、strict MCP，
+仅加载本次对应服务，以及明确的 memory/hooks/plugins 限制。safe-mode 会关闭 MCP，因此不用于
+这些桥接分支；只有原生工具或无工具时继续 safe-mode。首次接入或 CLI/配置变化时，在明确的
+能力测试中核对初始化与允许/拒绝效果；不能仅凭 help 声称隔离成立，也不增加绕过开关。
 
-统一日志仅在实际返回的 local_call_id 与父进程事实唯一一致时合并为一次调用，同时保留 Provider
+Adapter 在原始 trace 的 local_command_calls/local_callback_calls 保留实际资源请求与结果。
+Inspection 按需生成统一日志，仅在实际返回的 local_call_id 与父进程事实唯一一致时合并为一次调用，同时保留 Provider
 调用 ID、事件位置和原生观察。普通非零/超时是工具结果；资源、材料或必需记录失效另行阻止提交。
 缺失、矛盾或未配对的观察明确不完整，业务 owner 决定是否完成必做命令，不从模型文字补造退出码。
+
+通过 `read_execution_log` 查询时，默认只返回 metadata；明确 include_private_content=True 才读取
+原文并解析详细工具视图。旧 trace 的 tool_log 保留原解释，新原始日志按需解析而不回写。日志视图
+不改写 Attempt 的成功、失败或重试；显式自测 CLI 返回完整视图供后续评价。资源清理后的失败
+交接最多保存一次诊断，诊断写入期间的晚到取消不触发二次分类；实际运行中的取消仍保留。
 
 ## 3. 重复验证
 

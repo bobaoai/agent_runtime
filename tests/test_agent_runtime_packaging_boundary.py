@@ -210,7 +210,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
         from agent_runtime.registry.registry_release_compilation import (
             ExecutionProfileReleaseSpec, compile_execution_profile_release)
         from agent_runtime.registry.registry_local_persistence import main as registry_main
-        from agent_runtime.testing.execution_local_evaluation import main as evaluation_main
+        from agent_runtime.testing.conformance_local_evaluation import main as evaluation_main
         from agent_runtime.invocation.invocation_result_assembly import completed_adapter_result
         from agent_runtime.contracts.invocation_adapter_definition import OutputSubmission
 

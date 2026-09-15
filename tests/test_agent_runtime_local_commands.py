@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_runtime import evaluate_local_workflow_module
 from agent_runtime.contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
 from agent_runtime.invocation.invocation_local_command_execution import LocalCommandSession, LOCAL_COMMAND_CLI_TOOL_NAME
 from agent_runtime.invocation.invocation_local_command_mcp import exchange
@@ -621,7 +622,7 @@ def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monk
     # the Adapter itself is an ordinary test specialization of its existing port.
     monkeypatch.setattr(claude, "ClaudeAdapter", TestAdapter)
     monkeypatch.setattr(kernel, "_authorize_model_attempt", lambda **_: pytest.fail("No Product authority for this self-test"))
-    record = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
+    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
         material_root=tree, material_files=({"relative_path": "candidate.py", "sha256": hashlib.sha256(original).hexdigest(), "executable": False},),
         read_only_dependencies=(Path(sys.base_prefix).resolve(),), commands=(command("unit", "print('real command')"),))
     assert record["status"] == ("failed" if cleanup_failure else "completed"), record["failure_detail"]

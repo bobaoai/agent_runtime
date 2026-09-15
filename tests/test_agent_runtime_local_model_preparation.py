@@ -4,10 +4,12 @@ import hashlib
 import json
 import os
 import subprocess
+import tempfile
 from unittest.mock import patch
 
 import pytest
 
+from agent_runtime import evaluate_local_workflow_module
 from agent_runtime import (
     ModuleReviewer, RuntimeModulePlugin, load_runtime_registration,
     prepare_local_workflow_module, register_runtime_module_plugin, run_registered_workflow_module,
@@ -131,7 +133,7 @@ def test_requested_gateway_requires_cli_bridge_before_resources_or_provider():
     requirements = _requirements(semantic_input_delivery_mode="gateway_read", attempt_workspace_policy="none",
         tool_policy=("read_source",), network_policy="gateway_only",
         gateway_access_reasons=("external_fact_verification",))
-    with pytest.raises(ValueError, match="trusted CLI Gateway/MCP bridge"):
+    with pytest.raises(ValueError, match="production Gateway access"):
         local._execution_profile_for_requirements(requirements)
 
 
@@ -191,7 +193,7 @@ def test_public_resources_freeze_tree_and_exact_prompt_with_host_defaults(tmp_pa
         (tree / "pkg/value.py").write_text("changed only after capture\n")
         assert (materials / "source/pkg/value.py").read_bytes() == body
     calls = _observe_resource_evaluation(monkeypatch, inspect)
-    record = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={}, material_root=tree,
+    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={}, material_root=tree,
         material_files=({"relative_path": "pkg/value.py", "sha256": hashlib.sha256(body).hexdigest(), "executable": False},))
     assert record["status"] == "completed", record["failure_detail"]
     assert len(calls) == 1 and len(record["input_bindings"]) == 2 and _files(root) == before
@@ -207,7 +209,7 @@ def test_unused_or_cleared_host_dependencies_do_not_open_resources(tmp_path, mon
         "provider_cli_paths": {"claude_cli": "unused/missing"},
         "read_only_dependencies": ["unused/library"]}))
     calls = _observe_resource_evaluation(monkeypatch, lambda fields: None, tools=tools)
-    result = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+    result = evaluate_local_workflow_module(root, "summarize_note", input_payload={},
         cli_path=_fake_cli(tmp_path), read_only_dependencies=explicit_dependencies)
     assert result["status"] == "completed", result["failure_detail"]
     assert len(calls) == 1 and len(result["input_bindings"]) == 1
@@ -218,9 +220,9 @@ def test_invalid_material_hash_is_rejected_before_attempt_resources(tmp_path, mo
     tree = tmp_path / "tree"
     tree.mkdir()
     (tree / "value.txt").write_text("current data")
-    monkeypatch.setattr(local.tempfile, "TemporaryDirectory", lambda *a, **kw: pytest.fail("no Attempt for invalid input"))
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", lambda *a, **kw: pytest.fail("no Attempt for invalid input"))
     with pytest.raises(ValueError):
-        local.evaluate_local_workflow_module(root, "summarize_note", input_payload={}, material_root=tree,
+        evaluate_local_workflow_module(root, "summarize_note", input_payload={}, material_root=tree,
             material_files=({"relative_path": "value.txt", "sha256": "a"*64, "executable": False},))
 
 
@@ -235,7 +237,7 @@ def test_staged_tree_mutation_is_rejected_and_keeps_provider_log(tmp_path, monke
         target.chmod(0o600)
         target.write_text("real changed bytes")
     calls = _observe_resource_evaluation(monkeypatch, mutate)
-    record = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={},
         cli_path=_fake_cli(tmp_path), material_root=tree,
         material_files=({"relative_path": "value.txt", "sha256": hashlib.sha256(body).hexdigest(), "executable": False},))
     assert record["status"] == "failed" and record["output"] is None
@@ -275,7 +277,7 @@ def test_public_command_execution_and_cli_observations_share_one_verified_log(tm
         result.stdout_bytes, result.stderr_bytes = result.stdout.encode(), b""
         return result
     monkeypatch.setattr(claude, "ClaudeAdapter", lambda **kwargs: adapter_type(**kwargs, process_runner=process))
-    record = local.evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
+    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
         commands=({"command_id": "ok", "argv": ["/usr/bin/printf", "real command stdout"], "cwd": "scratch/run", "timeout_seconds": 5},
                   {"command_id": "bad", "argv": ["/usr/bin/false"], "cwd": "source", "timeout_seconds": 5}))
     assert record["status"] == "completed", record["failure_detail"]
