@@ -154,26 +154,61 @@ def prepare_local_workflow_module(
     if (len(workflow.nodes) != 1 or workflow.nodes[0].node_kind is not WorkflowNodeKind.MODULE
             or workflow.initial_node_id != workflow.nodes[0].node_id):
         raise ValueError("local preparation requires one Workflow Module entry node")
-    node = workflow.nodes[0]
-    module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
-    requirements = module.get_execution_requirements()
-    if requirements is None:
-        raise ValueError("Independent model preparation requires frozen Module execution requirements; historical Profiles are not defaults")
-    saved.registry.assert_module_execution_allowed(module, ModuleExecutionPurpose.EVALUATION)
+    return _prepare_loaded_workflow(saved, transport_kind=transport_kind, model_id=model_id,
+        reasoning_profile=reasoning_profile, release_store=release_store)
+
+
+def prepare_local_workflow(
+    root: Path, workflow_id: str, *, version: str | None = None,
+    transport_kind: str | None = None, model_id: str | None = None,
+    reasoning_profile: str | None = None, release_store=None,
+) -> tuple[LoadedRuntimeRegistration, ExecutionVariantPolicyRelease]:
+    """Prepare every Agent node through the same model conversion as one node.
+
+    Arguments and store effects follow prepare_local_workflow_module. Reads the
+    root/latest selection once, preserves the exact graph and creates bindings
+    only for its Module nodes. Each node must have frozen execution requirements;
+    zero-operation deterministic nodes use existing lower-level explicit
+    Profile/Adapter assembly, not a fabricated model binding. No provider call,
+    registration-source reload, production Gateway support or .runtime write.
+    Returns the same (LoadedRuntimeRegistration, exact Variant Policy) pair.
+    """
+    saved = load_runtime_registration(root, "workflow", workflow_id, version)
+    return _prepare_loaded_workflow(saved, transport_kind=transport_kind, model_id=model_id,
+        reasoning_profile=reasoning_profile, release_store=release_store)
+
+
+def _prepare_loaded_workflow(saved, *, transport_kind, model_id, reasoning_profile, release_store):
+    workflow = saved.release
     saved.registry.assert_workflow_execution_allowed(workflow, ModuleExecutionPurpose.EVALUATION)
     fixed = _closure(saved.registry, workflow, supplied_variants=())
-    profile = _execution_profile_for_requirements(requirements, transport_kind=transport_kind,
-        model_id=model_id, reasoning_profile=reasoning_profile)
-    try:
-        _assert_admitted_test_evaluation_profile(module, profile)
-    except NotImplementedError as exc:
-        raise ValueError(str(exc)) from exc
+    profiles, bindings = {}, []
+    for node in workflow.nodes:
+        if node.node_kind is not WorkflowNodeKind.MODULE:
+            continue
+        module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
+        requirements = module.get_execution_requirements()
+        if requirements is None:
+            raise ValueError("Independent model preparation requires frozen Module execution requirements; historical Profiles are not defaults")
+        saved.registry.assert_module_execution_allowed(module, ModuleExecutionPurpose.EVALUATION)
+        profile = _execution_profile_for_requirements(requirements, transport_kind=transport_kind,
+            model_id=model_id, reasoning_profile=reasoning_profile)
+        try:
+            _assert_admitted_test_evaluation_profile(module, profile)
+        except NotImplementedError as exc:
+            raise ValueError(str(exc)) from exc
+        profiles[profile.release_ref] = profile
+        bindings.append(ExecutionVariantProfileBindingCandidate(node.node_id, profile.release_ref, profile.release_sha256))
+    if not bindings:
+        raise ValueError("model preparation requires at least one Agent Module node")
+    identity = ({"workflow": workflow.release_sha256, "profile": profile.release_sha256} if len(bindings) == 1 else
+                {"workflow": workflow.release_sha256, "profiles": [asdict(item) for item in bindings]})
     variant = compile_execution_variant_policy_release(ExecutionVariantPolicyReleaseCandidate(
         policy_id=workflow.workflow_id + "_variant",
-        policy_version=content_version({"workflow": workflow.release_sha256, "profile": profile.release_sha256}),
+        policy_version=content_version(identity),
         origin_kind="workflow", origin_release_ref=workflow.release_ref,
         origin_release_sha256=workflow.release_sha256,
-        bindings=(ExecutionVariantProfileBindingCandidate(node.node_id, profile.release_ref, profile.release_sha256),),
+        bindings=tuple(bindings),
     ))
     schemas = {item.release_ref: item for item in fixed.schema_assets}
     schema = next(item for item in runtime_owned_policy_schema_assets()
@@ -181,7 +216,7 @@ def prepare_local_workflow_module(
                   and item.schema_sha256 == variant.policy_schema_sha256)
     schemas[schema.release_ref] = schema
     bundle = replace(fixed, schema_assets=tuple(schemas.values()),
-                     execution_profiles=(profile,), execution_variant_policies=(variant,))
+                     execution_profiles=tuple(profiles.values()), execution_variant_policies=(variant,))
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(bundle)
     if release_store is not None:
@@ -206,6 +241,7 @@ def evaluate_local_workflow_module(
     reasoning_profile: str | None = None, cli_path: Path | str | None = None,
     material_root: Path | None = None, material_files: tuple[dict, ...] = (),
     read_only_dependencies: tuple[Path, ...] | None = None, commands: tuple[dict, ...] = (),
+    tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None,
 ) -> dict:
     """Evaluate a registered single-node Workflow using temporary test resources.
 
@@ -260,6 +296,15 @@ def evaluate_local_workflow_module(
             Claude's local command tool records actual process results for these IDs; ordinary native Bash remains
             available independently. Required/expected business outcomes belong
             to the task input and its validator, not these resource definitions.
+        tool_session_factory: Optional trusted in-process factory with read-only
+            definitions and open_session(request). Definitions are frozen into
+            the prompt and live resources before opening the session. Only the
+            exact non-native tool_policy set is accepted. No import locator or
+            serialized factory is read from task data, config or resources JSON.
+        user_cancel_requested: Optional trusted callback for real user/workflow
+            cancellation, also passed to the underlying running CLI process.
+        resource_cancel_requested: Optional trusted callback for parent resource
+            closure. Stops the process as resource_closed, not user cancellation.
     Returns:
         JSON-compatible execution facts and output. provider_trace retains the
         observed response models and diagnostics. persistence is not_requested;
@@ -346,28 +391,86 @@ def evaluate_local_workflow_module(
         else:
             adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
                 workspace_root=workspace, codex_bin=str(executable))
-        adapters = AgentExecutionAdapterRegistry()
-        adapters.register(adapter)
-        request, module, profile, _, _ = _prepare_registered_workflow_module(
-            module_id=module.module_id, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
-            release_registry=saved.registry, workflow=workflow, variant_policy=selection,
-            artifact_host=artifacts, local_resources=resource_body)
-        _assert_registered_module_adapter(module, profile, adapters)
-        resources = ModuleSelfTestResources(request=request, workflow=workflow, variant=selection,
-            registry=saved.registry, adapter=adapter, artifact_host=artifacts, ledger=ledger, workspace_root=workspace)
-        try:
-            result = run_workflow_module(request, release_registry=saved.registry, adapters=adapters,
-                artifact_host=artifacts, ledger=ledger, self_test=resources)
-            attempt = result.attempts[-1]
-            def content(ref, digest):
-                return json.loads(artifacts.read_bytes(ref, digest))
-            output = None
-            if attempt.status == "completed":
-                if len(result.outputs) != 1:
-                    raise ValueError("Module evaluation requires one schema-valid output")
-                item = result.outputs[0]
-                output = content(item.output_ref, item.output_sha256)
-            return {"module_release_ref": module.release_ref, "module_release_sha256": module.release_sha256,
+        _, record = _run_prepared_workflow_node(registry=saved.registry, workflow=workflow,
+            selection=selection, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
+            artifact_host=artifacts, ledger=ledger, workspace_root=workspace, adapter=adapter,
+            local_resources=resource_body, tool_session_factory=tool_session_factory,
+            user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested)
+        return record
+
+
+def _run_prepared_workflow_node(
+    *, registry, workflow, selection, input_payload, idempotency_key,
+    artifact_host, ledger, workspace_root, adapter, node_id=None,
+    workflow_execution_id=None, dispatch_id=None, module_run_id=None,
+    workflow_resources=None, local_resources=None, attempt_ordinal=1, parent_attempt_id=None,
+    tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None,
+):
+    """Execute an exact prepared node using shared stores and a private workspace.
+
+    The graph host supplies all four node/execution/dispatch/run identities and
+    live workflow_resources. That parent must implement require_active() and
+    check_node_scope(request, workflow, variant, registry, artifact_host, ledger,
+    workspace_root) as keyword arguments, checking the admitted dispatch and
+    exact shared objects. No root lookup, model selection or registration occurs.
+    Omit all identities only for the existing single-node convenience entry.
+
+    Returns (ModuleRunResult, JSON-compatible evaluation facts including logs).
+    Closes this node's resource binding after capturing its logs; the caller
+    owns the workspace and shared-store lifecycle. No PG or production grant.
+    """
+    from ..ledger.ledger_execution_logging import read_execution_log
+    from ..invocation.invocation_tool_definition import tool_definition_records
+
+    for name, callback in (("user_cancel_requested", user_cancel_requested), ("resource_cancel_requested", resource_cancel_requested)):
+        if callback is not None and not callable(callback):
+            raise ValueError(name + " must be a trusted callable or None")
+
+    if workflow_resources is not None:
+        workflow_resources.require_active()
+    target = workflow.initial_node_id if node_id is None else node_id
+    nodes = [item for item in workflow.nodes if item.node_id == target]
+    if len(nodes) != 1:
+        raise ValueError("prepared execution must select an exact Workflow node")
+    module = registry.get_module(nodes[0].module_release_ref, nodes[0].module_release_sha256)
+    definitions = tool_definition_records(tool_session_factory.definitions) if tool_session_factory is not None else []
+    binding = next(item for item in selection.policy_document()["bindings"] if item["position_id"] == target)
+    selected_profile = registry.get_execution_profile(binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
+    callbacks = set(selected_profile.tool_policy) - {"read", "search", "shell"}
+    if {item["name"] for item in definitions} != callbacks:
+        raise ValueError("callback definitions must match the exact non-native Profile tools")
+    if tool_session_factory is not None and not callbacks:
+        raise ValueError("unused callback factory is not permitted")
+    if tool_session_factory is not None:
+        adapter.bind_tool_session_factory(tool_session_factory, definitions)
+    request, module, profile, _, _ = _prepare_registered_workflow_module(
+        module_id=module.module_id, input_payload=input_payload, idempotency_key=idempotency_key,
+        release_registry=registry, workflow=workflow, variant_policy=selection,
+        artifact_host=artifact_host, local_resources=local_resources,
+        workflow_node_id=node_id, workflow_execution_id=workflow_execution_id,
+        dispatch_id=dispatch_id, module_run_id=module_run_id,
+        attempt_ordinal=attempt_ordinal, parent_attempt_id=parent_attempt_id, tool_definitions=definitions)
+    adapters = AgentExecutionAdapterRegistry()
+    adapters.register(adapter)
+    _assert_registered_module_adapter(module, profile, adapters)
+    resources = ModuleSelfTestResources(request=request, workflow=workflow, variant=selection,
+        registry=registry, adapter=adapter, artifact_host=artifact_host, ledger=ledger,
+        workspace_root=workspace_root, workflow_resources=workflow_resources,
+        tool_session_factory=tool_session_factory, tool_definitions=definitions,
+        user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested)
+    try:
+        result = run_workflow_module(request, release_registry=registry, adapters=adapters,
+            artifact_host=artifact_host, ledger=ledger, self_test=resources)
+        attempt = result.attempts[-1]
+        def content(ref, digest):
+            return json.loads(artifact_host.read_bytes(ref, digest))
+        output = None
+        if attempt.status == "completed":
+            if len(result.outputs) != 1:
+                raise ValueError("Module evaluation requires one schema-valid output")
+            item = result.outputs[0]
+            output = content(item.output_ref, item.output_sha256)
+        record = {"module_release_ref": module.release_ref, "module_release_sha256": module.release_sha256,
                 "workflow_release_ref": workflow.release_ref, "workflow_release_sha256": workflow.release_sha256,
                 "execution_profile_ref": profile.release_ref, "execution_profile_sha256": profile.release_sha256,
                 "execution_variant_ref": selection.release_ref, "execution_variant_sha256": selection.release_sha256,
@@ -381,13 +484,14 @@ def evaluate_local_workflow_module(
                 "failure_detail": content(attempt.failure_detail_ref, attempt.failure_detail_sha256)
                     if attempt.failure_detail_ref is not None else None,
                 "usage": attempt.usage.as_dict(), "execution_trace": asdict(result),
-                "execution_log": read_execution_log(result.module_run, attempts=result.attempts, read_content=artifacts.read_bytes,
+                "execution_log": read_execution_log(result.module_run, attempts=result.attempts, read_content=artifact_host.read_bytes,
                                                      include_private_content=True),
                 "self_test_binding": json.loads(resources._body),
                 "provider_trace": content(attempt.provider_trace_ref, attempt.provider_trace_sha256)
                     if attempt.provider_trace_ref is not None else None}
-        finally:
-            resources.close()
+        return result, record
+    finally:
+        resources.close()
 
 
 def run_local_workflow_module(root: Path, workflow_id: str, *, version: str | None = None,

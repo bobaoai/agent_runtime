@@ -1,10 +1,29 @@
 # Changelog
 
-All notable changes to Agent Runtime are recorded here. The project remains at
-`0.2.0.dev0`; entries below describe the first standalone development line and
-may require a clean development database before the first public release.
+Notable changes to the standalone development line are recorded here. The
+current package version is declared in pyproject.toml. Earlier entries describe
+historical implementations, not the current executable adapter support matrix.
 
 ## Unreleased
+
+### 0.2.0.dev5: local multi-Agent evaluation
+
+- Common model preparation for registered Agent graphs; the existing single-node
+  entry retains its exact preparation behavior.
+- Process-local graph execution through the existing Coordinator and Module
+  kernel, including parallel joins, revision, matching wait events, replay and
+  cancellation with retained node facts. This is not cross-process durability.
+- Claude CLI adapter v3 exposes only explicitly bound self-test callback tools
+  through a strict request-scoped MCP bridge. Native tools and fixed command
+  execution remain separate capabilities; ordinary tool refusal is a per-call
+  result. Production Gateway remains unavailable, and no Claude SDK is used.
+- The same agent-runtime-evaluate command can run packaged capability and
+  independent-evaluation examples. Agent-requested child review is distinguished
+  from outer graph orchestration; actual logs and child results are returned.
+- Public API, CLI help and capability runbook describe the same execution
+  interfaces. Historical Profile bytes and committed results are not rewritten.
+
+## Earlier standalone development line
 
 ### Claude CLI execution and client API
 

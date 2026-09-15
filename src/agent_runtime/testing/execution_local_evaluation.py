@@ -7,8 +7,13 @@ import sys
 from ..execution.execution_local_invocation import evaluate_local_workflow_module
 
 
-def build_parser():
-    """Declare the actual evaluation arguments used by help and generated docs."""
+def build_parser(*, require_workflow=True, require_input=True):
+    """Declare execution arguments; a composed test CLI may supply its own target.
+
+    Defaults retain the registered single-node command. A composing caller that
+    disables either required argument must validate its own mutually exclusive
+    target before invoking an execution function. This builder performs no IO.
+    """
     parser = argparse.ArgumentParser(
         description="Evaluate one registered single-Module Workflow with its frozen requirements and an independent model. Supports empty or selected native tools. No PG or production authorization.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -24,9 +29,9 @@ def build_parser():
                 "Full run profile and API fields: start at agent_runtime/README.md\n"
                 "Portable review CLIs prepare/validate review objects; they are separate from Runtime CLIs."))
     parser.add_argument("--root", required=True, type=Path, help="Root containing .runtime definitions; not a model read root.")
-    parser.add_argument("--workflow", required=True, help="Registered single-node Workflow ID.")
+    parser.add_argument("--workflow", required=require_workflow, help="Registered single-node Workflow ID.")
     parser.add_argument("--version", help="Exact version; omit for the latest registered new definition.")
-    parser.add_argument("--input", required=True, type=Path, help="JSON input prepared under the Module's input schema.")
+    parser.add_argument("--input", required=require_input, type=Path, help="JSON input prepared under the selected Module or example input schema.")
     parser.add_argument("--transport", help="Independent transport: claude_cli (default), or codex_cli for tool-free inline Modules.")
     parser.add_argument("--model", help="Independent concrete model ID; required for codex_cli, otherwise omit for Runtime default.")
     parser.add_argument("--effort", help="Independent reasoning effort; required for codex_cli, otherwise omit for Runtime default.")

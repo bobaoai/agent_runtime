@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-runtime-core"
-version = "0.2.0.dev4"
+version = "0.2.0.dev5"
 description = "Provider-neutral execution infrastructure for registered agent workflows"
 readme = "README.md"
 license = "MIT"
@@ -34,7 +34,7 @@ test = [
 ]
 
 [project.scripts]
-agent-runtime-evaluate = "agent_runtime.testing.execution_local_evaluation:main"
+agent-runtime-evaluate = "agent_runtime.testing.conformance_local_evaluation:main"
 agent-runtime-registry = "agent_runtime.registry.registry_local_persistence:main"
 agent-runtime-inspect = "agent_runtime.inspection.inspection_snapshot_exporting:main"
 agent-runtime-live-inspect = "agent_runtime.inspection.inspection_http_serving:main"

@@ -292,7 +292,9 @@ def test_runbook_index_batch_commands_and_result_boundaries_are_explicit() -> No
     assert "--junitxml=PATH" in runbook
     assert "pytest 退出零表示实际执行的断言未失败，不表示所有用例都执行了" in runbook
     assert "完整测试和 fixtures 位于同版本 Runtime 源码 checkout" in runbook
-    assert "尚未实现的完整 agent_capability_example Workflow 不在其中" in runbook
+    assert "--example agent_capability_example" in runbook
+    assert "--example agent_evaluation_example" in runbook
+    assert "生产Gateway和跨进程恢复保留各自独立准入" in runbook
     assert "不表示这些能力已全部完成或通过" in catalog
     assert "run_agent_capability_verification(" not in runbook
     assert subject.render_agent_capability_runbook_markdown(tuple(reversed(cases))) == runbook

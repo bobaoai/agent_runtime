@@ -14,6 +14,7 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from ..contracts.registry_release_definition import (
+    ExecutionVariantPolicyRelease,
     WorkflowParallelGroupBinding,
     WorkflowRelease,
 )
@@ -24,7 +25,8 @@ from ..contracts.registry_workflow_definition import (
 )
 from ..registry.registry_graph_projection import project_workflow_release_graph
 from ..contracts.execution_host_definition import RuntimeWorkflowStartRequest
-from ..contracts.durability_backend_definition import DurableBackendAdapter
+from ..contracts.durability_backend_definition import DurableBackendAdapter, WorkflowCursor
+from ..foundation.foundation_contract_validation import validate_sha256
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from ..contracts.durability_topology_definition import (
     BackendExecutionRef,
@@ -148,13 +150,13 @@ class DurableExecutionCoordinator:
     def __init__(
         self,
         *,
-        cursor: DurableBackendAdapter,
+        cursor: WorkflowCursor,
         release_registry: RuntimeReleaseRegistry,
         activity_bridge: CellModuleActivityBridge,
         max_parallel_dispatches: int = 16,
     ) -> None:
-        if not isinstance(cursor, DurableBackendAdapter):
-            raise TypeError("cursor does not implement DurableBackendAdapter")
+        if not isinstance(cursor, WorkflowCursor):
+            raise TypeError("cursor does not implement WorkflowCursor")
         if type(release_registry) is not RuntimeReleaseRegistry:
             raise TypeError("release_registry must be RuntimeReleaseRegistry")
         if not isinstance(activity_bridge, CellModuleActivityBridge):
@@ -178,6 +180,10 @@ class DurableExecutionCoordinator:
     ) -> DurableExecutionProgress:
         """Drive until terminal, wait, retryable failure, or the call bound."""
 
+        if type(request) is not RuntimeWorkflowStartRequest:
+            raise TypeError("production start requires RuntimeWorkflowStartRequest")
+        if not isinstance(self._cursor, DurableBackendAdapter):
+            raise TypeError("production start requires DurableBackendAdapter")
         request.validate()
         if not isinstance(max_dispatches, int) or max_dispatches < 1:
             raise ValueError("max_dispatches must be a positive integer")
@@ -199,6 +205,62 @@ class DurableExecutionCoordinator:
         if execution.workflow_execution_id != request.workflow_execution_id:
             raise PermissionError("durable cursor crossed start execution identity")
         snapshot = await self._cursor.query(execution)
+        return await self._drive_started(
+            release=release, graph=graph, execution=execution, snapshot=snapshot,
+            selection_ref=request.execution_profile_selection_ref,
+            selection_sha256=request.execution_profile_selection_sha256,
+            max_dispatches=max_dispatches, max_committed_retry_scan=max_committed_retry_scan,
+        )
+
+    async def drive_started(
+        self, *, execution: BackendExecutionRef, workflow: WorkflowRelease,
+        selection: ExecutionVariantPolicyRelease, expected_start_sha256: str,
+        max_dispatches: int = 100, max_committed_retry_scan: int = 1_000,
+    ) -> DurableExecutionProgress:
+        """Drive one already-started exact graph; never admit production authority.
+
+        The cursor must retain the same actual start binding. Each node bridge
+        still enforces its live execution resources. No store or model is chosen.
+        """
+        if type(workflow) is not WorkflowRelease or type(selection) is not ExecutionVariantPolicyRelease:
+            raise TypeError("started execution requires exact Workflow and Variant releases")
+        execution.validate()
+        validate_sha256("expected_start_sha256", expected_start_sha256)
+        if type(max_dispatches) is not int or max_dispatches < 1:
+            raise ValueError("max_dispatches must be a positive integer")
+        if type(max_committed_retry_scan) is not int or max_committed_retry_scan < 1:
+            raise ValueError("max_committed_retry_scan must be a positive integer")
+        if self._release_registry.get_workflow(workflow.release_ref, workflow.release_sha256) != workflow:
+            raise ValueError("started Workflow differs from the registered release")
+        if self._release_registry.get_execution_variant_policy(selection.release_ref, selection.release_sha256) != selection:
+            raise ValueError("started selection differs from the registered release")
+        policy = selection.policy_document()
+        if (policy["origin_kind"], policy["origin_release_ref"], policy["origin_release_sha256"]) != (
+            "workflow", workflow.release_ref, workflow.release_sha256,
+        ):
+            raise ValueError("started selection belongs to another Workflow")
+        snapshot = await self._cursor.query(execution)
+        if snapshot.start_request_sha256 != expected_start_sha256:
+            raise PermissionError("cursor differs from the expected start binding")
+        # For a live local cursor this additionally binds the exact selection,
+        # not merely a caller-supplied hash. Durable callers retain their start.
+        check_start = getattr(self._cursor, "validate_started", None)
+        if not callable(check_start):
+            raise TypeError("drive_started requires a cursor that verifies its actual start/selection binding")
+        check_start(execution, workflow_release_ref=workflow.release_ref, workflow_release_sha256=workflow.release_sha256,
+                    selection_ref=selection.release_ref, selection_sha256=selection.release_sha256,
+                    expected_start_sha256=expected_start_sha256)
+        return await self._drive_started(
+            release=workflow, graph=project_workflow_release_graph(workflow),
+            execution=execution, snapshot=snapshot, selection_ref=selection.release_ref,
+            selection_sha256=selection.release_sha256, max_dispatches=max_dispatches,
+            max_committed_retry_scan=max_committed_retry_scan,
+        )
+
+    async def _drive_started(
+        self, *, release, graph, execution, snapshot, selection_ref, selection_sha256,
+        max_dispatches, max_committed_retry_scan,
+    ) -> DurableExecutionProgress:
         self._validate_snapshot(snapshot, release, graph, execution)
         if snapshot.terminal:
             return self._progress(
@@ -212,6 +274,11 @@ class DurableExecutionCoordinator:
         last_outcome: ModuleOutcome | None = None
         dispatch_count = 0
         while dispatch_count < max_dispatches:
+            snapshot = await self._cursor.query(execution)
+            self._validate_snapshot(snapshot, release, graph, execution)
+            if snapshot.terminal:
+                return self._progress(execution, snapshot, self._terminal_stop_reason(snapshot),
+                                      dispatch_count, last_outcome)
             parallel_group = self._parallel_group_for_state(
                 release,
                 snapshot.current_state,
@@ -222,7 +289,9 @@ class DurableExecutionCoordinator:
                         release=release,
                         group=parallel_group,
                         snapshot=snapshot,
-                        request=request,
+                        execution=execution,
+                        selection_ref=selection_ref,
+                        selection_sha256=selection_sha256,
                         remaining_dispatches=max_dispatches - dispatch_count,
                         max_dispatches=max_dispatches,
                         max_committed_retry_scan=max_committed_retry_scan,
@@ -237,7 +306,13 @@ class DurableExecutionCoordinator:
                         last_outcome,
                     )
                 dispatch_count += new_dispatch_count
-                last_outcome = branch_outcomes[-1]
+                if branch_outcomes:
+                    last_outcome = branch_outcomes[-1]
+                latest = await self._cursor.query(execution)
+                self._validate_snapshot(latest, release, graph, execution)
+                if latest.terminal:
+                    return self._progress(execution, latest, self._terminal_stop_reason(latest),
+                                          dispatch_count, last_outcome)
                 blocked_outcomes = tuple(
                     outcome
                     for outcome in branch_outcomes
@@ -281,7 +356,7 @@ class DurableExecutionCoordinator:
                         )
                     ).encode("utf-8")
                 ).hexdigest()
-                snapshot = await self._cursor.apply_external_event(
+                snapshot = await self._apply_external_event(
                     execution,
                     ExternalEvent(
                         event_id=f"parallel_{completion_digest[:24]}",
@@ -306,9 +381,17 @@ class DurableExecutionCoordinator:
                     )
                 continue
 
-            dispatch = self._build_dispatch(release, snapshot, request)
+            dispatch = self._build_dispatch(release, snapshot, selection_ref, selection_sha256)
             dispatch_count += 1
-            outcome = self._activity_bridge.dispatch(dispatch)
+            try:
+                outcome = await asyncio.to_thread(self._activity_bridge.dispatch, dispatch)
+            except BaseException:
+                latest = await self._cursor.query(execution)
+                self._validate_snapshot(latest, release, graph, execution)
+                if latest.runtime_status_id == 'cancelled':
+                    return self._progress(execution, latest, DurableExecutionStopReason.CANCELLED,
+                                          dispatch_count, last_outcome)
+                raise
             outcome.validate()
             self._validate_outcome(dispatch, outcome)
             committed = self._activity_bridge.get_committed_outcome(
@@ -320,8 +403,25 @@ class DurableExecutionCoordinator:
                     "Activity bridge returned an uncommitted ModuleOutcome"
                 )
             last_outcome = outcome
+            latest = await self._cursor.query(execution)
+            self._validate_snapshot(latest, release, graph, execution)
+            if latest.terminal:
+                return self._progress(execution, latest, self._terminal_stop_reason(latest),
+                                      dispatch_count, last_outcome)
 
             if outcome.disposition is ModuleOutcomeDisposition.WAIT:
+                acknowledge = getattr(self._cursor, 'acknowledge_wait', None)
+                if callable(acknowledge):
+                    try:
+                        acknowledge(execution, expected_state=outcome.expected_state_id, dispatch_id=outcome.dispatch_id,
+                                    outcome_ref=outcome.outcome_ref, outcome_sha256=outcome.outcome_sha256)
+                    except BaseException:
+                        latest = await self._cursor.query(execution)
+                        self._validate_snapshot(latest, release, graph, execution)
+                        if latest.runtime_status_id == 'cancelled':
+                            return self._progress(execution, latest, DurableExecutionStopReason.CANCELLED,
+                                                  dispatch_count, outcome)
+                        raise
                 return self._progress(
                     execution,
                     snapshot,
@@ -338,7 +438,7 @@ class DurableExecutionCoordinator:
                     outcome,
                 )
 
-            snapshot = await self._cursor.apply_external_event(
+            snapshot = await self._apply_external_event(
                 execution,
                 ExternalEvent(
                     event_id=dispatch.dispatch_id,
@@ -367,13 +467,27 @@ class DurableExecutionCoordinator:
             last_outcome,
         )
 
+    async def _apply_external_event(self, execution, event):
+        try:
+            return await self._cursor.apply_external_event(execution, event)
+        except BaseException:
+            # A cancellation can win after the preceding query but before the
+            # guarded transition. Preserve its real terminal cursor, not an error
+            # or an attempted advance; other failures retain their original cause.
+            latest = await self._cursor.query(execution)
+            if latest.runtime_status_id == 'cancelled':
+                return latest
+            raise
+
     async def _dispatch_parallel_group(
         self,
         *,
         release: WorkflowRelease,
         group: WorkflowParallelGroupBinding,
         snapshot: ExecutionSnapshot,
-        request: RuntimeWorkflowStartRequest,
+        execution: BackendExecutionRef,
+        selection_ref: str,
+        selection_sha256: str,
         remaining_dispatches: int,
         max_dispatches: int,
         max_committed_retry_scan: int,
@@ -392,7 +506,8 @@ class DurableExecutionCoordinator:
                 dispatch = self._build_dispatch(
                     release,
                     snapshot,
-                    request,
+                    selection_ref,
+                    selection_sha256,
                     node_id=branch_node_id,
                     retry_sequence=retry_sequence,
                 )
@@ -466,6 +581,9 @@ class DurableExecutionCoordinator:
                 resolved[dispatch.current_state_id] = outcome
             blocked = self._parallel_blocking_outcomes(group, resolved)
             if failures:
+                latest = await self._cursor.query(execution)
+                if latest.runtime_status_id == 'cancelled':
+                    return tuple(resolved.values()), len(pending)
                 first_failure = failures[0]
                 if not isinstance(first_failure, Exception):
                     raise first_failure
@@ -482,7 +600,8 @@ class DurableExecutionCoordinator:
     def _build_dispatch(
         release: WorkflowRelease,
         snapshot: ExecutionSnapshot,
-        request: RuntimeWorkflowStartRequest,
+        selection_ref: str,
+        selection_sha256: str,
         *,
         node_id: str | None = None,
         retry_sequence: int = 0,
@@ -506,7 +625,7 @@ class DurableExecutionCoordinator:
         identity_fields = (
             snapshot.workflow_execution_id,
             release.release_sha256,
-            request.execution_profile_selection_sha256,
+            selection_sha256,
             snapshot.current_state,
             str(sequence),
         )
@@ -532,10 +651,10 @@ class DurableExecutionCoordinator:
             workflow_release_ref=release.release_ref,
             workflow_release_sha256=release.release_sha256,
             execution_profile_selection_ref=(
-                request.execution_profile_selection_ref
+                selection_ref
             ),
             execution_profile_selection_sha256=(
-                request.execution_profile_selection_sha256
+                selection_sha256
             ),
             module_release_ref=node.module_release_ref,
             module_release_sha256=node.module_release_sha256,

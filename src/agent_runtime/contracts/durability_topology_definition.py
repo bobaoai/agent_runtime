@@ -20,7 +20,11 @@ from .registry_workflow_definition import (
     validate_capability_id,
     validate_runtime_ref,
 )
-from ..foundation.foundation_contract_validation import validate_bool, validate_id
+from ..foundation.foundation_contract_validation import validate_bool, validate_id, validate_opaque_ref
+
+
+GRAPH_PROJECTION_VERSION = "agent_runtime_graph_projection_v1"
+WORKFLOW_RELEASE_GRAPH_PROJECTION_VERSION = "agent_runtime_workflow_release_graph_projection_v1"
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -699,7 +703,13 @@ class GraphStateProjection:
 
 @dataclass(frozen=True)
 class WorkflowGraphProjection:
-    """Immutable backend projection compiled from one domain graph authority."""
+    """Immutable backend graph, preserving its producer's reference contract.
+
+    Registered Workflow projections carry the release's opaque graph reference;
+    the backend does not import that reference as Python code. Legacy domain
+    registration projections retain their module:attribute locator validation.
+    The existing projection_version distinguishes these two producer contracts.
+    """
 
     projection_version: str
     workflow_id: str
@@ -734,7 +744,10 @@ class WorkflowGraphProjection:
         _validate_token(
             "workflow_contract_version", self.workflow_contract_version
         )
-        validate_runtime_ref("graph_authority_ref", self.graph_authority_ref)
+        if self.projection_version == WORKFLOW_RELEASE_GRAPH_PROJECTION_VERSION:
+            validate_opaque_ref("graph_authority_ref", self.graph_authority_ref)
+        else:
+            validate_runtime_ref("graph_authority_ref", self.graph_authority_ref)
         _validate_id("initial_state", self.initial_state)
         if not self.states:
             raise ValueError("workflow graph projection requires states")

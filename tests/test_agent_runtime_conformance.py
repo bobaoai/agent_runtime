@@ -185,10 +185,13 @@ def _role_check_text(runtime_path: Path, source: str) -> str:
     return ast.unparse(tree).lower()
 
 
-def _assert_generic_role_vocabulary(runtime_path: Path, source: str, *, reviewer_capability: bool = False) -> None:
+def _assert_generic_role_vocabulary(runtime_path: Path, source: str, *, reviewer_capability: bool = False,
+                                    example_capability: bool = False) -> None:
     checked = _role_check_text(runtime_path, source)
     for role in ("theme", "writer", "verifier", "reviewer", "debater", "pm"):
         if role == "reviewer" and reviewer_capability:
+            continue
+        if example_capability and role in {"writer", "reviewer"}:
             continue
         assert re.search(rf"(?<![a-z]){role}(?![a-z])", checked) is None, runtime_path
 
@@ -200,6 +203,12 @@ def _assert_generic_role_vocabulary(runtime_path: Path, source: str, *, reviewer
 ))
 def test_capability_navigation_literals_are_not_executable_roles(source: str) -> None:
     _assert_generic_role_vocabulary(Path("testing/conformance_agent_capability_verification.py"), source)
+
+
+@pytest.mark.parametrize("role", ["theme", "verifier", "debater", "pm"])
+def test_example_role_instances_do_not_admit_unrelated_domain_roles(role):
+    with pytest.raises(AssertionError):
+        _assert_generic_role_vocabulary(Path("testing/conformance_agent_examples.py"), role, example_capability=True)
 
 
 @pytest.mark.parametrize("source", (
@@ -251,7 +260,13 @@ def test_runtime_role_vocabulary_is_confined_to_review_capability_owners() -> No
                 ) is None, runtime_path
             continue
         relative = runtime_path.relative_to(runtime_root)
-        _assert_generic_role_vocabulary(relative, source, reviewer_capability=relative.as_posix() in capability_paths)
+        # T2 11's fixed examples contain role instances. Only these exact
+        # verification-owned files may use those two instance names; the
+        # generic Execution/Invocation/Durability implementation remains role-free.
+        example_paths = {"testing/conformance_agent_examples.py", "testing/conformance_agent_execution.py",
+                         "testing/conformance_local_evaluation.py"}
+        _assert_generic_role_vocabulary(relative, source, reviewer_capability=relative.as_posix() in capability_paths,
+                                        example_capability=relative.as_posix() in example_paths)
 
 
 def test_reviewer_defaults_do_not_admit_other_roles_or_unrelated_surfaces():

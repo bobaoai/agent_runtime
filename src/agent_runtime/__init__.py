@@ -141,7 +141,8 @@ from .registry.registry_module_authoring import (
 from .registry.registry_module_loading import load_reviewer_registration
 from .registry.registry_local_persistence import LoadedRuntimeRegistration, load_runtime_registration, save_runtime_registration
 from .foundation.foundation_environment_setup import load_runtime_config, setup_runtime
-from .execution.execution_local_invocation import evaluate_local_workflow_module, prepare_local_workflow_module, run_local_workflow_module
+from .execution.execution_local_invocation import evaluate_local_workflow_module, prepare_local_workflow, prepare_local_workflow_module, run_local_workflow_module
+from .execution.execution_workflow_evaluation import WorkflowSelfTestResources, LocalWorkflowModuleBridge
 from .registry.registry_workflow_authoring import (
     WORKFLOW_MODULE_CLOSURE_INVALID,
     Workflow,
@@ -290,6 +291,9 @@ __all__ = [
     "save_runtime_registration",
     "run_local_workflow_module",
     "prepare_local_workflow_module",
+    "prepare_local_workflow",
+    "WorkflowSelfTestResources",
+    "LocalWorkflowModuleBridge",
     "evaluate_local_workflow_module",
     "ModuleAuthoringError",
     "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",

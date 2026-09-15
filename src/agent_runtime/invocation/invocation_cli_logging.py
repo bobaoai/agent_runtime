@@ -56,7 +56,7 @@ def cli_stream_bytes(trace: Mapping[str, Any], stream: str) -> bytes:
     return value.encode("utf-8")
 
 
-def _with_local_commands(view: dict, trace: Mapping[str, Any]) -> dict:
+def _with_local_commands(view: dict, trace: Mapping[str, Any], *, callbacks=False) -> dict:
     """Correlate real parent-process facts with the response the CLI observed.
 
     This runs while Invocation creates its stored view, never while Ledger
@@ -64,19 +64,23 @@ def _with_local_commands(view: dict, trace: Mapping[str, Any]) -> dict:
     evidence of identity: the actual returned local_call_id must pair uniquely,
     and the exact request/response JSON must agree with the parent record.
     """
-    if "local_command_calls" not in trace:
+    record_key = "local_callback_calls" if callbacks else "local_command_calls"
+    if record_key not in trace:
         return view
     native = view["tool_calls"]
-    view["provider_tool_calls"] = copy.deepcopy(native)
+    view.setdefault("provider_tool_calls", copy.deepcopy(native))
     issues = view["issues"]
-    records = trace["local_command_calls"]
+    records = trace[record_key]
     if type(records) is not list:
         issues.append("invalid_local_command_records")
         view["complete"] = False
         return view
     tool_name = trace.get("local_command_cli_tool_name")
-    if not isinstance(tool_name, str) or not tool_name:
+    callback_tools = trace.get("local_callback_cli_tools", []) if callbacks else []
+    if (callbacks and (type(callback_tools) is not list or any(type(name) is not str for name in callback_tools))) or (
+            not callbacks and (not isinstance(tool_name, str) or not tool_name)):
         issues.append("local_command_tool_identity_unavailable")
+        callback_tools = []
     by_id, bad_ids = {}, set()
     for position, supplied in enumerate(records):
         row = copy.deepcopy(supplied)
@@ -90,6 +94,18 @@ def _with_local_commands(view: dict, trace: Mapping[str, Any]) -> dict:
             continue
         by_id[identity] = row
         response, request = row.get("response"), row.get("request")
+        if callbacks:
+            valid = (row.get("source_kind") == "runtime_local" and type(row.get("tool_name")) is str
+                and "mcp__runtime_tools__" + row["tool_name"] in callback_tools
+                and row.get("status") in {"completed", "failed"} and type(request) is dict
+                and type(response) is dict and response.get("local_call_id") == identity
+                and response.get("tool_name") == row["tool_name"] and response.get("status") == row["status"]
+                and type(response.get("allowed")) is bool
+                and (row["status"] != "completed" or (response["allowed"] and response.get("error") is None)))
+            if not valid:
+                issues.append(f"invalid_local_callback_record:{identity}")
+                bad_ids.add(identity)
+            continue
         valid = (row.get("source_kind") == "runtime_local" and row.get("tool_name") == "sandbox_command_execute"
             and row.get("status") in {"completed", "failed"} and type(request) is dict
             and set(request) == {"command_id"} and type(request["command_id"]) is str
@@ -126,7 +142,7 @@ def _with_local_commands(view: dict, trace: Mapping[str, Any]) -> dict:
 
     observed, incomplete_native = {}, set()
     for index, call in enumerate(native):
-        if call.get("tool_name") != tool_name:
+        if (call.get("tool_name") not in callback_tools if callbacks else call.get("tool_name") != tool_name):
             continue
         response = call.get("response")
         block = response.get("tool_result") if isinstance(response, dict) else None
@@ -162,6 +178,7 @@ def _with_local_commands(view: dict, trace: Mapping[str, Any]) -> dict:
         call = native[index]
         same_json = lambda left, right: json.dumps(left, sort_keys=True, ensure_ascii=False, allow_nan=False) == json.dumps(right, sort_keys=True, ensure_ascii=False, allow_nan=False)
         if (identity in bad_ids or call.get("status") != row.get("status")
+                or (callbacks and call.get("tool_name") != "mcp__runtime_tools__" + row["tool_name"])
                 or len(call.get("request_event_indices", [])) != 1
                 or not same_json(call.get("request"), row.get("request"))
                 or not same_json(returned, row.get("response"))):
@@ -435,8 +452,9 @@ def parse_cli_log(trace: Mapping[str, Any]) -> dict:
                          "failed" if identity in denials or failed_results.get(identity) else "completed")
     if terminal_count != 1:
         issues.append("terminal_event_missing_or_duplicated")
-    return _with_local_commands({"schema_version": "runtime_cli_log_v1", "complete": not issues,
+    view = _with_local_commands({"schema_version": "runtime_cli_log_v1", "complete": not issues,
         "issues": issues, "events": events, "tool_calls": list(calls.values())}, trace)
+    return _with_local_commands(view, trace, callbacks=True)
 
 
 __all__ = ["captured_cli_streams", "cli_stream_bytes", "parse_cli_log"]

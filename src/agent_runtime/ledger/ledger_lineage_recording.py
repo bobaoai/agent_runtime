@@ -8,6 +8,7 @@ not a substitute for the formal production execution ledger.
 from __future__ import annotations
 
 from threading import RLock
+from copy import deepcopy
 
 from ..contracts.ledger_lineage_definition import (
     ModuleAttemptRecord,
@@ -20,6 +21,7 @@ from ..contracts.execution_module_definition import (
     ModuleRunResult,
     WorkflowModuleExecutionRequest,
 )
+from ..foundation.foundation_contract_validation import validate_id
 
 
 class InMemoryModuleExecutionLedger:
@@ -35,6 +37,8 @@ class InMemoryModuleExecutionLedger:
         self._attempt_starts: dict[str, ModuleAttemptStartedRecord] = {}
         self._attempts: dict[str, ModuleAttemptRecord] = {}
         self._results: dict[str, ModuleRunResult] = {}
+        self._workflow_requests: dict[str, WorkflowModuleExecutionRequest] = {}
+        self._outcomes: dict[tuple[str, str], object] = {}
 
     def guarded(self, operation):
         """Serialize a test-resource check/close with terminal record commits."""
@@ -95,6 +99,8 @@ class InMemoryModuleExecutionLedger:
             self._idempotency_requests[request.idempotency_key] = current_request
             self._in_progress.add(request.request_id)
             self._run_records[module_run.module_run_id] = module_run
+            if type(request) is WorkflowModuleExecutionRequest:
+                self._workflow_requests[request.request_id] = request
             for variant in variants:
                 self._variant_records[variant.variant_id] = variant
             for started in attempt_starts:
@@ -141,6 +147,57 @@ class InMemoryModuleExecutionLedger:
                 raise ValueError("Module Run result changed during idempotent replay")
             self._results[request_id] = result
             self._in_progress.discard(request_id)
+
+    def results_for_execution(self, workflow_execution_id: str) -> tuple[ModuleRunResult, ...]:
+        """Read exact completed node results from this process-local Ledger."""
+        validate_id("workflow_execution_id", workflow_execution_id)
+        with self._lock:
+            return tuple(result for _, result in sorted(self._results.items())
+                         if result.module_run.workflow_execution_id == workflow_execution_id)
+
+    def get_committed_outcome(self, workflow_execution_id: str, dispatch_id: str) -> object | None:
+        validate_id("workflow_execution_id", workflow_execution_id)
+        validate_id("dispatch_id", dispatch_id)
+        with self._lock:
+            return deepcopy(self._outcomes.get((workflow_execution_id, dispatch_id)))
+
+    def read_node_execution(self, workflow_execution_id: str, dispatch_id: str):
+        """Return recorded request, Run, Attempts and result for Execution to validate.
+
+        These are existing recorded values, not an Outcome schema or judgment.
+        An absent dispatch returns None; its unfinished result remains None.
+        """
+        validate_id('workflow_execution_id', workflow_execution_id)
+        validate_id('dispatch_id', dispatch_id)
+        with self._lock:
+            candidates = [request for request in self._workflow_requests.values()
+                          if (request.workflow_execution_id, request.dispatch_id) == (workflow_execution_id, dispatch_id)]
+            if not candidates:
+                return None
+            if len(candidates) != 1:
+                raise ValueError('dispatch has multiple recorded requests')
+            request = candidates[0]
+            result = self._results.get(request.request_id)
+            attempts = tuple(item for item in self._attempts.values() if item.module_run_id == request.module_run_id)
+            return request, self._run_records.get(request.module_run_id), attempts, result
+
+    def commit_outcome(self, workflow_execution_id: str, dispatch_id: str, outcome: object) -> object:
+        """Store one immutable caller-validated value under its exact execution key.
+
+        Execution checks the existing Outcome against recorded facts inside
+        guarded(), then calls this method in the same critical section.
+        """
+        validate_id('workflow_execution_id', workflow_execution_id)
+        validate_id('dispatch_id', dispatch_id)
+        if outcome is None:
+            raise ValueError('an absent outcome cannot be committed')
+        with self._lock:
+            key = (workflow_execution_id, dispatch_id)
+            prior = self._outcomes.get(key)
+            if prior is not None and prior != outcome:
+                raise ValueError("Outcome changed during local replay")
+            self._outcomes[key] = deepcopy(outcome)
+            return deepcopy(outcome)
 
 
 __all__ = ["InMemoryModuleExecutionLedger"]

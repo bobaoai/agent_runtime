@@ -146,11 +146,11 @@ def _profile_resources(profile, *, used, commands):
     if not used:
         return
     if (sys.platform != "darwin" or profile.executor_adapter_id != "claude_cli_adapter"
-            or profile.executor_adapter_revision != "v2" or profile.transport_kind != "claude_cli"
+            or profile.executor_adapter_revision != "v3" or profile.transport_kind != "claude_cli"
             or profile.execution_mode != "agent" or profile.semantic_input_delivery_mode != "inline"
             or profile.network_policy != "denied" or profile.gateway_access_reasons
             or not set(profile.tool_policy) & {"read", "search", "shell"}):
-        raise LocalResourceError("local files/dependencies/commands require the supported macOS Claude v2 agent resources",
+        raise LocalResourceError("local files/dependencies/commands require the supported macOS Claude v3 agent resources",
                                  error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
     if commands and ("shell" not in profile.tool_policy or profile.attempt_workspace_policy != "own_draft_read_write"):
         raise LocalResourceError("local commands require shell and private draft workspace",
@@ -403,16 +403,18 @@ def materialize_local_resources(body: bytes, *, materials_root: Path) -> None:
 
 
 def describe_local_resources(*, profile, body: bytes | None) -> str:
-    """Describe only the new Claude v2 relative layout before envelope capture.
+    """Render the current and historical Claude layout for exact request rebuilding.
 
-    Old bindings and Codex with no resources return an empty string, retaining
-    their original envelopes. The private material_root/read_only_dependencies
+    v2's original description remains required for committed replay; it grants
+    no execution capability. Earlier bindings and Codex retain empty descriptions.
+    Resource capture/admission and the Adapter still require the current revision.
+    The private material_root/read_only_dependencies
     fields and base64 file bodies are not rendered. Exact command argv and
     logical cwd remain explicit task data, including any supplied program locator.
     """
     document = validate_local_resources(profile=profile, body=body)
-    if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind) != (
-            "claude_cli_adapter", "v2", "claude_cli"):
+    if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind) not in {
+            ("claude_cli_adapter", "v2", "claude_cli"), ("claude_cli_adapter", "v3", "claude_cli")}:
         return ""
     draft = profile.attempt_workspace_policy == "own_draft_read_write"
     base = "../materials" if draft else "materials"

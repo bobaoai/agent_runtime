@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import functools
+import json
+import inspect
 from importlib import metadata
 from typing import Any, Mapping, Protocol
 
@@ -105,6 +107,10 @@ class ModuleProviderToolSession(Protocol):
     """Attempt-local, authorization-closed provider tool surface."""
 
     @property
+    def request(self) -> AuthorizedAgentExecutionRequest:
+        """The exact request passed to this session's factory."""
+
+    @property
     def definitions(self) -> tuple[ProviderToolDefinition, ...]:
         """Return every and only tool exposed for this Attempt."""
 
@@ -119,26 +125,85 @@ class ModuleProviderToolSession(Protocol):
         self,
         tool_name: str,
         payload: Mapping[str, Any],
-        authorization: AuthorizedOperationReceipt,
+        authorization: AuthorizedOperationReceipt | None,
     ) -> Mapping[str, Any]:
-        """Execute only after receiving the Runtime authorization receipt."""
+        """Execute under a real receipt or this session's bound self-test resources.
+
+        None is not a permission. Only Runtime's live self-test dispatcher may
+        use it; an external-operation session must reject None.
+        """
 
     def validate_completion(self) -> None:
-        """Fail when required registered reads were skipped or left incomplete."""
+        """Check resource/record integrity; business tool usage is task-owned."""
 
     @property
     def observations(self) -> tuple[ModuleToolCallObservation, ...]:
         """Return Runtime-authored request/response lineage for completed calls."""
 
+    def close(self) -> None:
+        """Stop and join owned work, including any in-flight child invocation."""
+
 
 class ModuleProviderToolSessionFactory(Protocol):
     """Create one isolated tool session from an exact authorized request."""
+
+    @property
+    def definitions(self) -> tuple[ProviderToolDefinition, ...]:
+        """Return fixed definitions before constructing the exact request."""
 
     def open_session(
         self,
         request: AuthorizedAgentExecutionRequest,
     ) -> ModuleProviderToolSession:
         """Bind exact Module inputs and authorization to one provider Attempt."""
+
+
+def freeze_tool_definitions(definitions) -> tuple[ProviderToolDefinition, ...]:
+    """Copy and validate the complete tool table without retaining mutable schemas."""
+    if type(definitions) is not tuple:
+        raise ValueError("tool definitions must be an immutable tuple")
+    records = []
+    seen = set()
+    for definition in definitions:
+        if type(definition) is not ProviderToolDefinition:
+            raise ValueError("invalid provider tool definition")
+        definition.validate()
+        if definition.tool_name in seen:
+            raise ValueError("duplicate provider tool name")
+        seen.add(definition.tool_name)
+        records.append(ProviderToolDefinition(definition.tool_name, definition.description,
+            json.loads(json.dumps(dict(definition.input_schema), allow_nan=False))))
+    return tuple(records)
+
+
+def tool_definition_records(definitions) -> list[dict]:
+    """Canonical model-visible fields shared by prompt, resource binding and MCP."""
+    return [{"name": item.tool_name, "description": item.description, "inputSchema": dict(item.input_schema)}
+            for item in freeze_tool_definitions(definitions)]
+
+
+def self_test_cancellation_callbacks(host, request) -> dict:
+    """Resolve optional controls without weakening the required resource guard.
+
+    Legacy hosts need only the existing validation/launch ports. A declared
+    control must be callable and return actual booleans; getter/call failures
+    propagate instead of being mistaken for an absent optional port.
+    """
+    if request.self_test_binding_ref is None:
+        return {}
+    try:
+        inspect.getattr_static(host, "self_test_cancel_requested")
+    except AttributeError:
+        return {}
+    query = host.self_test_cancel_requested
+    if not callable(query):
+        raise TypeError("optional self_test_cancel_requested must be callable")
+    def check(user):
+        result = query(request, user=user)
+        if type(result) is not bool:
+            raise TypeError("self_test_cancel_requested must return bool")
+        return result
+    return {"cancel_requested": lambda: check(False), "user_cancel_requested": lambda: check(True)}
 
 
 def validate_provider_tool_set(

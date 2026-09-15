@@ -39,9 +39,14 @@ API_SOURCES = {
     "src/agent_runtime/registry/registry_module_loading.py": ("load_reviewer_registration",),
     "src/agent_runtime/registry/registry_workflow_authoring.py": ("Workflow",),
     "src/agent_runtime/execution/execution_local_invocation.py": (
-        "prepare_local_workflow_module", "evaluate_local_workflow_module", "run_local_workflow_module",
+        "prepare_local_workflow", "prepare_local_workflow_module", "evaluate_local_workflow_module", "run_local_workflow_module",
     ),
+    "src/agent_runtime/execution/execution_workflow_evaluation.py": (
+        "WorkflowSelfTestResources", "LocalWorkflowModuleBridge",
+    ),
+    "src/agent_runtime/testing/conformance_agent_execution.py": ("run_agent_example",),
     "src/agent_runtime/testing/execution_local_evaluation.py": (),
+    "src/agent_runtime/testing/conformance_local_evaluation.py": (),
     "src/agent_runtime/foundation/foundation_environment_setup.py": ("setup_runtime", "load_runtime_config"),
     "src/agent_runtime/ledger/ledger_execution_logging.py": ("read_execution_log",),
     "src/agent_runtime/invocation/invocation_cli_logging.py": ("parse_cli_log",),
@@ -118,6 +123,7 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
         "CodexCliModuleExecutor": "agent_runtime.invocation.invocation_codex_module_invocation",
         "CodexCliInvocationResult": "agent_runtime.invocation.invocation_codex_module_invocation",
         "build_command": "agent_runtime.invocation.invocation_codex_module_invocation",
+        "run_agent_example": "agent_runtime.testing.conformance_agent_execution",
     }.get(name, "agent_runtime")
     lines = [f'## {name}', "", f"Public import: `from {module} import {name}`", ""]
     if isinstance(node, ast.ClassDef):
@@ -167,26 +173,45 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
     return lines
 
 
-def _cli_sections(tree: ast.Module, standalone: str | None = None) -> list[str]:
+def _cli_sections(tree: ast.Module, standalone: str | None = None,
+                  inherited_tree: ast.Module | None = None) -> list[str]:
     """Read literal argument/help declarations from the real CLI parser AST."""
     parser = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "build_parser")
+    parsers = [(parser, {})]
+    if inherited_tree is not None:
+        aliases = [alias.asname or alias.name for node in tree.body
+                   if isinstance(node, ast.ImportFrom) and node.module == "execution_local_evaluation"
+                   for alias in node.names if alias.name == "build_parser"]
+        calls = [node for node in ast.walk(parser) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id in aliases]
+        if len(calls) != 1:
+            raise ValueError("evaluation CLI must compose one declared execution parser")
+        inherited = next(node for node in inherited_tree.body
+                         if isinstance(node, ast.FunctionDef) and node.name == "build_parser")
+        values = {arg.arg: ast.literal_eval(default) for arg, default in
+                  zip(inherited.args.kwonlyargs, inherited.args.kw_defaults) if default is not None}
+        values.update({item.arg: ast.literal_eval(item.value) for item in calls[0].keywords})
+        parsers.insert(0, (inherited, values))
     commands: dict[str, tuple[str, list[tuple[str, str, str]]]] = {}
     if standalone is not None:
         commands["parser"] = (standalone, [])
-    for statement in parser.body:
-        if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call):
-            call = statement.value
-            if isinstance(call.func, ast.Attribute) and call.func.attr == "add_parser":
-                commands[statement.targets[0].id] = (ast.literal_eval(call.args[0]), [])
-        elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
-            call = statement.value
-            if (isinstance(call.func, ast.Attribute) and call.func.attr == "add_argument"
-                    and isinstance(call.func.value, ast.Name) and call.func.value.id in commands):
-                options = {item.arg: item.value for item in call.keywords}
-                required = ast.literal_eval(options["required"]) if "required" in options else False
-                help_text = ast.literal_eval(options["help"]) if "help" in options else ""
-                commands[call.func.value.id][1].append((", ".join(ast.literal_eval(arg) for arg in call.args),
-                                                       "required" if required else "optional", help_text))
+    for declaration, values in parsers:
+        for statement in declaration.body:
+            if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call):
+                call = statement.value
+                if isinstance(call.func, ast.Attribute) and call.func.attr == "add_parser":
+                    commands[statement.targets[0].id] = (ast.literal_eval(call.args[0]), [])
+            elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+                call = statement.value
+                if (isinstance(call.func, ast.Attribute) and call.func.attr == "add_argument"
+                        and isinstance(call.func.value, ast.Name) and call.func.value.id in commands):
+                    options = {item.arg: item.value for item in call.keywords}
+                    expression = options.get("required")
+                    required = (values[expression.id] if isinstance(expression, ast.Name)
+                                else ast.literal_eval(expression) if expression is not None else False)
+                    help_text = ast.literal_eval(options["help"]) if "help" in options else ""
+                    commands[call.func.value.id][1].append((", ".join(ast.literal_eval(arg) for arg in call.args),
+                                                           "required" if required else "optional", help_text))
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
     result = ["## Evaluation CLI" if standalone else "## CLI commands", "", "Generated from the installed parser's argument declarations.", "",
               _doc(main, "CLI main"), ""]
@@ -206,7 +231,7 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
         "<!-- Generated by tools/build_agent_runtime_api_reference.py. Edit source docstrings, not this file. -->",
         "", f"Runtime package version: `{version}`.", "",
         "Scope: Module authoring/export, Reviewer source checks, local Runtime setup,",
-        "versioned registration/loading, single-node evaluation and Claude CLI adaptation.",
+        "versioned registration/loading, local graph evaluation, packaged Agent examples and Claude CLI adaptation.",
         "Other Runtime APIs are outside this reference. Signatures, fields, descriptions and error",
         "constant values below come directly from this source tree; no Runtime modules are executed.",
         "", "For registration steps, see the [Registration runbook](agent_runtime_registration_runbook.md).",
@@ -229,8 +254,9 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
             lines.extend(_section(definitions[name], definitions))
         if source.endswith("registry_local_persistence.py"):
             lines.extend(_cli_sections(tree))
-        elif source.endswith("execution_local_evaluation.py"):
-            lines.extend(_cli_sections(tree, standalone="agent-runtime-evaluate"))
+        elif source.endswith("conformance_local_evaluation.py"):
+            inherited = ast.parse((project_root / "src/agent_runtime/testing/execution_local_evaluation.py").read_text())
+            lines.extend(_cli_sections(tree, standalone="agent-runtime-evaluate", inherited_tree=inherited))
         for node in tree.body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:

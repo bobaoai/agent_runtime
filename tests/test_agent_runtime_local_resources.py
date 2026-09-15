@@ -19,7 +19,7 @@ import test_agent_runtime_native_structured_output as native
 
 
 def profile(tmp_path, **overrides):
-    fields = dict(executor_adapter_id="claude_cli_adapter", executor_adapter_revision="v2",
+    fields = dict(executor_adapter_id="claude_cli_adapter", executor_adapter_revision="v3",
         transport_kind="claude_cli", provider_id="anthropic", execution_mode="agent",
         attempt_workspace_policy="own_draft_read_write", tool_policy=("read", "search", "shell"))
     fields.update(overrides)

@@ -12,9 +12,9 @@ import socket
 import sys
 
 
-def exchange(endpoint: Path, message: dict) -> object:
+def exchange(endpoint: Path, message: dict, *, max_request_bytes=65536) -> object:
     raw = json.dumps(message, ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"
-    if len(raw) > 65536:
+    if len(raw) > max_request_bytes:
         raise ValueError("Local command request is too large")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
         channel.connect(str(endpoint))
@@ -29,20 +29,25 @@ def exchange(endpoint: Path, message: dict) -> object:
     return result["result"]
 
 
-async def serve(endpoint: Path):
+async def serve(endpoint: Path, *, callbacks=False):
     # Optional cli_tools dependency is loaded only by this explicitly selected
     # proxy. Core import, registration and no-command execution stay independent.
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
     from mcp import types
 
-    server = Server("runtime_commands")
+    server = Server("runtime_tools" if callbacks else "runtime_commands")
     @server.list_tools()
     async def definitions():
         values = await asyncio.to_thread(exchange, endpoint, {"method": "definitions"})
         return [types.Tool(**item) for item in values]
     @server.call_tool()
     async def invoke(name: str, arguments: dict):
+        if callbacks:
+            response = await asyncio.to_thread(exchange, endpoint,
+                {"method": "invoke", "tool_name": name, "payload": arguments}, max_request_bytes=4 * 1024 * 1024)
+            return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(response, ensure_ascii=False))],
+                structuredContent=response, isError=response["status"] != "completed")
         if name != "sandbox_command_execute" or set(arguments) != {"command_id"}:
             raise ValueError("Only the declared command_id tool is available")
         response = await asyncio.to_thread(exchange, endpoint, {"method": "invoke", "command_id": arguments["command_id"]})
@@ -53,9 +58,9 @@ async def serve(endpoint: Path):
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in {2, 3} or (len(sys.argv) == 3 and sys.argv[2] != "--callbacks"):
         raise SystemExit("usage: invocation_local_command_mcp.py PRIVATE_ENDPOINT")
-    asyncio.run(serve(Path(sys.argv[1])))
+    asyncio.run(serve(Path(sys.argv[1]), callbacks=len(sys.argv) == 3))
 
 
 if __name__ == "__main__":

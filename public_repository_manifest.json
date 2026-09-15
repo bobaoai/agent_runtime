@@ -31,6 +31,8 @@
     "tools/public_repository_validation.py",
     "tests/test_public_repository_validation.py",
     "tests/local_registration_cli.py",
+    "tests/fixtures/claude_v2_replay/committed.json",
+    "tests/fixtures/claude_v2_replay/generate.py",
     "tests/test_workflow_execution_ledger_recording.py",
     "tools/registry_schema_migration_planning.py",
     "tests/test_registry_schema_migration_planning_tool.py"

@@ -399,3 +399,89 @@ def test_default_invoker_real_process_launch_is_guarded(tmp_path, monkeypatch, c
         assert result.terminal_status == "completed" and trace["byte_capture_exact"]
         assert trace["cli_version"] == "codex synthetic-local-process"
         assert cases.cli_stream_bytes(trace, "stdout") == cases.raw_events([cases.message(), cases.terminal()])
+
+
+@pytest.mark.parametrize("kind", ["not_callable", "getter_failure"])
+def test_declared_broken_optional_control_is_not_treated_as_absent(tmp_path, kind):
+    env = cases.environment(tmp_path, lambda _: pytest.fail("bad control reached Provider"))
+    env.request = self_test_request(env.request)
+    class Host(cases.native._RecordingHost):
+        def validate_self_test_binding(self, request, **ports):
+            assert request == env.request
+        def guard_self_test_launch(self, request, launch, **ports):
+            return launch()
+        @property
+        def self_test_cancel_requested(self):
+            if kind == "getter_failure":
+                raise AttributeError("declared control getter failed")
+            return None
+    env.host = Host()
+    with pytest.raises(AttributeError if kind == "getter_failure" else TypeError):
+        cases.execute(env)
+    assert not env.calls
+
+
+def test_optional_controls_are_forwarded_without_replacing_the_guard(tmp_path):
+    effects, queries = [], []
+    def invocation(fields):
+        assert fields["cancel_requested"]() is False
+        assert fields["user_cancel_requested"]() is False
+        fields["launch_guard"](lambda: effects.append("guarded"))
+        return cases.process()
+    env = cases.environment(tmp_path, invocation)
+    env.request = self_test_request(env.request)
+    class Host(cases.native._RecordingHost):
+        def validate_self_test_binding(self, request, **ports):
+            assert request == env.request
+        def guard_self_test_launch(self, request, launch, **ports):
+            self.validate_self_test_binding(request, **ports)
+            return launch()
+        def self_test_cancel_requested(self, request, *, user=False):
+            assert request == env.request
+            queries.append(user)
+            return False
+    env.host = Host()
+    result, trace = cases.execute(env)
+    assert result.terminal_status == "completed" and effects == ["guarded"]
+    assert False in queries and True in queries
+    assert result.input_tokens == 12 and trace["byte_capture_exact"]
+
+
+def test_optional_control_does_not_replace_a_missing_required_launch_guard(tmp_path):
+    env = cases.environment(tmp_path, lambda _: pytest.fail("missing guard reached Provider"))
+    env.request = self_test_request(env.request)
+    class Host(cases.native._RecordingHost):
+        def validate_self_test_binding(self, request, **ports):
+            pass
+        def self_test_cancel_requested(self, request, *, user=False):
+            return False
+    env.host = Host()
+    with pytest.raises(SelfTestResourceUnavailableError, match="launch guard"):
+        cases.execute(env)
+    assert not env.calls
+
+
+@pytest.mark.parametrize("failure_on", [1, 2])
+def test_late_optional_control_failure_keeps_observed_codex_result(tmp_path, failure_on):
+    env = cases.environment(tmp_path, lambda _: cases.process())
+    env.request = self_test_request(env.request)
+    queries = []
+    class Host(cases.native._RecordingHost):
+        def validate_self_test_binding(self, request, **ports):
+            assert request == env.request
+        def guard_self_test_launch(self, request, launch, **ports):
+            return launch()
+        def self_test_cancel_requested(self, request, *, user=False):
+            queries.append(user)
+            if len(queries) == failure_on:
+                raise RuntimeError("trusted cancellation control unavailable")
+            return False
+    env.host = Host()
+    result, trace = cases.execute(env)
+    assert result.terminal_status == "failed" and not result.outputs
+    assert result.failure.failure_class == "dependency_unavailable"
+    assert cases.detail(env, result)["failure_code"] == "ADAPTER_BINDING_UNAVAILABLE"
+    assert "trusted cancellation control unavailable" in cases.detail(env, result)["provider_error_message"]
+    assert result.input_tokens == 12 and result.output_tokens == 5
+    assert cases.cli_stream_bytes(trace, "stdout") == cases.raw_events([cases.message(), cases.terminal()])
+    assert len(env.calls) == 1 and len(queries) == failure_on

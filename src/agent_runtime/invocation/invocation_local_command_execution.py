@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
-import socketserver
 import subprocess
 import sys
 import tempfile
@@ -122,41 +121,16 @@ class LocalCommandSession:
                 "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_OPTIONAL_LOCKS": "0"}
             for command in self._commands.values():
                 self._resolve_command(command)
-            session = self
-            class Handler(socketserver.StreamRequestHandler):
-                def handle(self):
-                    self.connection.settimeout(5)
-                    try:
-                        line = self.rfile.readline(65537)
-                        if len(line) > 65536 or not line.endswith(b"\n"):
-                            raise ValueError("Local command protocol request exceeds its bounded frame")
-                        def unique(pairs):
-                            value = {}
-                            for key, item in pairs:
-                                if key in value:
-                                    raise ValueError("Duplicate local command protocol field")
-                                value[key] = item
-                            return value
-                        def invalid_constant(value):
-                            raise ValueError("Non-finite local command protocol value")
-                        message = json.loads(line, object_pairs_hook=unique, parse_constant=invalid_constant)
-                        if message == {"method": "definitions"}:
-                            session._validate_host()
-                            result = [{"name": item.tool_name, "description": item.description,
-                                       "inputSchema": dict(item.input_schema)} for item in session.definitions]
-                        elif isinstance(message, dict) and set(message) == {"method", "command_id"} and message["method"] == "invoke":
-                            result = session.invoke(message["command_id"])
-                        else:
-                            raise ValueError("Local command protocol accepts only definitions or an exact command_id")
-                        response = {"result": result}
-                    except Exception as exc:
-                        response = {"error": {"type": type(exc).__name__, "message": str(exc)}}
-                    self.wfile.write(json.dumps(response, ensure_ascii=False, allow_nan=False).encode() + b"\n")
-            class Server(socketserver.ThreadingUnixStreamServer):
-                daemon_threads = True
-            self._server = Server(str(self._socket_path), Handler)
-            self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-            self._thread.start()
+            from .invocation_tool_transport import start_tool_server
+            def dispatch(message):
+                if message == {"method": "definitions"}:
+                    self._validate_host()
+                    return [{"name": item.tool_name, "description": item.description,
+                             "inputSchema": dict(item.input_schema)} for item in self.definitions]
+                if isinstance(message, dict) and set(message) == {"method", "command_id"} and message["method"] == "invoke":
+                    return self.invoke(message["command_id"])
+                raise ValueError("Local command protocol accepts only definitions or an exact command_id")
+            self._server, self._thread = start_tool_server(self._socket_path, dispatch)
         except BaseException:
             self.close()
             raise

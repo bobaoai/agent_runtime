@@ -194,14 +194,41 @@ def finalize_adapter_result(*, artifact_host: ModuleArtifactHost,
     The interruption flag is monotonic. A signal during diagnostic commit adds
     a cancellation diagnostic without overwriting the preceding failure or trace;
     this bounded second pass never retries the model or resource cleanup.
+    An unavailable cancellation control produces ADAPTER_BINDING_UNAVAILABLE
+    while retaining the received trace and usage. It is neither proof of user
+    cancellation nor a cleanup failure; successful outputs are withheld.
     """
     if result.failure is not None and result.failure.detail_ref is not None:
         raise ValueError("finalization requires a deferred failure detail")
+    control_error = None
+    observed_interruption = False
+    def query_interruption():
+        nonlocal control_error, observed_interruption
+        if observed_interruption or control_error is not None:
+            return observed_interruption
+        try:
+            observed_interruption = interruption_requested()
+        except Exception as exc:
+            control_error = exc
+        return observed_interruption
     for _ in range(2):
         status, failure = result.terminal_status, result.failure
         content = pending_failure_detail
-        interrupted = interruption_requested()
-        if interrupted or status == "cancelled" or cleanup_error is not None:
+        interrupted = status == "cancelled" or query_interruption()
+        control_failure = control_error is not None
+        if control_failure:
+            status = "failed"
+            failure = AgentExecutionFailure(failure_class="dependency_unavailable",
+                retry_disposition_id="retry_denied", failure_scope_id="attempt_only")
+            diagnostic = f"{type(control_error).__name__}: {control_error}"
+            if cleanup_error is not None:
+                diagnostic += f"; cleanup error: {type(cleanup_error).__name__}: {cleanup_error}"
+            content = build_provider_failure_detail(failure_class=failure.failure_class,
+                failure_code="ADAPTER_BINDING_UNAVAILABLE",
+                message="Adapter cancellation control failed; preceding execution facts remain in the provider trace",
+                provider_response="", provider_error_message=diagnostic,
+                transport_exit_code=None, retryable=False)
+        elif interrupted or status == "cancelled" or cleanup_error is not None:
             cancelled = interrupted or status == "cancelled"
             status = "cancelled" if cancelled else "failed"
             failure = AgentExecutionFailure(failure_class="cancelled" if cancelled else "transport",
@@ -222,7 +249,11 @@ def finalize_adapter_result(*, artifact_host: ModuleArtifactHost,
             finalized = replace(result, terminal_status=status, outputs=(), failure=replace(failure,
                 detail_ref=detail.detail_ref, detail_sha256=detail.detail_sha256))
             finalized.validate()
-        if status == "cancelled" or not interruption_requested():
+        if status == "cancelled":
+            return finalized
+        if not query_interruption():
+            if control_error is not None and not control_failure:
+                continue  # A late control error must not return the earlier success.
             return finalized
     raise AssertionError("interruption flag must be monotonic")
 

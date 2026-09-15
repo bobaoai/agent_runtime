@@ -26,9 +26,83 @@ from test_agent_runtime_native_structured_output import (
 )
 
 
+@pytest.mark.parametrize("closed", [False, True])
+def test_legacy_self_test_host_without_optional_cancel_port_keeps_guard(tmp_path, closed):
+    import test_agent_runtime_native_structured_output as native
+    from test_agent_runtime_codex_environment import self_test_request
+    from agent_runtime.contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
+    compiled, registry, cell, _, _ = _environment(tmp_path, tools=(), mode="tool_free", workspace="none")
+    prompt = native._evaluation_prompt(cell, compiled, suffix="legacy_host")
+    request = self_test_request(native._direct_adapter_request(compiled, prompt, suffix="legacy_host"))
+    effects = []
+    class Host(native._RecordingHost):
+        def validate_self_test_binding(self, actual, **ports):
+            assert actual == request
+        def guard_self_test_launch(self, actual, launch, **ports):
+            self.validate_self_test_binding(actual, **ports)
+            if closed:
+                raise SelfTestResourceUnavailableError("existing resource guard is closed")
+            return launch()
+    def process(**fields):
+        assert "cancel_requested" not in fields and "user_cancel_requested" not in fields
+        fields["launch_guard"](lambda: effects.append("executed"))
+        lines = [json.dumps(event) for event in (_init(()), _result())]
+        for line in lines:
+            assert fields["on_stdout_line"](line)
+        result = subprocess.CompletedProcess(fields["argv"], 0, "\n".join(lines), "")
+        result.stdout_bytes, result.stderr_bytes = result.stdout.encode(), b""
+        return result
+    adapter = claude.ClaudeAdapter(release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
+                                  cli_path=_fake_cli(tmp_path), process_runner=process)
+    result = adapter.execute(request, Host())
+    assert result.terminal_status == ("failed" if closed else "completed")
+    assert effects == ([] if closed else ["executed"])
+    if not closed:
+        assert result.input_tokens == 7 and result.cell_local_trace_ref
+
+
+@pytest.mark.parametrize("failure_on", [1, 2])
+def test_late_optional_control_failure_keeps_observed_claude_result(tmp_path, failure_on):
+    import test_agent_runtime_native_structured_output as native
+    from test_agent_runtime_codex_environment import self_test_request
+    from agent_runtime.invocation.invocation_cli_logging import cli_stream_bytes
+    compiled, registry, cell, _, _ = _environment(tmp_path, tools=(), mode="tool_free", workspace="none")
+    prompt = native._evaluation_prompt(cell, compiled, suffix="late_control")
+    request = self_test_request(native._direct_adapter_request(compiled, prompt, suffix="late_control"))
+    queries, calls = [], []
+    class Host(native._RecordingHost):
+        def validate_self_test_binding(self, actual, **ports):
+            assert actual == request
+        def guard_self_test_launch(self, actual, launch, **ports):
+            return launch()
+        def self_test_cancel_requested(self, actual, *, user=False):
+            queries.append(user)
+            if len(queries) == failure_on:
+                raise RuntimeError("late Claude control failure")
+            return False
+    raw = "\n".join(json.dumps(event) for event in (_init(()), _result())).encode()
+    def process(**fields):
+        fields["launch_guard"](lambda: calls.append(fields))
+        for line in raw.decode().splitlines():
+            assert fields["on_stdout_line"](line)
+        result = subprocess.CompletedProcess(fields["argv"], 0, raw.decode(), "")
+        result.stdout_bytes, result.stderr_bytes = raw, b""
+        return result
+    adapter = claude.ClaudeAdapter(release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
+                                  cli_path=_fake_cli(tmp_path), process_runner=process)
+    result = adapter.execute(request, Host())
+    assert result.terminal_status == "failed" and not result.outputs
+    assert result.failure.failure_class == "dependency_unavailable"
+    assert native._direct_failure_detail(result, cell)["failure_code"] == "ADAPTER_BINDING_UNAVAILABLE"
+    assert result.input_tokens == 7 and result.output_tokens == 3
+    trace = json.loads(cell.read_bytes(result.cell_local_trace_ref, result.cell_local_trace_sha256))
+    assert cli_stream_bytes(trace, "stdout") == raw
+    assert len(calls) == 1 and len(queries) == failure_on
+
+
 def _environment(tmp_path, *, tools=("read", "search", "shell"), model="claude-opus-5[1m]", effort="xhigh", material=None, instructions="",
                  mode="agent", workspace="own_draft_read_write", output_mode="native_structured_output",
-                 binding=("claude_cli_adapter", "v2"), output_schema_document=None):
+                 binding=("claude_cli_adapter", "v3"), output_schema_document=None):
     compiled = _compile_native_module(
         tmp_path, output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="claude_fields", executor_adapter_id=binding[0],
@@ -138,9 +212,9 @@ def test_attempt_workspace_binds_exact_authorization_boundary(tmp_path, monkeypa
     captured = []
     entered = []
     execute = claude.ClaudeAdapter._execute
-    def capture(adapter, request, host, prepared, cleanup):
+    def capture(adapter, request, host, prepared, cleanup, *, cancellation):
         captured.append((adapter, request, host))
-        return execute(adapter, request, host, prepared, cleanup)
+        return execute(adapter, request, host, prepared, cleanup, cancellation=cancellation)
     def events(call):
         entered.append(True)
         yield _init()
@@ -274,7 +348,7 @@ def test_actual_model_must_match_the_profile(tmp_path, fault):
     assert trace["result"]["structured_output"] == {"value":"checked"}
 
 
-@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v2")])
+@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v3")])
 def test_actual_cli_settings_keep_resource_boundaries(tmp_path, binding):
     def events(call):
         argv = call["argv"]
@@ -321,7 +395,7 @@ def test_preflight_timeout_keeps_byte_diagnostics(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("damage", [None, "change", "remove", "symlink"])
-@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v2")])
+@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v3")])
 @pytest.mark.parametrize("process_error", [False, True])
 def test_materials_checked_on_process_completion_and_exception(tmp_path, damage, binding, process_error):
     env = _environment(tmp_path, material=b"original", binding=binding)
@@ -366,7 +440,7 @@ def test_unexpected_init_stops_stream(tmp_path, surface):
 
 
 @pytest.mark.parametrize("source", ["event", "result", "combined"])
-@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v2")])
+@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v3")])
 def test_cli_permission_denial_allows_later_tools_and_output(tmp_path, source, binding):
     continued = []
     def events(call):
@@ -743,7 +817,7 @@ def test_claude_adapter_executes_each_agent_field_combination(tmp_path, tools, w
     assert _assert_completed_provider_run(run, cell) == {"value": "checked"}
     assert len(calls) == 1
     trace = json.loads(cell.read_bytes(run.attempts[0].provider_trace_ref, run.attempts[0].provider_trace_sha256))
-    assert (trace["executor_adapter_id"], trace["executor_adapter_revision"]) == ("claude_cli_adapter", "v2")
+    assert (trace["executor_adapter_id"], trace["executor_adapter_revision"]) == ("claude_cli_adapter", "v3")
     assert hashlib.sha256(trace["actual_prompt"].encode()).hexdigest() == trace["prompt_envelope_sha256"]
     assert trace["execution_profile_ref"] == run.variants[0].execution_profile_ref
     assert trace["tool_log"]["complete"]
@@ -795,7 +869,7 @@ def test_invalid_effort_never_launches_provider(tmp_path, effort):
     assert run.attempts[0].status == "failed"
 
 
-@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v1"), ("claude_cli_native_tools_executor", "v2"),
+@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v1"), ("claude_cli_adapter", "v2"), ("claude_cli_native_tools_executor", "v2"),
                                      ("unknown", "v1"), ["claude_cli_adapter", "v2"]])
 def test_unknown_adapter_identity_rejected_before_resource_resolution(tmp_path, binding):
     with pytest.raises(ValueError, match="execution Profile"):
@@ -885,7 +959,7 @@ def test_claude_projection_failure_prevents_provider_invocation(tmp_path, monkey
     assert not (tmp_path / "attempts").exists()
 
 
-@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v1"), ("claude_cli_native_tools_executor", "v2")])
+@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v1"), ("claude_cli_adapter", "v2"), ("claude_cli_native_tools_executor", "v2")])
 def test_historical_claude_profile_is_readable_but_not_silently_reexecuted(tmp_path, binding):
     env = _environment(tmp_path, material=b"historical material", binding=binding)
     original = env[0].execution_profile.as_dict()

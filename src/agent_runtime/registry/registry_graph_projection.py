@@ -19,15 +19,13 @@ from ..contracts import (
 from ..contracts.registry_release_definition import WorkflowRelease
 from .registry_workflow_registration import resolve_registration_reference
 from ..contracts.durability_topology_definition import (
+    GRAPH_PROJECTION_VERSION,
+    WORKFLOW_RELEASE_GRAPH_PROJECTION_VERSION,
     GraphStateProjection,
     WorkflowGraphProjection,
 )
 
 
-GRAPH_PROJECTION_VERSION = "agent_runtime_graph_projection_v1"
-WORKFLOW_RELEASE_GRAPH_PROJECTION_VERSION = (
-    "agent_runtime_workflow_release_graph_projection_v1"
-)
 RUNTIME_TERMINAL_STATE_ID = "completed"
 
 

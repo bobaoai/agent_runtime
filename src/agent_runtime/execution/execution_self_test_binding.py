@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ..contracts.execution_module_definition import WorkflowModuleExecutionRequest
 from ..contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
-from ..contracts.registry_release_definition import ModuleExecutionPurpose, MODEL_INVOCATION_OPERATION_IDS
+from ..contracts.registry_release_definition import ModuleExecutionPurpose, ModuleKind, MODEL_INVOCATION_OPERATION_IDS
 from ..ledger.ledger_lineage_recording import InMemoryModuleExecutionLedger
 from .execution_content_staging import InMemoryCellArtifactStore
 
@@ -27,7 +27,9 @@ class ModuleSelfTestResources:
     """
 
     def __init__(self, *, request, workflow, variant, registry, adapter,
-                 artifact_host, ledger, workspace_root):
+                 artifact_host, ledger, workspace_root, workflow_resources=None,
+                 tool_session_factory=None, tool_definitions=(), user_cancel_requested=None,
+                 resource_cancel_requested=None):
         if type(request) is not WorkflowModuleExecutionRequest:
             raise ValueError("self-test requires a Workflow Module request")
         request.validate()
@@ -35,10 +37,14 @@ class ModuleSelfTestResources:
             raise PermissionError("self-test cannot execute a production purpose")
         if type(artifact_host) is not InMemoryCellArtifactStore or type(ledger) is not InMemoryModuleExecutionLedger:
             raise ValueError("self-test requires its temporary artifact store and memory Ledger")
-        if len(request.variants) != 1 or request.attempt_ordinal != 1:
-            raise ValueError("temporary evaluation accepts one initial Variant/Attempt")
+        if len(request.variants) != 1:
+            raise ValueError("temporary evaluation accepts one Variant per dispatch")
+        if workflow_resources is None and request.attempt_ordinal != 1:
+            raise ValueError("standalone temporary evaluation requires its initial Attempt")
         module = registry.get_module(request.module_release_ref, request.module_release_sha256)
-        if len(module.declared_operation_ids) != 1 or module.declared_operation_ids[0] not in MODEL_INVOCATION_OPERATION_IDS:
+        operation_free = (not module.declared_operation_ids and module.module_kind is ModuleKind.DETERMINISTIC
+                          and adapter.descriptor.transport_family == "in_process")
+        if not operation_free and (len(module.declared_operation_ids) != 1 or module.declared_operation_ids[0] not in MODEL_INVOCATION_OPERATION_IDS):
             raise PermissionError("self-test does not expose external Gateway operations")
         selected = request.variants[0]
         profile = registry.get_execution_profile(selected.execution_profile_ref, selected.execution_profile_sha256)
@@ -52,19 +58,35 @@ class ModuleSelfTestResources:
                 or profile.attempt_workspace_policy not in {"none", "own_draft_read_write"}):
             raise PermissionError("Profile is not admitted for temporary inline evaluation")
         if (registry.get_workflow(workflow.release_ref, workflow.release_sha256) != workflow
-                or registry.get_execution_variant_policy(variant.release_ref, variant.release_sha256) != variant
-                or len(workflow.nodes) != 1 or workflow.initial_node_id != request.workflow_node_id):
+                or registry.get_execution_variant_policy(variant.release_ref, variant.release_sha256) != variant):
             raise ValueError("self-test Workflow closure mismatch")
-        node = workflow.nodes[0]
+        if workflow_resources is None and (len(workflow.nodes) != 1 or workflow.initial_node_id != request.workflow_node_id):
+            raise ValueError("graph dispatch requires live parent Workflow resources")
+        nodes = [item for item in workflow.nodes if item.node_id == request.workflow_node_id]
+        if len(nodes) != 1:
+            raise ValueError("self-test must select an exact Workflow node")
+        node = nodes[0]
         if (node.module_release_ref, node.module_release_sha256) != (module.release_ref, module.release_sha256):
             raise ValueError("self-test Module differs from Workflow node")
         policy = variant.policy_document()
-        if policy != {"origin_kind": "workflow", "origin_release_ref": workflow.release_ref,
-                      "origin_release_sha256": workflow.release_sha256, "bindings": [{
+        expected_binding = {
                           "position_id": request.workflow_node_id,
                           "execution_profile_release_ref": profile.release_ref,
-                          "execution_profile_release_sha256": profile.release_sha256}]}:
+                          "execution_profile_release_sha256": profile.release_sha256}
+        if (policy["origin_kind"] != "workflow" or policy["origin_release_ref"] != workflow.release_ref
+                or policy["origin_release_sha256"] != workflow.release_sha256
+                or [item for item in policy["bindings"] if item["position_id"] == request.workflow_node_id] != [expected_binding]):
             raise ValueError("self-test Variant differs from Workflow selection")
+        self._parent = workflow_resources
+        self._tool_factory = tool_session_factory
+        self._tool_definitions = json.loads(json.dumps(tool_definitions, allow_nan=False))
+        self._user_cancel = user_cancel_requested
+        self._resource_cancel = resource_cancel_requested
+        self._parent_scope = dict(request=request, workflow=workflow, variant=variant, registry=registry,
+                                 artifact_host=artifact_host, ledger=ledger, workspace_root=Path(workspace_root).resolve(strict=True))
+        if self._parent is not None:
+            self._parent.require_active()
+            self._parent.check_node_scope(**self._parent_scope)
         self._request = request
         self._profile = profile
         self._registry = registry
@@ -95,7 +117,8 @@ class ModuleSelfTestResources:
             "workflow_release_ref": workflow.release_ref, "workflow_release_sha256": workflow.release_sha256,
             "variant_release_ref": variant.release_ref, "variant_release_sha256": variant.release_sha256,
             "adapter": asdict(adapter.descriptor), "workspace_root": str(self._workspace),
-            "record_store": "temporary_memory", "artifact_store": "temporary_memory"},
+            "record_store": "temporary_memory", "artifact_store": "temporary_memory",
+            **({"tool_definitions": self._tool_definitions} if self._tool_definitions else {})},
             sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         self._body = body
         self.binding_sha256 = hashlib.sha256(body).hexdigest()
@@ -105,6 +128,11 @@ class ModuleSelfTestResources:
         self.binding_ref = ref.artifact_ref
 
     def require_active(self):
+        if self._resource_cancel is not None and self._resource_cancel():
+            raise SelfTestResourceUnavailableError("parent invocation resources were closed")
+        if self._parent is not None:
+            self._parent.require_active()
+            self._parent.check_node_scope(**self._parent_scope)
         if not self._active or not self._workspace.is_dir():
             raise SelfTestResourceUnavailableError("self-test resources are closed or unavailable")
         if self._artifacts.read_bytes(self.binding_ref, self.binding_sha256) != self._body:
@@ -146,6 +174,21 @@ class ModuleSelfTestResources:
             self.require_active()
             return operation()
         return self._ledger.guarded(guarded)
+
+    def check_tools(self, *, factory, definitions):
+        self.require_active()
+        if factory is not self._tool_factory or definitions != self._tool_definitions:
+            raise SelfTestResourceUnavailableError("callback tools differ from the exact self-test resources")
+
+    def user_cancel_requested(self):
+        return bool(self._user_cancel is not None and self._user_cancel())
+
+    def cancel_requested(self):
+        try:
+            self.require_active()
+        except PermissionError:
+            return True
+        return False
 
     def close(self):
         def close():

@@ -118,6 +118,8 @@ def _default_invoke(
     timeout_seconds: int,
     environment: dict[str, str],
     launch_guard: Callable | None = None,
+    cancel_requested: Callable | None = None,
+    user_cancel_requested: Callable | None = None,
 ) -> CodexCliInvocationResult:
     """Run v4 with explicit private environment and a launch-time resource guard.
 
@@ -125,15 +127,17 @@ def _default_invoke(
     Injected invokers must accept environment and optional launch_guard; there is
     no fallback to the historical four-argument execution contract.
     """
+    cancellation = {name: value for name, value in (("cancel_requested", cancel_requested),
+        ("user_cancel_requested", user_cancel_requested)) if value is not None}
     version = run_cli_process(argv=[argv[0], "--version"], prompt="", cwd=cwd,
         timeout_seconds=min(timeout_seconds, 10), environment=environment,
-        max_output_bytes=4096, launch_guard=launch_guard)
+        max_output_bytes=4096, launch_guard=launch_guard, **cancellation)
     if version.returncode != 0 or not version.stdout.strip():
         raise OSError("Codex CLI version check failed")
     try:
         process = run_cli_process(
             argv=argv, prompt=prompt, cwd=cwd, timeout_seconds=timeout_seconds,
-            environment=environment, launch_guard=launch_guard,
+            environment=environment, launch_guard=launch_guard, **cancellation,
         )
     except (Exception, CliProcessInterrupted) as exc:
         exc.cli_version = version.stdout.strip()
@@ -490,6 +494,8 @@ class _CodexCliExecutorBase:
             artifact_host=self._artifact_host,
             expectation=expectation, self_test_validator=validate_self_test,
         )
+        from .invocation_tool_definition import self_test_cancellation_callbacks
+        cancellation = self_test_cancellation_callbacks(host, request)
         if self.shell_tool_enabled != ("shell" in prepared.profile.tool_policy):
             raise PermissionError("Codex actual Shell capability differs from the explicit Profile tool_policy")
         try:
@@ -502,7 +508,7 @@ class _CodexCliExecutorBase:
             try:
                 with ExitStack() as cleanup:
                     try:
-                        result = self._execute_prepared(request, host, prepared, cleanup)
+                        result = self._execute_prepared(request, host, prepared, cleanup, cancellation=cancellation)
                     except TerminalAdapterFailure as failure:
                         result, pending_detail = failure.result, failure.pending_failure_detail
             except Exception as exc:
@@ -512,7 +518,8 @@ class _CodexCliExecutorBase:
             return finalize_adapter_result(
                 artifact_host=self._artifact_host, request=request, result=result,
                 pending_failure_detail=pending_detail,
-                interruption_requested=lambda: interrupted.requested,
+                interruption_requested=lambda: interrupted.requested or (
+                    bool(cancellation) and cancellation["user_cancel_requested"]()),
                 cleanup_error=cleanup_error, interruption_code="codex_cli_interrupted",
                 cleanup_failure_code="codex_cli_cleanup_failed",
             )
@@ -523,6 +530,7 @@ class _CodexCliExecutorBase:
         host: AuthorizedAgentExecutionHost,
         prepared,
         cleanup: ExitStack,
+        *, cancellation: dict,
     ) -> AgentExecutionResult:
         module = prepared.module
         profile = prepared.profile
@@ -653,7 +661,7 @@ class _CodexCliExecutorBase:
             stage = "provider_invocation"
             result = self._invoker(argv=argv, prompt=prompt, cwd=workspace,
                                    timeout_seconds=profile.timeout_seconds, environment=environment,
-                                   launch_guard=launch_guard)
+                                   launch_guard=launch_guard, **cancellation)
             if type(result) is not CodexCliInvocationResult:
                 raise TypeError("Codex CLI invoker returned an invalid result")
             capture(result, complete=result.process_output_complete is True)

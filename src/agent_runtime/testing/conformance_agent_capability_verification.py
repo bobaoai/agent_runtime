@@ -578,6 +578,7 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
             test_paths=(
                 "tests/test_agent_runtime_native_structured_output.py",
                 "tests/test_agent_runtime_claude_native_tools.py",
+                "tests/test_agent_runtime_provider_tools.py",
                 "tests/test_agent_runtime_public_adapter_contracts.py",
                 "tests/test_agent_runtime_attempt_workspace.py",
             ),
@@ -635,18 +636,23 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
             test_paths=(
                 "tests/test_agent_runtime_workflow_authoring.py",
                 "tests/test_agent_runtime_parallel_workflow.py",
+                "tests/test_agent_runtime_local_workflow.py",
+                "tests/test_agent_runtime_capability_examples.py",
                 "tests/test_agent_runtime_product_host_execution_api.py",
             ),
-            environment_prerequisites=("本组使用内存 Registry 与受控执行替身，不启动真实 Temporal。",),
+            environment_prerequisites=("本组使用内存 Registry、真实图/Module内核与Provider替身；不启动真实Temporal。真实模型样例须单独开启对应gate。",),
             owning_design_refs=(_REGISTRY_DESIGN, _EXECUTION_DESIGN),
             example_test_refs=(
                 "tests/test_agent_runtime_workflow_authoring.py::test_same_workflow_export_registers_into_two_independent_registries",
                 "tests/test_agent_runtime_parallel_workflow.py::test_parallel_group_dispatches_branches_concurrently_and_joins_once",
+                "tests/test_agent_runtime_capability_examples.py::test_full_example_uses_real_graph_and_runtime_tools_with_provider_double",
+                "tests/test_agent_runtime_capability_examples.py::test_independent_evaluation_uses_child_facts_never_outer_substitution",
             ),
             input_description="同一 Workflow export 注册到两个独立 Registry；并行 fixture 声明两个 branch 和一个 join。",
             expected_result=(
                 "同一 origin 可以复用，两个 Registry 的执行配置独立。",
                 "两个 branch 并发执行，join 执行一次；恢复与失败路径见同组回归测试。",
+                "本地样例覆盖accepted、revision、wait及失败评价；未调用任务内Reviewer的Agent不会被外层补做。进程内重放与跨进程持久恢复分开。",
             ),
         ),
         _capability_case(
@@ -730,6 +736,7 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
             test_paths=(
                 "tests/test_agent_runtime_native_structured_output.py",
                 "tests/test_agent_runtime_managed_design_reviewer.py",
+                "tests/test_agent_runtime_capability_examples.py",
             ),
             environment_prerequisites=(
                 "设置 RUN_PROVIDER_INTEGRATION=1，准备本节测试使用的 Codex CLI 和有效登录。Claude 原生工具用例的命令及环境要求见 `agent_runtime_claude_native_tools.md`，同样需要显式开启；Runtime 不依赖 Claude Agent SDK。",
@@ -739,6 +746,7 @@ def required_agent_capability_cases() -> tuple[AgentCapabilityTestCase, ...]:
             example_test_refs=(
                 "tests/test_agent_runtime_native_structured_output.py::test_live_codex_evaluation_runs_through_run_module",
                 "tests/test_agent_runtime_managed_design_reviewer.py::test_registered_design_reviewer_runs_live_opus_5_through_runtime",
+                "tests/test_agent_runtime_capability_examples.py::test_live_claude_agent_examples",
             ),
             input_description="已注册测试 Module、固定 prompt/input/schema 与 transport Profile；审核 smoke 消费受控 Design fixture。",
             expected_result=(
@@ -909,7 +917,20 @@ def render_agent_capability_runbook_markdown(
         "测试依赖、可选 Provider/PG/Temporal 依赖以 pyproject.toml 为准。\n\n"
         "每组的样例 selector 指向真实测试函数。先读该函数及它直接使用的 fixture，"
         "再运行对应命令；fixture 中的 Provider 替身和测试授权对象用于验证，不是生产宿主配置。"
-        "这些是已有能力的具体样例，尚未实现的完整 agent_capability_example Workflow 不在其中。\n\n"
+        "随包 agent_capability_example 与 agent_evaluation_example 使用同一Runtime图和Module内核。"
+        "本地自测提供真实fixture工具与临时记录，生产Gateway和跨进程恢复保留各自独立准入。\n\n"
+        "### 随包多Agent样例\n\n"
+        "通过同一个已安装命令运行；root只定位注册和宿主程序，不授权读取项目全集。"
+        "例子会注册自己的准确Module/Workflow定义，模型在本次调用单独选择，默认不写PG。\n\n"
+        "```sh\nagent-runtime-evaluate --root ROOT --example agent_capability_example\n"
+        "agent-runtime-evaluate --root ROOT --example agent_capability_example --scenario revision\n"
+        "agent-runtime-evaluate --root ROOT --example agent_capability_example --scenario wait\n"
+        "agent-runtime-evaluate --root ROOT --example agent_evaluation_example\n```\n\n"
+        "wait样例先保存实际等待快照，再由测试宿主提交一个匹配的fixture事件并在同一进程继续。"
+        "评价样例的任务内审核由被测Agent的实际工具请求触发；独立评价读取Runtime记录，"
+        "原始节点和child日志随JSON结果返回。工具或业务结论与技术完成状态分别判断。"
+        "这些focused结果不代表42项完整Runtime验证；真实模型使用RUN_PROVIDER_INTEGRATION=1"
+        "开启test_live_claude_agent_examples，未开启的gate仍为not_run。\n\n"
         "### 1.1 Runtime 与宿主环境各准备什么\n\n"
         "宿主是使用 Runtime 的项目，例如 Analyst Billie。宿主决定执行什么、使用哪个环境；"
         "Runtime 提供执行、隔离、记录与读取能力。一次实际调用并不需要宿主另写一套执行器。\n\n"
@@ -940,6 +961,23 @@ def render_agent_capability_runbook_markdown(
         "Kernel 先用 begin 登记 Run/Variant（attempt_starts 为空），再于各 Attempt 实际开始时记录"
         "既有 StartRecord。缺少该接口会在新增执行记录前拒绝。相同 ID 的开始时间不可被刷新；"
         "Workflow 路径沿用 PG 中原已保存的 Runtime 时间。\n\n"
+        "### 1.3 判断结果与继续\n\n"
+        "先按层读取结果，不以退出零或最后的 running 快照代替判断：\n\n"
+        "| 读取位置 | 用途 |\n| --- | --- |\n"
+        "| output | 任务或审核的业务结论；技术执行完成不等于业务接受 |\n"
+        "| execution.nodes、child_executions | 实际调用、输入输出、失败、用量与完整日志 |\n"
+        "| execution.outcomes、execution.snapshot、stop_reason | 已提交图决策、最后位置和本次驱动为何停止 |\n"
+        "| failure、resources_cleaned | 调用失败与清理事实；资源失效时快照可能仍是 running，不能继续 |\n\n"
+        "WAIT 只在同一活实例收到当前条件匹配的事件后继续；重复 drive 不会越过等待。"
+        "随包 wait 样例由测试代码提供该事件，revision 则直接返回 Writer；两者都不是 Provider 技术重试。"
+        "用户取消或资源失效后先保留已有证据、等待活动调用收尾，再关闭资源。\n\n"
+        "新的 CLI 调用是新执行；保存 JSON 不会恢复已销毁的内存或 Provider 会话。"
+        "历史 committed replay 使用原准确请求与可读存储，不重新调用 Provider。\n\n"
+        "CLI 退出码 0 表示技术完成，1 表示失败或未完成，2 表示参数错误，130 表示用户取消。"
+        "保留 stdout/stderr；异常没有 error_code 时使用实际类型和诊断，不把消息文字编成稳定错误枚举。\n\n"
+        "参数、返回和继续条件以 [run_agent_example](agent_runtime_reviewer_api.md#run_agent_example)、"
+        "[WorkflowSelfTestResources](agent_runtime_reviewer_api.md#workflowselftestresources) 和 "
+        "[CLI](agent_runtime_reviewer_api.md#evaluation-cli) 的同源接口说明为准。\n\n"
         "## 2. 单例、分组与全仓批量运行\n\n"
         "单例和分组命令见第 4 节。全仓使用 pytest 自动收集，不需要手工维护另一个测试列表。"
         "可以先列出所有实际测试，再执行：\n\n"
@@ -1269,9 +1307,9 @@ def run_agent_capability_verification(
     scope_completed = all(
         item.state is AgentCapabilityResultState.PASSED for item in result_tuple
     )
-    # The current plan intentionally excludes the canonical Example and live
-    # registered Module transport evidence. A complete run can execute its selected
-    # cases, but this implementation must not claim full Runtime completion.
+    # Selected case callbacks alone do not establish the full required-gate and
+    # immutable peer-result closure. Packaged examples remain focused evidence;
+    # this aggregate must not infer full Runtime completion from callback votes.
     full_runtime_completed = False
     verification_result = AgentCapabilityVerificationResult(
         request_id=request.request_id,

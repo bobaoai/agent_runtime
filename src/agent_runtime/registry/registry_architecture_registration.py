@@ -345,6 +345,14 @@ def _source(
 
 
 RUNTIME_SOURCE_FILE_REGISTRATIONS = (
+    _source("execution", "workflow", "evaluation",
+            "designDoc/agent_runtime_00_execution_charter.md"),
+    _source("durability", "local", "coordination",
+            "designDoc/agent_runtime_07_temporal_durable_adapter_contract.md"),
+    _source("invocation", "provider_tool", "execution",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "tool", "transport",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
     _source("execution", "self_test", "binding",
             "designDoc/agent_runtime_09_authorization_integration_contract.md"),
     _source("execution", "local", "evaluation",
@@ -787,6 +795,24 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
 
 
 RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
+    RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/testing/conformance_agent_examples.py",
+        supporting_plane_id="conformance", source_directory_id="testing",
+        subject="agent", nominalized_action="examples",
+        owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/testing/conformance_agent_execution.py",
+        supporting_plane_id="conformance", source_directory_id="testing",
+        subject="agent", nominalized_action="execution",
+        owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/testing/conformance_local_evaluation.py",
+        supporting_plane_id="conformance", source_directory_id="testing",
+        subject="local", nominalized_action="evaluation",
+        owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
+    ),
     RuntimeSupportingSourceFileRegistration(
         source_path="src/agent_runtime/foundation/foundation_environment_setup.py",
         supporting_plane_id="foundation",

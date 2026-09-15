@@ -123,7 +123,7 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
                  "pytest>=8", "setuptools>=77", "temporalio>=1.31"],
     }
     assert configuration["project"]["scripts"] == {
-        "agent-runtime-evaluate": "agent_runtime.testing.execution_local_evaluation:main",
+        "agent-runtime-evaluate": "agent_runtime.testing.conformance_local_evaluation:main",
         "agent-runtime-registry": "agent_runtime.registry.registry_local_persistence:main",
         "agent-runtime-inspect": "agent_runtime.inspection.inspection_snapshot_exporting:main",
         "agent-runtime-live-inspect": "agent_runtime.inspection.inspection_http_serving:main",
@@ -227,7 +227,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
             assert 'usage:' in output.getvalue().lower()
         profile = compile_execution_profile_release(ExecutionProfileReleaseSpec(
             execution_profile_id='claude_cli_probe',
-            executor_adapter_id='claude_cli_adapter', executor_adapter_revision='v2',
+            executor_adapter_id='claude_cli_adapter', executor_adapter_revision='v3',
             transport_kind='claude_cli', provider_id='anthropic',
             model_id='claude-opus-5', reasoning_profile='high',
             execution_mode='tool_free', semantic_input_delivery_mode='inline',

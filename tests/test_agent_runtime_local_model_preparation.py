@@ -83,7 +83,7 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
     assert saved.release.workflow_id == "summarize_note"
     selected = saved.registry.snapshot().execution_profiles[0]
     requirements.assert_profile(selected)
-    assert (selected.executor_adapter_id, selected.executor_adapter_revision) == ("claude_cli_adapter", "v2")
+    assert (selected.executor_adapter_id, selected.executor_adapter_revision) == ("claude_cli_adapter", "v3")
     assert selected.model_id == "claude-opus-5[1m]" and selected.reasoning_profile == "xhigh"
     assert exported.module_release.reviewer_defaults is None
     assert not exported.origin_bundle.execution_profiles

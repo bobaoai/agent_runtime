@@ -32,6 +32,7 @@ from .invocation_result_assembly import (
 )
 from .invocation_schema_projection import NativeOutputSchemaProjectionError, claude_native_output_schema
 from .invocation_tool_definition import ModuleArtifactHost, runtime_package_version
+from .invocation_provider_tool_execution import ProviderToolSessionBridge
 from .invocation_local_resource_preparation import (
     LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256, LOCAL_RESOURCES_MEDIA_TYPE,
     LOCAL_RESOURCES_LOGICAL_NAME, parse_local_resources, materialize_local_resources,
@@ -44,12 +45,12 @@ from .invocation_workspace_preparation import (
 
 
 NATIVE_TOOLS = {"read": "Read", "search": "Grep", "shell": "Bash"}
-_CURRENT_BINDING = ("claude_cli_adapter", "v2")
+_CURRENT_BINDING = ("claude_cli_adapter", "v3")
 
 
 def _validate_binding(binding: tuple[str, str]) -> None:
     if type(binding) is not tuple or binding != _CURRENT_BINDING:
-        raise ValueError("ClaudeAdapter requires claude_cli_adapter@v2; historical records need an explicit new execution Profile")
+        raise ValueError("ClaudeAdapter requires claude_cli_adapter@v3; historical records need an explicit new execution Profile")
 
 
 def _execution_expectation(profile, adapter_binding=_CURRENT_BINDING) -> InvocationExecutionExpectation:
@@ -68,8 +69,6 @@ def _execution_expectation(profile, adapter_binding=_CURRENT_BINDING) -> Invocat
         raise ValueError("ClaudeAdapter requires inline input and denied tool network")
     if profile.attempt_workspace_policy not in {"none", "own_draft_read_write"}:
         raise ValueError("ClaudeAdapter requests an unsupported workspace policy")
-    if set(profile.tool_policy) - NATIVE_TOOLS.keys():
-        raise ValueError("Claude Profile requests unsupported native tools")
     if profile.reasoning_profile not in {"low", "medium", "high", "xhigh", "max"}:
         raise ValueError("ClaudeAdapter requests an unsupported CLI effort")
     return InvocationExecutionExpectation(
@@ -125,7 +124,7 @@ class ClaudeAdapter:
                  adapter_binding: tuple[str, str] = _CURRENT_BINDING) -> None:
         """Bind trusted resources and the current executable Adapter identity.
 
-        adapter_binding is claude_cli_adapter@v2. Old Profile records remain
+        adapter_binding is claude_cli_adapter@v3. Old Profile records remain
         readable and committed replay is independent of this Adapter, but new
         execution needs an explicit current Profile; no historical pair is
         silently reinterpreted. Agent drafts use scratch as cwd and the write
@@ -162,6 +161,8 @@ class ClaudeAdapter:
         self._cli_path = Path(cli_path).resolve(strict=True)
         self._dependencies = tuple(Path(item).resolve(strict=True) for item in read_only_dependencies)
         self._run = process_runner
+        self._tool_factory = None
+        self._tool_definitions = []
         self.descriptor = AgentExecutionAdapterDescriptor(
             adapter_contract_version="v1",
             adapter_id=self.executor_adapter_id, adapter_revision=self.executor_adapter_revision,
@@ -175,7 +176,17 @@ class ClaudeAdapter:
         )
         self.descriptor.validate()
 
-    def build_command(self, *, profile, settings: dict, output_schema: dict | None, local_commands=None) -> list[str]:
+    def bind_tool_session_factory(self, factory, definitions):
+        """Bind this Adapter instance to the exact trusted request preparation."""
+        from .invocation_tool_definition import tool_definition_records
+        if self._tool_factory is not None and self._tool_factory is not factory:
+            raise PermissionError("Adapter already belongs to another callback factory")
+        if tool_definition_records(factory.definitions) != definitions:
+            raise ValueError("factory differs from frozen tool definitions")
+        self._tool_factory = factory
+        self._tool_definitions = json.loads(json.dumps(definitions, allow_nan=False))
+
+    def build_command(self, *, profile, settings: dict, output_schema: dict | None, local_commands=None, provider_tools=None) -> list[str]:
         """Render validated fields using Runtime-generated settings and schema.
 
         Used internally by execute; it is not an execution or permission port.
@@ -200,12 +211,21 @@ class ClaudeAdapter:
         _execution_expectation(profile, (self.executor_adapter_id, self.executor_adapter_revision))
         if (output_schema is not None) != (profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT):
             raise ValueError("CLI schema presence differs from Profile output constraint mode")
-        tools = ",".join(NATIVE_TOOLS[name] for name in profile.tool_policy)
+        tools = ",".join(NATIVE_TOOLS[name] for name in profile.tool_policy if name in NATIVE_TOOLS)
         if local_commands is not None and type(local_commands) is not LocalCommandSession:
             raise TypeError("local_commands must be the exact Runtime LocalCommandSession")
         mcp_config = {"mcpServers": {}} if local_commands is None else local_commands.mcp_config
         allowed = tools if local_commands is None else tools + "," + LOCAL_COMMAND_CLI_TOOL_NAME
-        argv = [str(self._cli_path), "-p", *(["--safe-mode"] if local_commands is None else []), "--restricted", "--disable-slash-commands",
+        callback_names = set(profile.tool_policy) - NATIVE_TOOLS.keys()
+        if callback_names:
+            if type(provider_tools) is not ProviderToolSessionBridge or provider_tools.cli_tools != {
+                    "mcp__runtime_tools__" + name for name in callback_names}:
+                raise PermissionError("Profile callbacks require their exact live tool bridge")
+            mcp_config = {"mcpServers": {**mcp_config["mcpServers"], **provider_tools.mcp_config["mcpServers"]}}
+            allowed = ",".join(filter(None, (allowed, *sorted(provider_tools.cli_tools))))
+        elif provider_tools is not None:
+            raise ValueError("unused provider tool bridge")
+        argv = [str(self._cli_path), "-p", *(["--safe-mode"] if local_commands is None and provider_tools is None else []), "--restricted", "--disable-slash-commands",
                 "--strict-mcp-config", "--mcp-config", json.dumps(mcp_config, separators=(",", ":")), "--setting-sources", "",
                 "--no-chrome", "--no-session-persistence", "--model", profile.model_id,
                 "--effort", profile.reasoning_profile, "--permission-mode", "auto",
@@ -244,6 +264,13 @@ class ClaudeAdapter:
         request.validate()
         profile = self._registry.get_execution_profile(request.execution_profile_ref, request.execution_profile_sha256)
         expectation = _execution_expectation(profile, (self.executor_adapter_id, self.executor_adapter_revision))
+        callback_names = set(profile.tool_policy) - NATIVE_TOOLS.keys()
+        if callback_names:
+            if request.self_test_binding_ref is None or self._tool_factory is None:
+                raise PermissionError("callbacks require a trusted self-test Factory")
+            if callback_names != {item["name"] for item in self._tool_definitions} or "sandbox_command_execute" in callback_names:
+                raise PermissionError("callback table differs from Profile or conflicts with commands")
+            host.validate_provider_tool_session(request, factory=self._tool_factory, definitions=self._tool_definitions)
         def validate_self_test(value):
             validator = getattr(host, "validate_self_test_binding", None)
             if not callable(validator):
@@ -255,12 +282,14 @@ class ClaudeAdapter:
             expectation=expectation,
             self_test_validator=validate_self_test,
         )
+        from .invocation_tool_definition import self_test_cancellation_callbacks
+        cancellation = self_test_cancellation_callbacks(host, request)
         with _capture_cli_interrupts() as interrupted:
             result, pending_detail, cleanup_error = None, None, None
             try:
                 with ExitStack() as cleanup:
                     try:
-                        result = self._execute(request, host, prepared, cleanup)
+                        result = self._execute(request, host, prepared, cleanup, cancellation=cancellation)
                     except TerminalAdapterFailure as failure:
                         result, pending_detail = failure.result, failure.pending_failure_detail
             except Exception as exc:
@@ -270,13 +299,14 @@ class ClaudeAdapter:
             # One handoff for both success and failure, after their trace commits
             # and resource cleanup. An interrupted timeout must not allow retry.
             return finalize_adapter_result(artifact_host=self._artifacts, request=request, result=result,
-                pending_failure_detail=pending_detail, interruption_requested=lambda: interrupted.requested,
+                pending_failure_detail=pending_detail, interruption_requested=lambda: interrupted.requested or (
+                    bool(cancellation) and cancellation["user_cancel_requested"]()),
                 cleanup_error=cleanup_error, interruption_code="claude_cli_interrupted",
                 cleanup_failure_code="claude_cli_cleanup_failed")
 
-    def _execute(self, request, host, prepared, cleanup) -> AgentExecutionResult:
+    def _execute(self, request, host, prepared, cleanup, *, cancellation) -> AgentExecutionResult:
         profile = prepared.profile
-        tools = [NATIVE_TOOLS[name] for name in profile.tool_policy]
+        tools = [NATIVE_TOOLS[name] for name in profile.tool_policy if name in NATIVE_TOOLS]
         result: dict = {}
         trace: dict = {"transport": "claude_cli", "native_tool_events": [], "public_events": [],
                        "model": profile.model_id, "effort": profile.reasoning_profile,
@@ -285,6 +315,7 @@ class ClaudeAdapter:
         policy_refusal: str | None = None
         event_error: str | None = None
         local_commands = None
+        provider_tools = None
         resources_body = None
 
         def usage_fields():
@@ -361,9 +392,11 @@ class ClaudeAdapter:
                 trace["initialization"] = {key: event.get(key) for key in
                     ("model", "tools", "permissionMode", "skills", "plugins", "slash_commands", "mcp_servers", "claude_code_version")}
                 servers = event.get("mcp_servers", [])
-                servers_valid = (not servers if local_commands is None else
-                    isinstance(servers, list) and len(servers) == 1 and isinstance(servers[0], dict)
-                    and servers[0].get("name") == LOCAL_COMMAND_SERVER_NAME and servers[0].get("status") == "connected")
+                expected_servers = ({LOCAL_COMMAND_SERVER_NAME} if local_commands is not None else set()) | (
+                    {ProviderToolSessionBridge.server_name} if provider_tools is not None else set())
+                servers_valid = (isinstance(servers, list) and len(servers) == len(expected_servers)
+                    and all(isinstance(server, dict) and server.get("status") == "connected" for server in servers)
+                    and {server.get("name") for server in servers} == expected_servers)
                 if set(event.get("tools", [])) != expected_tools or not servers_valid or any(event.get(key) for key in
                     ("skills", "plugins", "slash_commands")) or (
                     event.get("permissionMode") != argv[argv.index("--permission-mode") + 1]
@@ -467,6 +500,11 @@ class ClaudeAdapter:
                         artifact_host=self._artifacts, workspace_root=self._workspace_root, resources_body=resources_body,
                         source_root=materials / "source", scratch_root=scratch, read_only_dependencies=self._dependencies))
                     expected_tools.add(LOCAL_COMMAND_CLI_TOOL_NAME)
+                if self._tool_factory is not None:
+                    stage = "provider_tool_preparation"
+                    provider_tools = cleanup.enter_context(ProviderToolSessionBridge(request=request, host=host,
+                        factory=self._tool_factory, definitions=self._tool_definitions, timeout_seconds=profile.timeout_seconds))
+                    expected_tools.update(provider_tools.cli_tools)
                 settings = {
                     "permissions": {"blockReadsOutsideWorkingDirectories": True,
                         "additionalDirectories": [str(materials), *map(str, read_dependencies)]},
@@ -483,10 +521,11 @@ class ClaudeAdapter:
                         "network": {"allowedDomains": [], "strictAllowlist": True,
                                     "allowAllUnixSockets": False, "allowLocalBinding": False}},
                 }
-                if local_commands is not None:
+                if local_commands is not None or provider_tools is not None:
                     settings.update(claudeMdExcludes=["**"], autoMemoryEnabled=False, disableAllHooks=True, enabledPlugins={})
-                    settings["sandbox"]["filesystem"]["denyRead"].append(str(local_commands.private_root))
-                argv = self.build_command(profile=profile, settings=settings, output_schema=native_schema, local_commands=local_commands)
+                    settings["sandbox"]["filesystem"]["denyRead"].extend(str(item.private_root) for item in (local_commands, provider_tools) if item is not None)
+                argv = self.build_command(profile=profile, settings=settings, output_schema=native_schema,
+                                          local_commands=local_commands, provider_tools=provider_tools)
                 stage = "cli_preflight"
                 version = subprocess.run([str(self._cli_path), "--version"], capture_output=True,
                                          text=True, check=True, timeout=30).stdout.strip()
@@ -517,12 +556,22 @@ class ClaudeAdapter:
                         launch_options["launch_guard"] = lambda launch: host.guard_self_test_launch(
                             request, launch, adapter=self, artifact_host=self._artifacts,
                             workspace_root=self._workspace_root, read_only_dependencies=self._dependencies)
+                        launch_options.update(cancellation)
                     process = self._run(argv=argv, prompt=prompt, cwd=cwd, environment=environment,
                                         timeout_seconds=profile.timeout_seconds, on_stdout_line=observe,
                                         **launch_options)
                     trace.update(exit_code=process.returncode, stdout=process.stdout, stderr=process.stderr,
                                  process_output_complete=True, **captured_cli_streams(process))
                 finally:
+                    if provider_tools is not None:
+                        try:
+                            provider_tools.close()
+                        except Exception as exc:
+                            command_cleanup_error = exc
+                            trace["provider_tool_cleanup_error"] = {"error_type": type(exc).__name__, "message": str(exc)}
+                        finally:
+                            trace["local_callback_calls"] = provider_tools.records
+                            trace["local_callback_cli_tools"] = sorted(provider_tools.cli_tools)
                     if local_commands is not None:
                         try:
                             local_commands.close()
@@ -547,11 +596,14 @@ class ClaudeAdapter:
                             intact = False
                         if not intact:
                             policy_refusal = "read-only material changed or unavailable"
-                if local_commands is not None:
+                if local_commands is not None or provider_tools is not None:
                     stage = "local_command_validation"
                     if command_cleanup_error is not None:
                         raise command_cleanup_error
-                    local_commands.validate_completion()
+                    if local_commands is not None:
+                        local_commands.validate_completion()
+                    if provider_tools is not None:
+                        provider_tools.validate_completion()
                     stage = "provider_invocation"
         except (Exception, CliProcessInterrupted) as exc:
             trace.update(stage=stage, error=str(exc))

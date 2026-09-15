@@ -149,6 +149,7 @@ def _run_cli_process(
     on_stdout_line: Callable[[str], bool] | None = None,
     launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
+    user_cancel_requested: Callable[[], bool] | None = None,
     interrupted: _CliInterruptState,
 ) -> subprocess.CompletedProcess[str]:
     """Drain both streams, stop the group on failure, preserve exact captured bytes.
@@ -167,7 +168,7 @@ def _run_cli_process(
     if type(timeout_seconds) is not int or timeout_seconds < 1:
         raise ValueError("CLI process timeout must be positive")
     def launch():
-        if interrupted.requested:
+        if interrupted.requested or (user_cancel_requested is not None and user_cancel_requested()):
             raise CliProcessInterrupted(returncode=None, output="", stderr="",
                                         stdout_bytes=b"", stderr_bytes=b"")
         if cancel_requested is not None and cancel_requested():
@@ -246,7 +247,8 @@ def _run_cli_process(
     cleanup_errors: list[str] = []
     try:
         while process.poll() is None:
-            if interrupted.requested:
+            if interrupted.requested or (user_cancel_requested is not None and user_cancel_requested()):
+                interrupted.requested = True
                 mark_failure("cancelled")
                 break
             if failure is not None:
@@ -325,6 +327,7 @@ def run_cli_process(
     on_stdout_line: Callable[[str], bool] | None = None,
     launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
+    user_cancel_requested: Callable[[], bool] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Capture bounded exact streams through process shutdown and output handoff.
 
@@ -336,11 +339,15 @@ def run_cli_process(
     An optional trusted cancel_requested callback stops resource-bound commands
     with resource_closed, not a forged user interruption. It is checked before
     Popen and during waiting; the launch guard still orders creation with close.
+    user_cancel_requested is a separate trusted callback for user cancellation
+    from another thread; it stops the process and raises CliProcessInterrupted
+    with captured bytes. It never converts resource closure into a user action.
     """
     with _capture_cli_interrupts() as interrupted:
         return _run_cli_process(argv=argv, prompt=prompt, cwd=cwd, timeout_seconds=timeout_seconds,
             environment=environment, max_output_bytes=max_output_bytes, on_stdout_line=on_stdout_line,
-            launch_guard=launch_guard, cancel_requested=cancel_requested, interrupted=interrupted)
+            launch_guard=launch_guard, cancel_requested=cancel_requested,
+            user_cancel_requested=user_cancel_requested, interrupted=interrupted)
 
 
 __all__ = ["CliProcessError", "CliProcessTimeout", "CliProcessInterrupted", "run_cli_process"]

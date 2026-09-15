@@ -26,16 +26,12 @@ from .execution_host_definition import (
 
 
 @runtime_checkable
-class DurableBackendAdapter(Protocol):
-    """Complete asynchronous control protocol for one durable backend."""
+class WorkflowCursor(Protocol):
+    """Control an already started execution; this interface grants no authority.
 
-    async def start(
-        self,
-        request: RuntimeWorkflowStartRequest,
-    ) -> BackendExecutionRef:
-        """Start or recover one exact pinned Workflow Execution."""
-
-        ...
+    A process-local implementation can resume only while its resources live.
+    Durable start and authorized cancellation remain on DurableBackendAdapter.
+    """
 
     async def apply_external_event(
         self,
@@ -51,17 +47,8 @@ class DurableBackendAdapter(Protocol):
 
         ...
 
-    async def request_cancellation(
-        self,
-        execution: BackendExecutionRef,
-        request: RuntimeCancellationRequest,
-    ) -> ExecutionSnapshot:
-        """Apply one typed cancellation and return its acknowledged snapshot."""
-
-        ...
-
     async def recover(self, execution: BackendExecutionRef) -> ExecutionSnapshot:
-        """Recover the same server-authoritative durable execution."""
+        """Return the same execution within this backend's recovery boundary."""
 
         ...
 
@@ -74,6 +61,21 @@ class DurableBackendAdapter(Protocol):
         ...
 
 
+@runtime_checkable
+class DurableBackendAdapter(WorkflowCursor, Protocol):
+    """A durable cursor with the original authorized host start/cancel boundary."""
+
+    async def start(self, request: RuntimeWorkflowStartRequest) -> BackendExecutionRef:
+        """Start or recover one exact pinned Workflow Execution."""
+        ...
+
+    async def request_cancellation(
+        self, execution: BackendExecutionRef, request: RuntimeCancellationRequest,
+    ) -> ExecutionSnapshot:
+        """Apply one typed authorized cancellation, preserving its host contract."""
+        ...
+
+
 __all__ = [
     "BackendEvent",
     "BackendExecutionRef",
@@ -82,4 +84,5 @@ __all__ = [
     "ExternalEvent",
     "RuntimeCancellationRequest",
     "RuntimeWorkflowStartRequest",
+    "WorkflowCursor",
 ]

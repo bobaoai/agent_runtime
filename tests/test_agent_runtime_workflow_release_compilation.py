@@ -59,6 +59,37 @@ def _candidate() -> WorkflowReleaseCandidate:
     )
 
 
+def test_registered_graph_projection_keeps_the_release_reference_contract():
+    from agent_runtime.registry.registry_graph_projection import project_workflow_release_graph
+    from agent_runtime.contracts.durability_topology_definition import WorkflowGraphProjection
+
+    release = compile_workflow_release(_candidate())
+    projection = project_workflow_release_graph(release)
+    assert projection.graph_authority_ref == release.graph_ref
+    assert WorkflowGraphProjection.from_backend_payload(projection.to_backend_payload()) == projection
+
+
+def test_legacy_graph_projection_still_requires_its_python_locator():
+    from agent_runtime.registry.registry_graph_projection import project_workflow_release_graph, GRAPH_PROJECTION_VERSION
+
+    projection = project_workflow_release_graph(compile_workflow_release(_candidate()))
+    legacy = replace(projection, projection_version=GRAPH_PROJECTION_VERSION)
+    legacy = replace(legacy, graph_sha256=legacy.computed_sha256())
+    with pytest.raises(ValueError, match="graph_authority_ref"):
+        legacy.validate()
+
+
+@pytest.mark.parametrize("reference", ["", "missing_scheme", "has space:graph", None])
+def test_registered_projection_rejects_invalid_opaque_reference(reference):
+    from agent_runtime.registry.registry_graph_projection import project_workflow_release_graph
+
+    projection = project_workflow_release_graph(compile_workflow_release(_candidate()))
+    invalid = replace(projection, graph_authority_ref=reference)
+    invalid = replace(invalid, graph_sha256=invalid.computed_sha256())
+    with pytest.raises(ValueError, match="graph_authority_ref"):
+        invalid.validate()
+
+
 def test_workflow_candidate_is_path_free_and_compiles_exact_content() -> None:
     forbidden_fragments = ("path", "root", "skill")
     assert not any(

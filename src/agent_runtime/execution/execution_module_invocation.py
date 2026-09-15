@@ -285,6 +285,17 @@ class _AttemptExecutionHost:
             return launch()
         return self._self_test.guarded(guarded)
 
+    def validate_provider_tool_session(self, request, *, factory, definitions):
+        """Resolve this exact request's trusted callback factory, never a payload grant."""
+        if self._self_test is None or request != self._request:
+            raise PermissionError("provider callbacks require the current self-test request")
+        self._self_test.check_tools(factory=factory, definitions=definitions)
+
+    def self_test_cancel_requested(self, request, *, user=False):
+        if self._self_test is None or request != self._request:
+            raise PermissionError("cancellation query differs from the self-test request")
+        return self._self_test.user_cancel_requested() if user else self._self_test.cancel_requested()
+
     def authorize_operation(
         self,
         request: ProviderOperationIntent,
@@ -514,6 +525,9 @@ class _AttemptExecutionHost:
 def _prepare_registered_workflow_module(
     *, module_id, input_payload, idempotency_key, release_registry, workflow,
     variant_policy, artifact_host, local_resources: bytes | None = None,
+    workflow_node_id=None, workflow_execution_id=None, dispatch_id=None,
+    module_run_id=None, attempt_ordinal=1, parent_attempt_id=None,
+    tool_definitions=(),
 ):
     """Freeze exact definitions and input without requiring a runnable Adapter.
 
@@ -524,6 +538,12 @@ def _prepare_registered_workflow_module(
 
     validate_id("module_id", module_id)
     validate_id("idempotency_key", idempotency_key)
+    if type(attempt_ordinal) is not int or attempt_ordinal < 1:
+        raise ValueError("attempt_ordinal must be a positive integer")
+    if attempt_ordinal == 1 and parent_attempt_id is not None:
+        raise ValueError("initial Attempt cannot have a parent")
+    if attempt_ordinal > 1:
+        validate_id("parent_attempt_id", parent_attempt_id)
     if type(input_payload) is not dict:
         raise ValueError("input_payload must be one JSON object")
     if type(workflow) is not WorkflowRelease or type(variant_policy) is not ExecutionVariantPolicyRelease:
@@ -533,11 +553,21 @@ def _prepare_registered_workflow_module(
     if release_registry.get_execution_variant_policy(variant_policy.release_ref, variant_policy.release_sha256) != variant_policy:
         raise ValueError("Variant Policy differs from the registered release")
     release_registry.assert_workflow_execution_allowed(workflow, ModuleExecutionPurpose.EVALUATION)
-    if len(workflow.nodes) != 1 or workflow.nodes[0].node_kind is not WorkflowNodeKind.MODULE:
-        raise ValueError("entry requires one registered Module node")
-    node = workflow.nodes[0]
-    if workflow.initial_node_id != node.node_id:
-        raise ValueError("the Module node must be the Workflow entry")
+    identities = (workflow_node_id, workflow_execution_id, dispatch_id, module_run_id)
+    explicit_node = any(value is not None for value in identities)
+    if explicit_node:
+        for name, value in zip(("workflow_node_id", "workflow_execution_id", "dispatch_id", "module_run_id"), identities):
+            validate_id(name, value)
+        matches = [item for item in workflow.nodes if item.node_id == workflow_node_id]
+        if len(matches) != 1 or matches[0].node_kind is not WorkflowNodeKind.MODULE:
+            raise ValueError("request must select one exact Workflow Module node")
+        node = matches[0]
+    else:
+        if len(workflow.nodes) != 1 or workflow.nodes[0].node_kind is not WorkflowNodeKind.MODULE:
+            raise ValueError("entry requires one registered Module node")
+        node = workflow.nodes[0]
+        if workflow.initial_node_id != node.node_id:
+            raise ValueError("the Module node must be the Workflow entry")
     module = release_registry.get_module(node.module_release_ref, node.module_release_sha256)
     if module.module_id != module_id:
         raise ValueError("Workflow Module differs from the requested target")
@@ -547,11 +577,12 @@ def _prepare_registered_workflow_module(
         selection["origin_kind"] != "workflow"
         or selection["origin_release_ref"] != workflow.release_ref
         or selection["origin_release_sha256"] != workflow.release_sha256
-        or len(selection["bindings"]) != 1
-        or selection["bindings"][0]["position_id"] != node.node_id
     ):
         raise ValueError("Variant Policy must select the exact Workflow Module node")
-    selected = selection["bindings"][0]
+    selected_bindings = [item for item in selection["bindings"] if item["position_id"] == node.node_id]
+    if len(selected_bindings) != 1:
+        raise ValueError("Variant Policy must select the exact Workflow Module node")
+    selected = selected_bindings[0]
     profile = release_registry.get_execution_profile(
         selected["execution_profile_release_ref"], selected["execution_profile_release_sha256"]
     )
@@ -562,13 +593,15 @@ def _prepare_registered_workflow_module(
     input_bytes = json.dumps(input_payload, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":"), allow_nan=False).encode("utf-8")
     Draft202012Validator(schema.schema_document()).validate(json.loads(input_bytes))
-    execution_id = _stable_id("execution", idempotency_key)
+    execution_id = workflow_execution_id if explicit_node else _stable_id("execution", idempotency_key)
+    run_id = module_run_id if explicit_node else _stable_id("module_run", execution_id)
+    content_key = _stable_id("node_input", run_id, str(attempt_ordinal), dispatch_id) if explicit_node else execution_id
     put_bytes = getattr(artifact_host, "put_bytes")
     task = put_bytes(
         artifact_kind_id="module_input", schema_version=module.input_schema_ref.rsplit("@", 1)[-1],
         schema_ref=module.input_schema_ref, schema_sha256=module.input_schema_sha256,
         media_type="application/json", content=input_bytes,
-        idempotency_key=execution_id + "_task", logical_name="task_input",
+        idempotency_key=content_key + "_task", logical_name="task_input",
     )
     input_binding = ModuleInputBinding("task_input", task.artifact_ref, task.artifact_sha256,
                                       module.input_schema_ref, module.input_schema_sha256, "application/json")
@@ -584,33 +617,39 @@ def _prepare_registered_workflow_module(
             artifact_kind_id="module_input", schema_version="v1",
             schema_ref=LOCAL_RESOURCES_SCHEMA_REF, schema_sha256=LOCAL_RESOURCES_SCHEMA_SHA256,
             media_type=LOCAL_RESOURCES_MEDIA_TYPE, content=local_resources,
-            idempotency_key=execution_id + "_resources", logical_name=LOCAL_RESOURCES_LOGICAL_NAME,
+            idempotency_key=content_key + "_resources", logical_name=LOCAL_RESOURCES_LOGICAL_NAME,
         )
         inputs += (ModuleInputBinding(LOCAL_RESOURCES_LOGICAL_NAME, resource.artifact_ref,
             resource.artifact_sha256, LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256,
             LOCAL_RESOURCES_MEDIA_TYPE),)
-    bundle = release_registry.get_prompt_bundle(module.prompt_bundle_ref, module.prompt_bundle_sha256)
-    prompt = build_inline_provider_prompt(
-        compiled_static_body=bundle.compiled_static_body, execution_specific_instructions="",
-        inputs=((input_binding, input_bytes),), output_constraint_mode=profile.output_constraint_mode,
-        resource_description=describe_local_resources(profile=profile, body=local_resources),
-    )
-    prompt_ref = put_bytes(
-        artifact_kind_id="prompt_envelope", schema_version="v1",
-        schema_ref="schema:prompt_envelope@v1", schema_sha256=_canonical_sha256({"type": "string"}),
-        media_type="text/plain", content=prompt.encode("utf-8"),
-        idempotency_key=execution_id + "_prompt", logical_name="prompt_envelope",
-    )
+    prompt_ref = None
+    if module.prompt_bundle_ref is not None:
+        bundle = release_registry.get_prompt_bundle(module.prompt_bundle_ref, module.prompt_bundle_sha256)
+        prompt = build_inline_provider_prompt(
+            compiled_static_body=bundle.compiled_static_body, execution_specific_instructions="",
+            inputs=((input_binding, input_bytes),), output_constraint_mode=profile.output_constraint_mode,
+            resource_description=describe_local_resources(profile=profile, body=local_resources) + (
+                "\n\nRuntime-provided tools (exact input schemas):\n" + json.dumps(tool_definitions,
+                    ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+                if tool_definitions else ""),
+        )
+        prompt_ref = put_bytes(
+            artifact_kind_id="prompt_envelope", schema_version="v1",
+            schema_ref="schema:prompt_envelope@v1", schema_sha256=_canonical_sha256({"type": "string"}),
+            media_type="text/plain", content=prompt.encode("utf-8"),
+            idempotency_key=content_key + "_prompt", logical_name="prompt_envelope",
+        )
     request = WorkflowModuleExecutionRequest.build(
-        request_id=_stable_id("request", execution_id), purpose=ModuleExecutionPurpose.EVALUATION,
-        workflow_execution_id=execution_id, dispatch_id=_stable_id("dispatch", execution_id),
-        workflow_node_id=node.node_id, module_run_id=_stable_id("module_run", execution_id),
+        request_id=_stable_id("request", content_key), purpose=ModuleExecutionPurpose.EVALUATION,
+        workflow_execution_id=execution_id, dispatch_id=dispatch_id if explicit_node else _stable_id("dispatch", execution_id),
+        workflow_node_id=node.node_id, module_run_id=run_id,
         module_release_ref=module.release_ref, module_release_sha256=module.release_sha256,
         input_package_ref=task.artifact_ref, input_package_sha256=task.artifact_sha256,
         inputs=inputs, variants=(ModuleVariantRequest(
             "default", 0, profile.release_ref, profile.release_sha256,
-            prompt_ref.artifact_ref, prompt_ref.artifact_sha256,
-        ),), idempotency_key=idempotency_key,
+            prompt_ref.artifact_ref if prompt_ref is not None else None,
+            prompt_ref.artifact_sha256 if prompt_ref is not None else None,
+        ),), idempotency_key=idempotency_key, attempt_ordinal=attempt_ordinal, parent_attempt_id=parent_attempt_id,
     )
     return request, module, profile, task, prompt_ref
 
@@ -618,10 +657,13 @@ def _prepare_registered_workflow_module(
 def _assert_registered_module_adapter(module, profile, adapters):
     """Require current execution dependencies only for an uncommitted request."""
     try:
-        _assert_admitted_test_evaluation_profile(module, profile)
+        if module.declared_operation_ids:
+            _assert_admitted_test_evaluation_profile(module, profile)
     except NotImplementedError as exc:
         raise ValueError(str(exc)) from exc
     adapter = adapters.resolve(profile.executor_adapter_id, profile.executor_adapter_revision)
+    if not module.declared_operation_ids and adapter.descriptor.transport_family != "in_process":
+        raise PermissionError("a provider transport requires a declared model invocation operation")
     _assert_descriptor_covers_profile(adapter.descriptor, profile)
 
 
