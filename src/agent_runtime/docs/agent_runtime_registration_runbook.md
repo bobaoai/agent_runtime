@@ -263,6 +263,12 @@ agent-runtime-evaluate --root /path/to/workspace --workflow registered_workflow 
 Read/Grep/Bash 仍可使用，未被限制成该命令清单。是否已完成全部必做命令由任务 owner 校验。
 统一日志按真实返回 ID 关联父进程和 CLI 观察；没有配对证据就明确不完整，不能凭命令名猜测。
 
+自定义 callback 使用 Python 的 `tool_session_factory`，由可信宿主提供函数定义与实际会话；
+多节点入口使用 `tool_session_factory_for_node`。它们不是 `--resources` 字段，也不是普通 CLI
+可从 JSON 导入的函数或服务。非原生工具名须匹配 Module/Profile 声明，工具 schema 由 factory 定义并固定；
+准确参数见上方执行 API 及 [LocalWorkflowModuleBridge](agent_runtime_reviewer_api.md#localworkflowmodulebridge)。
+随包 `--example` 使用自己的固定 callback，不授予生产领域 Gateway 访问权。
+
 宿主可在可选 `.runtime/config.json` 中提供程序路径和只读依赖默认，
 [load_runtime_config](agent_runtime_reviewer_api.md#load_runtime_config) 给出完整格式。
 显式 CLI 路径覆盖对应默认；依赖 None 使用默认，显式空列表清空。无工具调用不暴露未使用的依赖。

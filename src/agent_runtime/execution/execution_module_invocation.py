@@ -898,14 +898,40 @@ def run_module(
 ) -> ModuleRunResult:
     """Run one registered Module through the Test/Evaluation execution kernel.
 
-    The kernel accepts only isolated ``test`` and ``evaluation`` purposes. A
-    Module that declares a model operation requires ``authority``; its AR09
-    binding, fence, protected-operation intent, and Product operation decision
-    are resolved and validated before any provider transport is entered, and
-    the committed fence is re-read inside the atomic finalization that makes
-    outputs authoritative. Empty authorization evidence is admissible only for
-    the operation-free ``in_process`` conjunction. Every other protected
-    operation and every production purpose fails before adapter resolution.
+    This is the low-level isolated entry, not the resource-assembling self-test
+    convenience API. Use evaluate_local_workflow_module for ordinary registered
+    Workflow self-tests without production authorization.
+
+    Args:
+        request: Exact ModuleExecutionRequest with purpose test or evaluation,
+            fixed releases, inputs and Variant requests. Other purposes are
+            rejected here before adapter resolution.
+        release_registry: Registry resolving the exact declared releases.
+        adapters: Registered adapters covering each selected Profile. Generic
+            protocol support does not supply a concrete Provider or Gateway.
+        artifact_host: Request content and output staging through Runtime's
+            existing artifact interface.
+        ledger: Records this Module Run, Variants, Attempts and outcomes.
+        authority: Required when the Module declares a model operation. The
+            binding, fence and operation decisions must match this request.
+            Declared non-model operations also require the admitted resource
+            boundary and actual operation authorization; native tools do not
+            issue grants. Operation-free in_process Modules use no authority.
+        clock: Trusted UTC clock for the existing execution records.
+    Returns:
+        ModuleRunResult with actual execution facts and the existing output
+        resolution. A business verdict is not a technical failure. Detailed
+        Provider logs are read separately through Inspection.
+    Raises:
+        ValueError: Invalid request, release, Profile or unused authority.
+        NotImplementedError: Unsupported purpose or capability conjunction.
+        PermissionError: Missing or mismatched authorization/resources.
+        Native storage and other port errors retain their original contracts.
+    Effects:
+        Calls admitted adapters and records results through the supplied ports.
+        Applicable authorization fences are validated before effects and final
+        acceptance. This function neither creates host setup nor offers the
+        Workflow-bound durable dispatch and replay boundary below.
     """
 
     if type(request) is not ModuleExecutionRequest:
@@ -944,13 +970,40 @@ def run_workflow_module(
 ) -> ModuleRunResult:
     """Run one Module under an admitted Workflow Execution boundary.
 
-    The request carries the durable dispatch, Workflow node, and Module Run
-    IDs. The recorder commits start/authorization facts before provider entry,
-    atomically commits the result, and replays an already committed invocation
-    without calling the provider again.
-    For non-persistent self-tests only, self_test supplies an exact live
-    ModuleSelfTestResources and workflow_ledger is omitted. That path uses the
-    supplied memory Ledger and has no durable replay or production authority.
+    Args:
+        request: Exact WorkflowModuleExecutionRequest carrying its Workflow
+            dispatch, node and Module Run. Supported purposes are workflow,
+            evaluation, test and replay; one dispatch admits one Variant.
+        release_registry: Registry for the exact Workflow/Module/Profile closure.
+        adapters: Registered adapters covering the requested capabilities.
+        artifact_host: Content and output staging for this invocation.
+        ledger: Module Run and Attempt records for the shared execution kernel.
+        workflow_ledger: Durable WorkflowModuleLedgerRecorder, required unless
+            explicit self_test resources are supplied. Replays an already
+            committed invocation without calling the Provider again.
+        authority: Actual execution authority required by declared operations
+            on the persistent path. Cannot be combined with self_test.
+        clock: Trusted UTC clock for existing execution records.
+        self_test: Exact live ModuleSelfTestResources for a non-persistent test.
+            Its Registry, request, adapters, workspace and content must match.
+            workflow_ledger and authority are omitted on this path. High-level
+            evaluation functions assemble these resources for ordinary callers.
+    Returns:
+        ModuleRunResult from the same execution kernel. Self-test resources use
+        the supplied memory Ledger and provide no durable replay or production
+        authority. Logs are original facts; Inspection supplies detailed views.
+    Raises:
+        ValueError: Invalid request or missing durable/self-test recording path.
+        NotImplementedError: Multiple Variants in one dispatch or unsupported
+            capability conjunctions.
+        PermissionError: Mixed, mismatched or unavailable execution resources.
+        Other kernel and storage errors keep their existing contracts.
+    Effects:
+        The durable recorder commits start/authorization facts before Provider
+        entry and atomically commits terminal results. The self-test path records
+        in memory. Host authorization, storage and a concrete compatible Adapter
+        remain necessary for a persistent integration; this interface does not
+        provide a production Gateway or broaden the selected Profile.
     """
 
     if type(request) is not WorkflowModuleExecutionRequest:

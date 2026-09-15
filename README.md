@@ -38,6 +38,11 @@ Portable CLI 管审核对象的准备与结果校验，两套 CLI 保持分开�
 root 绑定模型或 Profile。宿主提供资源、授权和薄操作入口，不能把测试 fixture 当作正式配置。
 本目录提供任务发现与操作导航，不证明某个宿主或 Profile 已完成集成。
 
+使用本包时，README 负责导航；随包 Design 说明职责与意图；docstring、CLI help 和由代码生成的
+API reference 给出准确参数、默认值、返回值与错误；runbook 和操作 Skill 连接这些接口；同版本
+源码中的测试说明如何验证相应能力。工作记录和历史交付报告不承担必需的接口说明。调用者仍需
+提供自己的任务定义、输入、程序与资源，不能把缺少这些输入理解成需要寻找作者的历史聊天。
+
 随包样例使用普通 Module、同一 Workflow 执行和真实受控工具接口。`agent_capability_example` 包含
 查询、写作、并行审核、修订及同进程等待事件；`agent_evaluation_example` 让被测 Agent 自行请求
 任务内审核，再由独立 Agent 依据 Runtime 记录评价。工具读取的 fixture 与生产 Gateway 分开，
@@ -572,85 +577,60 @@ current executable truth.
 
 ## Current maturity
 
-`0.2.0.dev0` contains working PostgreSQL release registration, an
-append-only PostgreSQL Execution Ledger with restart recovery and immutable
-content verification, provider A/B adapters, Temporal recovery, and an
-authorized read-only Live Inspector over the formal records. These surfaces
-are implemented and tested; they are no longer listed as future work.
+Runtime 提供版本化注册、Module 执行、Workflow 协调、执行记录与只读查询。某个类型或字段能表达
+一种能力，不代表每个 Adapter、CLI 或宿主都已接通它。判断可用性时，先选调用入口，再核对该入口
+与所选 Adapter 的真实参数；[同版本 API reference](docs/agent_runtime_reviewer_api.md)给出准确合同。
 
-The public execution kernel has two entry points over the same registered
-Module and provider-adapter contracts. `run_module()` owns isolated Test or
-Evaluation runs. `run_workflow_module()` owns a durable Module Activity inside
-an admitted Workflow Execution and writes the canonical Execution Ledger
-before and after provider entry. Every invocation — explicitly registered provider adapters
-and in-process test doubles alike — crosses the canonical
-`AuthorizedAgentExecutionAdapter` contract, and a Module that declares a model
-operation requires a `ModuleExecutionAuthority`: its AR09 execution
-authorization binding, fence, protected-operation intent, and Product
-operation decision are resolved and validated before the provider transport is
-entered, and the committed fence is re-read inside the atomic finalization
-that makes outputs authoritative. The following terms describe separate
-dimensions and must not be used interchangeably:
+### 选择执行入口
 
-Workflow hosts use `WorkflowExecutionLedgerRecorder` for the surrounding
-execution facts: the frozen execution input package, deterministic derived
-outputs with their source-artifact refs, and each atomic Domain Outcome plus
-recovery checkpoint. Business plugins therefore do not construct ledger rows
-or keep a parallel shadow trace.
+普通调用者通常从前面的 runbook 或 `agent-runtime-evaluate` 开始，无需手拼执行内核资源：
 
-| Dimension | Question answered | Current values or examples |
+| 要完成的工作 | 入口与当前边界 |
+| --- | --- |
+| 自测已注册单节点 Workflow | CLI `--workflow` 或 [evaluate_local_workflow_module](docs/agent_runtime_reviewer_api.md#evaluate_local_workflow_module)；使用临时内存记录与明确测试资源，不要求生产授权或 PG |
+| 运行随包多 Agent 样例 | 同一 CLI 的 `--example` 或 [run_agent_example](docs/agent_runtime_reviewer_api.md#run_agent_example)；仅运行已列出的固定图，包含受控 callback 和子审核样例 |
+| 在自己的程序里组装本地多节点自测 | [prepare_local_workflow](docs/agent_runtime_reviewer_api.md#prepare_local_workflow)、[WorkflowSelfTestResources](docs/agent_runtime_reviewer_api.md#workflowselftestresources) 与 [LocalWorkflowModuleBridge](docs/agent_runtime_reviewer_api.md#localworkflowmodulebridge)；宿主提供节点输入、结果到图分支的映射及实际资源，不由单节点 CLI 自动接管任意业务图 |
+| 将已注册单节点审核接入授权持久执行 | [run_registered_workflow_module](docs/agent_runtime_reviewer_api.md#run_registered_workflow_module)；宿主提供真实授权与记录/内容存储，使用同一准确准备结果，不复制 Adapter 或日志实现 |
+
+更低层的内核有两个入口。[run_module](docs/agent_runtime_reviewer_api.md#run_module)只接纳隔离的 `test` / `evaluation` 请求；其中声明模型
+操作时需要明确的 execution authority。[run_workflow_module](docs/agent_runtime_reviewer_api.md#run_workflow_module)消费 Workflow-bound 请求：
+持久路径使用 `WorkflowModuleLedgerRecorder` 与所需授权；非持久路径使用准确的
+`ModuleSelfTestResources`，不能混入持久 recorder 或外部 authority。上表的自测入口会完成后一种
+资源组装。因此，低层接口的授权参数不能被误写成普通自测必须准备的生产授权。
+
+Workflow 宿主使用 `WorkflowExecutionLedgerRecorder` 记录完整输入、派生输出、Domain Outcome
+和恢复 checkpoint，业务插件不另建影子账本。一个 Workflow dispatch 当前承载一个 Variant；
+A/B 使用同一 Module Release、冻结输入下的独立 dispatch。已有提交按原记录重放。
+
+`production` 表示部署场景，不是 purpose 枚举值。`run_module()` 的用途限制不能套用到整个
+Workflow API；反过来，接口支持 Workflow-bound 请求也不证明宿主生产接入已完成。
+`standalone` purpose 当前不由这两个内核入口接纳；定义的 `standalone_allowed` entry policy
+与执行 purpose 是不同字段。具体请求仍须通过定义、资源和 Adapter 的实际校验。
+
+<a id="current-module-execution-admission-matrix"></a>
+
+### 随包执行路径的工具与资源支持
+
+以下按外部调用者实际提供的资源区分能力，适用于普通 Module，也适用于继承默认要求的
+ModuleReviewer。实际适用项以 Module 的固定要求为准；提供资源或更换模型不隐含扩展能力，
+不支持的要求不会被静默删掉。
+
+| 需要的能力 | 当前路径 | 调用者从哪里提供 |
 | --- | --- | --- |
-| Execution purpose | Why is this run being performed? | `test`, `evaluation`, `workflow`, `standalone`, `replay` |
-| Provider transport | How is the adapter reached? | Bundled model transports: `claude_cli`, `codex_cli`; test doubles use their declared binding. Generic transport families remain `in_process`, `sdk`, `cli`, `api` |
-| Capability profile | What may the model do and receive? | `execution_mode`, semantic input delivery, Attempt workspace, Gateway tools, and network policy |
-| Runtime execution gate | May this exact request execute now? | Purpose gate, exact registered releases, Module operations, exact profile, registered adapter identity and capability coverage, and — for model operations — committed AR09 authorization evidence must all pass; Workflow/Standalone entry additionally resolves its active pointer |
+| 无任务工具的内联模型调用 | Claude CLI；或显式选择 Codex 的 `tool_free`、`inline`、空工具、workspace `none`、network `denied` 组合 | 已注册 Module 的要求；模型、effort 和程序路径使用 [执行参数](docs/agent_runtime_reviewer_api.md#evaluate_local_workflow_module) |
+| 原生读取、搜索和 Shell | Claude 的 `agent`、`inline`、network `denied` 路径可使用声明的 `read/search/shell` 子集；workspace 为 `none` 或私有草稿 | 固定 Module 要求；本次材料与依赖通过已支持的 `--resources` / Python 参数提供，见 [ClaudeAdapter](docs/agent_runtime_reviewer_api.md#claudeadapter) |
+| 按 ID 执行并记录本地工程命令 | macOS Claude 路径；需要 `shell`、私有草稿和 `cli_tools` 依赖；普通 Bash 不被限制成该命令列表 | `--resources` 中的 `commands` 或 Python `commands` 参数；[原生命令说明](docs/agent_runtime_claude_native_tools.md#21-明确的本地工程资源与命令记录) |
+| 调用宿主明确提供的本地函数（callback） | Claude 自测路径，通过受控进程桥；工具名匹配 Module/Profile 的非原生工具，工具 schema 随 factory 定义固定；使用 `cli_tools` | Python `tool_session_factory`（或图入口的 `tool_session_factory_for_node`）；[函数及参数合同](docs/agent_runtime_reviewer_api.md#evaluate_local_workflow_module)与[图调用合同](docs/agent_runtime_reviewer_api.md#localworkflowmodulebridge) |
+| 生产领域 Gateway、`gateway_read` / `hybrid` 输入、直接工具联网，或 Codex 的带工具工作区 | 随包 CLI 尚未接通这些路径；通用协议或候选实现的存在不代表可直接调用 | 返回所选入口/Adapter 的具体不支持结果，交对应集成维护者，不改 Module 要求或换 transport 来掩盖缺口 |
 
-`production` is not a `ModuleExecutionPurpose` value. It describes a deployment
-scope normally entered through `workflow` or `standalone`; those
-purposes are not admitted by the current public entry point.
+Callback 是可信宿主程序提供的实际函数会话，不是从任务 JSON 加载代码或服务。普通 CLI 的
+资源 JSON 不接收 factory，`--example` 只使用样例自己的固定 factory；自定义 callback 使用上表的
+Python 接口。生产领域 Gateway 另有外部授权和数据访问合同，本地 callback 不提供这种授权。
 
-### Current Module-execution admission matrix
-
-| Purpose and Module shape | Capability profile | Registered transport | Current result |
-| --- | --- | --- | --- |
-| `test` or `evaluation`, no protected operation | Exact registered profile | `in_process` transport family only; a provider transport requires a declared model operation | Admitted without authorization evidence, subject to exact release and adapter checks |
-| `test` or `evaluation`, exactly one model operation (`invoke_model` or `model_execute`) and no other operation | `tool_free` + `inline` + workspace `none` + empty tool policy + network `denied` | Compatible Claude CLI or Codex CLI adapter | Admitted with explicit execution authority or Runtime-hosted self-test resources; self-tests do not synthesize production decisions |
-| `test` or `evaluation`, exactly one model operation and no other operation | `agent` + `inline` + workspace `none` or `own_draft_read_write` + an explicit subset of `read/search/shell` + network `denied` | ClaudeAdapter | Admitted within the CLI's implemented resource window. Materials remain read-only and permitted draft writes use the bounded scratch area |
-| `test` or `evaluation`, exactly one model operation plus one or more declared Gateway read operations | `agent` + `gateway_read` + workspace `none` + exact non-empty tool policy and access reason + network `gateway_only` | No bundled CLI Gateway adapter | The generic operation protocol and in-memory conformance tests remain; a real CLI Gateway bridge is not provided. No SDK fallback is available |
-| `test` or `evaluation`, any other protected-operation/profile conjunction | Any | Any | Rejected before Provider invocation, including `hybrid`, Gateway-plus-draft, attachments, direct egress, Codex workspace/Gateway, or a descriptor without dynamic authorization support |
-| Workflow-bound `evaluation`, `test`, `workflow`, or `replay` through `run_workflow_module()` | Same exact reviewed capability conjunctions as above | Same registered adapters | Admitted for one Variant per durable dispatch. Module Run/Variant and Attempt claim precede Provider entry; operation authorization precedes each effect; terminal Attempt/calls/usage/outputs are atomically finalized. Model and Gateway calls retain their AR09 evidence and immutable tool content refs. A committed invocation replays without a Provider call, and a missing direct-output resolution is healed from the committed Attempt bundle. |
-| `standalone` through either entry point | Any | Any | Not admitted by the current public entry points |
-
-These rows are exact reviewed conjunctions, not a rule that every
-Test/Evaluation capability may be freely combined. Adapter implementation and
-public-entry admission remain separate facts: adding a representable profile
-dimension or registering an adapter cannot implicitly admit a new hybrid.
-
-One durable Workflow dispatch currently carries exactly one Variant. A/B arms
-therefore use separate dispatches under the same Module Release and frozen
-input closure; evaluation and selection remain downstream Runtime records.
-
-| Capability profile | Semantic input | Attempt workspace | Model-visible tools | Agent network | Adapter status | Model-backed `run_module()` admission |
-| --- | --- | --- | --- | --- | --- | --- |
-| Tool-free inline | `inline` | `none` | None | `denied` | Claude CLI and Codex CLI implemented | `test` / `evaluation` admitted |
-| Agent with private drafts | `inline` | `own_draft_read_write` | Explicit native read/search/shell subset | `denied` | Claude CLI implemented; Codex workspace remains an unadmitted candidate | Claude CLI `test` / `evaluation` admitted; Codex workspace not admitted |
-| Agent with governed reads | `gateway_read` | `none` | Exact registered Runtime Gateway tools | `gateway_only` | Generic protocol only; no bundled CLI Gateway implementation | Requires an applicable implementation; not provided by the bundled CLIs |
-| Agent with direct sandboxed egress | Profile-specific | Profile-specific | Profile-specific | `direct_sandboxed` | No current public-entry slice | Not admitted |
-
-In the tool-free and Gateway-read profiles, workspace `none` means the model receives no
-writable Attempt draft capability; the Runtime may still create an isolated
-Attempt directory as an execution boundary. An empty tool policy means no
-model-visible tools. Network `denied` means no Agent-initiated general outbound
-or tool network access; the registered CLI transport may still connect to
-its model Provider control plane. Transport connectivity is not an Agent
-capability. In the Gateway slice, `gateway_only` exposes only the exact
-Profile/Module tool intersection. A validated and recorded `DENY` prevents that
-resource call and returns `OperationAuthorizationDenied`; an Adapter may deliver
-it as a tool error and continue. A closed fence, mismatched Attempt lineage,
-invalid decision or required-record failure still prevents continuation and
-result acceptance, even when the Adapter catches the error. Allowed Gateway
-calls retain their exact request/response lineage; denied operations never gain
-an ALLOW receipt.
+workspace `none` 只表示没有模型可写任务草稿，Runtime 仍可创建隔离的进程目录。network `denied`
+限制任务工具联网，不禁止 Provider 完成模型调用所需的连接。原生工具、本地命令和 callback 都不能
+自动获得领域操作许可；真实授权拒绝保留其来源。资源失效、关闭的 fence 或必要记录失败仍按各自
+合同处理，不能靠捕获一个工具异常取得继续执行的权限。
 
 Claude permission events and ordinary tool failures are recorded independently
 of the invocation outcome. Codex completion requires a successful process, an

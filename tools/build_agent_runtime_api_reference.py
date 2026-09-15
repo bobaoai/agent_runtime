@@ -22,7 +22,7 @@ API_SOURCES = {
         "Module", "ModuleReviewer", "ModuleExport", "ModuleAuthoringError",
     ),
     "src/agent_runtime/execution/execution_module_invocation.py": (
-        "run_registered_workflow_module",
+        "run_registered_workflow_module", "run_module", "run_workflow_module",
     ),
     "src/agent_runtime/registry/registry_local_persistence.py": (
         "LoadedRuntimeRegistration", "save_runtime_registration", "load_runtime_registration",
