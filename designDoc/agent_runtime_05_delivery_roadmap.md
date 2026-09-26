@@ -131,7 +131,7 @@ Runtime release unit 只包含 Runtime-owned package source、必要 metadata、
 Design bundle。Host registration sources、business Workflow plugins、domain Skills、tests、review artifacts、
 local credential、database files、provider sessions 和 temporary workspaces 不进入 production package。
 
-Runtime 自有的注册与 evaluation 操作 Skill 属于随包资源。它们说明如何使用 Runtime 的公开能力，
+Runtime 自有的注册与 Test Run 操作 Skill 属于随包资源。它们说明如何使用 Runtime 的公开能力，
 与同一发行包的 CLI 和使用文档共同交付；宿主业务 Skill 与业务 Reviewer source 仍在包边界之外。
 操作 Skill 的来源在 Runtime 产品中维护，宿主安装内容取自该发行包，不成为另一份通用操作方法的
 独立来源。它们作为数据资源交付，不作为 Runtime 执行 Module 注册。
