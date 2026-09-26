@@ -9,7 +9,7 @@ Runtime 把任务定义、运行环境、执行配置和执行记录分开管理
 | --- | --- | --- |
 | Module / ModuleReviewer / Workflow | Registry；任务 owner 提供 prompt、schema 与业务含义 | Module 是通用任务定义；ModuleReviewer 继承固定默认能力；单节点 Workflow 默认与 Module 同名 |
 | root、Python、程序、材料及依赖 | Foundation 做 setup；Invocation 使用运行资源；宿主提供资源与授权 | Python 默认固定为启动 Runtime 的当前环境；root 不自动授权读取整个项目，也不绑定模型 |
-| Execution Profile / Variant | Execution.prepare 生成，Registry 承载准确定义 | Module 决定能力要求，模型与 transport 独立选择；无需调用者手拼 Profile |
+| Execution Profile / Variant | Execution.prepare 生成，Registry 承载准确定义 | Module 决定能力要求；transport、模型与 effort 逐项取本次调用、该 Workflow 的参数文件、workspace 参数文件，最后是 Runtime 默认；无需调用者手拼 Profile |
 | CLI 与工具、Attempt 和结果 | Invocation 负责实际调用及原始记录；Execution 负责执行生命周期 | 工具错误与整次执行失败分开；业务是否通过由任务 owner 校验 |
 | 记录、恢复与查询 | Ledger / Durability / Inspection | 普通自测不依赖 PG；未请求持久化时返回本次记录，不承诺跨进程恢复 |
 
@@ -17,7 +17,7 @@ Runtime 把任务定义、运行环境、执行配置和执行记录分开管理
 该页先给整体组成，再列真实的 Module、ModuleReviewer 默认、ExecutionProfileRelease、Variant、
 执行入口和 CLI 参数。完整值来自代码与 docstring，不是另一份手工 Profile 配置。
 
-`agent-runtime-evaluate --help` 同时显示职责摘要和当前 Python 路径。Runtime CLI 管注册、执行和查询；
+`agent-runtime-test-run --help` 同时显示职责摘要和当前 Python 路径。Runtime CLI 管注册、执行和查询；
 Portable CLI 管审核对象的准备与结果校验，两套 CLI 保持分开。宿主不复制模型启动或日志解析逻辑。
 
 ## 按任务开始 / Start by task
@@ -32,7 +32,7 @@ Portable CLI 管审核对象的准备与结果校验，两套 CLI 保持分开�
 | 查询审核结果、执行日志或失败 / inspect a review | [按执行 ID 查询](docs/agent_runtime_registration_runbook.md#inspect-reviewer) |
 | 查完整运行配置、接口参数、返回值和错误 | [自动生成的 Module 与执行 API reference](docs/agent_runtime_reviewer_api.md) |
 | 开发 Runtime，运行回归测试 | [开发者能力与测试样例](docs/agent_runtime_capabilities.md) |
-| 运行多 Agent 示例或独立评价 | [随包多 Agent 样例](docs/agent_runtime_capability_runbook.md#随包多agent样例)；同一个 `agent-runtime-evaluate` 命令提供 `--example` |
+| 运行多 Agent 示例或独立评价 | [随包多 Agent 样例](docs/agent_runtime_capability_runbook.md#随包多agent样例)；同一个 `agent-runtime-test-run` 命令提供 `--example` |
 
 注册保存 Module/Workflow 定义；执行时由 Runtime 固定准确版本并准备本次配置，不要求先给宿主
 root 绑定模型或 Profile。宿主提供资源、授权和薄操作入口，不能把测试 fixture 当作正式配置。
@@ -583,11 +583,11 @@ Runtime 提供版本化注册、Module 执行、Workflow 协调、执行记录�
 
 ### 选择执行入口
 
-普通调用者通常从前面的 runbook 或 `agent-runtime-evaluate` 开始，无需手拼执行内核资源：
+普通调用者通常从前面的 runbook 或 `agent-runtime-test-run` 开始，无需手拼执行内核资源：
 
 | 要完成的工作 | 入口与当前边界 |
 | --- | --- |
-| 自测已注册单节点 Workflow | CLI `--workflow` 或 [evaluate_local_workflow_module](docs/agent_runtime_reviewer_api.md#evaluate_local_workflow_module)；使用临时内存记录与明确测试资源，不要求生产授权或 PG |
+| 自测已注册单节点 Workflow | CLI `--workflow`（root 下的本地定义）或 `--workflow-ref` 加 `--workflow-sha256`（只读取 PostgreSQL 中的准确定义），或 [run_local_workflow_test](docs/agent_runtime_reviewer_api.md#run_local_workflow_test)；使用临时内存记录与明确测试资源，不要求生产授权，不写 PG |
 | 运行随包多 Agent 样例 | 同一 CLI 的 `--example` 或 [run_agent_example](docs/agent_runtime_reviewer_api.md#run_agent_example)；仅运行已列出的固定图，包含受控 callback 和子审核样例 |
 | 在自己的程序里组装本地多节点自测 | [prepare_local_workflow](docs/agent_runtime_reviewer_api.md#prepare_local_workflow)、[WorkflowSelfTestResources](docs/agent_runtime_reviewer_api.md#workflowselftestresources) 与 [LocalWorkflowModuleBridge](docs/agent_runtime_reviewer_api.md#localworkflowmodulebridge)；宿主提供节点输入、结果到图分支的映射及实际资源，不由单节点 CLI 自动接管任意业务图 |
 | 将已注册单节点审核接入授权持久执行 | [run_registered_workflow_module](docs/agent_runtime_reviewer_api.md#run_registered_workflow_module)；宿主提供真实授权与记录/内容存储，使用同一准确准备结果，不复制 Adapter 或日志实现 |
@@ -617,10 +617,10 @@ ModuleReviewer。实际适用项以 Module 的固定要求为准；提供资源�
 
 | 需要的能力 | 当前路径 | 调用者从哪里提供 |
 | --- | --- | --- |
-| 无任务工具的内联模型调用 | Claude CLI；或显式选择 Codex 的 `tool_free`、`inline`、空工具、workspace `none`、network `denied` 组合 | 已注册 Module 的要求；模型、effort 和程序路径使用 [执行参数](docs/agent_runtime_reviewer_api.md#evaluate_local_workflow_module) |
+| 无任务工具的内联模型调用 | Claude CLI；或显式选择 Codex 的 `tool_free`、`inline`、空工具、workspace `none`、network `denied` 组合 | 已注册 Module 的要求；模型、effort 和程序路径使用 [执行参数](docs/agent_runtime_reviewer_api.md#run_local_workflow_test) |
 | 原生读取、搜索和 Shell | Claude 的 `agent`、`inline`、network `denied` 路径可使用声明的 `read/search/shell` 子集；workspace 为 `none` 或私有草稿 | 固定 Module 要求；本次材料与依赖通过已支持的 `--resources` / Python 参数提供，见 [ClaudeAdapter](docs/agent_runtime_reviewer_api.md#claudeadapter) |
 | 按 ID 执行并记录本地工程命令 | macOS Claude 路径；需要 `shell`、私有草稿和 `cli_tools` 依赖；普通 Bash 不被限制成该命令列表 | `--resources` 中的 `commands` 或 Python `commands` 参数；[原生命令说明](docs/agent_runtime_claude_native_tools.md#21-明确的本地工程资源与命令记录) |
-| 调用宿主明确提供的本地函数（callback） | Claude 自测路径，通过受控进程桥；工具名匹配 Module/Profile 的非原生工具，工具 schema 随 factory 定义固定；使用 `cli_tools` | Python `tool_session_factory`（或图入口的 `tool_session_factory_for_node`）；[函数及参数合同](docs/agent_runtime_reviewer_api.md#evaluate_local_workflow_module)与[图调用合同](docs/agent_runtime_reviewer_api.md#localworkflowmodulebridge) |
+| 调用宿主明确提供的本地函数（callback） | Claude 自测路径，通过受控进程桥；工具名匹配 Module/Profile 的非原生工具，工具 schema 随 factory 定义固定；使用 `cli_tools` | Python `tool_session_factory`（或图入口的 `tool_session_factory_for_node`）；[函数及参数合同](docs/agent_runtime_reviewer_api.md#run_local_workflow_test)与[图调用合同](docs/agent_runtime_reviewer_api.md#localworkflowmodulebridge) |
 | 生产领域 Gateway、`gateway_read` / `hybrid` 输入、直接工具联网，或 Codex 的带工具工作区 | 随包 CLI 尚未接通这些路径；通用协议或候选实现的存在不代表可直接调用 | 返回所选入口/Adapter 的具体不支持结果，交对应集成维护者，不改 Module 要求或换 transport 来掩盖缺口 |
 
 Callback 是可信宿主程序提供的实际函数会话，不是从任务 JSON 加载代码或服务。普通 CLI 的
@@ -646,7 +646,7 @@ raw logs; it does not parse tool behavior to decide success or retry. Inspection
 `read_execution_log` parses detailed tool events only when private content is
 requested. Historical traces that already contain `tool_log` retain their saved
 interpretation. A log gap affects the view's completeness, not the recorded
-Attempt status. The explicit evaluation API and CLI request this detailed view
+Attempt status. The Test Run API and CLI request this detailed view
 before their temporary resources close; a behavioral assessment remains separate.
 
 Claude's current binding is `claude_cli_adapter@v3`. Its complete stdin prompt,
@@ -656,7 +656,7 @@ readable, and committed requests replay without an Adapter; new executions use
 an explicitly prepared current Profile. Hosts must migrate their current entry
 points before adopting this package rather than reinterpret saved bindings.
 
-The existing evaluation CLI accepts `--resources FILE` for an explicitly frozen
+The Test Run CLI accepts `--resources FILE` for an explicitly frozen
 file tree, read-only dependency directories and task-supplied command IDs. On
 macOS, Claude can use its ordinary Read/Grep/Bash tools and, when commands are
 supplied, an additional Runtime-owned local MCP tool. The `cli_tools` extra is
@@ -671,18 +671,39 @@ Optional `root/.runtime/config.json` stores executable and read-only dependency
 locators, not models, Profiles, task material or database permissions. Explicit
 arguments override the selected resource defaults, including an empty dependency
 tuple. Unused defaults do not expose resources to tool-free Modules. See
-`load_runtime_config` and `evaluate_local_workflow_module` in the generated API
+`load_runtime_config` and `run_local_workflow_test` in the generated API
 for the exact fields, relative-path rules and error boundaries. This ordinary
-self-test remains non-persistent and does not connect to PostgreSQL.
+self-test remains non-persistent; it reads PostgreSQL only when the caller
+selects an exact PostgreSQL definition, and never writes it.
+
+Transport, model and effort are resolved per parameter from four layers: this
+call's arguments, then `root/.runtime/execution_parameters/workflows/<workflow_id>.json`,
+then `root/.runtime/execution_parameters/workspace.json`, then the Runtime
+default (`claude_cli`, `claude-opus-5[1m]`, `xhigh`). Both files are optional
+JSON objects with `"schema_version": "runtime_execution_parameters_v1"` and any
+of `transport_kind`, `model_id` and `reasoning_profile`:
+
+```json
+{"schema_version": "runtime_execution_parameters_v1", "model_id": "claude-fable-5-1[1m]", "reasoning_profile": "xhigh"}
+```
+
+Parameter files never select a definition version; pass `--version` or an exact
+ref/hash per call, otherwise the latest registered local version is used. A
+present file that is invalid, or contains any other key, fails preparation
+instead of falling through. A model or effort written in a layer whose transport
+differs from the resolved transport is rejected, so a Claude model is never sent
+to Codex. The Test Run record lists each parameter's source layer and file hash
+in `execution_parameter_sources`.
 
 Opt-in live smoke tests cover the remaining CLI implementations. The Codex
 test below covers the tool-free path. Claude CLI's native-tool cases and their
 environment prerequisites are documented in
 `docs/agent_runtime_claude_native_tools.md`; none invokes Claude Agent SDK.
 
-For a registered tool-free Module, the existing `agent-runtime-evaluate` command
-also accepts `--transport codex_cli --model MODEL --effort EFFORT`. Both model
-fields are explicit for Codex; omitting transport keeps the Claude defaults.
+For a registered tool-free Module, the `agent-runtime-test-run` command
+also accepts `--transport codex_cli --model MODEL --effort EFFORT`. Codex has no
+default model or effort; they come from this call or the same parameter-file layer
+as the transport. Omitting every layer keeps the Claude defaults.
 Codex v4 uses a fresh private Provider state and the host's one standard
 file-based login source, with Skills, plugins, MCP and task tools disabled.
 The real process launch is ordered against temporary-resource closure; no

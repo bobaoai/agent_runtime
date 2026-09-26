@@ -6,6 +6,25 @@ historical implementations, not the current executable adapter support matrix.
 
 ## Unreleased
 
+### Test Run entry and execution parameter layers
+
+- The installed command is now `agent-runtime-test-run` and the Python entry
+  `run_local_workflow_test`. `agent-runtime-evaluate` and
+  `evaluate_local_workflow_module` are removed without aliases; Behavior
+  Evaluation keeps its meaning. Setup replaces the bundled
+  `agent-runtime-evaluation` operator Skill with `agent-runtime-test-run` when
+  the old Skill has exactly its packaged or previously recorded content.
+- Test Run reads a definition either from `root/.runtime` or, read-only, from an
+  exact PostgreSQL Workflow ref/hash located through a DSN environment variable.
+  `root` is required in both modes; nothing is written to PostgreSQL.
+- `resources_path` and `expected_module_id` are accepted by the public API; the
+  CLI passes `--resources` and `--expected-module-id` through unchanged and no
+  longer runs setup separately.
+- Transport, model and effort are resolved per parameter from this call, the
+  Workflow parameter file, the workspace parameter file and the Runtime
+  default. Parameter files never select a version. Records report each value's
+  source layer and file hash in `execution_parameter_sources`.
+
 ### 0.2.0.dev5: local multi-Agent evaluation
 
 - Common model preparation for registered Agent graphs; the existing single-node

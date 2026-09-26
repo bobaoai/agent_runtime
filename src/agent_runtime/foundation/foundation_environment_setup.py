@@ -11,7 +11,7 @@ import stat
 import tempfile
 
 
-_SKILLS = ("agent-runtime-registration", "agent-runtime-evaluation")
+_SKILLS = ("agent-runtime-registration", "agent-runtime-test-run")
 _HOSTS = (".agents", ".claude")
 _FORMAT = "agent_runtime_setup_v1"
 # Exact predecessor operator content accepted for the initial source migration.
@@ -19,6 +19,15 @@ _FORMAT = "agent_runtime_setup_v1"
 _LEGACY_SKILL_SHA256 = {
     "agent-runtime-registration": frozenset({
         "7b6a34f87164201ddd420ce3f0e9dcefb98e7d8c2a393e8d36f558eef8a7458a",
+        # 0.2.0.dev7 packaged content, replaced when the Test Run rename lands.
+        "a7627eb1d9ce3f5fd99776f6fc95c9fa51a734ef8ce118173a6ef51c5699def6",
+    }),
+}
+# Operator Skills no longer shipped. Only their exact packaged content, or the
+# hash recorded by the previous setup, is removed; anything else is local work.
+_RETIRED_SKILL_SHA256 = {
+    "agent-runtime-evaluation": frozenset({
+        "9ae353b814fdc10d96b8dea61c9996ca8dee229f0aac0f8bec8638de4f0f7059",
     }),
 }
 
@@ -120,11 +129,19 @@ def load_runtime_config(root: Path) -> dict[str, object]:
             "read_only_dependencies": tuple(locator(value) for value in dependencies)}
 
 
+def _remove(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass
+
+
 def setup_runtime(root: Path) -> tuple[Path, ...]:
     """Check one host root and fill in missing Runtime setup resources.
 
-    Called by the existing registration/load and evaluation CLIs after argument
-    parsing, before the requested operation. Hosts may also call it as part of
+    Called by the registration/load CLIs after argument parsing and by the
+    Test Run API before definition preparation, ahead of the requested operation. Hosts may also call it as part of
     their setup. A ready environment performs bounded local reads and no writes;
     there is no separate Skill installation command.
 
@@ -133,27 +150,34 @@ def setup_runtime(root: Path) -> tuple[Path, ...]:
             not expanded here; a shell may expand it before calling a CLI.
             Creates .runtime when missing and places
             the two bundled operator Skills in .agents/skills and .claude/skills.
+            A retired agent-runtime-evaluation Skill with exactly its packaged
+            content or its previously recorded hash is removed after the
+            replacement Skill is written.
             It is neither a model read root nor a model or database binding.
     Returns:
-        Paths actually written, or an empty tuple when setup is already current.
+        Paths actually written or removed, or an empty tuple when setup is already current.
         Existing tool stdout remains the original operation's result.
     Raises:
         ValueError: Invalid setup metadata, a non-regular file or symlink in a managed target path,
-            or locally changed/unknown same-name Skill content. The target is
-            included in the error; resolve that content with its owner.
+            or locally changed/unknown same-name Skill content, including a
+            changed retired Skill. The target is included in the error; resolve
+            that content with its owner. Nothing is written when this happens.
         OSError: Missing package resources or native file failure. Some setup
             writes may have completed; repeat setup with the same installed
             package to finish preparation, not the model operation blindly.
     Effects:
-        Reads only two packaged Skill files, four fixed host Skill files and
+        Reads only two packaged Skill files, four fixed host Skill files, two
+        retired host Skill files and
         .runtime/setup.json. The latter records its format and last installed
         Skill SHA-256 values, covering raw UTF-8 file bytes, not Module identity.
         Preserves registered module/workflow definitions and all other Skills.
         Known predecessor content or unchanged managed content may be upgraded;
         unknown local content is never overwritten by name alone.
-        Preflights targets before writing, replaces individual files atomically,
-        and writes setup metadata last. Partial preparation is recoverable with
-        the same package. The host serializes setup on one root; there is no
+        Preflights targets before writing, writes new Skills, then removes
+        managed retired Skill files and their emptied folders, and writes setup
+        metadata last. Metadata still naming a retired Skill is readable.
+        Partial preparation is recoverable with the same package; a retired
+        Skill left under new metadata is still recognized by its exact hash. The host serializes setup on one root; there is no
         cross-process transaction, lock, history, credential or request service.
         Does not scan a workspace/catalog, connect to PG, call/login a provider,
         change models, install software, or validate business object inputs.
@@ -173,7 +197,7 @@ def setup_runtime(root: Path) -> tuple[Path, ...]:
             state = json.loads(before_state)
             previous = state["skill_sha256"]
             if (set(state) != {"format", "skill_sha256"} or state["format"] != _FORMAT
-                    or not isinstance(previous, dict) or set(previous) - set(_SKILLS)
+                    or not isinstance(previous, dict) or set(previous) - set(_SKILLS) - set(_RETIRED_SKILL_SHA256)
                     or any(not isinstance(value, str) or len(value) != 64
                            or any(char not in "0123456789abcdef" for char in value)
                            for value in previous.values())):
@@ -191,12 +215,40 @@ def setup_runtime(root: Path) -> tuple[Path, ...]:
                     raise ValueError(f"Runtime setup found local Skill content: {path}")
             if before != content:
                 pending.append((path, before, content))
+    removals = []
+    for host in _HOSTS:
+        for name, accepted in _RETIRED_SKILL_SHA256.items():
+            path = _target(root, host, "skills", name, "SKILL.md")
+            before = _read(path)
+            if before is None:
+                folder = path.parent
+                if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
+                    removals.append((path, None))
+                continue
+            digest = _digest(before)
+            if digest not in accepted and digest != previous.get(name):
+                raise ValueError(f"Runtime setup found local content in a retired Skill: {path}")
+            removals.append((path, before))
     state_content = (json.dumps({"format": _FORMAT, "skill_sha256": hashes}, sort_keys=True,
                                indent=2) + "\n").encode()
+    state = None
     if before_state != state_content:
-        pending.append((state_path, before_state, state_content))
+        state = (state_path, before_state, state_content)
     written = []
     for path, before, content in pending:
+        _target(root, *path.relative_to(root).parts)
+        if _read(path) != before:
+            raise ValueError(f"Runtime setup target changed during preparation: {path}")
+        _write(path, content)
+        written.append(path)
+    for path, before in removals:
+        _target(root, *path.relative_to(root).parts)
+        if _read(path) != before:
+            raise ValueError(f"Runtime setup target changed during preparation: {path}")
+        _remove(path)
+        written.append(path)
+    if state is not None:
+        path, before, content = state
         _target(root, *path.relative_to(root).parts)
         if _read(path) != before:
             raise ValueError(f"Runtime setup target changed during preparation: {path}")

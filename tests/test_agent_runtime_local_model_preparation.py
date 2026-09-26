@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agent_runtime import evaluate_local_workflow_module
+from agent_runtime import run_local_workflow_test
 from agent_runtime import (
     ModuleReviewer, RuntimeModulePlugin, load_runtime_registration,
     prepare_local_workflow_module, register_runtime_module_plugin, run_registered_workflow_module,
@@ -55,6 +55,7 @@ def test_registration_model_parameters_fail_before_writes(tmp_path, name):
     assert result.returncode == 2 and not root.exists()
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("mode,tools,workspace", [
     ("tool_free", (), "none"), ("agent", (), "none"),
     ("agent", (), "own_draft_read_write"), ("agent", ("read",), "none"),
@@ -63,7 +64,8 @@ def test_registration_model_parameters_fail_before_writes(tmp_path, name):
 ])
 @pytest.mark.parametrize("output_mode", ["prompt_only_json", "native_structured_output"])
 def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mode, tools, workspace, output_mode):
-    from agent_runtime import Module, evaluate_local_workflow_module
+    """Substitutes: FakeCLI executable and an in-process Claude process runner."""
+    from agent_runtime import Module, run_local_workflow_test
     from agent_runtime.registry import registry_reviewer_defaults
     from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID as TASK_SKILL
 
@@ -80,6 +82,8 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
     root = tmp_path / "host"
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
         "ordinary_example", "v1", workflow.origin_bundle), root=root)
+    from agent_runtime import setup_runtime
+    setup_runtime(root)  # Test Run runs setup itself; a ready root receives no writes.
     before = _files(root)
     saved, variant = prepare_local_workflow_module(root, "summarize_note")
     assert saved.release.workflow_id == "summarize_note"
@@ -111,7 +115,7 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
         completed.stdout_bytes, completed.stderr_bytes = completed.stdout.encode(), b""
         return completed
     monkeypatch.setattr(claude, "ClaudeAdapter", lambda **kw: adapter_type(**kw, process_runner=process))
-    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path))
+    record = run_local_workflow_test(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path))
     assert record["status"] == "completed", record["failure_detail"]
     assert record["output"] == {"summary": "the actual ordinary output"}
     assert record["execution_log"]["complete"] and len(calls) == 1
@@ -169,7 +173,9 @@ def _observe_resource_evaluation(monkeypatch, inspect, *, tools=("read", "search
     return calls
 
 
+@pytest.mark.fake_run
 def test_public_resources_freeze_tree_and_exact_prompt_with_host_defaults(tmp_path, monkeypatch):
+    """Substitutes: FakeCLI executable and an in-process Claude process runner."""
     from pathlib import Path
     root = _resource_test_module(tmp_path)
     tree = tmp_path / "tree"
@@ -182,6 +188,8 @@ def test_public_resources_freeze_tree_and_exact_prompt_with_host_defaults(tmp_pa
     (root / ".runtime/config.json").write_text(json.dumps({
         "provider_cli_paths": {"claude_cli": str(executable), "codex_cli": "unused/missing"},
         "read_only_dependencies": [str(dependency)]}))
+    from agent_runtime import setup_runtime
+    setup_runtime(root)  # Test Run runs setup itself; a ready root receives no writes.
     before = _files(root)
     def inspect(fields):
         materials = fields["cwd"].parent / "materials"
@@ -193,7 +201,7 @@ def test_public_resources_freeze_tree_and_exact_prompt_with_host_defaults(tmp_pa
         (tree / "pkg/value.py").write_text("changed only after capture\n")
         assert (materials / "source/pkg/value.py").read_bytes() == body
     calls = _observe_resource_evaluation(monkeypatch, inspect)
-    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={}, material_root=tree,
+    record = run_local_workflow_test(root, "summarize_note", input_payload={}, material_root=tree,
         material_files=({"relative_path": "pkg/value.py", "sha256": hashlib.sha256(body).hexdigest(), "executable": False},))
     assert record["status"] == "completed", record["failure_detail"]
     assert len(calls) == 1 and len(record["input_bindings"]) == 2 and _files(root) == before
@@ -202,19 +210,22 @@ def test_public_resources_freeze_tree_and_exact_prompt_with_host_defaults(tmp_pa
     assert not calls[0]["cwd"].exists()
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("tools,explicit_dependencies", [((), None), (("read", "search", "shell"), ())])
 def test_unused_or_cleared_host_dependencies_do_not_open_resources(tmp_path, monkeypatch, tools, explicit_dependencies):
+    """Substitutes: FakeCLI executable and an in-process Claude process runner."""
     root = _resource_test_module(tmp_path, tools=tools)
     (root / ".runtime/config.json").write_text(json.dumps({
         "provider_cli_paths": {"claude_cli": "unused/missing"},
         "read_only_dependencies": ["unused/library"]}))
     calls = _observe_resource_evaluation(monkeypatch, lambda fields: None, tools=tools)
-    result = evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+    result = run_local_workflow_test(root, "summarize_note", input_payload={},
         cli_path=_fake_cli(tmp_path), read_only_dependencies=explicit_dependencies)
     assert result["status"] == "completed", result["failure_detail"]
     assert len(calls) == 1 and len(result["input_bindings"]) == 1
 
 
+@pytest.mark.deterministic
 def test_invalid_material_hash_is_rejected_before_attempt_resources(tmp_path, monkeypatch):
     root = _resource_test_module(tmp_path)
     tree = tmp_path / "tree"
@@ -222,11 +233,13 @@ def test_invalid_material_hash_is_rejected_before_attempt_resources(tmp_path, mo
     (tree / "value.txt").write_text("current data")
     monkeypatch.setattr(tempfile, "TemporaryDirectory", lambda *a, **kw: pytest.fail("no Attempt for invalid input"))
     with pytest.raises(ValueError):
-        evaluate_local_workflow_module(root, "summarize_note", input_payload={}, material_root=tree,
+        run_local_workflow_test(root, "summarize_note", input_payload={}, material_root=tree,
             material_files=({"relative_path": "value.txt", "sha256": "a"*64, "executable": False},))
 
 
+@pytest.mark.fake_run
 def test_staged_tree_mutation_is_rejected_and_keeps_provider_log(tmp_path, monkeypatch):
+    """Substitutes: FakeCLI executable and an in-process Claude process runner."""
     root = _resource_test_module(tmp_path)
     tree = tmp_path / "tree"
     tree.mkdir()
@@ -237,14 +250,16 @@ def test_staged_tree_mutation_is_rejected_and_keeps_provider_log(tmp_path, monke
         target.chmod(0o600)
         target.write_text("real changed bytes")
     calls = _observe_resource_evaluation(monkeypatch, mutate)
-    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+    record = run_local_workflow_test(root, "summarize_note", input_payload={},
         cli_path=_fake_cli(tmp_path), material_root=tree,
         material_files=({"relative_path": "value.txt", "sha256": hashlib.sha256(body).hexdigest(), "executable": False},))
     assert record["status"] == "failed" and record["output"] is None
     assert len(calls) == 1 and record["provider_trace"]["raw_streams"]
 
 
+@pytest.mark.fake_run
 def test_public_command_execution_and_cli_observations_share_one_verified_log(tmp_path, monkeypatch):
+    """Substitutes: FakeCLI executable and an in-process Claude process runner; local IPC and commands are real."""
     from pathlib import Path
     from agent_runtime.invocation.invocation_local_command_mcp import exchange
     from agent_runtime.invocation.invocation_local_command_execution import LOCAL_COMMAND_CLI_TOOL_NAME
@@ -277,7 +292,7 @@ def test_public_command_execution_and_cli_observations_share_one_verified_log(tm
         result.stdout_bytes, result.stderr_bytes = result.stdout.encode(), b""
         return result
     monkeypatch.setattr(claude, "ClaudeAdapter", lambda **kwargs: adapter_type(**kwargs, process_runner=process))
-    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
+    record = run_local_workflow_test(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
         commands=({"command_id": "ok", "argv": ["/usr/bin/printf", "real command stdout"], "cwd": "scratch/run", "timeout_seconds": 5},
                   {"command_id": "bad", "argv": ["/usr/bin/false"], "cwd": "source", "timeout_seconds": 5}))
     assert record["status"] == "completed", record["failure_detail"]

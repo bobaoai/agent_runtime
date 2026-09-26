@@ -22,18 +22,18 @@ For registration steps, see the [Registration runbook](agent_runtime_registratio
 | ModuleReviewer：固定运行底座 | Runtime 的 ModuleReviewer 提供默认 ModuleExecutionRequirements；不同 Reviewer 提供不同任务内容 | Registry 保留通用 Module 的继承行为；下游不按 Reviewer 名称重新组装或增加配置 |
 | Workflow：节点、版本与连接 | 调用者组装；单节点默认与 Module 同名，也可明确命名 | Registry 保存图；Execution 固定本次准确版本，未指定版本时使用最新注册定义 |
 | root、Python、程序与资源 | 宿主给 root、现有登录及明确材料/额外依赖；Python 固定为启动 Runtime 的 sys.executable | Foundation 做轻量 setup/配置读取；Invocation 使用当前 Python 环境，只读开放其运行库，不另选解释器；root 本身不是模型读取许可 |
-| ExecutionProfileRelease 与 Variant | 调用者可给模型、transport、effort；未给时用 Runtime 默认；固定能力来自 Module | Execution.prepare 生成本次具体 Profile 与节点绑定；Registry 承载准确内容；调用者不手拼 Profile，root 不固定绑定模型 |
+| ExecutionProfileRelease 与 Variant | 每项执行参数依次取本次调用、该 Workflow 的参数文件、workspace 参数文件、Runtime 默认；参数文件不选择定义版本；固定能力来自 Module | Execution.prepare 生成本次具体 Profile 与节点绑定并记录每项来源；Registry 承载准确内容；调用者不手拼 Profile |
 | Provider 与工具调用 | 上一步已经固定的 Profile 和明确资源 | Invocation 的 Adapter 组装 CLI、执行声明资源接口，取得基本 metadata、最终结果并归档原始流；不分析工具日志判断整次行为 |
 | Attempt、重试与输出提交 | 准确请求、预算及实际执行事实 | Execution 管理生命周期和技术完成条件；命令非零/正常权限拒绝不是自动的整体失败；任务 owner 判断业务是否通过 |
 | 日志、恢复与查询 | 宿主明确提供存储与授权；普通自测不需要 PG | Ledger 保留全部 Attempt 原始事实，Durability 按既有记录协调恢复；Inspection 仅在明确查询时解析详细视图，不改运行状态 |
 
 调用顺序：任务 source → Registry 的 Module/Workflow → Execution.prepare 的具体配置 →
 Invocation 的 CLI/工具调用 → Execution 接受技术结果 → Ledger 返回原始事实。
-显式 Evaluation 再组合 Inspection 取得详细日志，由任务 owner 判断业务结果；无持久存储时在清理前
+Test Run 再组合 Inspection 取得详细日志，由任务 owner 判断业务结果；无持久存储时在清理前
 返回当次原文，不承诺进程结束后恢复。
 
 完整参数在本页的 Module、ModuleReviewer、ModuleExecutionRequirements、ExecutionProfileRelease、
-ExecutionVariantPolicyRelease、prepare_local_workflow_module、evaluate_local_workflow_module 和 CLI 章节中，
+ExecutionVariantPolicyRelease、prepare_local_workflow_module、run_local_workflow_test 和 CLI 章节中，
 由各自真实定义导出。ModuleReviewer 的默认字段也直接取自该类，不从历史 ReviewerDefaults 猜测当前配置。
 
 Runtime CLI 负责 setup、注册、执行和查询。Portable CLI 负责准备审核对象并校验审核结果；宿主接入只
@@ -69,7 +69,7 @@ Runtime CLI 负责 setup、注册、执行和查询。Portable CLI 负责准备�
 - [WorkflowSelfTestResources](#workflowselftestresources)
 - [LocalWorkflowModuleBridge](#localworkflowmodulebridge)
 - [run_agent_example](#run_agent_example)
-- [evaluate_local_workflow_module](#evaluate_local_workflow_module)
+- [run_local_workflow_test](#run_local_workflow_test)
 - [setup_runtime](#setup_runtime)
 - [load_runtime_config](#load_runtime_config)
 - [read_execution_log](#read_execution_log)
@@ -80,7 +80,7 @@ Runtime CLI 负责 setup、注册、执行和查询。Portable CLI 负责准备�
 - [build_command](#build_command)
 - [PostgresWorkflowInspectionRepository](#postgresworkflowinspectionrepository)
 - [CLI commands](#cli-commands)
-- [Evaluation CLI](#evaluation-cli)
+- [Test Run CLI](#test-run-cli)
 - [Error constants](#error-constants)
 
 ## Module
@@ -520,7 +520,7 @@ def run_module(
 Run one registered Module through the Test/Evaluation execution kernel.
 
 This is the low-level isolated entry, not the resource-assembling self-test
-convenience API. Use evaluate_local_workflow_module for ordinary registered
+convenience API. Use run_local_workflow_test for ordinary registered
 Workflow self-tests without production authorization.
 
 **Args**
@@ -1476,13 +1476,15 @@ def prepare_local_workflow(
 
 Prepare every Agent node through the same model conversion as one node.
 
-Arguments and store effects follow prepare_local_workflow_module. Reads the
-root/latest selection once, preserves the exact graph and creates bindings
-only for its Module nodes. Each node must have frozen execution requirements;
-zero-operation deterministic nodes use existing lower-level explicit
-Profile/Adapter assembly, not a fabricated model binding. No provider call,
-registration-source reload, production Gateway support or .runtime write.
-Returns the same (LoadedRuntimeRegistration, exact Variant Policy) pair.
+Arguments, execution parameter layers and store effects follow
+prepare_local_workflow_module; all Module nodes share this Workflow's one
+resolution. Reads the root/latest selection once, preserves the exact graph
+and creates bindings only for its Module nodes. Each node must have frozen
+execution requirements; zero-operation deterministic nodes use existing
+lower-level explicit Profile/Adapter assembly, not a fabricated model
+binding. No provider call, registration-source reload, production Gateway
+support or .runtime write. Returns the same (LoadedRuntimeRegistration,
+exact Variant Policy) pair.
 
 ## prepare_local_workflow_module
 
@@ -1505,39 +1507,48 @@ Resolve a fixed single-node Module Workflow and this invocation's model.
 
 **Args**
 
-- `root`: Registered host root. Only saved definitions are read; this is
-  neither a model choice nor permission to read the whole project.
+- `root`: Registered host root. Saved definitions and the two execution
+  parameter files are read; root is not permission to read the project.
 - `workflow_id`: Saved Workflow object ID.
 - `version`: Exact definition version, or None for the latest registered
   new definition. Resolved once before preparing exact releases.
-- `transport_kind`: Independent model transport; None uses Runtime's model
-  preset. codex_cli supports its admitted tool-free requirements and
-  requires explicit model_id and reasoning_profile.
+  Execution parameter files never select a version.
+- `transport_kind`: This call's model transport. None takes the Workflow
+  parameter file, then the workspace parameter file, then Runtime's
+  claude_cli default (see execution_parameter_resolution).
+  codex_cli supports its admitted tool-free requirements and
+  requires explicit model_id and reasoning_profile from some layer.
   Model names are never used to infer another transport or provider.
-- `model_id`: Independent model override; None uses claude-opus-5[1m] for
-  claude_cli. codex_cli requires an explicit concrete model.
-- `reasoning_profile`: Independent effort override; None uses xhigh for
-  claude_cli. codex_cli requires an explicit supported effort.
-  Omitted model fields use the Runtime preset, never saved bindings.
+- `model_id`: This call's model; None falls back through the same layers,
+  ending at claude-opus-5[1m] for claude_cli. codex_cli has no default.
+- `reasoning_profile`: This call's effort; None falls back through the same
+  layers, ending at xhigh for claude_cli. codex_cli has no default.
+  A model or effort cannot come from a layer whose transport differs
+  from the resolved transport. Saved Profiles are never defaults.
   Tools/network/workspace/budgets come from frozen Module requirements.
 - `release_store`: Optional explicit existing store providing register_bundle
   and load_release_registry, such as PostgresRuntimeReleaseStore.
-  Its schema must already be ready. Writes and verifies exact releases
-  for durable execution, with no local-file update. Shared stores
-  require readers that understand the selected release format.
+  Its schema must already be ready. Here it writes and verifies exact
+  releases for durable execution, with no local-file update; this
+  differs from run_local_workflow_test, where release_store is only a
+  read-only definition source. Shared stores require readers that
+  understand the selected release format.
 **Returns**
 
 A pair (LoadedRuntimeRegistration, ExecutionVariantPolicyRelease).
 The first contains the fixed Workflow and the exact invocation Registry;
 the second selects this invocation's Profile at its Module node.
-Build host adapters/authorization using this Registry and Profile, then
-pass this same Workflow/Registry/Variant to run_registered_workflow_module.
-Do not reload the root or resolve the model again before invoking.
+Parameter sources are not returned here; run_local_workflow_test
+records them. Build host adapters/authorization using this Registry and
+Profile, then pass this same Workflow/Registry/Variant to
+run_registered_workflow_module. Do not reload the root or resolve the
+model again before invoking.
 **Raises**
 
 - `FileNotFoundError`: Missing saved Workflow/version.
-- `ValueError`: Invalid saved data, unsupported transport, missing fixed
-  Module requirements, unsupported graph or Profile/Module boundary.
+- `ValueError`: Invalid saved data or parameter file, mixed transports,
+  unsupported transport, missing fixed Module requirements,
+  unsupported graph or Profile/Module boundary.
 - `ModuleAuthoringError`: Native Registry compatibility failure where raised.
 - `Exception`: Store failures retain their native contract. No model has
   run when preparation fails; prior store writes may have committed.
@@ -1947,16 +1958,20 @@ Register and run one packaged, non-persistent multi-Agent example.
 - `input_payload`: Optional object with exactly task and required_facts.
   None uses the packaged finite facts. No runtime flags, credentials,
   factory locators or model overrides are accepted in task JSON.
-- `transport_kind`: Independent model transport passed to common preparation.
+- `transport_kind`: This call's transport passed to common preparation;
+  None falls back through the example Workflow's parameter file, the
+  workspace parameter file and the default. The parent graph and the
+  child Reviewer resolve separately and must reach the same transport.
   Current tool-capable examples require the admitted Claude CLI path.
-- `model_id`: Independent explicit model, or Runtime's public default.
-- `reasoning_profile`: Independent effort, or Runtime's public default.
+- `model_id`: This call's model, or the same parameter-file layers/default.
+- `reasoning_profile`: This call's effort, or the same layers/default.
 - `cli_path`: Explicit executable; otherwise the root's configured executable
-  or the same transport's PATH lookup is used, without provider fallback.
+  or the resolved transport's PATH lookup is used, without fallback.
 **Returns**
 
 Actual Workflow/node records, child execution records, final output,
-resource cleanup and observed stop reason. Full raw logs are retained in
+resource cleanup and observed stop reason. execution_parameter_sources
+gives the parent Workflow's and child Reviewer's parameter sources. Full raw logs are retained in
 the returned Runtime records. This explicit example requests Inspection
 for node and child logs before cleanup; evaluation receives selected
 actual facts. Ordinary graph dispatch does not parse native tool logs.
@@ -1982,21 +1997,28 @@ Python remains the interpreter running Runtime. No additional environment.
 Every invocation creates a fresh Workflow execution. Saved JSON preserves
 evidence but does not resume a closed graph or a Provider CLI session.
 
-## evaluate_local_workflow_module
+## run_local_workflow_test
 
-Public import: `from agent_runtime import evaluate_local_workflow_module`
+Public import: `from agent_runtime import run_local_workflow_test`
 
 ```python
-def evaluate_local_workflow_module(
+def run_local_workflow_test(
     root: Path,
-    workflow_id: str,
+    workflow_id: str | None=None,
     *,
     input_payload: dict,
+    expected_module_id: str | None=None,
     version: str | None=None,
+    release_store=None,
+    release_database_url_env: str | None=None,
+    release_schema: str | None=None,
+    workflow_release_ref: str | None=None,
+    workflow_release_sha256: str | None=None,
     transport_kind: str | None=None,
     model_id: str | None=None,
     reasoning_profile: str | None=None,
     cli_path: Path | str | None=None,
+    resources_path: Path | None=None,
     material_root: Path | None=None,
     material_files: tuple[dict, ...]=(),
     read_only_dependencies: tuple[Path, ...] | None=None,
@@ -2007,35 +2029,66 @@ def evaluate_local_workflow_module(
 ) -> dict:
 ```
 
-Evaluate a registered single-node Workflow using temporary test resources.
+Test-run a registered single-node Workflow using temporary test resources.
 
 **Args**
 
-- `root`: Root containing .runtime definitions; never a model/tool read root.
-- `workflow_id`: Workflow to load, including single-Module Workflows.
+- `root`: Required in both definition modes. Locates Runtime setup,
+  root/.runtime/config.json resource defaults, local definitions and
+  the execution parameter files; never a model/tool read root.
+- `workflow_id`: Local definition: Workflow to load from root/.runtime,
+  including single-Module Workflows. Excludes every PostgreSQL field.
 - `input_payload`: Exact JSON input validated against the registered schema.
-- `version`: Exact version; None resolves the latest new definition once.
-- `transport_kind`: Independent execution transport; None uses Runtime's
+- `expected_module_id`: Optional exact Module ID the selected Workflow must
+  run. Checked before materials are captured or a model is called.
+- `version`: Local definition only: exact version; None resolves the latest
+  registered new definition once. Parameter files never choose it.
+- `release_store`: PostgreSQL definition: trusted in-process store providing
+  load_release_registry, such as PostgresRuntimeReleaseStore. Read
+  only: the exact Workflow is loaded and this call's Profile/Variant
+  stay in memory; nothing is registered or written. This differs from
+  prepare_local_workflow_module, whose release_store writes releases.
+- `release_database_url_env`: PostgreSQL definition: name of the environment
+  variable holding the DSN, used with release_schema instead of a store
+  object. The DSN is read from that variable only and never enters
+  input, records or any Provider process, including CLI preflight.
+  A variable name that either Adapter passes through to its Provider
+  environment, such as LOGNAME or HTTPS_PROXY, is rejected.
+- `release_schema`: PostgreSQL definition: existing release schema to read.
+- `workflow_release_ref`: PostgreSQL definition: exact Workflow release_ref.
+- `workflow_release_sha256`: PostgreSQL definition: exact release_sha256. A
+  missing, mismatched or multi-node release is rejected; there is no
+  fallback to a same-named local definition.
+- `transport_kind`: This call's transport. None takes the Workflow parameter
+  file, then the workspace parameter file, then Runtime's claude_cli
   default. claude_cli supports empty or selected native tool sets,
   inline input, and no write area or a private draft as defined.
   codex_cli supports tool_free, inline, empty tools, workspace none
   and denied tool network. It requires explicit model_id and effort;
   unsupported requirements are rejected, never reduced to fit.
-- `model_id`: Independent concrete model ID; None uses the Claude default.
+- `model_id`: This call's concrete model ID; None falls back through the same
+  layers to the Claude default.
   Codex requires an explicit model. Claude verifies observed model
   identity, allowing its known CLI [1m] selector. Codex retains the
   requested identity and available Provider facts without inventing
   an unreported actual response model. Model names do not select transport.
-- `reasoning_profile`: Independent effort; None uses Runtime's default.
+- `reasoning_profile`: This call's effort; None falls back through the same
+  layers to Runtime's default. A model or effort written in a layer
+  whose transport differs from the resolved transport is rejected.
   Required for codex_cli; no default is inferred from another Provider.
 - `cli_path`: Explicit installed provider executable; otherwise use the
   selected transport's root/.runtime/config.json provider_cli_paths
   value, then host PATH when that value is absent. No login or
   installation is performed. Model selection does not come from config.
   Relative paths are resolved from the caller's working directory
-  before entering the temporary Attempt directory.
+  before entering the temporary Attempt directory. Both definition
+  modes use the same root configuration.
   Codex uses file-based auth from the host's standard CODEX_HOME/auth.json
   (default ~/.codex/auth.json), never from task JSON or a fallback account.
+- `resources_path`: Declarative resource JSON with material_root,
+  material_files, read_only_dependencies and commands; relative paths
+  resolve against that file. Excludes the four decomposed resource
+  arguments below; giving both is rejected before any setup.
 - `material_root`: Explicit source directory for the frozen file list below,
   never implicitly the host root. Only listed ordinary files are read.
 - `material_files`: Tuple of dictionaries with relative_path, sha256 and
@@ -2072,7 +2125,10 @@ Evaluate a registered single-node Workflow using temporary test resources.
   closure. Stops the process as resource_closed, not user cancellation.
 **Returns**
 
-JSON-compatible execution facts and output. provider_trace retains the
+JSON-compatible execution facts and output. execution_parameter_sources
+gives each parameter's source layer (call, workflow_file,
+workspace_file or runtime_default), file path and file SHA-256; it is
+record-only and never enters the Profile. provider_trace retains the
 observed response models and diagnostics. persistence is not_requested;
 execution_log contains every Attempt's full private provider trace,
 original encoded streams, per-call view and explicit completeness issues,
@@ -2104,36 +2160,47 @@ recovery, not durable credential backup or automatic writeback.
 **Raises**
 
 - `FileNotFoundError`: Missing registration, version or provider executable.
-- `ValueError`: Unsupported graph/Profile, input or resource configuration.
+- `KeyError`: The exact PostgreSQL Workflow release is absent.
+- `ValueError`: Conflicting definition targets or resources, a missing or
+  empty DSN variable, hash mismatch, a different expected Module,
+  invalid parameter file, mixed transports, unsupported graph/Profile,
+  input or resource configuration. Target and resource conflicts are
+  rejected before setup, a PostgreSQL connection or a Provider call.
 - `jsonschema.exceptions.ValidationError`: Input violates its registered schema.
 - `PermissionError`: The requested operation is outside bounded test resources.
 - `Exception`: Existing provider/environment errors retain their contracts.
 **Effects**
 
-Reads fixed definitions, stages input in memory, calls the admitted
-Adapter through the existing Workflow Module kernel, and returns facts.
-Does not access PostgreSQL, discover storage credentials, write .runtime,
-manufacture production authorization, or persist a request receipt.
+Runs lightweight setup_runtime(root), reads fixed definitions (reading
+PostgreSQL only for a PostgreSQL definition), stages input in memory,
+calls the admitted Adapter through the existing Workflow Module kernel,
+and returns facts. Does not write PostgreSQL, register definitions,
+write execution parameters, manufacture production authorization, or
+persist a request receipt.
 Its private temporary workspace is removed on exit. The caller may
 explicitly save the returned result; Runtime does not save it by default.
 
-## Evaluation CLI
+## Test Run CLI
 
 Generated from the installed parser's argument declarations.
 
-Run the selected path and print its actual execution records as JSON.
+Run the selected target and print its actual execution records as JSON.
 
-Exactly one of --workflow and --example is required. --workflow also requires
---input and delegates unchanged arguments to the existing execution command.
---example owns fixed definitions and fixture resources, so --version and
---resources are rejected. Optional --input contains task and required_facts.
-Exit 0 means technical completion, not business acceptance or full Runtime
-conformance. Exit 1 means input/environment/execution/cleanup failure or an
-unfinished graph; captured facts remain in returned JSON when available.
-Exit 2 means invalid command arguments before setup or model execution.
-Exit 130 means user cancellation, retaining captured records when started.
-Examples register their exact source and create temporary execution resources;
-the normal --workflow path retains its existing setup and no-registration effects.
+Exactly one target is required: --workflow (local definition),
+--workflow-ref with --workflow-sha256 (read-only PostgreSQL definition,
+also requiring --release-database-url-env and --release-schema), or
+--example. Registered definitions require --input; all their arguments go
+unchanged to run_local_workflow_test, which runs setup, reads the resource
+file and resolves execution parameters. --example owns fixed definitions
+and fixture resources, so --version, --resources, PostgreSQL arguments and
+--expected-module-id are rejected; its model choice uses the same
+execution parameter layers. Optional --input contains task and
+required_facts. Exit 0 means technical completion, not business acceptance
+or full Runtime conformance. Exit 1 means input/definition/environment/
+execution/cleanup failure or an unfinished graph; captured facts remain in
+returned JSON when available. Exit 2 means invalid command arguments before
+setup or model execution. Exit 130 means user cancellation, retaining
+captured records when started.
 
 For --example, a caught graph error is printed in the execution JSON on stdout:
 status=failed, stop_reason=execution_error, failure={error_type, detail}. Errors
@@ -2144,17 +2211,22 @@ that resources remain usable. Preserve exception types and diagnostics.
 --scenario wait automatically supplies a fixture event; there is no interactive
 resume command. A new CLI invocation starts another execution.
 
-### agent-runtime-evaluate
+### agent-runtime-test-run
 
 | Argument | Required | Help |
 | --- | --- | --- |
-| `--root` | required | Root containing .runtime definitions; not a model read root. |
-| `--workflow` | optional | Registered single-node Workflow ID. |
-| `--version` | optional | Exact version; omit for the latest registered new definition. |
+| `--root` | required | Root containing .runtime setup, definitions and execution parameter files; not a model read root. Required for local and PostgreSQL definitions. |
+| `--workflow` | optional | Local definition: registered single-node Workflow ID under root/.runtime. |
+| `--version` | optional | Local definition only: exact version; omit for the latest registered new definition. |
+| `--workflow-ref` | optional | PostgreSQL definition: exact Workflow release_ref. Requires --workflow-sha256, --release-database-url-env and --release-schema; excludes --workflow and --version. |
+| `--workflow-sha256` | optional | PostgreSQL definition: exact Workflow release_sha256. |
+| `--release-database-url-env` | optional | PostgreSQL definition: name of the environment variable holding the DSN. The DSN itself is never an argument, input field or record value. The store is read only; nothing is registered or written. |
+| `--release-schema` | optional | PostgreSQL definition: existing release schema to read. |
+| `--expected-module-id` | optional | Optional exact Module ID the selected Workflow must run; checked before materials are captured or a model is called. |
 | `--input` | optional | JSON input prepared under the selected Module or example input schema. |
-| `--transport` | optional | Independent transport: claude_cli (default), or codex_cli for tool-free inline Modules. |
-| `--model` | optional | Independent concrete model ID; required for codex_cli, otherwise omit for Runtime default. |
-| `--effort` | optional | Independent reasoning effort; required for codex_cli, otherwise omit for Runtime default. |
+| `--transport` | optional | This call's transport: claude_cli or codex_cli. Omit to use the parameter files or the claude_cli default. |
+| `--model` | optional | This call's concrete model ID. Omit to use the parameter files or the default; codex_cli has no default model. |
+| `--effort` | optional | This call's reasoning effort. Omit to use the parameter files or the default; codex_cli has no default effort. |
 | `--cli-path` | optional | Installed executable; overrides root/.runtime/config.json provider_cli_paths, then PATH is used if unconfigured. Codex uses the host's standard file-based login. |
 | `--resources` | optional | Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}]. Resource paths are relative to this file; command cwd is source/scratch-relative. python/python3 use current Runtime Python; other arguments are not interpolated. Empty dependencies clear additional host defaults, not the current Python runtime. No models, credentials or production grants here. |
 | `--example` | optional | Register and run a packaged example. capability covers query/writer/parallel reviews; evaluation covers Agent-requested child review and independent evaluation. Definitions are saved under root; execution is temporary. --input is optional and accepts exactly task and required_facts; omission uses the packaged finite fixture. |
@@ -2172,8 +2244,8 @@ def setup_runtime(
 
 Check one host root and fill in missing Runtime setup resources.
 
-Called by the existing registration/load and evaluation CLIs after argument
-parsing, before the requested operation. Hosts may also call it as part of
+Called by the registration/load CLIs after argument parsing and by the
+Test Run API before definition preparation, ahead of the requested operation. Hosts may also call it as part of
 their setup. A ready environment performs bounded local reads and no writes;
 there is no separate Skill installation command.
 
@@ -2183,30 +2255,37 @@ there is no separate Skill installation command.
   not expanded here; a shell may expand it before calling a CLI.
   Creates .runtime when missing and places
   the two bundled operator Skills in .agents/skills and .claude/skills.
+  A retired agent-runtime-evaluation Skill with exactly its packaged
+  content or its previously recorded hash is removed after the
+  replacement Skill is written.
   It is neither a model read root nor a model or database binding.
 **Returns**
 
-Paths actually written, or an empty tuple when setup is already current.
+Paths actually written or removed, or an empty tuple when setup is already current.
 Existing tool stdout remains the original operation's result.
 **Raises**
 
 - `ValueError`: Invalid setup metadata, a non-regular file or symlink in a managed target path,
-  or locally changed/unknown same-name Skill content. The target is
-  included in the error; resolve that content with its owner.
+  or locally changed/unknown same-name Skill content, including a
+  changed retired Skill. The target is included in the error; resolve
+  that content with its owner. Nothing is written when this happens.
 - `OSError`: Missing package resources or native file failure. Some setup
   writes may have completed; repeat setup with the same installed
   package to finish preparation, not the model operation blindly.
 **Effects**
 
-Reads only two packaged Skill files, four fixed host Skill files and
+Reads only two packaged Skill files, four fixed host Skill files, two
+retired host Skill files and
 .runtime/setup.json. The latter records its format and last installed
 Skill SHA-256 values, covering raw UTF-8 file bytes, not Module identity.
 Preserves registered module/workflow definitions and all other Skills.
 Known predecessor content or unchanged managed content may be upgraded;
 unknown local content is never overwritten by name alone.
-Preflights targets before writing, replaces individual files atomically,
-and writes setup metadata last. Partial preparation is recoverable with
-the same package. The host serializes setup on one root; there is no
+Preflights targets before writing, writes new Skills, then removes
+managed retired Skill files and their emptied folders, and writes setup
+metadata last. Metadata still naming a retired Skill is readable.
+Partial preparation is recoverable with the same package; a retired
+Skill left under new metadata is still recognized by its exact hash. The host serializes setup on one root; there is no
 cross-process transaction, lock, history, credential or request service.
 Does not scan a workspace/catalog, connect to PG, call/login a provider,
 change models, install software, or validate business object inputs.

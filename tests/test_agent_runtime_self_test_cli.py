@@ -12,18 +12,19 @@ from threading import Event, Thread
 
 import pytest
 
-from agent_runtime import evaluate_local_workflow_module
+from agent_runtime import run_local_workflow_test
 from agent_runtime.execution import execution_local_invocation as local
 from agent_runtime.execution.execution_module_invocation import run_workflow_module
 from agent_runtime.invocation import invocation_claude_cli_execution as claude
 from agent_runtime.contracts.invocation_adapter_definition import AuthorizedAgentExecutionRequest
-from agent_runtime.testing.conformance_local_evaluation import main
+from agent_runtime.testing.conformance_local_test_run import main
 from test_agent_runtime_claude_native_tools import _fake_cli, _init, _result
 from test_agent_runtime_reviewer_registration_cli import _source, _register, _files, MODULE_ID
 
 
 @pytest.fixture
 def environment(tmp_path, monkeypatch):
+    """Substitutes: FakeCLI executable and an in-process Claude adapter process; PostgreSQL constructors fail if touched."""
     source, _ = _source(tmp_path / "source")
     root = tmp_path / "host"
     _register(root, source)
@@ -74,14 +75,17 @@ def environment(tmp_path, monkeypatch):
     from agent_runtime.ledger import PostgresRuntimeExecutionRecordStore
     for store in (PostgresRuntimeReleaseStore, PostgresRuntimeExecutionRecordStore):
         monkeypatch.setattr(store, "from_dsn", lambda *a, **kw: pytest.fail("self-test cannot connect to PG"))
+    from agent_runtime import setup_runtime
+    setup_runtime(root)  # Test Run runs setup itself; a ready root receives no writes.
     return root, executable, calls, handles, controls, output
 
 
 def invoke(environment, **kwargs):
     root, executable, *_ = environment
-    return evaluate_local_workflow_module(root, MODULE_ID, input_payload={}, cli_path=executable, **kwargs)
+    return run_local_workflow_test(root, MODULE_ID, input_payload={}, cli_path=executable, **kwargs)
 
 
+@pytest.mark.fake_run
 def test_self_test_runs_without_pg_or_product_authorization(environment):
     root, _, calls, handles, _, _ = environment
     before = _files(root)
@@ -104,6 +108,7 @@ def test_self_test_runs_without_pg_or_product_authorization(environment):
         resources.require_active()
 
 
+@pytest.mark.fake_run
 def test_new_model_is_new_call_not_a_saved_binding(environment):
     root, _, calls, *_ = environment
     before = _files(root)
@@ -116,6 +121,7 @@ def test_new_model_is_new_call_not_a_saved_binding(environment):
     assert _files(root) == before and len(calls) == 2
 
 
+@pytest.mark.fake_run
 def test_closed_resources_reject_late_output(environment):
     _, _, _, handles, controls, _ = environment
     controls["during_provider"] = lambda: handles[0][0].close()
@@ -127,12 +133,14 @@ def test_closed_resources_reject_late_output(environment):
     assert record["failure_detail"]["failure_code"] == "self_test_resources_unavailable"
 
 
+@pytest.mark.fake_run
 def test_wrong_transport_stops_before_provider(environment):
     with pytest.raises(ValueError, match="Unsupported model transport"):
         invoke(environment, transport_kind="unsupported_cli")
     assert environment[2] == []
 
 
+@pytest.mark.fake_run
 def test_self_test_rejects_actual_model_mismatch(environment):
     environment[4]["response_model"] = "claude-sonnet-4-6"
     record = invoke(environment)
@@ -142,6 +150,7 @@ def test_self_test_rejects_actual_model_mismatch(environment):
     assert record["usage"]["input_tokens"] == 7
 
 
+@pytest.mark.fake_run
 def test_cli_executable_permission_is_not_a_closed_test_resource(environment):
     environment[1].chmod(0o600)
     record = invoke(environment)
@@ -151,6 +160,7 @@ def test_cli_executable_permission_is_not_a_closed_test_resource(environment):
     assert "Permission denied" in record["failure_detail"]["message"]
 
 
+@pytest.mark.fake_run
 def test_cli_success_non_pass_and_execution_failure(environment, tmp_path, capsys):
     root, executable, calls, _, controls, output = environment
     payload = tmp_path / "input.json"
@@ -174,11 +184,12 @@ def test_cli_success_non_pass_and_execution_failure(environment, tmp_path, capsy
     assert failure.value.code == 2 and len(calls) == before
 
 
+@pytest.mark.deterministic
 def test_cli_interrupt_is_not_a_verdict(monkeypatch, tmp_path, capsys):
-    from agent_runtime.testing import conformance_local_evaluation as cli
+    from agent_runtime.testing import conformance_local_test_run as cli
     def interrupted(*args, **kw):
         raise KeyboardInterrupt
-    monkeypatch.setattr(cli, "evaluate_local_workflow_module", interrupted)
+    monkeypatch.setattr(cli, "run_local_workflow_test", interrupted)
     payload = tmp_path / "input.json"
     payload.write_text("{}")
     assert main(["--root", str(tmp_path), "--workflow", "test", "--input", str(payload)]) == 130
@@ -186,6 +197,7 @@ def test_cli_interrupt_is_not_a_verdict(monkeypatch, tmp_path, capsys):
     assert not captured.out and json.loads(captured.err)["error_type"] == "KeyboardInterrupt"
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("field,value", [
     ("self_test_binding_ref", "artifact:forged"), ("self_test_binding_sha256", "1"*64),
     ("input_closure_sha256", "1"*64), ("execution_profile_ref", "execution-profile:other@v1"),
@@ -206,6 +218,7 @@ def test_forged_adapter_requests_cannot_use_live_host(environment, field, value)
     assert invoke(environment)["status"] == "completed"
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("port", ["ledger", "artifact_host", "adapter", "workspace_root", "request", "authority"])
 def test_resources_cannot_cross_requests_or_ports(environment, port):
     from agent_runtime.execution import AgentExecutionAdapterRegistry, InMemoryCellArtifactStore
@@ -237,6 +250,7 @@ def test_resources_cannot_cross_requests_or_ports(environment, port):
     assert invoke(environment)["status"] == "completed"
 
 
+@pytest.mark.fake_run
 def test_self_test_fields_do_not_change_legacy_request_hash(environment):
     _, _, _, _, controls, _ = environment
     def before(adapter, request, host):
@@ -265,7 +279,9 @@ def test_self_test_fields_do_not_change_legacy_request_hash(environment):
     assert invoke(environment)["status"] == "completed"
 
 
+@pytest.mark.fake_run
 def test_installed_console_executes_without_checkout_or_pg(tmp_path):
+    """Substitutes: a shell script standing in for the Claude CLI; the built wheel and console entry are real."""
     from test_agent_runtime_packaging_boundary import _build_runtime_wheel
     wheel = _build_runtime_wheel(tmp_path / "build")
     installed = tmp_path / "installed"
@@ -288,7 +304,7 @@ def test_installed_console_executes_without_checkout_or_pg(tmp_path):
     child = {key:value for key,value in os.environ.items()
              if key not in {"PLATFORM_DATABASE_URL", "AGENT_RUNTIME_TEST_DATABASE_URL", "DDM_REVIEW_EXECUTOR"}}
     child["PYTHONPATH"] = str(installed)
-    argv = [str(installed/"bin/agent-runtime-evaluate"), "--root", str(root), "--workflow", MODULE_ID,
+    argv = [str(installed/"bin/agent-runtime-test-run"), "--root", str(root), "--workflow", MODULE_ID,
             "--input", str(payload), "--cli-path", str(executable)]
     completed = subprocess.run(argv, cwd=tmp_path, env=child, capture_output=True, text=True, timeout=60)
     assert completed.returncode == 0, (completed.stdout, completed.stderr)
@@ -298,11 +314,12 @@ def test_installed_console_executes_without_checkout_or_pg(tmp_path):
     assert all(after[path] == content for path, content in before.items())
     assert set(after) - set(before) == {".runtime/setup.json", *(
         f"{host}/skills/{name}/SKILL.md" for host in (".agents", ".claude")
-        for name in ("agent-runtime-registration", "agent-runtime-evaluation"))}
+        for name in ("agent-runtime-registration", "agent-runtime-test-run"))}
     refused = subprocess.run([*argv, "--save-to-pg"], cwd=tmp_path, env=child, capture_output=True, text=True)
     assert refused.returncode == 2 and not refused.stdout
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("operation", ["launch", "read"])
 def test_close_is_ordered_after_an_admitted_effect(environment, monkeypatch, operation):
     _, _, calls, handles, controls, _ = environment

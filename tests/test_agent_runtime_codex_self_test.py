@@ -9,20 +9,21 @@ from threading import Event, Thread
 
 import pytest
 
-from agent_runtime import evaluate_local_workflow_module
+from agent_runtime import run_local_workflow_test
 from agent_runtime import Module, RuntimeModulePlugin, prepare_local_workflow_module, register_runtime_module_plugin
 from agent_runtime.execution import execution_local_invocation as local
 from agent_runtime.execution import execution_module_invocation as kernel
 from agent_runtime.contracts.invocation_adapter_definition import AuthorizedAgentExecutionRequest
 from agent_runtime.invocation import invocation_codex_module_invocation as codex
 from agent_runtime.registry import RuntimeReleaseRegistry
-from agent_runtime.testing.conformance_local_evaluation import main
+from agent_runtime.testing.conformance_local_test_run import main
 from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID
 from test_agent_runtime_reviewer_registration_cli import _files
 
 
 @pytest.fixture
 def environment(tmp_path, monkeypatch):
+    """Substitutes: the Codex CLI process runner and a synthetic file login; Runtime resources and the execution kernel are real."""
     source = _task_project(tmp_path / "source", module_id="summarize_note")
     requirements = _requirements(execution_mode="tool_free", tool_policy=(),
         attempt_workspace_policy="none", timeout_seconds=30, max_attempts=1)
@@ -86,15 +87,18 @@ def environment(tmp_path, monkeypatch):
         return result
     monkeypatch.setattr(codex, "run_cli_process", process)
     monkeypatch.setattr(kernel, "_authorize_model_attempt", lambda **kw: pytest.fail("No Product authorization in self-test"))
+    from agent_runtime import setup_runtime
+    setup_runtime(root)  # Test Run runs setup itself; a ready root receives no writes.
     return root, requirements, resources, calls, controls, adapters
 
 
 def invoke(environment, **changes):
-    return evaluate_local_workflow_module(environment[0], "summarize_note", input_payload={},
+    return run_local_workflow_test(environment[0], "summarize_note", input_payload={},
         transport_kind="codex_cli", model_id="gpt-6-astra", reasoning_profile="xhigh",
         cli_path=Path(sys.executable), **changes)
 
 
+@pytest.mark.fake_run
 def test_public_codex_evaluation_uses_live_resources_and_same_log(environment):
     root, _, resources, calls, _, _ = environment
     before = _files(root)
@@ -112,6 +116,7 @@ def test_public_codex_evaluation_uses_live_resources_and_same_log(environment):
     assert not Path(calls[0]["environment"]["CODEX_HOME"]).exists()
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("field,value", [("model_id", None), ("reasoning_profile", None), ("model_id", ""), ("reasoning_profile", "")])
 def test_codex_requires_explicit_model_and_effort_without_default_or_writes(environment, field, value):
     root, _, _, calls, *_ = environment
@@ -122,6 +127,7 @@ def test_codex_requires_explicit_model_and_effort_without_default_or_writes(envi
     assert not calls and _files(root) == before
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("effort", ["two words", "line\nbreak", "quoted\"value"])
 def test_codex_invalid_nonempty_effort_precedes_store_resources_and_process(environment, monkeypatch, effort):
     from agent_runtime.invocation import invocation_codex_environment as private_state
@@ -141,12 +147,13 @@ def test_codex_invalid_nonempty_effort_precedes_store_resources_and_process(envi
     with pytest.raises(ValueError, match="effort|reasoning_profile"):
         prepare_local_workflow_module(root, "summarize_note", release_store=Store(), **selection)
     with pytest.raises(ValueError, match="effort|reasoning_profile"):
-        evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+        run_local_workflow_test(root, "summarize_note", input_payload={},
             cli_path=Path(sys.executable), **selection)
     assert touched == resources == calls == adapters == []
     assert _files(root) == before
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("effort", ["max", "ultra", "persistent", "model_custom"])
 def test_codex_preparation_preserves_current_cli_effort_syntax(environment, effort):
     root, _, resources, calls, _, adapters = environment
@@ -160,6 +167,7 @@ def test_codex_preparation_preserves_current_cli_effort_syntax(environment, effo
     assert resources == calls == adapters == [] and _files(root) == before
 
 
+@pytest.mark.fake_run
 def test_public_codex_log_preserves_orphan_progress_without_inventing_execution(environment):
     root, _, _, calls, controls, _ = environment
     before = _files(root)
@@ -181,6 +189,7 @@ def test_public_codex_log_preserves_orphan_progress_without_inventing_execution(
     assert event in [entry["event"] for entry in view["events"]]
 
 
+@pytest.mark.fake_run
 def test_public_codex_cli_resolves_relative_executable_before_actual_attempt_cwd(environment, tmp_path, monkeypatch, capsys):
     from agent_runtime import setup_runtime
     from agent_runtime.invocation.invocation_process_execution import run_cli_process
@@ -228,6 +237,7 @@ else:
     assert not resources[0]._workspace.exists()
 
 
+@pytest.mark.fake_run
 def test_codex_model_change_keeps_definition_and_changes_only_execution_selection(environment):
     root = environment[0]
     before = _files(root)
@@ -240,6 +250,7 @@ def test_codex_model_change_keeps_definition_and_changes_only_execution_selectio
     assert _files(root) == before
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("phase", ["before_launch", "during_provider"])
 def test_codex_closed_resources_prevent_launch_or_accepting_late_output(environment, phase):
     _, _, resources, calls, controls, _ = environment
@@ -253,6 +264,7 @@ def test_codex_closed_resources_prevent_launch_or_accepting_late_output(environm
         assert record["provider_trace"]["provider_terminal"]["type"] == "turn.completed"
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("field,value", [
     ("self_test_binding_ref", "artifact:forged"), ("self_test_binding_sha256", "a"*64),
     ("input_closure_sha256", "b"*64), ("execution_profile_sha256", "c"*64),
@@ -274,6 +286,7 @@ def test_codex_forged_binding_rejected_before_any_process(environment, field, va
     assert record["status"] == "failed" and calls == []
 
 
+@pytest.mark.fake_run
 def test_existing_cli_routes_codex_and_preserves_exit_semantics(environment, tmp_path, capsys):
     payload = tmp_path / "input.json"
     payload.write_text("{}")
@@ -288,6 +301,7 @@ def test_existing_cli_routes_codex_and_preserves_exit_semantics(environment, tmp
     assert refused.value.code == 2 and len(environment[3]) == 1
 
 
+@pytest.mark.fake_run
 def test_codex_resource_close_serializes_only_with_launch_not_the_entire_invocation(environment):
     _, _, resources, calls, controls, _ = environment
     def before(adapter, request, host):
@@ -315,6 +329,7 @@ def test_codex_resource_close_serializes_only_with_launch_not_the_entire_invocat
     assert record["status"] == "failed" and calls == []
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("port", ["artifact_host", "workspace_root", "adapter"])
 def test_codex_live_resources_cannot_be_reused_with_different_ports(environment, port):
     _, _, _, calls, controls, _ = environment
@@ -340,3 +355,34 @@ def test_codex_does_not_shrink_reviewer_default_tools_to_make_a_profile(tmp_path
         prepare_local_workflow_module(root, MODULE_ID, transport_kind="codex_cli",
                                      model_id="gpt-6-astra", reasoning_profile="xhigh")
     assert _files(root) == before
+
+
+@pytest.mark.fake_run
+def test_pg_dsn_never_reaches_codex_version_check_provider_or_record(environment, monkeypatch):
+    """Substitutes: the fixture's Codex process runner and an in-memory release store for PostgreSQL."""
+    from agent_runtime import load_runtime_registration
+    from agent_runtime.registry import PostgresRuntimeReleaseStore
+    root = environment[0]
+    saved = load_runtime_registration(root, "workflow", "summarize_note")
+    class Store:
+        def load_release_registry(self):
+            return saved.registry
+        def register_bundle(self, bundle):
+            pytest.fail("Test Run must not write a PostgreSQL definition store")
+    secret = "postgresql://reader:SECRET-DSN-VALUE@db.invalid/runtime"
+    monkeypatch.setenv("RUNTIME_TEST_RELEASE_DSN", secret)
+    monkeypatch.setattr(PostgresRuntimeReleaseStore, "from_dsn", classmethod(lambda cls, dsn, *, schema: Store()))
+    launched, runner = [], codex.run_cli_process
+    def observed(**fields):
+        launched.append((list(fields["argv"]), dict(fields["environment"])))
+        return runner(**fields)
+    monkeypatch.setattr(codex, "run_cli_process", observed)
+    record = run_local_workflow_test(root, input_payload={}, release_database_url_env="RUNTIME_TEST_RELEASE_DSN",
+        release_schema="agent_runtime", workflow_release_ref=saved.release.release_ref,
+        workflow_release_sha256=saved.release.release_sha256, transport_kind="codex_cli", model_id="gpt-6-astra",
+        reasoning_profile="xhigh", cli_path=Path(sys.executable))
+    assert record["status"] == "completed", record["failure_detail"]
+    assert len(launched) == 2 and "--version" in launched[0][0]
+    for _, env in launched:
+        assert "RUNTIME_TEST_RELEASE_DSN" not in env and "SECRET-DSN-VALUE" not in json.dumps(env)
+    assert "SECRET-DSN-VALUE" not in json.dumps(record)

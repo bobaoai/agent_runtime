@@ -56,7 +56,7 @@ adapter = ClaudeAdapter(
 adapters.register(adapter)
 ```
 
-project_root、workflow_id 指向准确注册；requested_model/requested_effort 为本次选择，None 使用 Runtime 默认。cell_artifacts、adapters 和 host_* 是已有执行入口的真实资源。通过 run_registered_workflow_module 或 run_workflow_module 消费同一次准备结果，完整参数沿用公共 API。普通自测直接使用 agent-runtime-evaluate，无需手工实例化 Adapter 或提供 PG。
+project_root、workflow_id 指向准确注册；requested_model/requested_effort 为本次选择，None 依次取执行参数文件与 Runtime 默认。cell_artifacts、adapters 和 host_* 是已有执行入口的真实资源。通过 run_registered_workflow_module 或 run_workflow_module 消费同一次准备结果，完整参数沿用公共 API。普通自测直接使用 agent-runtime-test-run，无需手工实例化 Adapter 或提供 PG。
 
 新准备使用 claude_cli_adapter@v3，完整实际输入在 Prompt Envelope 保存前固定。旧
 claude_cli_adapter@v1/v2 和 claude_cli_native_tools_executor@v2 的记录仍按原 bytes/hash 读取，
@@ -115,7 +115,7 @@ Inspection 在明确请求详细日志时标明缺少或矛盾的事件，不从
 
 ### 2.1 明确的本地工程资源与命令记录
 
-普通自测通过现有 `agent-runtime-evaluate --resources FILE` 提供冻结材料树、只读依赖和任务命令，
+普通自测通过 `agent-runtime-test-run --resources FILE` 提供冻结材料树、只读依赖和任务命令，
 不需要调用者实例化 Adapter。资源控制包进入原 inputs hash 闭包，控制包本身保持私有；模型只看到
 任务全文、确定的相对材料位置和命令说明。实际 stdin 与保存的 Prompt Envelope 使用相同字节。
 可选 `.runtime/config.json` 只提供程序/依赖 locator 默认，完整参数见自动 API 中的 load_runtime_config。

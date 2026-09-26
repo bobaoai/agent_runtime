@@ -45,8 +45,8 @@ API_SOURCES = {
         "WorkflowSelfTestResources", "LocalWorkflowModuleBridge",
     ),
     "src/agent_runtime/testing/conformance_agent_execution.py": ("run_agent_example",),
-    "src/agent_runtime/testing/execution_local_evaluation.py": (),
-    "src/agent_runtime/testing/conformance_local_evaluation.py": ("evaluate_local_workflow_module",),
+    "src/agent_runtime/testing/execution_local_test_run.py": (),
+    "src/agent_runtime/testing/conformance_local_test_run.py": ("run_local_workflow_test",),
     "src/agent_runtime/foundation/foundation_environment_setup.py": ("setup_runtime", "load_runtime_config"),
     "src/agent_runtime/inspection/inspection_execution_logging.py": ("read_execution_log", "parse_cli_log"),
     "src/agent_runtime/invocation/invocation_claude_cli_execution.py": ("ClaudeAdapter",),
@@ -179,12 +179,12 @@ def _cli_sections(tree: ast.Module, standalone: str | None = None,
     parsers = [(parser, {})]
     if inherited_tree is not None:
         aliases = [alias.asname or alias.name for node in tree.body
-                   if isinstance(node, ast.ImportFrom) and node.module == "execution_local_evaluation"
+                   if isinstance(node, ast.ImportFrom) and node.module == "execution_local_test_run"
                    for alias in node.names if alias.name == "build_parser"]
         calls = [node for node in ast.walk(parser) if isinstance(node, ast.Call)
                  and isinstance(node.func, ast.Name) and node.func.id in aliases]
         if len(calls) != 1:
-            raise ValueError("evaluation CLI must compose one declared execution parser")
+            raise ValueError("Test Run CLI must compose one declared execution parser")
         inherited = next(node for node in inherited_tree.body
                          if isinstance(node, ast.FunctionDef) and node.name == "build_parser")
         values = {arg.arg: ast.literal_eval(default) for arg, default in
@@ -212,7 +212,7 @@ def _cli_sections(tree: ast.Module, standalone: str | None = None,
                     commands[call.func.value.id][1].append((", ".join(ast.literal_eval(arg) for arg in call.args),
                                                            "required" if required else "optional", help_text))
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
-    result = ["## Evaluation CLI" if standalone else "## CLI commands", "", "Generated from the installed parser's argument declarations.", "",
+    result = ["## Test Run CLI" if standalone else "## CLI commands", "", "Generated from the installed parser's argument declarations.", "",
               _doc(main, "CLI main"), ""]
     for command, arguments in commands.values():
         title = command if standalone else "agent-runtime-registry " + command
@@ -241,7 +241,7 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
     lines.extend(["## " + _doc(overview_tree, "Runtime run profile"), "", "## Contents", ""])
     symbols = [name for names in API_SOURCES.values() for name in names]
     lines.extend(f"- [{name}](#{name.lower()})" for name in symbols)
-    lines.extend(["- [CLI commands](#cli-commands)", "- [Evaluation CLI](#evaluation-cli)", "- [Error constants](#error-constants)", ""])
+    lines.extend(["- [CLI commands](#cli-commands)", "- [Test Run CLI](#test-run-cli)", "- [Error constants](#error-constants)", ""])
     constants: dict[str, str] = {}
     for source, selected in API_SOURCES.items():
         tree = ast.parse((project_root / source).read_text(encoding="utf-8"), filename=source)
@@ -253,9 +253,9 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
             lines.extend(_section(definitions[name], definitions))
         if source.endswith("registry_local_persistence.py"):
             lines.extend(_cli_sections(tree))
-        elif source.endswith("conformance_local_evaluation.py"):
-            inherited = ast.parse((project_root / "src/agent_runtime/testing/execution_local_evaluation.py").read_text())
-            lines.extend(_cli_sections(tree, standalone="agent-runtime-evaluate", inherited_tree=inherited))
+        elif source.endswith("conformance_local_test_run.py"):
+            inherited = ast.parse((project_root / "src/agent_runtime/testing/execution_local_test_run.py").read_text())
+            lines.extend(_cli_sections(tree, standalone="agent-runtime-test-run", inherited_tree=inherited))
         for node in tree.body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:

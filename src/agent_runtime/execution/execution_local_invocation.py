@@ -9,18 +9,18 @@
 | ModuleReviewer：固定运行底座 | Runtime 的 ModuleReviewer 提供默认 ModuleExecutionRequirements；不同 Reviewer 提供不同任务内容 | Registry 保留通用 Module 的继承行为；下游不按 Reviewer 名称重新组装或增加配置 |
 | Workflow：节点、版本与连接 | 调用者组装；单节点默认与 Module 同名，也可明确命名 | Registry 保存图；Execution 固定本次准确版本，未指定版本时使用最新注册定义 |
 | root、Python、程序与资源 | 宿主给 root、现有登录及明确材料/额外依赖；Python 固定为启动 Runtime 的 sys.executable | Foundation 做轻量 setup/配置读取；Invocation 使用当前 Python 环境，只读开放其运行库，不另选解释器；root 本身不是模型读取许可 |
-| ExecutionProfileRelease 与 Variant | 调用者可给模型、transport、effort；未给时用 Runtime 默认；固定能力来自 Module | Execution.prepare 生成本次具体 Profile 与节点绑定；Registry 承载准确内容；调用者不手拼 Profile，root 不固定绑定模型 |
+| ExecutionProfileRelease 与 Variant | 每项执行参数依次取本次调用、该 Workflow 的参数文件、workspace 参数文件、Runtime 默认；参数文件不选择定义版本；固定能力来自 Module | Execution.prepare 生成本次具体 Profile 与节点绑定并记录每项来源；Registry 承载准确内容；调用者不手拼 Profile |
 | Provider 与工具调用 | 上一步已经固定的 Profile 和明确资源 | Invocation 的 Adapter 组装 CLI、执行声明资源接口，取得基本 metadata、最终结果并归档原始流；不分析工具日志判断整次行为 |
 | Attempt、重试与输出提交 | 准确请求、预算及实际执行事实 | Execution 管理生命周期和技术完成条件；命令非零/正常权限拒绝不是自动的整体失败；任务 owner 判断业务是否通过 |
 | 日志、恢复与查询 | 宿主明确提供存储与授权；普通自测不需要 PG | Ledger 保留全部 Attempt 原始事实，Durability 按既有记录协调恢复；Inspection 仅在明确查询时解析详细视图，不改运行状态 |
 
 调用顺序：任务 source → Registry 的 Module/Workflow → Execution.prepare 的具体配置 →
 Invocation 的 CLI/工具调用 → Execution 接受技术结果 → Ledger 返回原始事实。
-显式 Evaluation 再组合 Inspection 取得详细日志，由任务 owner 判断业务结果；无持久存储时在清理前
+Test Run 再组合 Inspection 取得详细日志，由任务 owner 判断业务结果；无持久存储时在清理前
 返回当次原文，不承诺进程结束后恢复。
 
 完整参数在本页的 Module、ModuleReviewer、ModuleExecutionRequirements、ExecutionProfileRelease、
-ExecutionVariantPolicyRelease、prepare_local_workflow_module、evaluate_local_workflow_module 和 CLI 章节中，
+ExecutionVariantPolicyRelease、prepare_local_workflow_module、run_local_workflow_test 和 CLI 章节中，
 由各自真实定义导出。ModuleReviewer 的默认字段也直接取自该类，不从历史 ReviewerDefaults 猜测当前配置。
 
 Runtime CLI 负责 setup、注册、执行和查询。Portable CLI 负责准备审核对象并校验审核结果；宿主接入只
@@ -55,6 +55,10 @@ from .execution_self_test_binding import ModuleSelfTestResources
 from ..ledger.ledger_lineage_recording import InMemoryModuleExecutionLedger
 
 
+# Layer-1 transport; execution_parameter_resolution compares file layers against it.
+_RUNTIME_DEFAULT_TRANSPORT = "claude_cli"
+
+
 def _execution_profile_for_requirements(
     requirements: ModuleExecutionRequirements, *, transport_kind: str | None = None,
     model_id: str | None = None, reasoning_profile: str | None = None,
@@ -67,7 +71,7 @@ def _execution_profile_for_requirements(
     its Adapter validates supported requirements. No executable/resources opened.
     """
     requirements.validate()
-    transport = "claude_cli" if transport_kind is None else transport_kind
+    transport = _RUNTIME_DEFAULT_TRANSPORT if transport_kind is None else transport_kind
     if transport == "claude_cli":
         from ..invocation.invocation_claude_cli_execution import _execution_expectation, _CURRENT_BINDING
         model = "claude-opus-5[1m]" if model_id is None else model_id
@@ -97,6 +101,24 @@ def _execution_profile_for_requirements(
     return profile
 
 
+def _require_single_module_entry(workflow) -> None:
+    if (len(workflow.nodes) != 1 or workflow.nodes[0].node_kind is not WorkflowNodeKind.MODULE
+            or workflow.initial_node_id != workflow.nodes[0].node_id):
+        raise ValueError("local preparation requires one Workflow Module entry node")
+
+
+def _prepare_local_workflow_module_with_sources(
+    root: Path, workflow_id: str, *, version: str | None = None,
+    transport_kind: str | None = None, model_id: str | None = None,
+    reasoning_profile: str | None = None, release_store=None,
+):
+    """Private form of prepare_local_workflow_module that also returns parameter sources."""
+    saved = load_runtime_registration(root, "workflow", workflow_id, version)
+    _require_single_module_entry(saved.release)
+    return _prepare_loaded_workflow(saved, root=root, transport_kind=transport_kind, model_id=model_id,
+        reasoning_profile=reasoning_profile, release_store=release_store)
+
+
 def prepare_local_workflow_module(
     root: Path, workflow_id: str, *, version: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
@@ -105,37 +127,46 @@ def prepare_local_workflow_module(
     """Resolve a fixed single-node Module Workflow and this invocation's model.
 
     Args:
-        root: Registered host root. Only saved definitions are read; this is
-            neither a model choice nor permission to read the whole project.
+        root: Registered host root. Saved definitions and the two execution
+            parameter files are read; root is not permission to read the project.
         workflow_id: Saved Workflow object ID.
         version: Exact definition version, or None for the latest registered
             new definition. Resolved once before preparing exact releases.
-        transport_kind: Independent model transport; None uses Runtime's model
-            preset. codex_cli supports its admitted tool-free requirements and
-            requires explicit model_id and reasoning_profile.
+            Execution parameter files never select a version.
+        transport_kind: This call's model transport. None takes the Workflow
+            parameter file, then the workspace parameter file, then Runtime's
+            claude_cli default (see execution_parameter_resolution).
+            codex_cli supports its admitted tool-free requirements and
+            requires explicit model_id and reasoning_profile from some layer.
             Model names are never used to infer another transport or provider.
-        model_id: Independent model override; None uses claude-opus-5[1m] for
-            claude_cli. codex_cli requires an explicit concrete model.
-        reasoning_profile: Independent effort override; None uses xhigh for
-            claude_cli. codex_cli requires an explicit supported effort.
-            Omitted model fields use the Runtime preset, never saved bindings.
+        model_id: This call's model; None falls back through the same layers,
+            ending at claude-opus-5[1m] for claude_cli. codex_cli has no default.
+        reasoning_profile: This call's effort; None falls back through the same
+            layers, ending at xhigh for claude_cli. codex_cli has no default.
+            A model or effort cannot come from a layer whose transport differs
+            from the resolved transport. Saved Profiles are never defaults.
             Tools/network/workspace/budgets come from frozen Module requirements.
         release_store: Optional explicit existing store providing register_bundle
             and load_release_registry, such as PostgresRuntimeReleaseStore.
-            Its schema must already be ready. Writes and verifies exact releases
-            for durable execution, with no local-file update. Shared stores
-            require readers that understand the selected release format.
+            Its schema must already be ready. Here it writes and verifies exact
+            releases for durable execution, with no local-file update; this
+            differs from run_local_workflow_test, where release_store is only a
+            read-only definition source. Shared stores require readers that
+            understand the selected release format.
     Returns:
         A pair (LoadedRuntimeRegistration, ExecutionVariantPolicyRelease).
         The first contains the fixed Workflow and the exact invocation Registry;
         the second selects this invocation's Profile at its Module node.
-        Build host adapters/authorization using this Registry and Profile, then
-        pass this same Workflow/Registry/Variant to run_registered_workflow_module.
-        Do not reload the root or resolve the model again before invoking.
+        Parameter sources are not returned here; run_local_workflow_test
+        records them. Build host adapters/authorization using this Registry and
+        Profile, then pass this same Workflow/Registry/Variant to
+        run_registered_workflow_module. Do not reload the root or resolve the
+        model again before invoking.
     Raises:
         FileNotFoundError: Missing saved Workflow/version.
-        ValueError: Invalid saved data, unsupported transport, missing fixed
-            Module requirements, unsupported graph or Profile/Module boundary.
+        ValueError: Invalid saved data or parameter file, mixed transports,
+            unsupported transport, missing fixed Module requirements,
+            unsupported graph or Profile/Module boundary.
         ModuleAuthoringError: Native Registry compatibility failure where raised.
         Exception: Store failures retain their native contract. No model has
             run when preparation fails; prior store writes may have committed.
@@ -148,12 +179,20 @@ def prepare_local_workflow_module(
         records inputs, actual configuration, outputs and failures in its Ledger.
         History is queried by execution ID, not by this preparation function.
     """
+    saved, variant, _ = _prepare_local_workflow_module_with_sources(root, workflow_id, version=version,
+        transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile,
+        release_store=release_store)
+    return saved, variant
+
+
+def _prepare_local_workflow_with_sources(
+    root: Path, workflow_id: str, *, version: str | None = None,
+    transport_kind: str | None = None, model_id: str | None = None,
+    reasoning_profile: str | None = None, release_store=None,
+):
+    """Private form of prepare_local_workflow that also returns parameter sources."""
     saved = load_runtime_registration(root, "workflow", workflow_id, version)
-    workflow = saved.release
-    if (len(workflow.nodes) != 1 or workflow.nodes[0].node_kind is not WorkflowNodeKind.MODULE
-            or workflow.initial_node_id != workflow.nodes[0].node_id):
-        raise ValueError("local preparation requires one Workflow Module entry node")
-    return _prepare_loaded_workflow(saved, transport_kind=transport_kind, model_id=model_id,
+    return _prepare_loaded_workflow(saved, root=root, transport_kind=transport_kind, model_id=model_id,
         reasoning_profile=reasoning_profile, release_store=release_store)
 
 
@@ -164,20 +203,31 @@ def prepare_local_workflow(
 ) -> tuple[LoadedRuntimeRegistration, ExecutionVariantPolicyRelease]:
     """Prepare every Agent node through the same model conversion as one node.
 
-    Arguments and store effects follow prepare_local_workflow_module. Reads the
-    root/latest selection once, preserves the exact graph and creates bindings
-    only for its Module nodes. Each node must have frozen execution requirements;
-    zero-operation deterministic nodes use existing lower-level explicit
-    Profile/Adapter assembly, not a fabricated model binding. No provider call,
-    registration-source reload, production Gateway support or .runtime write.
-    Returns the same (LoadedRuntimeRegistration, exact Variant Policy) pair.
+    Arguments, execution parameter layers and store effects follow
+    prepare_local_workflow_module; all Module nodes share this Workflow's one
+    resolution. Reads the root/latest selection once, preserves the exact graph
+    and creates bindings only for its Module nodes. Each node must have frozen
+    execution requirements; zero-operation deterministic nodes use existing
+    lower-level explicit Profile/Adapter assembly, not a fabricated model
+    binding. No provider call, registration-source reload, production Gateway
+    support or .runtime write. Returns the same (LoadedRuntimeRegistration,
+    exact Variant Policy) pair.
     """
-    saved = load_runtime_registration(root, "workflow", workflow_id, version)
-    return _prepare_loaded_workflow(saved, transport_kind=transport_kind, model_id=model_id,
-        reasoning_profile=reasoning_profile, release_store=release_store)
+    saved, variant, _ = _prepare_local_workflow_with_sources(root, workflow_id, version=version,
+        transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile,
+        release_store=release_store)
+    return saved, variant
 
 
-def _prepare_loaded_workflow(saved, *, transport_kind, model_id, reasoning_profile, release_store):
+def _prepare_loaded_workflow(saved, *, root, transport_kind, model_id, reasoning_profile, release_store):
+    """Resolve execution parameters for the loaded Workflow and prepare its exact closure.
+
+    Returns (LoadedRuntimeRegistration, Variant, ResolvedExecutionParameters).
+    """
+    from .execution_parameter_resolution import resolve_execution_parameters
+
+    resolved = resolve_execution_parameters(root, saved.release.workflow_id, transport_kind=transport_kind,
+        model_id=model_id, reasoning_profile=reasoning_profile)
     workflow = saved.release
     saved.registry.assert_workflow_execution_allowed(workflow, ModuleExecutionPurpose.EVALUATION)
     fixed = _closure(saved.registry, workflow, supplied_variants=())
@@ -190,8 +240,8 @@ def _prepare_loaded_workflow(saved, *, transport_kind, model_id, reasoning_profi
         if requirements is None:
             raise ValueError("Independent model preparation requires frozen Module execution requirements; historical Profiles are not defaults")
         saved.registry.assert_module_execution_allowed(module, ModuleExecutionPurpose.EVALUATION)
-        profile = _execution_profile_for_requirements(requirements, transport_kind=transport_kind,
-            model_id=model_id, reasoning_profile=reasoning_profile)
+        profile = _execution_profile_for_requirements(requirements, transport_kind=resolved.transport_kind,
+            model_id=resolved.model_id, reasoning_profile=resolved.reasoning_profile)
         try:
             _assert_admitted_test_evaluation_profile(module, profile)
         except NotImplementedError as exc:
@@ -231,7 +281,7 @@ def _prepare_loaded_workflow(saved, *, transport_kind, model_id, reasoning_profi
         # Do not let unrelated shared-store selections enter this invocation.
         registry = RuntimeReleaseRegistry()
         registry.register_bundle(actual)
-    return LoadedRuntimeRegistration(workflow, registry), variant
+    return LoadedRuntimeRegistration(workflow, registry), variant, resolved
 
 
 def _run_prepared_workflow_node(

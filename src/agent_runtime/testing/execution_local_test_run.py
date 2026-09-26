@@ -1,4 +1,4 @@
-"""Argument and resource parsing shared by the installed evaluation CLI."""
+"""Argument and resource parsing shared by the installed Test Run CLI and API."""
 import argparse
 import json
 from pathlib import Path
@@ -7,36 +7,45 @@ import sys
 
 
 def build_parser(*, require_workflow=True, require_input=True):
-    """Declare execution arguments; a composed test CLI may supply its own target.
+    """Declare Test Run arguments; a composed CLI may supply its own target check.
 
     Defaults retain the registered single-node command. A composing caller that
     disables either required argument must validate its own mutually exclusive
     target before invoking an execution function. This builder performs no IO.
     """
     parser = argparse.ArgumentParser(
-        description="Evaluate one registered single-Module Workflow with its frozen requirements and an independent model. Supports empty or selected native tools. No PG or production authorization.",
+        description="Test-run one registered single-Module Workflow with its frozen requirements and an independently selected model. The definition comes from root/.runtime or, read-only, from an exact PostgreSQL release. Supports empty or selected native tools. No production authorization; results are not persisted.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("Runtime ownership:\n"
                 "  Registry: Module/ModuleReviewer requirements and Workflow versions.\n"
                 "  Foundation: root setup and host resource locators.\n"
-                "  Execution: exact Profile/Variant, Attempts, retries and technical completion.\n"
+                "  Execution: execution parameters, exact Profile/Variant, Attempts, retries and technical completion.\n"
                 "  Invocation: CLI assembly, basic metadata/final result and raw capture.\n"
                 "  Ledger: raw facts and original content from every Attempt.\n"
                 "  Durability: recovery under the existing execution contract.\n"
                 "  Inspection: private detailed views on request; no execution-state changes.\n"
-                "  Explicit evaluation: execute, inspect and return facts for owner judgment.\n"
+                "  Test Run: execute, inspect and return facts for owner judgment.\n"
                 "  Task owner: input meaning and business acceptance; no host-side Adapter.\n"
+                "Execution parameters (--transport, --model, --effort) are taken per parameter from this call,\n"
+                "  then root/.runtime/execution_parameters/workflows/<workflow_id>.json, then\n"
+                "  root/.runtime/execution_parameters/workspace.json, then the Runtime default.\n"
+                "  Parameter files never choose a definition version.\n"
                 f"Current Runtime Python (fixed default): {sys.executable}\n"
                 "No Python selector or fallback. Read-only Python runtime support does not add tools.\n"
                 "Full run profile and API fields: start at agent_runtime/README.md\n"
                 "Portable review CLIs prepare/validate review objects; they are separate from Runtime CLIs."))
-    parser.add_argument("--root", required=True, type=Path, help="Root containing .runtime definitions; not a model read root.")
-    parser.add_argument("--workflow", required=require_workflow, help="Registered single-node Workflow ID.")
-    parser.add_argument("--version", help="Exact version; omit for the latest registered new definition.")
+    parser.add_argument("--root", required=True, type=Path, help="Root containing .runtime setup, definitions and execution parameter files; not a model read root. Required for local and PostgreSQL definitions.")
+    parser.add_argument("--workflow", required=require_workflow, help="Local definition: registered single-node Workflow ID under root/.runtime.")
+    parser.add_argument("--version", help="Local definition only: exact version; omit for the latest registered new definition.")
+    parser.add_argument("--workflow-ref", help="PostgreSQL definition: exact Workflow release_ref. Requires --workflow-sha256, --release-database-url-env and --release-schema; excludes --workflow and --version.")
+    parser.add_argument("--workflow-sha256", help="PostgreSQL definition: exact Workflow release_sha256.")
+    parser.add_argument("--release-database-url-env", help="PostgreSQL definition: name of the environment variable holding the DSN. The DSN itself is never an argument, input field or record value. The store is read only; nothing is registered or written.")
+    parser.add_argument("--release-schema", help="PostgreSQL definition: existing release schema to read.")
+    parser.add_argument("--expected-module-id", help="Optional exact Module ID the selected Workflow must run; checked before materials are captured or a model is called.")
     parser.add_argument("--input", required=require_input, type=Path, help="JSON input prepared under the selected Module or example input schema.")
-    parser.add_argument("--transport", help="Independent transport: claude_cli (default), or codex_cli for tool-free inline Modules.")
-    parser.add_argument("--model", help="Independent concrete model ID; required for codex_cli, otherwise omit for Runtime default.")
-    parser.add_argument("--effort", help="Independent reasoning effort; required for codex_cli, otherwise omit for Runtime default.")
+    parser.add_argument("--transport", help="This call's transport: claude_cli or codex_cli. Omit to use the parameter files or the claude_cli default.")
+    parser.add_argument("--model", help="This call's concrete model ID. Omit to use the parameter files or the default; codex_cli has no default model.")
+    parser.add_argument("--effort", help="This call's reasoning effort. Omit to use the parameter files or the default; codex_cli has no default effort.")
     parser.add_argument("--cli-path", type=Path, help="Installed executable; overrides root/.runtime/config.json provider_cli_paths, then PATH is used if unconfigured. Codex uses the host's standard file-based login.")
     parser.add_argument("--resources", type=Path, help="Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}]. Resource paths are relative to this file; command cwd is source/scratch-relative. python/python3 use current Runtime Python; other arguments are not interpolated. Empty dependencies clear additional host defaults, not the current Python runtime. No models, credentials or production grants here.")
     return parser

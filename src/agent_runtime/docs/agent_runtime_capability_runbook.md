@@ -13,10 +13,10 @@ wheel 随附本文档；完整测试和 fixtures 位于同版本 Runtime 源码 
 通过同一个已安装命令运行；root只定位注册和宿主程序，不授权读取项目全集。例子会注册自己的准确Module/Workflow定义，模型在本次调用单独选择，默认不写PG。
 
 ```sh
-agent-runtime-evaluate --root ROOT --example agent_capability_example
-agent-runtime-evaluate --root ROOT --example agent_capability_example --scenario revision
-agent-runtime-evaluate --root ROOT --example agent_capability_example --scenario wait
-agent-runtime-evaluate --root ROOT --example agent_evaluation_example
+agent-runtime-test-run --root ROOT --example agent_capability_example
+agent-runtime-test-run --root ROOT --example agent_capability_example --scenario revision
+agent-runtime-test-run --root ROOT --example agent_capability_example --scenario wait
+agent-runtime-test-run --root ROOT --example agent_evaluation_example
 ```
 
 wait样例先保存实际等待快照，再由测试宿主提交一个匹配的fixture事件并在同一进程继续。评价样例的任务内审核由被测Agent的实际工具请求触发；独立评价读取Runtime记录，原始节点和child日志随JSON结果返回。工具或业务结论与技术完成状态分别判断。这些focused结果不代表42项完整Runtime验证；真实模型使用RUN_PROVIDER_INTEGRATION=1开启test_live_claude_agent_examples，未开启的gate仍为not_run。
@@ -60,7 +60,7 @@ WAIT 只在同一活实例收到当前条件匹配的事件后继续；重复 dr
 
 CLI 退出码 0 表示技术完成，1 表示失败或未完成，2 表示参数错误，130 表示用户取消。保留 stdout/stderr；异常没有 error_code 时使用实际类型和诊断，不把消息文字编成稳定错误枚举。
 
-参数、返回和继续条件以 [run_agent_example](agent_runtime_reviewer_api.md#run_agent_example)、[WorkflowSelfTestResources](agent_runtime_reviewer_api.md#workflowselftestresources) 和 [CLI](agent_runtime_reviewer_api.md#evaluation-cli) 的同源接口说明为准。
+参数、返回和继续条件以 [run_agent_example](agent_runtime_reviewer_api.md#run_agent_example)、[WorkflowSelfTestResources](agent_runtime_reviewer_api.md#workflowselftestresources) 和 [CLI](agent_runtime_reviewer_api.md#test-run-cli) 的同源接口说明为准。
 
 ## 2. 单例、分组与全仓批量运行
 

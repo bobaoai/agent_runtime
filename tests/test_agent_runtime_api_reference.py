@@ -66,9 +66,10 @@ def test_run_profile_is_exported_from_entry_docstring(source):
     assert "## Runtime run profile — source probe" in render_api_reference(source).decode()
 
 
+@pytest.mark.deterministic
 def test_evaluation_help_exposes_ownership_and_current_python():
     import sys
-    from agent_runtime.testing.execution_local_evaluation import build_parser
+    from agent_runtime.testing.execution_local_test_run import build_parser
     help_text = build_parser().format_help()
     for word in ("Registry", "Foundation", "Execution", "Invocation", "Ledger", "Durability", "Inspection"):
         assert word in help_text
@@ -76,12 +77,13 @@ def test_evaluation_help_exposes_ownership_and_current_python():
     assert "No Python selector or fallback" in help_text
 
 
+@pytest.mark.deterministic
 def test_public_evaluation_export_preserves_runtime_dependency_direction():
-    from agent_runtime import evaluate_local_workflow_module
-    from agent_runtime.testing.conformance_local_evaluation import evaluate_local_workflow_module as implementation
+    from agent_runtime import run_local_workflow_test
+    from agent_runtime.testing.conformance_local_test_run import run_local_workflow_test as implementation
     from agent_runtime.conformance.conformance_architecture_manifest import RUNTIME_ALLOWED_DEPENDENCY_TARGETS
 
-    assert evaluate_local_workflow_module is implementation
+    assert run_local_workflow_test is implementation
     assert "conformance" in RUNTIME_ALLOWED_DEPENDENCY_TARGETS["public_facade"]
     assert not {"inspection", "conformance"} & RUNTIME_ALLOWED_DEPENDENCY_TARGETS["execution"]
     assert "invocation" not in RUNTIME_ALLOWED_DEPENDENCY_TARGETS["inspection"]
@@ -268,13 +270,14 @@ def test_task_navigation_and_local_links_are_closed():
         assert path.read_bytes() == (ROOT / "src/agent_runtime" / path.relative_to(ROOT)).read_bytes()
 
 
+@pytest.mark.deterministic
 def test_task_runbook_preserves_environment_and_execution_boundaries():
     body = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text()
     for phrase in ("不重新编译或注册", "Source owner", "runtime_module_registration_v4", "execution_schema",
                    "要求持久执行却找不到实际授权/存储接入时", "不生成 Workflow", "不会自动建表或迁移",
                    "origin_bundle", "相同 key", "授权替身", "输出校验", "持久回读"):
         assert phrase in body
-    assert "persistence=not_requested" in body and "agent-runtime-evaluate --root" in body
+    assert "persistence=not_requested" in body and "agent-runtime-test-run --root" in body
     for phrase in ("prepare_local_workflow_module", "误传退出 2", "不读取旧文件的模型选择",
                    "不会成为这个新入口的默认", "明确更换模型使用新 key"):
         assert phrase in body

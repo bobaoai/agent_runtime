@@ -34,7 +34,7 @@ Agent 能找到同一安装版本的 CLI 和操作说明，区分宿主 root 与
 当前 Reviewer 注册入口消费 `runtime_module_registration_v4` 任务 source。v2/v3 或其他不相容来源
 交回 source owner 明确迁移；操作者不靠删字段、补 transport 或改版本使注册通过。
 
-请求运行已注册对象时，使用 `agent-runtime-test-run` 完成其支持的普通自测；需要持久执行、
+请求运行已注册对象时，使用 `agent-runtime-evaluation` 完成其支持的普通自测；需要持久执行、
 PG 注册或其他宿主专用操作时，按同版本 runbook 交给已有宿主入口，不将这些配置变成普通本地注册前提。
 CLI 或必要资料缺失时说明具体缺件及提供方，保留已完成事实。
 

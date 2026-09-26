@@ -899,7 +899,7 @@ def run_module(
     """Run one registered Module through the Test/Evaluation execution kernel.
 
     This is the low-level isolated entry, not the resource-assembling self-test
-    convenience API. Use evaluate_local_workflow_module for ordinary registered
+    convenience API. Use run_local_workflow_test for ordinary registered
     Workflow self-tests without production authorization.
 
     Args:

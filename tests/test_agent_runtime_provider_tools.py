@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from agent_runtime import evaluate_local_workflow_module
+from agent_runtime import run_local_workflow_test
 from agent_runtime.contracts.registry_release_definition import WorkflowEdge
 from agent_runtime.execution import InMemoryCellArtifactStore
 from agent_runtime.execution.execution_local_invocation import _run_prepared_workflow_node
@@ -148,6 +148,7 @@ class CallbackFactory:
 
 
 def callback_run(tmp_path, monkeypatch, factory, *, payload=None, missing_observation=False, sequence=None):
+    """Substitutes: FakeCLI executable and an in-process Claude process runner; the callback bridge and its IPC are real."""
     from agent_runtime.execution import execution_local_invocation as local
     from agent_runtime.invocation import invocation_claude_cli_execution as claude
     from agent_runtime.invocation.invocation_local_command_mcp import exchange
@@ -191,10 +192,11 @@ def callback_run(tmp_path, monkeypatch, factory, *, payload=None, missing_observ
         result.stdout_bytes, result.stderr_bytes = raw, b""
         return result
     monkeypatch.setattr(claude, "ClaudeAdapter", lambda **fields: adapter_type(**fields, process_runner=process))
-    return evaluate_local_workflow_module(root, "summarize_note", input_payload={},
+    return run_local_workflow_test(root, "summarize_note", input_payload={},
         cli_path=_fake_cli(tmp_path), tool_session_factory=factory)
 
 
+@pytest.mark.fake_run
 def test_actual_callback_ipc_joins_provider_ids_and_frozen_prompt(tmp_path, monkeypatch):
     factory = CallbackFactory()
     record = callback_run(tmp_path, monkeypatch, factory)
@@ -209,6 +211,7 @@ def test_actual_callback_ipc_joins_provider_ids_and_frozen_prompt(tmp_path, monk
     assert factory.requests[0].self_test_binding_ref
 
 
+@pytest.mark.fake_run
 def test_bad_callback_payload_is_denied_without_running_it(tmp_path, monkeypatch):
     factory = CallbackFactory()
     record = callback_run(tmp_path, monkeypatch, factory, payload={"value": 41, "target": "unapproved"})
@@ -217,6 +220,7 @@ def test_bad_callback_payload_is_denied_without_running_it(tmp_path, monkeypatch
     assert call["status"] == "failed" and call["response"]["allowed"] is False
 
 
+@pytest.mark.fake_run
 def test_callback_permission_denial_can_be_followed_by_success(tmp_path, monkeypatch):
     factory = CallbackFactory()
     old_open = factory.open_session
@@ -237,6 +241,7 @@ def test_callback_permission_denial_can_be_followed_by_success(tmp_path, monkeyp
     assert factory.calls == [("inspect_note", {"value": 41})]
 
 
+@pytest.mark.fake_run
 def test_callback_cannot_hide_actual_resource_definition_drift(tmp_path, monkeypatch):
     factory = CallbackFactory()
     old_open = factory.open_session
@@ -253,12 +258,14 @@ def test_callback_cannot_hide_actual_resource_definition_drift(tmp_path, monkeyp
     assert record["provider_trace"]["local_callback_calls"][0]["response"]["status"] == "failed"
 
 
+@pytest.mark.fake_run
 def test_unobserved_callback_result_cannot_be_a_complete_log(tmp_path, monkeypatch):
     record = callback_run(tmp_path, monkeypatch, CallbackFactory(), missing_observation=True)
     assert record["status"] == "completed"
     assert not record["execution_log"]["complete"]
 
 
+@pytest.mark.fake_run
 def test_changed_session_definitions_prevent_provider_entry(tmp_path, monkeypatch):
     factory = CallbackFactory()
     original = factory.open_session
@@ -271,6 +278,7 @@ def test_changed_session_definitions_prevent_provider_entry(tmp_path, monkeypatc
     assert record["status"] == "failed" and not factory.calls and factory.closed
 
 
+@pytest.mark.fake_run
 def test_session_from_another_request_is_rejected(tmp_path, monkeypatch):
     factory = CallbackFactory()
     original = factory.open_session
@@ -283,6 +291,7 @@ def test_session_from_another_request_is_rejected(tmp_path, monkeypatch):
     assert record["status"] == "failed" and not factory.calls and factory.closed
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("kind", ["missing", "empty", "extra", "schema"])
 def test_factory_binding_errors_prevent_session_and_provider(tmp_path, monkeypatch, kind):
     factory = CallbackFactory()
@@ -297,6 +306,7 @@ def test_factory_binding_errors_prevent_session_and_provider(tmp_path, monkeypat
     assert not factory.requests and not factory.calls
 
 
+@pytest.mark.fake_run
 def test_callback_executes_only_the_prepared_child_through_kernel(tmp_path, monkeypatch):
     from agent_runtime.execution import execution_local_invocation as local
     from agent_runtime.invocation import invocation_claude_cli_execution as claude

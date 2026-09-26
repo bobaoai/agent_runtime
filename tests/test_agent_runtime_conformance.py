@@ -235,6 +235,7 @@ def test_capability_navigation_exemption_does_not_apply_to_other_runtime_files()
             _assert_generic_role_vocabulary(Path(path), '_CASE_LABELS = {"case": "Reviewer 文档"}')
 
 
+@pytest.mark.deterministic
 def test_runtime_role_vocabulary_is_confined_to_review_capability_owners() -> None:
     runtime_root = Path(__file__).resolve().parents[1] / "src" / "agent_runtime"
     role_source = runtime_root / "registry/registry_module_authoring.py"
@@ -264,7 +265,7 @@ def test_runtime_role_vocabulary_is_confined_to_review_capability_owners() -> No
         # verification-owned files may use those two instance names; the
         # generic Execution/Invocation/Durability implementation remains role-free.
         example_paths = {"testing/conformance_agent_examples.py", "testing/conformance_agent_execution.py",
-                         "testing/conformance_local_evaluation.py"}
+                         "testing/conformance_local_test_run.py"}
         _assert_generic_role_vocabulary(relative, source, reviewer_capability=relative.as_posix() in capability_paths,
                                         example_capability=relative.as_posix() in example_paths)
 

@@ -355,7 +355,7 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
             "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
     _source("execution", "self_test", "binding",
             "designDoc/agent_runtime_09_authorization_integration_contract.md"),
-    _source("execution", "local", "evaluation",
+    _source("execution", "local", "test_run",
             "designDoc/agent_runtime_00_execution_charter.md", source_directory_id="testing"),
     _source("registry", "reviewer", "defaults",
             "designDoc/agent_runtime_01_module_contract_and_assembly.md"),
@@ -363,6 +363,8 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
             "designDoc/agent_runtime_01_module_contract_and_assembly.md"),
     _source("execution", "local", "invocation",
             "designDoc/agent_runtime_00_execution_charter.md"),
+    _source("execution", "parameter", "resolution",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
     _source(
         "registry",
         "architecture",
@@ -816,9 +818,9 @@ RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
         owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
     ),
     RuntimeSupportingSourceFileRegistration(
-        source_path="src/agent_runtime/testing/conformance_local_evaluation.py",
+        source_path="src/agent_runtime/testing/conformance_local_test_run.py",
         supporting_plane_id="conformance", source_directory_id="testing",
-        subject="local", nominalized_action="evaluation",
+        subject="local", nominalized_action="test_run",
         owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
     ),
     RuntimeSupportingSourceFileRegistration(

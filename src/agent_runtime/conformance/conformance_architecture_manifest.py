@@ -340,7 +340,7 @@ RUNTIME_PUBLIC_SURFACE_MANIFEST = MappingProxyType(
             "prepare_local_workflow",
             "WorkflowSelfTestResources",
             "LocalWorkflowModuleBridge",
-            "evaluate_local_workflow_module",
+            "run_local_workflow_test",
             "ModuleAuthoringError",
             "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
             "MODULE_OPERATION_DECLARATION_INVALID",

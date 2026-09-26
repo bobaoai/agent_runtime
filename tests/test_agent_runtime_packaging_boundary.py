@@ -107,6 +107,7 @@ def _build_runtime_wheel(tmp_path: Path) -> Path:
     return wheels[0]
 
 
+@pytest.mark.deterministic
 def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
     configuration = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -123,7 +124,7 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
                  "pytest>=8", "setuptools>=77", "temporalio>=1.31"],
     }
     assert configuration["project"]["scripts"] == {
-        "agent-runtime-evaluate": "agent_runtime.testing.conformance_local_evaluation:main",
+        "agent-runtime-test-run": "agent_runtime.testing.conformance_local_test_run:main",
         "agent-runtime-registry": "agent_runtime.registry.registry_local_persistence:main",
         "agent-runtime-inspect": "agent_runtime.inspection.inspection_snapshot_exporting:main",
         "agent-runtime-live-inspect": "agent_runtime.inspection.inspection_http_serving:main",
@@ -177,6 +178,7 @@ def test_runtime_source_imports_only_stdlib_or_runtime_owned_modules() -> None:
     assert violations == []
 
 
+@pytest.mark.deterministic
 def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -> None:
     wheel = _build_runtime_wheel(tmp_path)
     result = _run_isolated_python_with_dependencies(
@@ -210,7 +212,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
         from agent_runtime.registry.registry_release_compilation import (
             ExecutionProfileReleaseSpec, compile_execution_profile_release)
         from agent_runtime.registry.registry_local_persistence import main as registry_main
-        from agent_runtime.testing.conformance_local_evaluation import main as evaluation_main
+        from agent_runtime.testing.conformance_local_test_run import main as evaluation_main
         from agent_runtime.invocation.invocation_result_assembly import completed_adapter_result
         from agent_runtime.contracts.invocation_adapter_definition import OutputSubmission
 
@@ -270,6 +272,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
     }
 
 
+@pytest.mark.deterministic
 def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
     tmp_path: Path,
 ) -> None:
@@ -300,7 +303,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         for member in members
     )
     assert "agent_runtime/README.md" in members
-    for name in ("agent-runtime-registration", "agent-runtime-evaluation"):
+    for name in ("agent-runtime-registration", "agent-runtime-test-run"):
         resource = f"agent_runtime/skills/{name}/SKILL.md"
         assert resource in members
         with zipfile.ZipFile(wheel_path) as wheel:

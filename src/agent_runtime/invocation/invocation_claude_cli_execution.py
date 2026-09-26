@@ -80,6 +80,13 @@ def _execution_expectation(profile, adapter_binding=_CURRENT_BINDING) -> Invocat
     )
 
 
+# Host variables passed through to every Claude CLI process; Runtime sets PATH,
+# temporary directories and Git/Python isolation itself.
+_ENVIRONMENT_KEYS = frozenset({
+    "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR",
+})
+
+
 def _model_identity(value):
     """Accept exact model IDs and the known CLI context-window selector only.
 
@@ -491,22 +498,23 @@ class ClaudeAdapter:
                     settings["sandbox"]["filesystem"]["denyRead"].extend(str(item.private_root) for item in (local_commands, provider_tools) if item is not None)
                 argv = self.build_command(profile=profile, settings=settings, output_schema=native_schema,
                                           local_commands=local_commands, provider_tools=provider_tools)
-                stage = "cli_preflight"
-                version = subprocess.run([str(self._cli_path), "--version"], capture_output=True,
-                                         text=True, check=True, timeout=30).stdout.strip()
-                help_text = subprocess.run([str(self._cli_path), "--help"], capture_output=True,
-                                           text=True, check=True, timeout=30).stdout
-                required = ("--safe-mode", "--restricted", "--tools", "--settings", "--effort", "--strict-mcp-config", "--add-dir")
-                if any(flag not in help_text for flag in required) or (native_schema is not None and "--json-schema" not in help_text):
-                    raise ValueError("configured Claude CLI lacks a required option")
-                environment = {key: value for key, value in os.environ.items() if key in
-                    {"HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}}
+                # One filtered environment serves the preflight and the real call, so host
+                # secrets such as a definition-store DSN never reach any Claude CLI process.
+                environment = {key: value for key, value in os.environ.items() if key in _ENVIRONMENT_KEYS}
                 bins = [str(dep / "bin") for dep in self._dependencies if (dep / "bin").is_dir()]
                 python_bins = [str(python.parent)] if python is not None else []
                 environment.update(PATH=os.pathsep.join(dict.fromkeys([*python_bins, *bins, "/usr/bin", "/bin", "/usr/sbin", "/sbin"])),
                     TMPDIR=str(cli_temporary), CLAUDE_CODE_TMPDIR=str(cli_temporary),
                     PYTHONDONTWRITEBYTECODE="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
                     GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
+                stage = "cli_preflight"
+                version = subprocess.run([str(self._cli_path), "--version"], capture_output=True, env=environment,
+                                         text=True, check=True, timeout=30).stdout.strip()
+                help_text = subprocess.run([str(self._cli_path), "--help"], capture_output=True, env=environment,
+                                           text=True, check=True, timeout=30).stdout
+                required = ("--safe-mode", "--restricted", "--tools", "--settings", "--effort", "--strict-mcp-config", "--add-dir")
+                if any(flag not in help_text for flag in required) or (native_schema is not None and "--json-schema" not in help_text):
+                    raise ValueError("configured Claude CLI lacks a required option")
                 prompt = prepared.prompt
                 trace.update(argv=argv, environment=environment, cwd=str(cwd), cli_version=version, settings=settings,
                              actual_prompt=prompt, material_sha256=material_hashes, timeout_seconds=profile.timeout_seconds,

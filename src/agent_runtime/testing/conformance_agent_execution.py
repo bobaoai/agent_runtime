@@ -155,15 +155,19 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
         input_payload: Optional object with exactly task and required_facts.
             None uses the packaged finite facts. No runtime flags, credentials,
             factory locators or model overrides are accepted in task JSON.
-        transport_kind: Independent model transport passed to common preparation.
+        transport_kind: This call's transport passed to common preparation;
+            None falls back through the example Workflow's parameter file, the
+            workspace parameter file and the default. The parent graph and the
+            child Reviewer resolve separately and must reach the same transport.
             Current tool-capable examples require the admitted Claude CLI path.
-        model_id: Independent explicit model, or Runtime's public default.
-        reasoning_profile: Independent effort, or Runtime's public default.
+        model_id: This call's model, or the same parameter-file layers/default.
+        reasoning_profile: This call's effort, or the same layers/default.
         cli_path: Explicit executable; otherwise the root's configured executable
-            or the same transport's PATH lookup is used, without provider fallback.
+            or the resolved transport's PATH lookup is used, without fallback.
     Returns:
         Actual Workflow/node records, child execution records, final output,
-        resource cleanup and observed stop reason. Full raw logs are retained in
+        resource cleanup and observed stop reason. execution_parameter_sources
+        gives the parent Workflow's and child Reviewer's parameter sources. Full raw logs are retained in
         the returned Runtime records. This explicit example requests Inspection
         for node and child logs before cleanup; evaluation receives selected
         actual facts. Ordinary graph dispatch does not parse native tool logs.
@@ -189,7 +193,7 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
     """
     from jsonschema import Draft202012Validator
     from ..execution.execution_local_invocation import (
-        prepare_local_workflow, prepare_local_workflow_module, _run_prepared_workflow_node,
+        _prepare_local_workflow_with_sources, _prepare_local_workflow_module_with_sources, _run_prepared_workflow_node,
     )
     from ..execution.execution_workflow_evaluation import WorkflowSelfTestResources, LocalWorkflowModuleBridge
     from ..inspection.inspection_execution_logging import read_execution_log
@@ -213,16 +217,23 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
         example_name, "v1", definition.origin_bundle), root=root)
     choice = dict(transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile)
-    saved, selection = prepare_local_workflow(root, example_name, version="v1", **choice)
-    child = child_selection = None
+    saved, selection, parameters = _prepare_local_workflow_with_sources(root, example_name, version="v1", **choice)
+    child = child_selection = child_parameters = None
     if example_name == EXAMPLE_NAMES[1]:
         exported = Module.to_workflow(build_example_reviewer()).export()
         register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
             "agent_example_task_review", "v1", exported.origin_bundle), root=root)
-        child, child_selection = prepare_local_workflow_module(root, exported.workflow_release.workflow_id,
-                                                               version="v1", **choice)
+        child, child_selection, child_parameters = _prepare_local_workflow_module_with_sources(
+            root, exported.workflow_release.workflow_id, version="v1", **choice)
+    prepared = [(saved.registry, selection)] + ([] if child is None else [(child.registry, child_selection)])
+    transports = {registry.get_execution_profile(binding["execution_profile_release_ref"],
+                                                 binding["execution_profile_release_sha256"]).transport_kind
+                  for registry, variant in prepared for binding in variant.policy_document()["bindings"]}
+    if len(transports) != 1:
+        raise ValueError("Example nodes resolved different transports " + ", ".join(sorted(transports))
+                         + "; the example runs one executable, so align the execution parameter files")
+    transport, = transports
     config = load_runtime_config(root)
-    transport = "claude_cli" if transport_kind is None else transport_kind
     executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(transport)
     if executable is None:
         executable = shutil.which({"claude_cli": "claude", "codex_cli": "codex"}[transport])
@@ -386,5 +397,7 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
                 "stop_reason": progress.stop_reason.value if progress else "execution_error", "failure": failure,
                 "output": final[-1]["output"] if final else None,
                 "execution": record, "child_executions": deepcopy(children), "wait_snapshots": event_snapshots,
+                "execution_parameter_sources": {"workflow": parameters.as_record(),
+                    "child_review": None if child_parameters is None else child_parameters.as_record()},
                 "persistence": "not_requested", "full_runtime_completed": False})
     return response

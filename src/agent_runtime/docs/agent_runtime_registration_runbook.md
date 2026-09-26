@@ -198,7 +198,7 @@ print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
 重复提交使用原生幂等注册；同一 ref 的内容冲突应返回发布负责人，不覆盖已有记录或临时改个版本绕过。
 数据库结构未就绪时停止，本段不会自动建表或迁移。
 
-`origin_bundle` 不含 Profile 和 Variant。此底层示例只注册 Module；需要当前本地 evaluation 入口时，以 Module.to_workflow(exported).export() 的 origin_bundle 注册真实 Workflow，或直接使用 0.1 的 register-reviewer CLI 一次完成。
+`origin_bundle` 不含 Profile 和 Variant。此底层示例只注册 Module；需要当前本地 Test Run 入口时，以 Module.to_workflow(exported).export() 的 origin_bundle 注册真实 Workflow，或直接使用 0.1 的 register-reviewer CLI 一次完成。
 [Workflow 组装](#5-可选-workflow-assembly)仍允许明确命名和多节点图。注册依赖闭合不等于执行资源已准备；普通自测和外部授权执行按下一节分别进入。
 
 <a id="test-reviewer"></a>
@@ -208,34 +208,48 @@ print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
 普通自测可以直接使用安装包中的正式命令，不需要 PG 或生产授权：
 
 ```sh
-agent-runtime-evaluate --root /path/to/host --workflow example_reviewer \
+agent-runtime-test-run --root /path/to/host --workflow example_reviewer \
   --input /path/to/prepared_input.json --transport claude_cli
 ```
 
 输入由该 Reviewer 所属工具按注册 schema 准备。root 只定位已保存定义，不向模型开放整个项目。
-省略 --version 使用最近注册的新定义；--model/--effort 是本次选择，省略时使用 Runtime 默认，
-不读取旧文件保存的模型绑定。支持范围和参数来自
-[Evaluation CLI](agent_runtime_reviewer_api.md#evaluation-cli) 与
-[evaluate_local_workflow_module](agent_runtime_reviewer_api.md#evaluate_local_workflow_module)。
+省略 --version 使用最近注册的新定义。--transport/--model/--effort 是本次选择；省略的项依次取
+`root/.runtime/execution_parameters/workflows/<workflow_id>.json`、
+`root/.runtime/execution_parameters/workspace.json`，最后是 Runtime 默认。参数文件只写这三项，
+不选择定义版本；也不读取旧文件保存的模型绑定。结果的 `execution_parameter_sources` 写明每项的
+来源层与文件哈希。支持范围和参数来自
+[Test Run CLI](agent_runtime_reviewer_api.md#test-run-cli) 与
+[run_local_workflow_test](agent_runtime_reviewer_api.md#run_local_workflow_test)。
 
 命令用临时资源执行已有单节点 Workflow，stdout 返回结果及内存执行事实，标注
 persistence=not_requested；不会写 PG、注册定义或持久请求回执。CLI 前置 setup 可能补齐环境文件。
 测试资源退出时清理，不能用本次
 execution ID 查询持久历史，也不提供跨进程重放。操作者可以明确保存 stdout 作为测试证据，
-但该文件不是持久 Runtime Ledger。当前此命令不接 PG；保存类参数会被拒绝，不自动忽略。
+但该文件不是持久 Runtime Ledger。此命令不写 PG；保存类参数会被拒绝，不自动忽略。
+
+定义保存在 PG 时，改用准确的 ref/hash 只读取定义，root 仍用于 setup、资源配置和参数文件：
+
+```sh
+agent-runtime-test-run --root /path/to/host --workflow-ref runtime-workflow:example_reviewer@v1 \
+  --workflow-sha256 EXACT_SHA256 --release-database-url-env RUNTIME_RELEASE_DATABASE_URL \
+  --release-schema agent_runtime --input /path/to/prepared_input.json
+```
+
+DSN 只从所给环境变量读取，不进入输入、结果或 Provider 环境。缺失、hash 不符或非单节点定义直接
+拒绝，不回退到 root 下的同名定义；本次 Profile/Variant 只在内存中准备，不向 PG 写任何内容。
 已完成并通过注册输出 schema 的执行退出 0（包括有效 non_pass），技术失败退出 1，
 用法错误退出 2，中断退出 130。所属语义 validator 仍由宿主调用，不能将 schema 通过当作审核通过。
 
 无工具普通Module也可以通过同一命令选择Codex：
 
 ```sh
-agent-runtime-evaluate --root /path/to/workspace --workflow summarize_note \
+agent-runtime-test-run --root /path/to/workspace --workflow summarize_note \
   --input /path/to/input.json --transport codex_cli --model YOUR_CODEX_MODEL --effort high \
   --cli-path /path/to/codex
 ```
 
 Codex要求显式模型与effort，只接纳tool_free、inline、空工具、workspace none和network denied。
-要求工具的Module不会被自动降为无工具。省略transport继续原Claude默认；模型名不决定transport。
+要求工具的Module不会被自动降为无工具。省略的transport依次取参数文件与原Claude默认；模型名不决定transport。
 命令使用宿主标准CODEX_HOME/auth.json，未设置CODEX_HOME时使用用户标准.codex/auth.json。
 当前Codex认证方式是file-based；缺文件就返回环境错误，不登录或寻找其他账号。
 Runtime为每次调用准备独立Provider state，不载入宿主Skills/Plugins/会话；实际启动受本次活资源
@@ -249,12 +263,12 @@ Profile/Variant，不能把旧v3静默改成v4。Module/Workflow定义不因新�
 普通工程材料仍通过同一命令提供：
 
 ```sh
-agent-runtime-evaluate --root /path/to/workspace --workflow registered_workflow \
+agent-runtime-test-run --root /path/to/workspace --workflow registered_workflow \
   --input /path/to/task.json --resources /path/to/resources.json
 ```
 
 资源 JSON 提供明确的材料根、带 hash/执行位的文件清单、只读依赖及按 ID 选择的命令；准确字段、
-相对路径规则与错误见 [evaluate_local_workflow_module](agent_runtime_reviewer_api.md#evaluate_local_workflow_module)
+相对路径规则与错误见 [run_local_workflow_test](agent_runtime_reviewer_api.md#run_local_workflow_test)
 和同版本 `--help`。调用者提供源工具生成的冻结清单，不把整个宿主 root 隐含交给模型。
 材料复制保持相对目录结构，实际完整 prompt 在保存 envelope 前形成。
 
@@ -349,7 +363,7 @@ print({"execution_id": execution_id, "record_count": len(trace.records),
 None 表示该引用没有可读内容，不能当成成功空输出。输出、prompt、诊断可能包含私有材料，只向
 获授权读者展示，不把凭据或原文发到共享日志。
 
-完整工具日志由 Runtime 提供。普通 `agent-runtime-evaluate` 返回的 `execution_log` 包含全部 Attempt，
+完整工具日志由 Runtime 提供。普通 `agent-runtime-test-run` 返回的 `execution_log` 包含全部 Attempt，
 每项带实际工具请求、结果、原始事件位置和完整性信息；`provider_log.raw_streams` 保存原始 stdout/stderr
 的 base64 字节。它在临时资源清理前生成，调用者可保存完整 stdout JSON；无需 PG 或新的日志命令。
 `complete=false` 和 `issues` 表示日志存在缺口，不能将部分记录或空列表当成已确认没有工具调用。
@@ -375,7 +389,7 @@ log = repository.read_execution_log(execution_id, include_private_content=True)
 普通运行只处理基本 metadata 与最终 result，归档原始流和 Runtime 实际资源记录，不配对或评价
 工具日志。`read_execution_log(..., include_private_content=True)` 才按需生成详细工具视图；
 默认 False 不读私有正文。旧 trace 已保存的 `tool_log` 保留原解释，新 trace 从原文派生，不回写
-历史。日志缺口只影响视图完整性，不改变 Attempt 状态或重试。显式 evaluation CLI 在临时资源
+历史。日志缺口只影响视图完整性，不改变 Attempt 状态或重试。Test Run CLI 在临时资源
 清理前调用同一读取接口，返回各次 Attempt 的完整已采集原文与详细视图，再由任务 owner 判断。
 
 工具拒绝与整次执行失败分别记录。Claude 实时拒绝、工具结果与最终拒绝摘要可关联同一准确

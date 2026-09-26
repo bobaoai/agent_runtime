@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_runtime import evaluate_local_workflow_module
+from agent_runtime import run_local_workflow_test
 from agent_runtime.contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
 from agent_runtime.invocation.invocation_local_command_execution import LocalCommandSession, LOCAL_COMMAND_CLI_TOOL_NAME
 from agent_runtime.invocation.invocation_local_command_mcp import exchange
@@ -561,8 +561,10 @@ def test_private_protocol_rejects_noncanonical_or_oversized_messages(tmp_path, r
         assert env.host.launches == 0
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("cleanup_failure", [False, True])
 def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monkeypatch, cleanup_failure):
+    """Substitutes: FakeCLI executable and an in-process Claude process runner; the local commands run for real."""
     from agent_runtime import Module, RuntimeModulePlugin, register_runtime_module_plugin
     from agent_runtime.registry import RuntimeReleaseRegistry
     from agent_runtime.execution import execution_local_invocation as local, execution_module_invocation as kernel
@@ -622,7 +624,7 @@ def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monk
     # the Adapter itself is an ordinary test specialization of its existing port.
     monkeypatch.setattr(claude, "ClaudeAdapter", TestAdapter)
     monkeypatch.setattr(kernel, "_authorize_model_attempt", lambda **_: pytest.fail("No Product authority for this self-test"))
-    record = evaluate_local_workflow_module(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
+    record = run_local_workflow_test(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
         material_root=tree, material_files=({"relative_path": "candidate.py", "sha256": hashlib.sha256(original).hexdigest(), "executable": False},),
         read_only_dependencies=(Path(sys.base_prefix).resolve(),), commands=(command("unit", "print('real command')"),))
     assert record["status"] == ("failed" if cleanup_failure else "completed"), record["failure_detail"]

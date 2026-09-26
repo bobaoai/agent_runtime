@@ -175,6 +175,7 @@ def test_example_cleanup_failure_retains_captured_records():
     assert result["execution"]["nodes"] == [{"actual": "record"}]
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("arguments", [
     [], ["--workflow", "some_workflow"], ["--example", "agent_capability_example", "--version", "v1"],
     ["--example", "agent_capability_example", "--resources", "resources.json"],
@@ -182,7 +183,7 @@ def test_example_cleanup_failure_retains_captured_records():
     ["--example", "agent_evaluation_example", "--scenario", "wait"],
 ])
 def test_example_cli_invalid_arguments_stop_before_root_or_model(tmp_path, arguments):
-    from agent_runtime.testing.conformance_local_evaluation import main
+    from agent_runtime.testing.conformance_local_test_run import main
     root = tmp_path / "unused_root"
     with pytest.raises(SystemExit) as error:
         main(["--root", str(root), *arguments])
@@ -190,8 +191,9 @@ def test_example_cli_invalid_arguments_stop_before_root_or_model(tmp_path, argum
     assert not root.exists()
 
 
+@pytest.mark.deterministic
 def test_installed_cli_routes_examples_and_preserves_returned_facts(tmp_path, monkeypatch, capsys):
-    from agent_runtime.testing import conformance_local_evaluation as cli
+    from agent_runtime.testing import conformance_local_test_run as cli
     seen = []
     def run(root, example, **arguments):
         seen.append((root, example, arguments))
@@ -202,18 +204,23 @@ def test_installed_cli_routes_examples_and_preserves_returned_facts(tmp_path, mo
     assert seen[0][1] == "agent_evaluation_example" and seen[0][2]["input_payload"] is None
 
 
+@pytest.mark.deterministic
 def test_installed_cli_keeps_the_existing_registered_execution_entry(tmp_path, monkeypatch):
-    from agent_runtime.testing import conformance_local_evaluation as cli
+    from agent_runtime.testing import conformance_local_test_run as cli
     arguments = ["--root", str(tmp_path), "--workflow", "one_module", "--input", "input.json"]
     seen = []
-    monkeypatch.setattr(cli, "_execute_registered", lambda argv: seen.append(argv) or 0)
+    monkeypatch.setattr(cli, "_execute_registered", lambda args: seen.append(args) or 0)
     assert cli.main(arguments) == 0
-    assert seen == [arguments]
+    assert len(seen) == 1
+    args = seen[0]
+    assert (args.root, args.workflow, str(args.input)) == (tmp_path, "one_module", "input.json")
+    assert args.workflow_ref is args.example is args.version is args.resources is None
 
 
+@pytest.mark.deterministic
 def test_example_help_preserves_inherited_execution_guidance(monkeypatch, capsys):
-    from agent_runtime.testing import conformance_local_evaluation as cli
-    from agent_runtime.testing.execution_local_evaluation import build_parser
+    from agent_runtime.testing import conformance_local_test_run as cli
+    from agent_runtime.testing.execution_local_test_run import build_parser
     inherited = build_parser(require_workflow=False, require_input=False)
     combined = cli.build_parser()
     assert combined.epilog.startswith(inherited.epilog)

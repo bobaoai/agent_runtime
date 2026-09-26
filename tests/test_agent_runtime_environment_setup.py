@@ -62,8 +62,9 @@ def test_config_rejects_link_without_reading_target(tmp_path):
     assert target.read_text() == "not a config"
 
 
+@pytest.mark.deterministic
 def test_resource_file_resolves_only_host_locators_and_preserves_command_argv(tmp_path, monkeypatch):
-    from agent_runtime.testing.execution_local_evaluation import _resource_arguments
+    from agent_runtime.testing.execution_local_test_run import _resource_arguments
     file = tmp_path / "request/resources.json"
     file.parent.mkdir()
     command = {"command_id": "unit", "argv": ["python", "-m", "pytest", "tests"],
@@ -80,10 +81,11 @@ def test_resource_file_resolves_only_host_locators_and_preserves_command_argv(tm
     assert _resource_arguments(None) == {}
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("document", [{"profile": {}}, {"commands": {}}, {"material_root": 1},
                                        {"read_only_dependencies": [False]}, []])
 def test_resource_file_rejects_unknown_configuration_and_wrong_shapes(tmp_path, document):
-    from agent_runtime.testing.execution_local_evaluation import _resource_arguments
+    from agent_runtime.testing.execution_local_test_run import _resource_arguments
     file = tmp_path / "resources.json"
     file.write_text(json.dumps(document))
     with pytest.raises(ValueError):
@@ -129,10 +131,11 @@ def test_first_setup_and_ready_path_only_touch_fixed_local_resources(tmp_path, p
                for path, (body, modified) in current.items())
 
 
+@pytest.mark.deterministic
 def test_setup_creates_absent_root_and_repairs_only_missing_resource(tmp_path, package):
     root = tmp_path / "new/host"
     assert len(setup_runtime(root)) == 5
-    missing = root / ".agents/skills/agent-runtime-evaluation/SKILL.md"
+    missing = root / ".agents/skills/agent-runtime-test-run/SKILL.md"
     missing.unlink()
     assert setup_runtime(root) == (missing,)
 
@@ -163,9 +166,10 @@ def test_known_predecessor_uses_exact_content_not_name(tmp_path, package, monkey
     assert _snapshot(root) == before
 
 
+@pytest.mark.deterministic
 def test_unknown_content_preflight_writes_nothing(tmp_path, package):
     root = tmp_path / "host"
-    target = root / ".claude/skills/agent-runtime-evaluation/SKILL.md"
+    target = root / ".claude/skills/agent-runtime-test-run/SKILL.md"
     target.parent.mkdir(parents=True)
     target.write_text("user's different Skill")
     before = _snapshot(root)
@@ -189,9 +193,10 @@ def test_invalid_setup_metadata_is_not_replaced(tmp_path, package, value):
     assert _snapshot(root) == before
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("relative", [".runtime", ".runtime/setup.json", ".agents", ".agents/skills",
     ".agents/skills/agent-runtime-registration", ".agents/skills/agent-runtime-registration/SKILL.md",
-    ".claude/skills/agent-runtime-evaluation/SKILL.md"])
+    ".claude/skills/agent-runtime-test-run/SKILL.md"])
 def test_fixed_target_symlinks_do_not_escape(tmp_path, package, relative):
     root = tmp_path / "host"
     target = root / relative
@@ -216,6 +221,7 @@ def test_native_file_error_does_not_replace_directory(tmp_path, package):
     assert target.is_dir() and not (root / ".runtime").exists()
 
 
+@pytest.mark.deterministic
 def test_metadata_write_failure_can_finish_with_same_package(tmp_path, package, monkeypatch):
     root = tmp_path / "host"
     original = setup._write
@@ -226,7 +232,7 @@ def test_metadata_write_failure_can_finish_with_same_package(tmp_path, package, 
     monkeypatch.setattr(setup, "_write", interrupted)
     with pytest.raises(OSError, match="metadata write failed"):
         setup_runtime(root)
-    assert (root / ".claude/skills/agent-runtime-evaluation/SKILL.md").is_file()
+    assert (root / ".claude/skills/agent-runtime-test-run/SKILL.md").is_file()
     monkeypatch.setattr(setup, "_write", original)
     assert setup_runtime(root) == (root / ".runtime/setup.json",)
     assert setup_runtime(root) == ()
@@ -255,31 +261,37 @@ def test_registration_commands_setup_before_business_dispatch(tmp_path, monkeypa
     assert events == [("setup", tmp_path), ("operation", command)]
 
 
-def test_evaluation_setup_before_invocation_and_failure_stops(tmp_path, monkeypatch, capsys):
-    from agent_runtime.testing import conformance_local_evaluation as cli
+@pytest.mark.deterministic
+def test_test_run_setup_precedes_preparation_once_and_failure_stops(tmp_path, monkeypatch, capsys):
+    """The API owns setup: the CLI adds no second setup, and a setup failure stops preparation."""
+    from agent_runtime.testing import conformance_local_test_run as cli
     events = []
     payload = tmp_path / "input.json"
     payload.write_text("{}")
     def prepare(root):
         events.append("setup")
+    def preparation(*args, **kwargs):
+        events.append("prepare")
+        raise LookupError("stop after preparation starts")
     monkeypatch.setattr(setup, "setup_runtime", prepare)
-    monkeypatch.setattr(cli, "evaluate_local_workflow_module", lambda *a, **k:
-        events.append("evaluation") or {"status": "completed"})
+    monkeypatch.setattr(cli, "_prepare_local_workflow_module_with_sources", preparation)
     args = ["--root", str(tmp_path), "--workflow", "sample", "--input", str(payload)]
-    assert cli.main(args) == 0 and events == ["setup", "evaluation"]
-    assert json.loads(capsys.readouterr().out) == {"status": "completed"}
+    assert cli.main(args) == 1 and events == ["setup", "prepare"]
+    assert json.loads(capsys.readouterr().err)["detail"] == "stop after preparation starts"
     def fail(root):
+        events.append("setup")
         raise ValueError("setup conflict")
     monkeypatch.setattr(setup, "setup_runtime", fail)
     events.clear()
-    assert cli.main(args) == 1 and events == []
+    assert cli.main(args) == 1 and events == ["setup"]
     captured = capsys.readouterr()
     assert not captured.out and json.loads(captured.err)["detail"] == "setup conflict"
 
 
+@pytest.mark.deterministic
 def test_argument_errors_and_help_do_not_run_setup(tmp_path, monkeypatch):
     from agent_runtime.registry import registry_local_persistence as registry
-    from agent_runtime.testing import conformance_local_evaluation as evaluation
+    from agent_runtime.testing import conformance_local_test_run as evaluation
     monkeypatch.setattr(setup, "setup_runtime", lambda root: pytest.fail("must parse first"))
     for main in (registry.main, evaluation.main):
         with pytest.raises(SystemExit) as help_result:

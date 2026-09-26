@@ -34,7 +34,7 @@ test = [
 ]
 
 [project.scripts]
-agent-runtime-evaluate = "agent_runtime.testing.conformance_local_evaluation:main"
+agent-runtime-test-run = "agent_runtime.testing.conformance_local_test_run:main"
 agent-runtime-registry = "agent_runtime.registry.registry_local_persistence:main"
 agent-runtime-inspect = "agent_runtime.inspection.inspection_snapshot_exporting:main"
 agent-runtime-live-inspect = "agent_runtime.inspection.inspection_http_serving:main"
@@ -59,9 +59,14 @@ packages = [
 "agent_runtime" = "src/agent_runtime"
 
 [tool.setuptools.package-data]
-"agent_runtime" = ["README.md", "design_contract/*.md", "design_contract/*.json", "docs/*.md", "skills/agent-runtime-registration/SKILL.md", "skills/agent-runtime-evaluation/SKILL.md"]
+"agent_runtime" = ["README.md", "design_contract/*.md", "design_contract/*.json", "docs/*.md", "skills/agent-runtime-registration/SKILL.md", "skills/agent-runtime-test-run/SKILL.md"]
 "agent_runtime.inspection" = ["*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "deterministic: fixed rules checked without simulating a model run",
+  "fake_run: real entry flow with named substitute dependencies such as FakeCLI or a fake store",
+  "real_run: real entry and dependencies; gated by AGENT_RUNTIME_REAL_RUN=1 and reported unverified when not run",
+]
