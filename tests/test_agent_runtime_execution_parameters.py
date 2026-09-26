@@ -16,8 +16,6 @@ from agent_runtime.execution.execution_parameter_resolution import (
 )
 from agent_runtime.registry import RuntimeReleaseRegistry
 
-from test_agent_runtime_claude_native_tools import _fake_cli
-from test_agent_runtime_local_model_preparation import _observe_resource_evaluation
 from test_agent_runtime_reviewer_registration_cli import _files
 
 
@@ -34,14 +32,14 @@ def _write(root, relative, **values):
     return hashlib.sha256(body).hexdigest()
 
 
-def _module_root(tmp_path, *, version="v1", root=None):
+def _module_root(tmp_path, *, version="v1", root=None, timeout_seconds=30):
     """Register a tool-free single-node Workflow named summarize_note."""
     from agent_runtime import Module
     from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID as TASK_SKILL
     source = _task_project(tmp_path / ("source_" + version), module_id=WORKFLOW)
     module = Module.from_registration(source, skill_id=TASK_SKILL, module_id=WORKFLOW,
         execution_requirements=_requirements(execution_mode="tool_free", tool_policy=(),
-            attempt_workspace_policy="none", timeout_seconds=30, max_attempts=1))
+            attempt_workspace_policy="none", timeout_seconds=timeout_seconds, max_attempts=1))
     root = tmp_path / "host" if root is None else root
     workflow = module.to_workflow(module.export(module_version=version)).export()
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
@@ -204,77 +202,93 @@ def test_parameter_values_pass_the_same_profile_checks_as_explicit_values(tmp_pa
         prepare_local_workflow_module(root, WORKFLOW)
 
 
+REAL_GATE = pytest.mark.skipif(os.environ.get("AGENT_RUNTIME_REAL_RUN") != "1",
+                               reason="unverified: set AGENT_RUNTIME_REAL_RUN=1 with an authenticated Claude CLI")
+# Neither value is the Runtime default (claude-opus-5[1m], xhigh), so each can only come from its layer.
+REAL_MODEL, REAL_EFFORT = "claude-sonnet-5", "low"
+REAL_TIMEOUT_SECONDS = 300
+
+
 def _test_run_root(tmp_path):
-    root = _module_root(tmp_path)
+    root = _module_root(tmp_path, timeout_seconds=REAL_TIMEOUT_SECONDS)
     setup_runtime(root)
     return root
 
 
-@pytest.mark.fake_run
-def test_test_run_sends_file_parameters_to_the_provider_and_records_their_sources(tmp_path, monkeypatch):
-    """Substitutes: FakeCLI executable and an in-process Claude process runner."""
+def _flag(argv, name):
+    return argv[argv.index(name) + 1]
+
+
+@pytest.mark.real_run
+@REAL_GATE
+def test_real_test_run_sends_file_parameters_to_the_provider_and_records_their_sources(tmp_path):
+    """Real entry: installed Claude CLI, local registration and this package's Test Run API."""
     root = _test_run_root(tmp_path)
-    # The provider double reports claude-opus-5[1m]; effort is the value that distinguishes layers.
-    digest = _write(root, WORKSPACE, model_id="claude-opus-5[1m]", reasoning_profile="high")
-    calls = _observe_resource_evaluation(monkeypatch, lambda fields: None, tools=())
+    digest = _write(root, WORKSPACE, model_id=REAL_MODEL, reasoning_profile=REAL_EFFORT)
     before = _files(root)
-    record = run_local_workflow_test(root, WORKFLOW, input_payload={}, cli_path=_fake_cli(tmp_path))
+    record = run_local_workflow_test(root, WORKFLOW, input_payload={})
     assert record["status"] == "completed", record["failure_detail"]
-    argv = calls[0]["argv"]
-    assert argv[argv.index("--model") + 1] == "claude-opus-5[1m]" and argv[argv.index("--effort") + 1] == "high"
-    assert (record["model"], record["effort"]) == ("claude-opus-5[1m]", "high")
+    argv = record["provider_trace"]["argv"]
+    assert (_flag(argv, "--model"), _flag(argv, "--effort")) == (REAL_MODEL, REAL_EFFORT)
+    assert (record["model"], record["effort"]) == (REAL_MODEL, REAL_EFFORT)
     for name in ("model_id", "reasoning_profile"):
         assert record["execution_parameter_sources"][name] == {
             "layer": SOURCE_WORKSPACE_FILE, "file": WORKSPACE, "file_sha256": digest}
     assert record["execution_parameter_sources"]["transport_kind"]["layer"] == SOURCE_RUNTIME_DEFAULT
     assert _files(root) == before
-    overridden = run_local_workflow_test(root, WORKFLOW, input_payload={}, reasoning_profile="low",
-                                         cli_path=_fake_cli(tmp_path))
-    argv = calls[1]["argv"]
-    assert argv[argv.index("--effort") + 1] == "low"
+    overridden = run_local_workflow_test(root, WORKFLOW, input_payload={}, reasoning_profile="medium")
+    assert overridden["status"] == "completed", overridden["failure_detail"]
+    argv = overridden["provider_trace"]["argv"]
+    assert (_flag(argv, "--model"), _flag(argv, "--effort")) == (REAL_MODEL, "medium")
     assert overridden["execution_parameter_sources"]["reasoning_profile"]["layer"] == SOURCE_CALL
+    assert overridden["execution_parameter_sources"]["model_id"]["layer"] == SOURCE_WORKSPACE_FILE
     assert overridden["execution_profile_sha256"] != record["execution_profile_sha256"]
 
 
-@pytest.mark.fake_run
-def test_test_run_cli_uses_the_parameter_files_and_call_arguments(tmp_path, monkeypatch, capsys):
-    """Substitutes: FakeCLI executable and an in-process Claude process runner."""
+@pytest.mark.real_run
+@REAL_GATE
+def test_real_test_run_cli_uses_the_parameter_files_and_call_arguments(tmp_path, capsys):
+    """Real entry: installed Claude CLI through this package's Test Run command."""
     from agent_runtime.testing.conformance_local_test_run import main
     root = _test_run_root(tmp_path)
-    _write(root, WORKFLOW_FILE, reasoning_profile="high")
-    calls = _observe_resource_evaluation(monkeypatch, lambda fields: None, tools=())
+    _write(root, WORKFLOW_FILE, reasoning_profile=REAL_EFFORT)
     payload = tmp_path / "input.json"
     payload.write_text("{}")
-    assert main(["--root", str(root), "--workflow", WORKFLOW, "--input", str(payload), "--model", "claude-opus-5[1m]",
-                 "--cli-path", str(_fake_cli(tmp_path))]) == 0
+    assert main(["--root", str(root), "--workflow", WORKFLOW, "--input", str(payload), "--model", REAL_MODEL]) == 0
     record = json.loads(capsys.readouterr().out)
-    argv = calls[0]["argv"]
-    assert argv[argv.index("--effort") + 1] == "high"
+    assert record["status"] == "completed", record["failure_detail"]
+    argv = record["provider_trace"]["argv"]
+    assert (_flag(argv, "--model"), _flag(argv, "--effort")) == (REAL_MODEL, REAL_EFFORT)
     assert record["execution_parameter_sources"]["reasoning_profile"]["layer"] == SOURCE_WORKFLOW_FILE
     assert record["execution_parameter_sources"]["model_id"]["layer"] == SOURCE_CALL
 
 
-@pytest.mark.fake_run
-def test_example_parent_and_child_both_receive_the_workspace_parameters(tmp_path, monkeypatch):
-    """Substitutes: FakeCLI executable and the packaged example's provider double."""
+@pytest.mark.real_run
+@REAL_GATE
+def test_real_example_parent_and_child_both_receive_the_workspace_parameters(tmp_path):
+    """Real entry: installed Claude CLI running the packaged evaluation example's parent graph and child Reviewer.
+
+    The parent's Provider nodes and every child Reviewer call are checked from
+    their own execution records; a run in which the tested Agent never called
+    the child Reviewer fails.
+    """
     from agent_runtime.testing.conformance_agent_execution import run_agent_example
-    from test_agent_runtime_capability_examples import _fake_models
     root = tmp_path / "root"
-    digest = _write(root, WORKSPACE, model_id="claude-opus-5[1m]", reasoning_profile="high")
-    seen = []
-    from agent_runtime.invocation import invocation_claude_cli_execution as claude
-    calls = _fake_models(monkeypatch)
-    double = claude.ClaudeAdapter
-    class Recording(double):
-        def _process(self, **fields):
-            argv = fields["argv"]
-            seen.append((argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]))
-            return super()._process(**fields)
-    monkeypatch.setattr(claude, "ClaudeAdapter", Recording)
-    result = run_agent_example(root, "agent_evaluation_example", cli_path=_fake_cli(tmp_path))
-    assert result["status"] == "completed", result
-    assert "capability_task_reviewer" in calls and len(seen) == len(calls)
-    assert set(seen) == {("claude-opus-5[1m]", "high")}
+    digest = _write(root, WORKSPACE, model_id=REAL_MODEL, reasoning_profile=REAL_EFFORT)
+    result = run_agent_example(root, "agent_evaluation_example")
+    assert result["status"] == "completed", result.get("failure")
+    nodes = {row["dispatch"]["current_state_id"]: row for row in result["execution"]["nodes"]}
+    tested_attempts = {row["attempt_id"] for row in nodes["tested_agent"]["execution_trace"]["attempts"]}
+    calls = result["child_executions"]
+    assert calls, "the tested Agent called the child Reviewer"
+    assert all(call["parent_attempt_id"] in tested_attempts for call in calls)
+    executed = [(nodes["tested_agent"], "capability_tested_agent"), (nodes["evaluation_agent"], "capability_evaluation_agent"),
+                *((call["record"], "capability_task_reviewer") for call in calls)]
+    for record, module_id in executed:
+        assert record["status"] == "completed" and record["module_release_ref"].startswith(f"runtime-module:{module_id}@")
+        argv = record["provider_trace"]["argv"]
+        assert (_flag(argv, "--model"), _flag(argv, "--effort")) == (REAL_MODEL, REAL_EFFORT), module_id
+        assert (record["model"], record["effort"]) == (REAL_MODEL, REAL_EFFORT), module_id
     sources = result["execution_parameter_sources"]
     for name in ("workflow", "child_review"):
         assert sources[name]["model_id"] == {"layer": SOURCE_WORKSPACE_FILE, "file": WORKSPACE, "file_sha256": digest}
@@ -289,17 +303,4 @@ def test_example_rejects_different_parent_and_child_transports_before_the_provid
            transport_kind="codex_cli", model_id="gpt-6-sol", reasoning_profile="high")
     monkeypatch.setattr(claude, "ClaudeAdapter", lambda **kw: pytest.fail("no Provider before the transport check"))
     with pytest.raises(ValueError, match="different transports"):
-        run_agent_example(root, "agent_evaluation_example", cli_path=_fake_cli(tmp_path))
-
-
-@pytest.mark.real_run
-@pytest.mark.skipif(os.environ.get("AGENT_RUNTIME_REAL_RUN") != "1",
-                    reason="unverified: set AGENT_RUNTIME_REAL_RUN=1 with an authenticated Claude CLI")
-def test_real_test_run_uses_the_workspace_parameter_file(tmp_path):
-    """Real entry: installed Claude CLI on PATH, local registration and this package's Test Run API."""
-    root = _test_run_root(tmp_path)
-    _write(root, WORKSPACE, model_id="claude-opus-5[1m]", reasoning_profile="low")
-    record = run_local_workflow_test(root, WORKFLOW, input_payload={})
-    assert record["status"] == "completed", record["failure_detail"]
-    assert (record["model"], record["effort"]) == ("claude-opus-5[1m]", "low")
-    assert record["execution_parameter_sources"]["reasoning_profile"]["layer"] == SOURCE_WORKSPACE_FILE
+        run_agent_example(root, "agent_evaluation_example")

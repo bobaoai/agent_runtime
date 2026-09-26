@@ -68,5 +68,5 @@ testpaths = ["tests"]
 markers = [
   "deterministic: fixed rules checked without simulating a model run",
   "fake_run: real entry flow with named substitute dependencies such as FakeCLI or a fake store",
-  "real_run: real entry and dependencies; gated by AGENT_RUNTIME_REAL_RUN=1 and reported unverified when not run",
+  "real_run: real entry and dependencies; Provider runs need AGENT_RUNTIME_REAL_RUN=1 and PostgreSQL runs need AGENT_RUNTIME_TEST_DATABASE_URL; reported unverified when not run",
 ]

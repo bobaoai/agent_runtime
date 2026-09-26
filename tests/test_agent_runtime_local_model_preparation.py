@@ -141,13 +141,13 @@ def test_requested_gateway_requires_cli_bridge_before_resources_or_provider():
         local._execution_profile_for_requirements(requirements)
 
 
-def _resource_test_module(tmp_path, *, tools=("read", "search", "shell")):
+def _resource_test_module(tmp_path, *, tools=("read", "search", "shell"), timeout_seconds=30):
     from agent_runtime import Module
     from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID as TASK_SKILL
     source = _task_project(tmp_path / "source", module_id="summarize_note")
     module = Module.from_registration(source, skill_id=TASK_SKILL, module_id="summarize_note",
         execution_requirements=_requirements(execution_mode="agent" if tools else "tool_free", tool_policy=tools,
-            attempt_workspace_policy="own_draft_read_write" if tools else "none", timeout_seconds=30, max_attempts=1))
+            attempt_workspace_policy="own_draft_read_write" if tools else "none", timeout_seconds=timeout_seconds, max_attempts=1))
     root = tmp_path / "host"
     workflow = module.to_workflow(module.export(module_version="v1")).export()
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(

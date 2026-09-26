@@ -355,34 +355,3 @@ def test_codex_does_not_shrink_reviewer_default_tools_to_make_a_profile(tmp_path
         prepare_local_workflow_module(root, MODULE_ID, transport_kind="codex_cli",
                                      model_id="gpt-6-astra", reasoning_profile="xhigh")
     assert _files(root) == before
-
-
-@pytest.mark.fake_run
-def test_pg_dsn_never_reaches_codex_version_check_provider_or_record(environment, monkeypatch):
-    """Substitutes: the fixture's Codex process runner and an in-memory release store for PostgreSQL."""
-    from agent_runtime import load_runtime_registration
-    from agent_runtime.registry import PostgresRuntimeReleaseStore
-    root = environment[0]
-    saved = load_runtime_registration(root, "workflow", "summarize_note")
-    class Store:
-        def load_release_registry(self):
-            return saved.registry
-        def register_bundle(self, bundle):
-            pytest.fail("Test Run must not write a PostgreSQL definition store")
-    secret = "postgresql://reader:SECRET-DSN-VALUE@db.invalid/runtime"
-    monkeypatch.setenv("RUNTIME_TEST_RELEASE_DSN", secret)
-    monkeypatch.setattr(PostgresRuntimeReleaseStore, "from_dsn", classmethod(lambda cls, dsn, *, schema: Store()))
-    launched, runner = [], codex.run_cli_process
-    def observed(**fields):
-        launched.append((list(fields["argv"]), dict(fields["environment"])))
-        return runner(**fields)
-    monkeypatch.setattr(codex, "run_cli_process", observed)
-    record = run_local_workflow_test(root, input_payload={}, release_database_url_env="RUNTIME_TEST_RELEASE_DSN",
-        release_schema="agent_runtime", workflow_release_ref=saved.release.release_ref,
-        workflow_release_sha256=saved.release.release_sha256, transport_kind="codex_cli", model_id="gpt-6-astra",
-        reasoning_profile="xhigh", cli_path=Path(sys.executable))
-    assert record["status"] == "completed", record["failure_detail"]
-    assert len(launched) == 2 and "--version" in launched[0][0]
-    for _, env in launched:
-        assert "RUNTIME_TEST_RELEASE_DSN" not in env and "SECRET-DSN-VALUE" not in json.dumps(env)
-    assert "SECRET-DSN-VALUE" not in json.dumps(record)
