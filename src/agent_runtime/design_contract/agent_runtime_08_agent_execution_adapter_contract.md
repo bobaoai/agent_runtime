@@ -36,8 +36,9 @@ Evaluation 承担，不是普通模型运行的隐含步骤。
 ```mermaid
 flowchart TD
     M["已注册 Module<br/>任务定义与通用运行要求"] --> E["Execution 准备本次调用"]
-    C["独立模型选择<br/>显式参数或 Runtime 默认"] --> E
-    H["宿主 root 与安装配置<br/>程序、认证来源、材料和存储"] --> E
+    C["独立模型选择<br/>按 §5.1 四层来源取值"] --> E
+    H["宿主 root 与安装配置<br/>程序、认证来源、材料、存储<br/>workspace 与 Workflow 执行参数文件"] --> E
+    H -->|执行参数文件| C
     I["本次输入及适用外部决定"] --> E
     E --> P["固定本次 Execution Profile<br/>输入、资源和 Attempt 身份"]
     P --> A["Invocation 解析 Adapter<br/>核对要求能否实际表达"]
@@ -95,7 +96,7 @@ Provider Adapter 是技术绑定，不是新的 Agent 角色。Runtime core 不 
 | --- | --- | --- |
 | instruction、输入输出 schema、任务完成条件 | Module 的固定定义 | Prompt 和结果校验；Profile 不改写其含义 |
 | execution mode、工具、输入交付、workspace、工具网络、上下文与预算要求 | 通用 Module 运行要求；ModuleReviewer 构造时提供 Runtime 默认 | 解析后的 Profile 和实际资源准备 |
-| provider、transport、model、effort 及模型参数 | 调用者的显式选择；省略项使用 Runtime 随包公开的模型默认 | 本次 Profile；不反向改变 Module 能力 |
+| provider、transport、model、effort 及模型参数 | 按四层来源取值，取第一个写了值的来源：本次调用的显式选择；该 Workflow 的执行参数文件；workspace 执行参数文件；Runtime 随包公开的模型默认 | 本次 Profile，并记录每项的来源层与所用参数文件哈希；不反向改变 Module 能力 |
 | root、CLI executable、认证来源、依赖、运行目录、可用 stores | 宿主安装配置；明确的本次资源参数按公共接口覆盖对应宿主项 | 宿主资源解析与实际调用记录 |
 | 本次任务正文、材料和已提供的逻辑请求身份 | 本次请求 | 固定输入与执行记录；任务正文不能作为配置覆盖 |
 
@@ -113,8 +114,9 @@ Execution Profile 是已经解析的执行配置快照，保存模型、Adapter�
 Runtime 发布的默认环境。Portable Reviewer source 提供任务身份、归属、prompt、schema 与相关
 任务文件，不声明 transport、模型或工具配置。定义导出不检查本机 CLI，也不选择本次 Profile。
 
-新的调用准备采用本次显式模型选择或 Runtime 默认，不把 root、环境名称、相邻项目或历史保存的
-Profile 当作模型选择规则。已有低层接口明确传入的准确 Profile / Variant 继续按该绑定执行；读取
+新的调用准备按 §5.1 的四层来源取得模型选择。root 下的 workspace 与 Workflow 执行参数文件是项目明确写下的
+选择，属于合法来源；root 的其他内容、环境名称、相邻项目或历史保存的 Profile 不当作模型选择规则。
+参数文件给出的值同样受 Module 运行要求约束，超出其能力时在 Provider 前拒绝，不改用其他模型。参数文件存在但不可读或内容无效时，本次调用在准备阶段失败，不视为该层未写值。已有低层接口明确传入的准确 Profile / Variant 继续按该绑定执行；读取
 旧记录和重放已提交结果保持原内容，不补入新的 Reviewer 默认。
 
 模型与能力分别变化：更换模型不修改 Module；更改 Module 的固定能力形成新定义。Profile 或
@@ -150,7 +152,8 @@ Provider 用于完成结构化响应的技术输出机制与访问文件、网�
 接入宿主发现位置。已准备环境只做必要本地检查，不额外运行模型、扫描整个项目或连接生产数据库。
 CLI 帮助和纯定义构造不初始化环境。
 
-`.runtime` 可保存可复用的宿主参数及已注册定义。Module 与 Workflow 分开保存；单节点 Workflow
+`.runtime` 可保存可复用的宿主参数、已注册定义，以及 workspace 与各 Workflow 的执行参数文件；执行参数文件
+与已注册定义分开存放，只保存执行参数，不选择定义版本；注册新版本不改写它们。Module 与 Workflow 分开保存；单节点 Workflow
 仍属于 Workflow。定义的版本存取与执行目标选择由 Registry 和 Execution 各自的公共合同处理，
 不在环境准备或 Adapter 中另定规则。Invocation 消费 Execution 已经按本次用途选定的准确目标；
 Profile 准备和实际调用固定同一结果，不重新从 root、latest 或其他指针选择版本。
@@ -454,8 +457,10 @@ Provider 退出并完成资源清理后，Adapter 使用已经取得的结果和
 
 1. 普通无工具 Module 能经公共入口执行，且无隐含工具、网络或 ambient 上下文；普通 Agent
    使用允许的工具与自己的输出 schema。ModuleReviewer 最后验证同一路径上的默认环境。
-2. 显式模型选择与 Runtime 默认分别验证；更换模型不改变工具能力；root 与历史 Profile 不决定
-   新调用模型。准备结果和实际执行消费同一份已解析配置。
+2. 四层来源分别验证：本次显式选择、Workflow 执行参数文件、workspace 执行参数文件与 Runtime 默认
+   各自生效，高优先层写了值时覆盖低优先层；记录写明每项来源层与参数文件哈希；参数文件的值超出 Module 能力时拒绝，文件无效时在准备阶段失败；
+   更换模型不改变工具能力；root 的其他内容与历史 Profile 不决定新调用模型。准备结果和实际执行消费
+   同一份已解析配置。
 3. 工具集合、只读材料、可写目录、网络、输出模式与允许的上下文组合，均核对真实转换；未知或
    不支持组合在 Provider 前返回具体缺口，不以 Provider 身份或 Reviewer 名称一概拒绝。
 4. 正例证明允许的读取、搜索、Shell 命令和临时写入能执行；负例证明被禁止的效果被阻止。
