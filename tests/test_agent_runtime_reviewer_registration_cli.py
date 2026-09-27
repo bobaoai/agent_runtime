@@ -35,8 +35,9 @@ def _source(tmp_path, *, version="v4"):
 
 
 def _legacy_export(source_root, *, version="legacy_v1", defaults=None):
-    """Explicit old producer fixture; never reintroduces an old production API."""
+    """Historical decoded release fixture; current compiler emits only v2."""
     from agent_runtime.registry.registry_module_authoring import ModuleExport
+    from test_agent_runtime_registry_candidate_compilation import _historical_export
     source = load_module_registration(source_root, skill_id=SKILL_ID, module_id=MODULE_ID)
     behavior, evaluation, retry = _policies()
     candidate = AgentModuleReleaseCandidate(
@@ -53,7 +54,7 @@ def _legacy_export(source_root, *, version="legacy_v1", defaults=None):
         reviewer_defaults=defaults,
     )
     return ModuleExport(source=source, candidate=candidate,
-        compiled=compile_agent_module_release(candidate), behavior_policy=behavior,
+        compiled=_historical_export(candidate), behavior_policy=behavior,
         evaluation_policy=evaluation, retry_policy=retry)
 
 

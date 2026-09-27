@@ -21,6 +21,7 @@ from agent_runtime.contracts.registry_release_definition import (
     SchemaAssetRelease,
     WorkflowEdge,
     WorkflowNodeKind,
+    ModuleExecutionRequirements,
 )
 from agent_runtime.registry.registry_release_compilation import (
     AgentModuleReleaseCandidate,
@@ -159,7 +160,12 @@ def _complete_registry_case() -> _CompleteRegistryCase:
             instruction_source_ref="host-source:skill/registry_catalog/prompt@v1",
             instruction_text="Return one registry catalog result.\n",
             declared_operation_ids=("invoke_model",),
-            compatible_transport_kinds=("claude_agent_sdk", "codex_cli"),
+            compatible_transport_kinds=(),
+            execution_requirements=ModuleExecutionRequirements(
+                context_isolation="workflow_execution_isolated", execution_mode="tool_free",
+                semantic_input_delivery_mode="inline", attempt_workspace_policy="none",
+                tool_policy=(), gateway_access_reasons=(), network_policy="denied",
+                output_constraint_mode="prompt_only_json", max_attempts=3),
             behavior_policy_ref=behavior.release_ref,
             behavior_policy_sha256=behavior.release_sha256,
             evaluation_policy_ref=evaluation.release_ref,

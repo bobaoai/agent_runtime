@@ -59,6 +59,7 @@ from agent_runtime.contracts.ledger_record_definition import (
 from agent_runtime.contracts.registry_release_definition import (
     ModuleExecutionRequirements,
     ModuleExecutionPurpose,
+    ModuleRelease,
     OutputResolutionPolicy,
 )
 from agent_runtime.execution.execution_authorization_coordination import (
@@ -195,7 +196,7 @@ def _compile_native_module(
         "required": ["value"],
         "additionalProperties": False,
     }
-    requirements = None if legacy_definition else ModuleExecutionRequirements(
+    requirements = ModuleExecutionRequirements(
         context_isolation="workflow_execution_isolated",
         execution_mode=execution_mode,
         semantic_input_delivery_mode=semantic_input_delivery_mode,
@@ -223,7 +224,7 @@ def _compile_native_module(
             ),
             instruction_text="Produce the native result.\n",
             declared_operation_ids=declared_operation_ids,
-            compatible_transport_kinds=(transport_kind,) if legacy_definition else (),
+            compatible_transport_kinds=(),
             execution_requirements=requirements,
             behavior_policy_ref=behavior_policy.release_ref,
             behavior_policy_sha256=behavior_policy.release_sha256,
@@ -234,6 +235,10 @@ def _compile_native_module(
             output_resolution_policy=output_resolution_policy,
         )
     )
+    if legacy_definition:
+        compiled.module = _historical_module_without_requirements(
+            compiled.module, transport_kind=transport_kind
+        )
     profile = compile_execution_profile_release(
         ExecutionProfileReleaseSpec(
             execution_profile_id=execution_profile_id,
@@ -264,6 +269,20 @@ def _compile_native_module(
         evaluation_policy=evaluation_policy,
         retry_policy=retry_policy,
     )
+
+
+def _historical_module_without_requirements(module, *, transport_kind: str):
+    """Decode a historical fixture without reopening the current compiler."""
+    payload = module.as_dict()
+    payload.pop("execution_requirements")
+    payload["compatible_transport_kinds"] = [transport_kind]
+    body = {key: value for key, value in payload.items() if key != "release_sha256"}
+    payload["release_sha256"] = hashlib.sha256(json.dumps(
+        body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+    historical = ModuleRelease.from_dict(payload)
+    historical.validate()
+    return historical
 
 
 _TEST_TIME = "2026-08-09T12:00:00Z"

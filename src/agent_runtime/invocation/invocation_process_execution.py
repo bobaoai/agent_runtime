@@ -167,22 +167,29 @@ def _stop_process_group(process: subprocess.Popen) -> None:
     except Exception as exc:
         errors.append("descendant ownership could not be confirmed: " + str(exc))
     owned = list(getattr(process, "_runtime_descendants", ()))
-    group_owned = process.poll() is None
     for child in owned:
         try:
             if not child.is_running():
                 continue
-            if os.name == "posix" and os.getpgid(child.pid) == process.pid:
-                group_owned = True
             child.kill()  # psutil checks PID reuse before signaling.
         except (psutil.NoSuchProcess, ProcessLookupError):
             pass
         except (psutil.Error, OSError) as exc:
             errors.append("owned descendant could not be stopped: " + str(exc))
-    # Discovery failure must not skip the original known-process termination.
+    # Popen created this session/group. Its leader may already have exited
+    # before discovery; unobserved same-group children still belong to it.
+    # Always terminate the known group, independently of ancestry sampling.
     try:
-        if os.name == "posix" and group_owned:
-            os.killpg(process.pid, signal.SIGKILL)
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except PermissionError:
+                # Darwin may report EPERM for an exited, unreaped group leader.
+                # Reap only if already finished and retry the same known group;
+                # a live leader or a second denial remains a cleanup failure.
+                if process.poll() is None:
+                    raise
+                os.killpg(process.pid, signal.SIGKILL)
         elif process.poll() is None:
             process.kill()
     except ProcessLookupError:

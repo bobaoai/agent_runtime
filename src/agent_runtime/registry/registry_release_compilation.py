@@ -748,9 +748,12 @@ def compile_agent_module_release(
 
     if type(candidate) is not AgentModuleReleaseCandidate:
         raise ValueError("candidate must be an AgentModuleReleaseCandidate")
-    if (candidate.execution_requirements is not None
-            and candidate.execution_requirements.schema_version != "module_execution_requirements_v2"):
-        raise ValueError("New Module compilation requires module_execution_requirements_v2; historical requirements are read-only")
+    requirements = candidate.execution_requirements
+    if (type(requirements) is not ModuleExecutionRequirements
+            or requirements.schema_version != "module_execution_requirements_v2"
+            or candidate.reviewer_defaults is not None
+            or candidate.compatible_transport_kinds != ()):
+        raise ValueError("New Agent Module compilation requires module_execution_requirements_v2 without legacy defaults or transport lists; historical releases are read-only")
     if not candidate.owner_contract_content:
         raise ValueError("owner_contract_content must not be empty")
     if not candidate.instruction_source_ref:

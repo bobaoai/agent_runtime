@@ -8,7 +8,7 @@ import pytest
 
 from agent_runtime import Module
 from agent_runtime.contracts.registry_release_definition import (
-    ModuleExecutionRequirements, ModuleRelease,
+    ModuleExecutionRequirements, ModuleRelease, ReviewerDefaults,
 )
 from agent_runtime.registry import RuntimeReleaseRegistry, compile_agent_module_release
 
@@ -98,6 +98,18 @@ def test_historical_requirements_cannot_enter_new_authoring_or_compilation(tmp_p
     with pytest.raises(ValueError, match="historical requirements are read-only"):
         Module.from_registration(source, skill_id=SKILL_ID, module_id="summarize_note",
                                  execution_requirements=historical)
-    with pytest.raises(ValueError, match="historical requirements are read-only"):
+    with pytest.raises(ValueError, match="module_execution_requirements_v2"):
         compile_agent_module_release(replace(_agent_candidate(), compatible_transport_kinds=(),
                                              execution_requirements=historical))
+
+
+@pytest.mark.parametrize("changes", [
+    {"execution_requirements": None},
+    {"execution_requirements": None, "reviewer_defaults": ReviewerDefaults()},
+    {"execution_requirements": None, "compatible_transport_kinds": ("claude_cli",)},
+    {"reviewer_defaults": ReviewerDefaults()},
+    {"compatible_transport_kinds": ("claude_cli",)},
+])
+def test_current_compiler_rejects_each_legacy_agent_candidate_shape(changes):
+    with pytest.raises(ValueError, match="module_execution_requirements_v2"):
+        compile_agent_module_release(replace(_agent_candidate(), **changes))

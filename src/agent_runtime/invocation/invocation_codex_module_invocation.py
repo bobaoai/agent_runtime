@@ -591,6 +591,9 @@ class _CodexCliExecutorBase:
             invoker: Trusted v4 callable accepting keyword argv, prompt, cwd,
                 timeout_seconds, environment and optional launch_guard. It must pass
                 the explicit environment and launch guard to actual process creation.
+                An active run budget additionally requires deadline_monotonic;
+                it is omitted when the host has no enclosing deadline. Optional
+                cancellation ports are passed only when supplied by the host.
                 The default uses run_cli_process. An old four-argument callable is
                 rejected before resource preparation; no unguarded fallback is tried.
             codex_bin: Optional explicit installed CLI. None uses the existing host
@@ -706,27 +709,32 @@ class _CodexCliExecutorBase:
                 raise SelfTestResourceUnavailableError("Codex self-test requires live Runtime resource validation and launch guard")
             validator(value, adapter=self, artifact_host=self._artifact_host, workspace_root=self._workspace_root,
                       **self._host_resources())
+        from .invocation_tool_definition import self_test_cancellation_callbacks
+        invocation_controls = self_test_cancellation_callbacks(host, request)
+        deadline = invocation_deadline(host, request)
+        if deadline is not None:
+            invocation_controls["deadline_monotonic"] = deadline
+        try:
+            inspect.signature(self._invoker).bind(argv=[], prompt="", cwd=self._workspace_root,
+                timeout_seconds=profile.timeout_seconds, environment={}, launch_guard=None,
+                **invocation_controls)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Codex v4 invoker must accept explicit environment, optional launch_guard "
+                "and the active host controls: " + ", ".join(invocation_controls)) from exc
         prepared = prepare_registered_invocation_context(
             request=request,
             release_registry=self._release_registry,
             artifact_host=self._artifact_host,
             expectation=expectation, self_test_validator=validate_self_test,
         )
-        from .invocation_tool_definition import self_test_cancellation_callbacks
-        cancellation = self_test_cancellation_callbacks(host, request)
         if self.shell_tool_enabled != ("shell" in prepared.profile.tool_policy):
             raise PermissionError("Codex actual Shell capability differs from the explicit Profile tool_policy")
-        try:
-            inspect.signature(self._invoker).bind(argv=[], prompt="", cwd=self._workspace_root,
-                timeout_seconds=profile.timeout_seconds, environment={}, launch_guard=None)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Codex v4 invoker must accept explicit environment and optional launch_guard") from exc
         with _capture_cli_interrupts() as interrupted:
             result, pending_detail, cleanup_error = None, None, None
             try:
                 with ExitStack() as cleanup:
                     try:
-                        result = self._execute_prepared(request, host, prepared, cleanup, cancellation=cancellation)
+                        result = self._execute_prepared(request, host, prepared, cleanup, invocation_controls=invocation_controls)
                     except TerminalAdapterFailure as failure:
                         result, pending_detail = failure.result, failure.pending_failure_detail
             except Exception as exc:
@@ -737,7 +745,7 @@ class _CodexCliExecutorBase:
                 artifact_host=self._artifact_host, request=request, result=result,
                 pending_failure_detail=pending_detail,
                 interruption_requested=lambda: interrupted.requested or (
-                    bool(cancellation) and cancellation["user_cancel_requested"]()),
+                    "user_cancel_requested" in invocation_controls and invocation_controls["user_cancel_requested"]()),
                 cleanup_error=cleanup_error, interruption_code="codex_cli_interrupted",
                 cleanup_failure_code="codex_cli_cleanup_failed",
             )
@@ -752,7 +760,7 @@ class _CodexCliExecutorBase:
         host: AuthorizedAgentExecutionHost,
         prepared,
         cleanup: ExitStack,
-        *, cancellation: dict,
+        *, invocation_controls: dict,
     ) -> AgentExecutionResult:
         module = prepared.module
         profile = prepared.profile
@@ -924,8 +932,7 @@ class _CodexCliExecutorBase:
             try:
                 result = self._invoker(argv=argv, prompt=prompt, cwd=cwd,
                                        timeout_seconds=profile.timeout_seconds, environment=environment,
-                                       deadline_monotonic=invocation_deadline(host, request),
-                                       launch_guard=launch_guard, **cancellation)
+                                       launch_guard=launch_guard, **invocation_controls)
                 if type(result) is not CodexCliInvocationResult:
                     raise TypeError("Codex CLI invoker returned an invalid result")
                 capture(result, complete=result.process_output_complete is True)

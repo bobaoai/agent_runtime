@@ -445,7 +445,8 @@ def _registered_legacy_reviewer():
         entry_policy=ModuleEntryPolicy.STANDALONE_ALLOWED,
         output_resolution_policy=OutputResolutionPolicy.EVALUATED_SINGLE,
     )
-    compiled = compile_agent_module_release(candidate)
+    from test_agent_runtime_registry_candidate_compilation import _historical_export
+    compiled = _historical_export(candidate)
     variant_candidate = ExecutionVariantPolicyReleaseCandidate(
         policy_id=f"{MODULE_ID}_legacy_variant", policy_version="v1",
         origin_kind="standalone_module", origin_release_ref=compiled.module.release_ref,

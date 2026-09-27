@@ -35,6 +35,7 @@ def _schema(schema_ref: str) -> str:
 
 
 def _compiled_module_case():
+    from test_agent_runtime_registry_candidate_compilation import _execution_requirements
     behavior = compile_behavior_policy_release(
         BehaviorPolicyReleaseCandidate(
             policy_id="workflow_execution_isolated",
@@ -69,7 +70,8 @@ def _compiled_module_case():
             instruction_source_ref="host-source:skill/module/prompt@v1",
             instruction_text="Produce the synthetic result.\n",
             declared_operation_ids=("invoke_model",),
-            compatible_transport_kinds=("claude_agent_sdk", "codex_cli"),
+            compatible_transport_kinds=(),
+            execution_requirements=_execution_requirements(),
             behavior_policy_ref=behavior.release_ref,
             behavior_policy_sha256=behavior.release_sha256,
             evaluation_policy_ref=evaluation.release_ref,

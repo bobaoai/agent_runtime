@@ -2695,6 +2695,9 @@ Configure the admitted Codex implementation without preparing resources.
 - `invoker`: Trusted v4 callable accepting keyword argv, prompt, cwd,
   timeout_seconds, environment and optional launch_guard. It must pass
   the explicit environment and launch guard to actual process creation.
+  An active run budget additionally requires deadline_monotonic;
+  it is omitted when the host has no enclosing deadline. Optional
+  cancellation ports are passed only when supplied by the host.
   The default uses run_cli_process. An old four-argument callable is
   rejected before resource preparation; no unguarded fallback is tried.
 - `codex_bin`: Optional explicit installed CLI. None uses the existing host
@@ -2839,6 +2842,9 @@ Configure the admitted Codex implementation without preparing resources.
 - `invoker`: Trusted v4 callable accepting keyword argv, prompt, cwd,
   timeout_seconds, environment and optional launch_guard. It must pass
   the explicit environment and launch guard to actual process creation.
+  An active run budget additionally requires deadline_monotonic;
+  it is omitted when the host has no enclosing deadline. Optional
+  cancellation ports are passed only when supplied by the host.
   The default uses run_cli_process. An old four-argument callable is
   rejected before resource preparation; no unguarded fallback is tried.
 - `codex_bin`: Optional explicit installed CLI. None uses the existing host

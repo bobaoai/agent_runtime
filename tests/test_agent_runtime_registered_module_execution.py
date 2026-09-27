@@ -40,7 +40,7 @@ from agent_runtime.registry import (
 
 from test_agent_runtime_native_structured_output import (
     _compile_native_module, _register_compiled_for_evaluation, _ProductAuthorityDouble,
-    _TEST_TIME,
+    _TEST_TIME, _historical_module_without_requirements,
 )
 
 
@@ -119,7 +119,7 @@ def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
     options = {} if output_schema is None else {"output_schema_document": output_schema}
     compiled = _compile_native_module(tmp_path, output_resolution_policy=policy,
                                       executor_adapter_revision=profile_revision,
-                                      legacy_definition=legacy_definition, **options)
+                                      **options)
     if input_schema is not None:
         changed = compile_agent_module_release(AgentModuleReleaseCandidate(
             module_id=compiled.module.module_id, module_version="candidate_v1",
@@ -130,7 +130,7 @@ def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
             output_schema_document=json.dumps(output_schema),
             instruction_source_ref="host-source:native-skill/native_module/prompt@candidate_v1",
             instruction_text="Produce the native result.\n", declared_operation_ids=("invoke_model",),
-            compatible_transport_kinds=("codex_cli",) if legacy_definition else (),
+            compatible_transport_kinds=(),
             execution_requirements=compiled.module.execution_requirements,
             behavior_policy_ref=compiled.behavior_policy.release_ref, behavior_policy_sha256=compiled.behavior_policy.release_sha256,
             evaluation_policy_ref=compiled.evaluation_policy.release_ref, evaluation_policy_sha256=compiled.evaluation_policy.release_sha256,
@@ -139,6 +139,10 @@ def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
         ))
         for name in ("module", "schema_assets", "prompt_components", "prompt_bundle"):
             setattr(compiled, name, getattr(changed, name))
+    if legacy_definition:
+        compiled.module = _historical_module_without_requirements(
+            compiled.module, transport_kind="codex_cli"
+        )
     registry = _register_compiled_for_evaluation(compiled)
     workflow_candidate = WorkflowReleaseCandidate(
         workflow_id="single_module", workflow_version="v1", workflow_contract_version="v1",

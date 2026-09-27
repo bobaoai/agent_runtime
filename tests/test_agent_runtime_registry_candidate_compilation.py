@@ -77,13 +77,14 @@ def _agent_candidate() -> AgentModuleReleaseCandidate:
         instruction_source_ref="host-source:skill/module/prompt@v1",
         instruction_text="Produce the synthetic result.\n",
         declared_operation_ids=("invoke_model",),
-        compatible_transport_kinds=("claude_agent_sdk", "codex_cli"),
+        compatible_transport_kinds=(),
         behavior_policy_ref=behavior.release_ref,
         behavior_policy_sha256=behavior.release_sha256,
         evaluation_policy_ref=evaluation.release_ref,
         evaluation_policy_sha256=evaluation.release_sha256,
         retry_policy_ref=retry.release_ref,
         retry_policy_sha256=retry.release_sha256,
+        execution_requirements=_execution_requirements(),
     )
 
 
@@ -104,12 +105,35 @@ def _legacy_execution_requirements():
     return ModuleExecutionRequirements.from_dict(payload)
 
 
+def _legacy_candidate(**changes):
+    """Describe a frozen old payload for decoder tests, never current compilation."""
+    return replace(_agent_candidate(), execution_requirements=None,
+                   compatible_transport_kinds=("claude_agent_sdk", "codex_cli"), **changes)
+
+
+def _historical_export(candidate):
+    """Decode an old Module shape using the current prompt/schema closure."""
+    current = compile_agent_module_release(replace(candidate, execution_requirements=_execution_requirements(),
+        reviewer_defaults=None, compatible_transport_kinds=()))
+    payload = current.module.as_dict()
+    payload.pop("execution_requirements")
+    payload["compatible_transport_kinds"] = list(candidate.compatible_transport_kinds)
+    if candidate.reviewer_defaults is not None:
+        payload["reviewer_defaults"] = candidate.reviewer_defaults.as_dict()
+    body = {name: value for name, value in payload.items() if name != "release_sha256"}
+    payload["release_sha256"] = hashlib.sha256(json.dumps(body, ensure_ascii=False,
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    historical = ModuleRelease.from_dict(payload)
+    historical.validate()
+    return replace(current, module=historical)
+
+
 @pytest.mark.deterministic
 @pytest.mark.parametrize("snapshot_version", [None, "v1", "v2"])
 def test_legacy_module_codec_and_requirements_view_preserve_exact_payload(snapshot_version):
     snapshot = None if snapshot_version is None else ReviewerDefaults(version=snapshot_version)
-    candidate = replace(_agent_candidate(), reviewer_defaults=snapshot)
-    module = compile_agent_module_release(candidate).module
+    candidate = _legacy_candidate(reviewer_defaults=snapshot)
+    module = _historical_export(candidate).module
     payload = module.as_dict()
     before = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     assert "execution_requirements" not in payload
@@ -154,10 +178,9 @@ def test_new_requirements_codec_excludes_legacy_keys_and_rejects_mixed_payloads(
     assert payload["execution_requirements"] == _execution_requirements().as_dict()
     assert ModuleRelease.from_dict(payload) == module
     assert module.get_execution_requirements() == _execution_requirements()
-    old_plain = compile_agent_module_release(_agent_candidate()).module
-    old_snapshot = compile_agent_module_release(replace(
-        _agent_candidate(), module_version="old_snapshot",
-        reviewer_defaults=ReviewerDefaults(version="v2"))).module
+    old_plain = _historical_export(_legacy_candidate()).module
+    old_snapshot = _historical_export(_legacy_candidate(
+        module_version="old_snapshot", reviewer_defaults=ReviewerDefaults(version="v2"))).module
     bundle = RuntimeReleaseBundle(modules=(old_plain, old_snapshot, module))
     assert RuntimeReleaseBundle.from_dict(bundle.as_dict()).as_dict() == bundle.as_dict()
     for name, value in (("reviewer_defaults", None), ("compatible_transport_kinds", [])):
@@ -184,6 +207,7 @@ def test_invalid_or_unknown_requirement_shape_is_rejected(value):
         ModuleExecutionRequirements.from_dict(value)
 
 
+@pytest.mark.deterministic
 def test_compiler_rejects_mixed_new_and_legacy_capabilities():
     for changes in (
         {"compatible_transport_kinds": ("claude_cli",)},
@@ -191,13 +215,14 @@ def test_compiler_rejects_mixed_new_and_legacy_capabilities():
     ):
         candidate = replace(_agent_candidate(), compatible_transport_kinds=(),
                             execution_requirements=_execution_requirements())
-        with pytest.raises(ValueError, match="cannot mix"):
+        with pytest.raises(ValueError, match="without legacy defaults or transport lists"):
             compile_agent_module_release(replace(candidate, **changes))
 
 
+@pytest.mark.deterministic
 def test_legacy_timeout_is_not_clamped_by_requirements_mapping():
-    module = compile_agent_module_release(replace(
-        _agent_candidate(), reviewer_defaults=ReviewerDefaults(timeout_seconds=86401))).module
+    module = _historical_export(_legacy_candidate(
+        reviewer_defaults=ReviewerDefaults(timeout_seconds=86401))).module
     before = module.as_dict()
     with pytest.raises(ValueError):
         module.get_execution_requirements()

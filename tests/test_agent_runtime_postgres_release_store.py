@@ -12,6 +12,7 @@ from agent_runtime.contracts.registry_release_definition import (
     LegacyReleaseAdmissionRecord,
     LegacyReleaseAdmissionState,
     ModuleEntryPolicy,
+    ModuleExecutionRequirements,
     ReleaseSubjectKind,
 )
 from agent_runtime.registry import (
@@ -677,7 +678,12 @@ def test_postgres_active_pointer_set_clear_and_reload(
             instruction_source_ref="skill-instruction:test:pointer",
             instruction_text="Return one result.\n",
             declared_operation_ids=("model_execute",),
-            compatible_transport_kinds=("claude_agent_sdk",),
+            compatible_transport_kinds=(),
+            execution_requirements=ModuleExecutionRequirements(
+                context_isolation="workflow_execution_isolated", execution_mode="tool_free",
+                semantic_input_delivery_mode="inline", attempt_workspace_policy="none",
+                tool_policy=(), gateway_access_reasons=(), network_policy="denied",
+                output_constraint_mode="native_structured_output", max_attempts=3),
             behavior_policy_ref=behavior.release_ref,
             behavior_policy_sha256=behavior.release_sha256,
             evaluation_policy_ref=evaluation.release_ref,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import agent_runtime
+import pytest
 from agent_runtime.contracts.registry_release_definition import (
     ModuleEntryPolicy,
     ModuleRelease,
@@ -27,6 +28,7 @@ def _schema(schema_ref: str) -> str:
     )
 
 
+@pytest.mark.deterministic
 def test_module_release_symbol_rename_preserves_persisted_identity() -> None:
     behavior = compile_behavior_policy_release(
         BehaviorPolicyReleaseCandidate(
@@ -49,7 +51,8 @@ def test_module_release_symbol_rename_preserves_persisted_identity() -> None:
             max_attempts=3,
         )
     )
-    module = compile_agent_module_release(
+    from test_agent_runtime_registry_candidate_compilation import _historical_export
+    module = _historical_export(
         AgentModuleReleaseCandidate(
             module_id="module_release_symbol_case",
             module_version="v1",
