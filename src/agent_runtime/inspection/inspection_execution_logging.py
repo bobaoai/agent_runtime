@@ -100,15 +100,19 @@ def _with_local_commands(view: dict, trace: Mapping[str, Any], *, callbacks=Fals
         if (call.get("tool_name") not in callback_tools if callbacks else call.get("tool_name") != tool_name):
             continue
         response = call.get("response")
-        block = response.get("tool_result") if isinstance(response, dict) else None
-        content = block.get("content") if isinstance(block, dict) else None
-        if isinstance(content, list) and all(isinstance(item, dict) and item.get("type") == "text"
-                                            and isinstance(item.get("text"), str) for item in content):
-            content = "\n".join(item["text"] for item in content)
-        try:
-            returned = decode_cli_event(content) if isinstance(content, str) else None
-        except (ValueError, UnicodeError):
-            returned = None
+        if trace.get("transport") == "codex_cli":
+            # parse_cli_log has already decoded a Codex MCP result to the returned object.
+            returned = response if isinstance(response, dict) else None
+        else:
+            block = response.get("tool_result") if isinstance(response, dict) else None
+            content = block.get("content") if isinstance(block, dict) else None
+            if isinstance(content, list) and all(isinstance(item, dict) and item.get("type") == "text"
+                                                and isinstance(item.get("text"), str) for item in content):
+                content = "\n".join(item["text"] for item in content)
+            try:
+                returned = decode_cli_event(content) if isinstance(content, str) else None
+            except (ValueError, UnicodeError):
+                returned = None
         identity = returned.get("local_call_id") if isinstance(returned, dict) else None
         if not isinstance(identity, str) or not identity:
             if call.get("status") == "completed":

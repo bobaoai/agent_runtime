@@ -76,6 +76,7 @@ Runtime CLI 负责 setup、注册、执行和查询。Portable CLI 负责准备�
 - [parse_cli_log](#parse_cli_log)
 - [ClaudeAdapter](#claudeadapter)
 - [CodexCliModuleExecutor](#codexclimoduleexecutor)
+- [CodexCliAgentWorkspaceModuleExecutor](#codexcliagentworkspacemoduleexecutor)
 - [CodexCliInvocationResult](#codexcliinvocationresult)
 - [build_command](#build_command)
 - [PostgresWorkflowInspectionRepository](#postgresworkflowinspectionrepository)
@@ -1516,7 +1517,8 @@ Resolve a fixed single-node Module Workflow and this invocation's model.
 - `transport_kind`: This call's model transport. None takes the Workflow
   parameter file, then the workspace parameter file, then Runtime's
   claude_cli default (see execution_parameter_resolution).
-  codex_cli supports its admitted tool-free requirements and
+  codex_cli binds tool-free requirements to v4 and agent
+  requirements whose tools include shell to workspace v3, and
   requires explicit model_id and reasoning_profile from some layer.
   Model names are never used to infer another transport or provider.
 - `model_id`: This call's model; None falls back through the same layers,
@@ -2064,8 +2066,12 @@ Test-run a registered single-node Workflow using temporary test resources.
   default. claude_cli supports empty or selected native tool sets,
   inline input, and no write area or a private draft as defined.
   codex_cli supports tool_free, inline, empty tools, workspace none
-  and denied tool network. It requires explicit model_id and effort;
-  unsupported requirements are rejected, never reduced to fit.
+  and denied tool network (v4), and the agent workspace
+  environment: tools including shell, inline input, a private
+  draft and denied tool network (workspace v3, which also takes
+  the frozen resources and commands). It requires explicit
+  model_id and effort; unsupported requirements are rejected,
+  never reduced to fit.
 - `model_id`: This call's concrete model ID; None falls back through the same
   layers to the Claude default.
   Codex requires an explicit model. Claude verifies observed model
@@ -2625,6 +2631,17 @@ Execute an isolated tool-free Module using Codex CLI file authentication.
 v4 has explicit private-state/environment preparation and a launch guard.
 v3 releases are readable historical definitions, not executable aliases.
 
+### CodexCliModuleExecutor.execution_expectation
+
+```python
+@staticmethod
+def execution_expectation(
+    profile: ExecutionProfileRelease,
+) -> InvocationExecutionExpectation:
+```
+
+Check a Profile against this implementation without opening resources.
+
 ### CodexCliModuleExecutor.__init__
 
 ```python
@@ -2637,6 +2654,7 @@ def __init__(
     invoker: CodexCliInvoker=_default_invoke,
     codex_bin: str | None=None,
     auth_file: Path | None=None,
+    read_only_dependencies: tuple[Path, ...]=(),
 ) -> None:
 ```
 
@@ -2661,6 +2679,9 @@ Configure the admitted Codex implementation without preparing resources.
   the host's original CODEX_HOME/auth.json, or standard .codex/auth.json
   when CODEX_HOME is unset. Resolution occurs only during invocation.
   Missing file authentication does not fall back to keychain/API keys.
+- `read_only_dependencies`: Workspace v3 only. Explicit trusted existing
+  directories the Agent's shell may read; never task-supplied.
+  Tool-free v4 accepts none.
 **Raises**
 
 - `ValueError`: Required artifact methods or descriptor fields are invalid.
@@ -2694,7 +2715,7 @@ def execute(
 ) -> AgentExecutionResult:
 ```
 
-Execute one v4 invocation with live resources and private Provider state.
+Execute one invocation with live resources and private Provider state.
 
 A self-test requires the kernel's live host validator and actual launch
 guard. Missing hooks or an incompatible injected invoker fail before CLI
@@ -2719,15 +2740,164 @@ turn terminal are checked before validating the final output.
 **Raises**
 
 - `ValueError`: Invalid request/Profile or incompatible injected invoker.
-- `PermissionError`: Missing live resource/operation evidence or unsupported
-  workspace execution. Provider is not started on these entry failures.
+- `PermissionError`: Missing live resource/operation evidence, or (workspace
+  v3) a read grant that would reopen a denied, credential or private
+  location, or declared commands that could read a protected
+  location. Provider is not started on these failures.
 - `Exception`: Native content/record-store integrity failures retain their owner.
 **Effects**
 
 Resolves one authentication file, prepares private state and one Attempt,
-launches the selected CLI with fixed v4 configuration, and stages output
-and trace through the supplied ports. No login, registration, model fallback,
-credential copy-back or global environment modification is performed.
+launches the selected CLI with its fixed configuration, and stages output
+and trace through the supplied ports. Workspace v3 also stages materials,
+records main_folder, codex_permission_profile and isolation_gaps, and
+runs declared commands in the Runtime command session. No login,
+registration, model fallback, credential copy-back or global
+environment modification is performed.
+
+## CodexCliAgentWorkspaceModuleExecutor
+
+Public import: `from agent_runtime.invocation.invocation_codex_module_invocation import CodexCliAgentWorkspaceModuleExecutor`
+
+```python
+class CodexCliAgentWorkspaceModuleExecutor(_CodexCliExecutorBase):
+    ...
+```
+
+Execute an agent workspace Module (tools including shell) with the Codex shell tool.
+
+Each Attempt has one main folder, its private scratch directory: the cwd,
+the only writable location and the home of TMPDIR. A permission profile
+generated per call keeps materials, read-only dependencies, Runtime Python
+and the Codex program readable, closes user trees, external volumes, shared
+and host temporary directories, and disables tool network. Other system
+directories remain readable (recorded in isolation_gaps). Declared local
+commands run through the Runtime command proxy, the only MCP server.
+The historical v2 Profile stays readable and is refused by binding.
+
+### CodexCliAgentWorkspaceModuleExecutor.execution_expectation
+
+```python
+@staticmethod
+def execution_expectation(
+    profile: ExecutionProfileRelease,
+) -> InvocationExecutionExpectation:
+```
+
+Check a Profile against workspace v3 without opening resources.
+
+### CodexCliAgentWorkspaceModuleExecutor.__init__
+
+```python
+def __init__(
+    self,
+    *,
+    release_registry: RuntimeReleaseRegistry,
+    artifact_host: ModuleArtifactHost,
+    workspace_root: Path,
+    invoker: CodexCliInvoker=_default_invoke,
+    codex_bin: str | None=None,
+    auth_file: Path | None=None,
+    read_only_dependencies: tuple[Path, ...]=(),
+) -> None:
+```
+
+Configure the admitted Codex implementation without preparing resources.
+
+**Args**
+
+- `release_registry`: Exact registered definitions used by invocation checks.
+- `artifact_host`: Request-owned content/trace store implementing read_bytes,
+  commit_failure_detail and commit_attempt_trace. This does not select
+  or connect to a persistent database.
+- `workspace_root`: Host-owned Attempt workspace and cleanup tree. Provider
+  private state is created separately, outside this tree, at execution.
+- `invoker`: Trusted v4 callable accepting keyword argv, prompt, cwd,
+  timeout_seconds, environment and optional launch_guard. It must pass
+  the explicit environment and launch guard to actual process creation.
+  The default uses run_cli_process. An old four-argument callable is
+  rejected before resource preparation; no unguarded fallback is tried.
+- `codex_bin`: Optional explicit installed CLI. None uses the existing host
+  executable resolver at invocation; this constructor probes no program.
+- `auth_file`: Optional single regular file authentication source. None uses
+  the host's original CODEX_HOME/auth.json, or standard .codex/auth.json
+  when CODEX_HOME is unset. Resolution occurs only during invocation.
+  Missing file authentication does not fall back to keychain/API keys.
+- `read_only_dependencies`: Workspace v3 only. Explicit trusted existing
+  directories the Agent's shell may read; never task-supplied.
+  Tool-free v4 accepts none.
+**Raises**
+
+- `ValueError`: Required artifact methods or descriptor fields are invalid.
+- `OSError`: The workspace locator cannot be resolved by the host filesystem.
+**Effects**
+
+Stores resource locators and builds the descriptor. Does not create a
+directory, open credentials, call a CLI/model, or register any release.
+During execution only CLI reads or refreshes credentials. If it replaces
+the private authentication reference, state is retained for host recovery
+and the invocation returns a trace-bound cleanup failure, not approval.
+
+### CodexCliAgentWorkspaceModuleExecutor.descriptor
+
+```python
+@property
+def descriptor(
+    self,
+) -> AgentExecutionAdapterDescriptor:
+```
+
+Return immutable canonical adapter admission metadata.
+
+### CodexCliAgentWorkspaceModuleExecutor.execute
+
+```python
+def execute(
+    self,
+    request: AuthorizedAgentExecutionRequest,
+    host: AuthorizedAgentExecutionHost,
+) -> AgentExecutionResult:
+```
+
+Execute one invocation with live resources and private Provider state.
+
+A self-test requires the kernel's live host validator and actual launch
+guard. Missing hooks or an incompatible injected invoker fail before CLI
+effects. Credential replacement retains private state and reports cleanup
+failure; no credentials enter the prompt, Profile or command arguments.
+
+**Args**
+
+- `request`: Exact registered request with frozen inputs and either external
+  operation evidence or the existing live self-test resource binding.
+- `host`: Trusted request-bound Runtime host for staging outputs and, for
+  self-tests, live binding validation and launch-time resource checking.
+**Returns**
+
+AgentExecutionResult with a schema-valid output or typed failed/cancelled
+status. Business verdicts remain Module-owned. Actual CLI version, captured
+streams and terminal metadata stay in the private Attempt trace.
+Inspection derives detailed tool views on request; those views do not
+determine ordinary execution failure or retry.
+CLI error notifications may be transient; process exit and the unique
+turn terminal are checked before validating the final output.
+**Raises**
+
+- `ValueError`: Invalid request/Profile or incompatible injected invoker.
+- `PermissionError`: Missing live resource/operation evidence, or (workspace
+  v3) a read grant that would reopen a denied, credential or private
+  location, or declared commands that could read a protected
+  location. Provider is not started on these failures.
+- `Exception`: Native content/record-store integrity failures retain their owner.
+**Effects**
+
+Resolves one authentication file, prepares private state and one Attempt,
+launches the selected CLI with its fixed configuration, and stages output
+and trace through the supplied ports. Workspace v3 also stages materials,
+records main_folder, codex_permission_profile and isolation_gaps, and
+runs declared commands in the Runtime command session. No login,
+registration, model fallback, credential copy-back or global
+environment modification is performed.
 
 ## CodexCliInvocationResult
 

@@ -68,7 +68,8 @@ def _execution_profile_for_requirements(
     Model selection happens here, independently of task definition and saved
     historical bindings. None uses claude_cli, claude-opus-5[1m], xhigh; explicit
     empty/unsupported values fail. codex_cli requires explicit model and effort;
-    its Adapter validates supported requirements. No executable/resources opened.
+    tool_free binds the v4 executor and agent the workspace v3 executor, whose
+    check validates supported requirements. No executable/resources opened.
     """
     requirements.validate()
     transport = _RUNTIME_DEFAULT_TRANSPORT if transport_kind is None else transport_kind
@@ -82,9 +83,11 @@ def _execution_profile_for_requirements(
     elif transport == "codex_cli":
         if not model_id or not reasoning_profile:
             raise ValueError("codex_cli requires explicit model_id and reasoning_profile; no Claude defaults apply")
-        from ..invocation.invocation_codex_module_invocation import _execution_expectation, CodexCliModuleExecutor
+        from ..invocation import invocation_codex_module_invocation as codex
+        executor, _execution_expectation = ((codex.CodexCliAgentWorkspaceModuleExecutor, codex._workspace_execution_expectation)
+            if requirements.execution_mode == "agent" else (codex.CodexCliModuleExecutor, codex._execution_expectation))
         model, effort, provider = model_id, reasoning_profile, "openai"
-        adapter_id, revision = CodexCliModuleExecutor.executor_adapter_id, CodexCliModuleExecutor.executor_adapter_revision
+        adapter_id, revision = executor.executor_adapter_id, executor.executor_adapter_revision
         defaults = None
     else:
         raise ValueError(f"Unsupported model transport: {transport_kind}; no automatic fallback")
@@ -136,7 +139,8 @@ def prepare_local_workflow_module(
         transport_kind: This call's model transport. None takes the Workflow
             parameter file, then the workspace parameter file, then Runtime's
             claude_cli default (see execution_parameter_resolution).
-            codex_cli supports its admitted tool-free requirements and
+            codex_cli binds tool-free requirements to v4 and agent
+            requirements whose tools include shell to workspace v3, and
             requires explicit model_id and reasoning_profile from some layer.
             Model names are never used to infer another transport or provider.
         model_id: This call's model; None falls back through the same layers,

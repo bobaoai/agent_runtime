@@ -2,21 +2,22 @@
 
 The adapters implement the canonical ``AuthorizedAgentExecutionAdapter``
 protocol. Both send one complete, precommitted Prompt Envelope assembled from
-authorized inputs. The tool-free adapter consumes the final response directly.
-The Agent-workspace adapter gives Codex its standard workspace-write and shell
-permissions so it can draft, reread, revise, and validate from an Attempt-local
-cwd. That adapter remains a conformance candidate rather than a public-kernel
-admission because Codex workspace-write does not confine ambient filesystem
-reads to that cwd. Neither adapter gives the provider a database connection or
-network-enabled tool execution. Expected provider failures return a typed
-failed result; exceptions are adapter conformance failures. Outputs are staged
-through the host and become authoritative only through Runtime finalization.
+authorized inputs. The tool-free adapter (v4) consumes the final response
+directly. The workspace adapter (v3) runs the agent workspace environment:
+the Codex shell tool works in one main folder per Attempt under a permission
+profile generated for that call, and declared local commands arrive through
+the Runtime command proxy. Neither adapter gives the provider a database
+connection or network-enabled tool execution. Expected provider failures
+return a typed failed result; exceptions are adapter conformance failures.
+Outputs are staged through the host and become authoritative only through
+Runtime finalization.
 """
 
 from __future__ import annotations
 
 from contextlib import ExitStack
 from dataclasses import dataclass
+import hashlib
 import json
 import inspect
 import os
@@ -66,6 +67,13 @@ from .invocation_process_execution import (
     CliProcessError, CliProcessInterrupted, _capture_cli_interrupts, run_cli_process,
 )
 from .invocation_codex_environment import prepare_codex_environment
+from .invocation_process_execution import _runtime_python_executable, _runtime_python_read_roots
+from .invocation_local_resource_preparation import (
+    LocalResourceError, assert_local_materials_unchanged, parse_local_resources, stage_attempt_materials,
+)
+from .invocation_local_command_execution import (
+    LocalCommandSession, LOCAL_COMMAND_SERVER_NAME, LOCAL_COMMAND_TOOL_NAME, _SYSTEM_READ_ROOTS,
+)
 from .invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,
     lease_attempt_workspace,
@@ -170,6 +178,210 @@ def _execution_expectation(profile: ExecutionProfileRelease) -> InvocationExecut
                                          "tool_free", "inline", "none", "denied", ())
 
 
+def _workspace_execution_expectation(profile: ExecutionProfileRelease) -> InvocationExecutionExpectation:
+    """Validate the agent workspace combination (tools including shell) for v3.
+
+    Codex has no Read or Grep tools of its own; its shell covers read, search
+    and shell, so only a tool policy containing shell maps. A policy with read
+    or search alone is reported as unsupported before any resource is opened.
+    """
+    profile.validate()
+    if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind,
+            profile.provider_id) != ("codex_cli_agent_workspace_executor", "v3", "codex_cli", "openai"):
+        raise ValueError("Codex workspace v3 requires its exact binding; prepare an explicit compatible Profile")
+    if (profile.execution_mode, profile.semantic_input_delivery_mode, profile.attempt_workspace_policy,
+            profile.network_policy, profile.gateway_access_reasons) != ("agent", "inline", "own_draft_read_write", "denied", ()):
+        raise ValueError("Codex workspace v3 supports only agent, inline input, a private draft workspace and denied network")
+    if not profile.tool_policy or not set(profile.tool_policy) <= {"read", "search", "shell"}:
+        raise CodexCapabilityUnsupportedError("Codex workspace v3 supports only read, search and shell tools")
+    if "shell" not in profile.tool_policy:
+        raise CodexCapabilityUnsupportedError("Codex provides read and search only through its shell tool; allow shell as well")
+    return InvocationExecutionExpectation("codex_cli_agent_workspace_executor", "v3", "codex_cli",
+                                         "agent", "inline", "own_draft_read_write", "denied", profile.tool_policy)
+
+
+PERMISSION_PROFILE_NAME = "runtime_attempt"
+# Fixed roots no workspace Attempt may read; resolved protected locations are added per call.
+_DENIED_ROOTS = (Path("/Users"), Path("/Volumes"), Path("/tmp"), Path("/private/tmp"),
+                 Path("/private/var/folders"), Path("/var/folders"))
+# Codex permission profiles start from the built-in read-only base; readable
+# system directories outside the denied roots are this recorded isolation gap.
+ISOLATION_GAPS = ("system_directories_readable",)
+
+
+class CodexCapabilityUnsupportedError(ValueError):
+    """The requested execution cannot be expressed by a Codex implementation."""
+
+    error_code = "ADAPTER_CAPABILITY_UNSUPPORTED"
+
+
+def codex_program_files(codex_bin: str | Path) -> tuple[Path, ...]:
+    """The invoked entry and its resolved file; Codex must read both to start its sandbox helper."""
+    entry = Path(codex_bin).absolute()
+    return tuple(dict.fromkeys((entry, entry.resolve(strict=True))))
+
+
+def codex_auth_directories(auth_reference: Path) -> tuple[Path, ...]:
+    """Directories of the selected authentication file and of its link target.
+
+    auth_reference is the private state entry that points at the selected
+    source; both its target's directory and that directory's resolved form
+    are protected, so a relocated or linked credential stays covered.
+    """
+    source = Path(auth_reference).readlink()
+    return tuple(dict.fromkeys((source.parent.absolute(), source.resolve().parent)))
+
+
+def _credential_locations() -> tuple[Path, ...]:
+    home = Path.home()
+    return tuple(path.resolve() for path in (home / ".codex", home / ".claude", home / ".claude.json",
+                                             home / "Library/Keychains"))
+
+
+def _overlaps(left: Path, right: Path) -> bool:
+    return left == right or left.is_relative_to(right) or right.is_relative_to(left)
+
+
+def check_codex_external_grants(grants: tuple[Path, ...], *, protected: tuple[Path, ...],
+                                host_temp_root: Path, workspace_root: Path) -> None:
+    """Refuse a read grant that would reopen something the profile denies.
+
+    A more specific grant overrides a parent deny, so a grant that overlaps a
+    protected, credential or workspace location, that is a denied or broad
+    root, or that contains a denied root or the host temporary root, is
+    refused. A grant inside the host temporary root is ordinary (for example a
+    test fixture); only its root and ancestors are refused.
+    """
+    host_temp_root = Path(host_temp_root).resolve()
+    closed = (*protected, *_credential_locations(), Path(workspace_root).resolve())
+    for grant in grants:
+        grant = Path(grant).resolve()
+        if any(_overlaps(grant, location) for location in closed if location != host_temp_root):
+            raise PermissionError(f"Codex read grant {grant} overlaps private execution state or credentials")
+        if grant == Path(grant.anchor) or host_temp_root.is_relative_to(grant) or any(
+                root.is_relative_to(grant) for root in _DENIED_ROOTS):
+            raise PermissionError(f"Codex read grant {grant} would open a denied root")
+
+
+def codex_permission_profile(*, main_folder: Path, materials: Path, readable: tuple[Path, ...],
+                             program_files: tuple[Path, ...], protected: tuple[Path, ...],
+                             host_temp_root: Path, workspace_root: Path) -> dict:
+    """Return the Codex permission profile for one workspace Attempt, or raise PermissionError.
+
+    main_folder is the only writable location; materials is this Attempt's
+    read-only input tree. Both must lie inside workspace_root, which is denied
+    as a whole so other Attempts stay closed. readable holds read-only
+    dependencies and Runtime Python roots; program_files are granted as files,
+    never as their directories. protected holds the resolved host temporary
+    root, Provider private state and authentication directories.
+    """
+    workspace_root = Path(workspace_root).resolve()
+    main_folder, materials = Path(main_folder).resolve(), Path(materials).resolve()
+    for own in (main_folder, materials):
+        if own == workspace_root or not own.is_relative_to(workspace_root) or any(
+                _overlaps(own, location) for location in (*protected, *_credential_locations())
+                if location != Path(host_temp_root).resolve()):
+            raise PermissionError(f"Codex Attempt folder {own} is outside its workspace or overlaps private state")
+    check_codex_external_grants((*readable, *program_files), protected=protected,
+                                host_temp_root=host_temp_root, workspace_root=workspace_root)
+    filesystem = {str(path): "deny" for path in (*_DENIED_ROOTS, *protected, workspace_root)}
+    filesystem.update({str(Path(path).resolve()): "read" for path in (materials, *readable)})
+    filesystem.update({str(path): "read" for path in program_files})
+    filesystem[str(main_folder)] = "write"
+    return {"extends": ":read-only", "filesystem": filesystem, "network": {"enabled": False}}
+
+
+def command_sandbox_conflicts(*, protected: tuple[Path, ...], command_readable_roots: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Protected locations a declared command could read through its own sandbox.
+
+    Declared commands run in the Runtime command sandbox, whose read roots are
+    separate from the Codex profile; a protected location inside one of them
+    is not closed by the Codex deny.
+    """
+    roots = tuple(Path(root).resolve() for root in command_readable_roots)
+    return tuple(location for location in protected
+                 if any(Path(location).resolve().is_relative_to(root) for root in roots))
+
+
+def _toml_string(text: str) -> str:
+    """Render a TOML basic string that parses back to exactly text.
+
+    Quotation mark, backslash and control characters other than tab are
+    escaped; every other character, including non-BMP ones, stays literal.
+    A string holding a lone surrogate (a path that is not valid Unicode) has
+    no TOML form and is refused rather than altered.
+    """
+    parts = ['"']
+    for character in text:
+        code = ord(character)
+        if 0xD800 <= code <= 0xDFFF:
+            raise ValueError("a path that is not valid Unicode cannot be written to the Codex configuration")
+        if character in '"\\':
+            parts.append("\\" + character)
+        elif (code < 0x20 and character != "\t") or code == 0x7F:
+            parts.append(f"\\u{code:04X}")
+        else:
+            parts.append(character)
+    parts.append('"')
+    return "".join(parts)
+
+
+def _toml(value) -> str:
+    """Render a JSON-compatible value as a TOML inline value for -c overrides."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_toml_string(str(key))}={_toml(item)}" for key, item in value.items()) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    if isinstance(value, (int, float)):
+        return json.dumps(value)
+    return _toml_string(str(value))
+
+
+_FEATURES_OFF = ("multi_agent", "plugins", "plugin_sharing", "apps", "browser_use", "computer_use",
+                 "skill_search", "tool_suggest", "memories", "view_image", "image_generation", "hooks",
+                 "workspace_dependencies")
+
+
+def _command(*, profile, workspace, codex_bin, schema_path, mcp_servers: str, shell_tool: bool,
+             permission_options: tuple[str, ...], sandbox: tuple[str, ...]) -> list[str]:
+    # The shell lives in the functions namespace; excluding it from code mode
+    # removes the shell tool itself (codex-cli 0.153.4), so only v3 keeps it.
+    excluded = '["collaboration","clock"]' if shell_tool else '["functions","collaboration","clock"]'
+    options = ["project_doc_max_bytes=0", 'approval_policy="never"',
+        'cli_auth_credentials_store="file"', "agents.enabled=false", "skills.include_instructions=false",
+        "features.code_mode.excluded_tool_namespaces=" + excluded,
+        mcp_servers, "features.skip_host_skill_discovery=true", 'web_search="disabled"',
+        "features.shell_tool=" + ("true" if shell_tool else "false")]
+    options.extend("features." + name + "=false" for name in _FEATURES_OFF)
+    options.extend(permission_options)
+    argv = [str(codex_bin), "exec", "-m", profile.model_id,
+            "-c", "model_reasoning_effort=" + json.dumps(profile.reasoning_profile)]
+    for option in options:
+        argv.extend(("-c", option))
+    argv.extend(("-C", str(workspace), *sandbox, "--skip-git-repo-check",
+                 "--ignore-user-config", "--ignore-rules", "--strict-config", "--ephemeral", "--json"))
+    if schema_path is not None:
+        argv.extend(("--output-schema", str(schema_path)))
+    argv.append("-")
+    return argv
+
+
+def _developer_tool_bins() -> list[str]:
+    """The Xcode developer tool bin from xcode-select, avoiding the xcrun shims in /usr/bin.
+
+    Returns nothing when unresolved; the other PATH entries still apply.
+    """
+    try:
+        selected = subprocess.run(["/usr/bin/xcode-select", "-p"], capture_output=True, text=True,
+                                  timeout=10, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    path = Path(selected) / "usr" / "bin"
+    return [str(path)] if selected and path.is_dir() else []
+
+
 def build_command(*, profile: ExecutionProfileRelease, workspace: Path, codex_bin: str,
                   schema_path: Path | None = None) -> list[str]:
     """Render the actual v4 command for execution and context probes, without I/O.
@@ -192,25 +404,52 @@ def build_command(*, profile: ExecutionProfileRelease, workspace: Path, codex_bi
         None. No file reads, credential resolution, process or environment changes.
     """
     _execution_expectation(profile)
-    options = ["project_doc_max_bytes=0", 'approval_policy="never"',
-        'cli_auth_credentials_store="file"', "agents.enabled=false", "skills.include_instructions=false",
-        'features.code_mode.excluded_tool_namespaces=["functions","collaboration","clock"]',
-        "mcp_servers={}", "features.skip_host_skill_discovery=true", 'web_search="disabled"']
-    options.extend("features." + name + "=false" for name in (
-        "shell_tool", "multi_agent", "plugins", "plugin_sharing", "apps", "browser_use",
-        "computer_use", "skill_search", "tool_suggest", "memories", "view_image",
-        "image_generation", "hooks", "workspace_dependencies",
-    ))
-    argv = [str(codex_bin), "exec", "-m", profile.model_id,
-            "-c", "model_reasoning_effort=" + json.dumps(profile.reasoning_profile)]
-    for option in options:
-        argv.extend(("-c", option))
-    argv.extend(("-C", str(workspace), "-s", "read-only", "--skip-git-repo-check",
-                 "--ignore-user-config", "--ignore-rules", "--strict-config", "--ephemeral", "--json"))
-    if schema_path is not None:
-        argv.extend(("--output-schema", str(schema_path)))
-    argv.append("-")
-    return argv
+    return _command(profile=profile, workspace=workspace, codex_bin=codex_bin, schema_path=schema_path,
+                    mcp_servers="mcp_servers={}", shell_tool=False, permission_options=(),
+                    sandbox=("-s", "read-only"))
+
+
+def build_workspace_command(*, profile: ExecutionProfileRelease, main_folder: Path, codex_bin: str,
+                            permission_profile: dict, local_commands: LocalCommandSession | None = None,
+                            schema_path: Path | None = None) -> list[str]:
+    """Render the workspace v3 command for one prepared Attempt, without I/O.
+
+    The shell tool is on as a non-login shell and every other optional
+    feature stays off. The generated permission profile replaces -s, which
+    Codex does not accept together with a permission profile. With declared
+    commands, the Runtime command proxy is the only MCP server and exposes
+    only its command tool.
+
+    Args:
+        profile: Exact workspace v3 Profile; supplies model and effort.
+        main_folder: The Attempt's only writable folder, used as cwd.
+        codex_bin: Host-selected CLI executable locator.
+        permission_profile: Result of codex_permission_profile for this Attempt.
+        local_commands: This Attempt's LocalCommandSession, or None.
+        schema_path: Optional prepared native schema file.
+    Returns:
+        A fresh argv list for one codex exec invocation.
+    Raises:
+        ValueError: Profile targets another binding or capability set.
+        TypeError: local_commands is not the exact Runtime session.
+    """
+    _workspace_execution_expectation(profile)
+    if local_commands is not None and type(local_commands) is not LocalCommandSession:
+        raise TypeError("local_commands must be the exact Runtime LocalCommandSession")
+    mcp_servers = "mcp_servers={}"
+    if local_commands is not None:
+        server = local_commands.mcp_config["mcpServers"][LOCAL_COMMAND_SERVER_NAME]
+        mcp_servers = f"mcp_servers.{LOCAL_COMMAND_SERVER_NAME}=" + _toml({
+            "command": server["command"], "args": server["args"], "enabled_tools": [LOCAL_COMMAND_TOOL_NAME],
+            "default_tools_approval_mode": "approve", "tool_timeout_sec": server["timeout"] // 1000})
+    name = PERMISSION_PROFILE_NAME
+    # A non-login shell does not source login profiles for each command.
+    permission_options = ("allow_login_shell=false", f"default_permissions={json.dumps(name)}",
+        f"permissions.{name}.extends={_toml(permission_profile['extends'])}",
+        f"permissions.{name}.filesystem={_toml(permission_profile['filesystem'])}",
+        f"permissions.{name}.network.enabled={_toml(permission_profile['network']['enabled'])}")
+    return _command(profile=profile, workspace=main_folder, codex_bin=codex_bin, schema_path=schema_path,
+                    mcp_servers=mcp_servers, shell_tool=True, permission_options=permission_options, sandbox=())
 
 
 def _parse_usage(events: list[dict]) -> tuple[dict, list[str]]:
@@ -316,11 +555,15 @@ class _CodexCliExecutorBase:
     expected_execution_mode = "tool_free"
     expected_semantic_input_delivery_mode = "inline"
     expected_attempt_workspace_policy = "none"
-    expected_tool_policy: tuple[str, ...] = ()
     expected_network_policy = "denied"
     shell_tool_enabled = False
-    sandbox_mode = "read-only"
+    workspace_execution = False
     descriptor_admission_state = "integration_tested"
+
+    @staticmethod
+    def execution_expectation(profile: ExecutionProfileRelease) -> InvocationExecutionExpectation:
+        """Check a Profile against this implementation without opening resources."""
+        return _execution_expectation(profile)
 
     def __init__(
         self,
@@ -331,6 +574,7 @@ class _CodexCliExecutorBase:
         invoker: CodexCliInvoker = _default_invoke,
         codex_bin: str | None = None,
         auth_file: Path | None = None,
+        read_only_dependencies: tuple[Path, ...] = (),
     ) -> None:
         """Configure the admitted Codex implementation without preparing resources.
 
@@ -352,6 +596,9 @@ class _CodexCliExecutorBase:
                 the host's original CODEX_HOME/auth.json, or standard .codex/auth.json
                 when CODEX_HOME is unset. Resolution occurs only during invocation.
                 Missing file authentication does not fall back to keychain/API keys.
+            read_only_dependencies: Workspace v3 only. Explicit trusted existing
+                directories the Agent's shell may read; never task-supplied.
+                Tool-free v4 accepts none.
         Raises:
             ValueError: Required artifact methods or descriptor fields are invalid.
             OSError: The workspace locator cannot be resolved by the host filesystem.
@@ -378,6 +625,9 @@ class _CodexCliExecutorBase:
         self._invoker = invoker
         self._codex_bin = codex_bin
         self._auth_file = auth_file
+        if read_only_dependencies and not self.workspace_execution:
+            raise ValueError("Tool-free Codex execution takes no read-only dependencies")
+        self._dependencies = tuple(Path(item).resolve(strict=True) for item in read_only_dependencies)
         self._descriptor = provider_adapter_descriptor(
             adapter_id=self.executor_adapter_id,
             adapter_revision=self.executor_adapter_revision,
@@ -401,7 +651,7 @@ class _CodexCliExecutorBase:
         request: AuthorizedAgentExecutionRequest,
         host: AuthorizedAgentExecutionHost,
     ) -> AgentExecutionResult:
-        """Execute one v4 invocation with live resources and private Provider state.
+        """Execute one invocation with live resources and private Provider state.
 
         A self-test requires the kernel's live host validator and actual launch
         guard. Missing hooks or an incompatible injected invoker fail before CLI
@@ -423,29 +673,36 @@ class _CodexCliExecutorBase:
             turn terminal are checked before validating the final output.
         Raises:
             ValueError: Invalid request/Profile or incompatible injected invoker.
-            PermissionError: Missing live resource/operation evidence or unsupported
-                workspace execution. Provider is not started on these entry failures.
+            PermissionError: Missing live resource/operation evidence, or (workspace
+                v3) a read grant that would reopen a denied, credential or private
+                location, or declared commands that could read a protected
+                location. Provider is not started on these failures.
             Exception: Native content/record-store integrity failures retain their owner.
         Effects:
             Resolves one authentication file, prepares private state and one Attempt,
-            launches the selected CLI with fixed v4 configuration, and stages output
-            and trace through the supplied ports. No login, registration, model fallback,
-            credential copy-back or global environment modification is performed.
+            launches the selected CLI with its fixed configuration, and stages output
+            and trace through the supplied ports. Workspace v3 also stages materials,
+            records main_folder, codex_permission_profile and isolation_gaps, and
+            runs declared commands in the Runtime command session. No login,
+            registration, model fallback, credential copy-back or global
+            environment modification is performed.
         """
-        if self.descriptor.admission_state == "conformance_candidate":
-            raise PermissionError("Codex workspace candidate lacks required ambient-read isolation")
         if type(request) is not AuthorizedAgentExecutionRequest:
             raise ValueError("request must be an exact AuthorizedAgentExecutionRequest")
         request.validate()
         profile = self._release_registry.get_execution_profile(request.execution_profile_ref,
                                                               request.execution_profile_sha256)
-        expectation = _execution_expectation(profile)
+        expectation = self.execution_expectation(profile)
+        if self.workspace_execution:
+            check_codex_external_grants((*_runtime_python_read_roots(), *self._dependencies), protected=(),
+                host_temp_root=Path(tempfile.gettempdir()), workspace_root=self._workspace_root)
         def validate_self_test(value):
             validator = getattr(host, "validate_self_test_binding", None)
             guard = getattr(host, "guard_self_test_launch", None)
             if not callable(validator) or not callable(guard):
                 raise SelfTestResourceUnavailableError("Codex self-test requires live Runtime resource validation and launch guard")
-            validator(value, adapter=self, artifact_host=self._artifact_host, workspace_root=self._workspace_root)
+            validator(value, adapter=self, artifact_host=self._artifact_host, workspace_root=self._workspace_root,
+                      **self._host_resources())
         prepared = prepare_registered_invocation_context(
             request=request,
             release_registry=self._release_registry,
@@ -481,6 +738,10 @@ class _CodexCliExecutorBase:
                 cleanup_error=cleanup_error, interruption_code="codex_cli_interrupted",
                 cleanup_failure_code="codex_cli_cleanup_failed",
             )
+
+    def _host_resources(self) -> dict:
+        """Resource arguments the kernel host checks; v4 keeps its original call."""
+        return {"read_only_dependencies": self._dependencies} if self.workspace_execution else {}
 
     def _execute_prepared(
         self,
@@ -572,6 +833,8 @@ class _CodexCliExecutorBase:
             trace["stage"] = "executable_resolution"
             fail("dependency_unavailable", "ADAPTER_BINDING_UNAVAILABLE", str(exc), cause=exc)
         stage = "workspace_lease"
+        cwd, materials, local_commands, resources_body = workspace, None, None, None
+        material_hashes, policy_refusal = {}, None
         try:
             cleanup.enter_context(lease_attempt_workspace(workspace))
             schema_path = None
@@ -583,43 +846,150 @@ class _CodexCliExecutorBase:
                 schema_path = schema_directory / "output_schema.json"
                 schema_path.write_text(json.dumps(projected_output_schema, ensure_ascii=False,
                     sort_keys=True, separators=(",", ":")), encoding="utf-8")
-            argv = build_command(profile=profile, workspace=workspace, codex_bin=executable,
-                                 schema_path=schema_path)
+            if self.workspace_execution:
+                # One main folder per Attempt: scratch is the cwd, the only
+                # writable location, and holds TMPDIR; materials stay read-only.
+                stage = "material_preparation"
+                work = workspace / "work"
+                materials, cwd = work / "materials", work / "scratch"
+                for directory in (work, materials, cwd, cwd / ".tmp"):
+                    if directory.is_symlink():
+                        policy_refusal = "Codex workspace directory is a symlink"
+                        raise AttemptWorkspaceConflictError(policy_refusal)
+                    directory.mkdir(mode=0o700, exist_ok=True)
+                def set_stage(value):
+                    nonlocal stage
+                    stage = value
+                try:
+                    material_hashes, resources_body = stage_attempt_materials(
+                        request=request, host=host, profile=profile, materials=materials,
+                        dependencies=self._dependencies, set_stage=set_stage)
+                except AttemptWorkspaceConflictError as exc:
+                    policy_refusal = str(exc)
+                    raise
+            else:
+                argv = build_command(profile=profile, workspace=workspace, codex_bin=executable,
+                                     schema_path=schema_path)
             stage = "provider_environment"
+            host_temp_root = Path(tempfile.gettempdir()).resolve()
             environment = cleanup.enter_context(prepare_codex_environment(
                 workspace_root=self._workspace_root, auth_file=self._auth_file,
                 source_environment=dict(os.environ)))
-            trace.update(argv=list(argv), cwd=str(workspace),
+            if self.workspace_execution:
+                stage = "isolation_preparation"
+                state = Path(environment["CODEX_HOME"]).resolve()
+                protected = tuple(dict.fromkeys((host_temp_root, state, *codex_auth_directories(state / "auth.json"))))
+                python = _runtime_python_executable()
+                python_roots = _runtime_python_read_roots()
+                permission = codex_permission_profile(
+                    main_folder=cwd, materials=materials,
+                    readable=tuple(dict.fromkeys((*python_roots, *self._dependencies))),
+                    program_files=codex_program_files(executable), protected=protected,
+                    host_temp_root=host_temp_root, workspace_root=self._workspace_root)
+                if resources_body is not None and parse_local_resources(resources_body)["commands"]:
+                    exposed = command_sandbox_conflicts(protected=protected, command_readable_roots=(
+                        *map(Path, _SYSTEM_READ_ROOTS), *python_roots, *self._dependencies, materials / "source", cwd))
+                    if exposed:
+                        raise PermissionError("Declared commands could read protected locations: "
+                                              + ", ".join(map(str, exposed)))
+                    stage = "local_command_preparation"
+                    local_commands = cleanup.enter_context(LocalCommandSession(
+                        request=request, profile=profile, host=host, adapter=self,
+                        artifact_host=self._artifact_host, workspace_root=self._workspace_root,
+                        resources_body=resources_body, source_root=materials / "source", scratch_root=cwd,
+                        read_only_dependencies=self._dependencies))
+                argv = build_workspace_command(profile=profile, main_folder=cwd, codex_bin=executable,
+                    permission_profile=permission, local_commands=local_commands, schema_path=schema_path)
+                bins = [str(dep / "bin") for dep in self._dependencies if (dep / "bin").is_dir()]
+                environment.update(
+                    TMPDIR=str(cwd / ".tmp"),
+                    PATH=os.pathsep.join(dict.fromkeys([str(python.parent), *bins, *_developer_tool_bins(),
+                                                        "/usr/bin", "/bin"])),
+                    GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", PYTHONDONTWRITEBYTECODE="1")
+                trace.update(main_folder=str(cwd), codex_permission_profile=permission,
+                             isolation_gaps=list(ISOLATION_GAPS), material_sha256=material_hashes)
+            trace.update(argv=list(argv), cwd=str(cwd),
                          prompt_envelope_sha256=request.prompt_envelope_sha256,
                          environment_keys=sorted(environment), provider_state_isolated=True)
             launch_guard = None
             if request.self_test_binding_ref is not None:
                 launch_guard = lambda launch: host.guard_self_test_launch(
                     request, launch, adapter=self, artifact_host=self._artifact_host,
-                    workspace_root=self._workspace_root)
+                    workspace_root=self._workspace_root, **self._host_resources())
             stage = "provider_invocation"
-            result = self._invoker(argv=argv, prompt=prompt, cwd=workspace,
-                                   timeout_seconds=profile.timeout_seconds, environment=environment,
-                                   launch_guard=launch_guard, **cancellation)
-            if type(result) is not CodexCliInvocationResult:
-                raise TypeError("Codex CLI invoker returned an invalid result")
-            capture(result, complete=result.process_output_complete is True)
-            trace["cli_version"] = result.cli_version
-            if type(result.returncode) is not int or type(result.process_output_complete) is not bool:
-                raise TypeError("Codex CLI invoker returned invalid process metadata")
+            command_cleanup_error = None
+            try:
+                result = self._invoker(argv=argv, prompt=prompt, cwd=cwd,
+                                       timeout_seconds=profile.timeout_seconds, environment=environment,
+                                       launch_guard=launch_guard, **cancellation)
+                if type(result) is not CodexCliInvocationResult:
+                    raise TypeError("Codex CLI invoker returned an invalid result")
+                capture(result, complete=result.process_output_complete is True)
+                trace["cli_version"] = result.cli_version
+                if type(result.returncode) is not int or type(result.process_output_complete) is not bool:
+                    raise TypeError("Codex CLI invoker returned invalid process metadata")
+            finally:
+                if local_commands is not None:
+                    try:
+                        local_commands.close()
+                    except Exception as exc:
+                        command_cleanup_error = exc
+                        trace["local_command_cleanup_error"] = {"error_type": type(exc).__name__, "message": str(exc)}
+                    finally:
+                        trace["local_command_calls"] = local_commands.records
+                        trace["local_command_cli_tool_name"] = LOCAL_COMMAND_TOOL_NAME
+                if resources_body is not None:
+                    try:
+                        assert_local_materials_unchanged(resources_body, materials_root=materials)
+                    except Exception as exc:
+                        policy_refusal = "read-only material tree changed or unavailable"
+                        trace["material_integrity_error"] = str(exc)
+                for name, digest in material_hashes.items():
+                    target = Path(name)
+                    try:
+                        intact = (target.resolve() == target and target.is_file()
+                                  and hashlib.sha256(target.read_bytes()).hexdigest() == digest)
+                    except (OSError, RuntimeError):
+                        intact = False
+                    if not intact:
+                        policy_refusal = "read-only material changed or unavailable"
+            if local_commands is not None:
+                stage = "local_command_validation"
+                if command_cleanup_error is not None:
+                    raise command_cleanup_error
+                local_commands.validate_completion()
+                stage = "provider_invocation"
         except (Exception, KeyboardInterrupt) as exc:
             trace.update(stage=stage, error=str(exc))
+            if stage == "isolation_preparation" and isinstance(exc, PermissionError):
+                raise  # Before any Provider or command process; the caller sees the refusal.
             if getattr(exc, "cli_version", None) is not None:
                 trace["cli_version"] = exc.cli_version
-            if isinstance(exc, (subprocess.CalledProcessError, subprocess.TimeoutExpired, CliProcessInterrupted)) or any(
-                getattr(exc, name, None) is not None for name in ("stdout", "stderr", "stdout_bytes", "stderr_bytes")
-            ):
+            if stage != "local_command_validation" and (
+                    isinstance(exc, (subprocess.CalledProcessError, subprocess.TimeoutExpired, CliProcessInterrupted))
+                    or any(getattr(exc, name, None) is not None
+                           for name in ("stdout", "stderr", "stdout_bytes", "stderr_bytes"))):
                 capture(exc, complete=False)
             if isinstance(exc, KeyboardInterrupt):
                 fail("cancelled", "codex_cli_interrupted", "Codex CLI interrupted",
                      terminal_status="cancelled", cause=exc)
             if isinstance(exc, SelfTestResourceUnavailableError):
                 fail("authorization", "self_test_resources_unavailable", str(exc), cause=exc)
+            if policy_refusal:
+                trace["policy_refusal_reason"] = policy_refusal
+                fail("policy_violation", "ADAPTER_POLICY_VIOLATION", policy_refusal, cause=exc)
+            if isinstance(exc, LocalResourceError):
+                fail("dependency_unavailable" if exc.error_code == "ADAPTER_CAPABILITY_UNSUPPORTED" else
+                     "policy_violation" if exc.error_code == "ADAPTER_POLICY_VIOLATION" else "schema",
+                     exc.error_code, str(exc), cause=exc)
+            if stage == "local_command_preparation" and isinstance(exc, NotImplementedError):
+                fail("dependency_unavailable", "ADAPTER_CAPABILITY_UNSUPPORTED", str(exc), cause=exc)
+            if stage == "local_command_validation":
+                fail("unknown", "ADAPTER_CONFORMANCE_FAILED", str(exc), cause=exc)
+            if stage == "authorized_input_read":
+                raise
+            if stage == "material_preparation" and isinstance(exc, ValueError):
+                fail("schema", "ADAPTER_REQUEST_INVALID", str(exc), cause=exc)
             if isinstance(exc, subprocess.TimeoutExpired):
                 fail("timeout", "codex_cli_timeout", "Codex CLI invocation timed out",
                      retry="retry_allowed", cause=exc)
@@ -634,6 +1004,9 @@ class _CodexCliExecutorBase:
             if stage != "provider_invocation" or isinstance(exc, OSError):
                 fail("dependency_unavailable", "ADAPTER_BINDING_UNAVAILABLE", str(exc), cause=exc)
             fail("unknown", "ADAPTER_CONFORMANCE_FAILED", "Codex invoker violated its result contract", cause=exc)
+        if policy_refusal:
+            trace["policy_refusal_reason"] = policy_refusal
+            fail("policy_violation", "ADAPTER_POLICY_VIOLATION", policy_refusal)
         if not result.process_output_complete:
             fail("transport", "codex_cli_process_failed", "Codex process output capture is incomplete")
         if result.returncode != 0:
@@ -701,26 +1074,36 @@ class CodexCliModuleExecutor(_CodexCliExecutorBase):
 
 
 class CodexCliAgentWorkspaceModuleExecutor(_CodexCliExecutorBase):
-    """Unadmitted workspace candidate; refuses execution until reads are confined.
+    """Execute an agent workspace Module (tools including shell) with the Codex shell tool.
 
-    The historical v2 Profile and descriptor identity remain readable. This
-    implementation cannot limit ambient reads and does not grant a usable public
-    execution path. Both direct execute and the kernel fail before workspace or
-    provider effects; selecting an empty tool_policy cannot implicitly enable Shell.
+    Each Attempt has one main folder, its private scratch directory: the cwd,
+    the only writable location and the home of TMPDIR. A permission profile
+    generated per call keeps materials, read-only dependencies, Runtime Python
+    and the Codex program readable, closes user trees, external volumes, shared
+    and host temporary directories, and disables tool network. Other system
+    directories remain readable (recorded in isolation_gaps). Declared local
+    commands run through the Runtime command proxy, the only MCP server.
+    The historical v2 Profile stays readable and is refused by binding.
     """
 
     executor_adapter_id = "codex_cli_agent_workspace_executor"
-    executor_adapter_revision = "v2"
-    descriptor_admission_state = "conformance_candidate"
+    executor_adapter_revision = "v3"
     expected_execution_mode = "agent"
     expected_attempt_workspace_policy = "own_draft_read_write"
-    expected_tool_policy = ()
     shell_tool_enabled = True
-    sandbox_mode = "workspace-write"
+    workspace_execution = True
+
+    @staticmethod
+    def execution_expectation(profile: ExecutionProfileRelease) -> InvocationExecutionExpectation:
+        """Check a Profile against workspace v3 without opening resources."""
+        return _workspace_execution_expectation(profile)
 
 
 __all__ = [
     "build_command",
+    "build_workspace_command",
+    "codex_permission_profile",
+    "CodexCapabilityUnsupportedError",
     "CodexCliInvocationResult",
     "CodexCliInvoker",
     "CodexCliAgentWorkspaceModuleExecutor",

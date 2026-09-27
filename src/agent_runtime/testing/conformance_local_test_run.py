@@ -115,8 +115,12 @@ def run_local_workflow_test(
             default. claude_cli supports empty or selected native tool sets,
             inline input, and no write area or a private draft as defined.
             codex_cli supports tool_free, inline, empty tools, workspace none
-            and denied tool network. It requires explicit model_id and effort;
-            unsupported requirements are rejected, never reduced to fit.
+            and denied tool network (v4), and the agent workspace
+            environment: tools including shell, inline input, a private
+            draft and denied tool network (workspace v3, which also takes
+            the frozen resources and commands). It requires explicit
+            model_id and effort; unsupported requirements are rejected,
+            never reduced to fit.
         model_id: This call's concrete model ID; None falls back through the same
             layers to the Claude default.
             Codex requires an explicit model. Claude verifies observed model
@@ -243,7 +247,9 @@ def run_local_workflow_test(
             raise ValueError(f"Environment variable {release_database_url_env} is missing or empty; no DSN fallback")
 
     from ..invocation.invocation_claude_cli_execution import ClaudeAdapter
-    from ..invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
+    from ..invocation.invocation_codex_module_invocation import (
+        CodexCliAgentWorkspaceModuleExecutor, CodexCliModuleExecutor,
+    )
     from ..inspection.inspection_execution_logging import read_execution_log
     from ..foundation.foundation_environment_setup import load_runtime_config, setup_runtime
     from ..invocation.invocation_local_resource_preparation import capture_local_resources, parse_local_resources
@@ -301,6 +307,11 @@ def run_local_workflow_test(
             adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
                 workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
                 adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
+        elif (selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision) == (
+                CodexCliAgentWorkspaceModuleExecutor.executor_adapter_id,
+                CodexCliAgentWorkspaceModuleExecutor.executor_adapter_revision):
+            adapter = CodexCliAgentWorkspaceModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
+                workspace_root=workspace, codex_bin=str(executable), read_only_dependencies=dependencies)
         else:
             adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
                 workspace_root=workspace, codex_bin=str(executable))

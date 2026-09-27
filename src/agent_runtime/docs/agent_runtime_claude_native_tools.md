@@ -209,3 +209,34 @@ python -B -m pytest -q -s -p no:cacheprovider \
 缺少 CLI/登录/运行库/PG/schema/source/input 时，补宿主对应的环境或注册输入；Runtime 公共入口、
 Adapter、记录或查询实现有缺陷时，回到 Runtime 修复并随包交付。审核内容本身的缺陷交给所属
 Reviewer/文稿负责人，不通过改启动参数或替换 schema 让它通过。
+
+## 4. Codex workspace 执行（Reviewer 默认环境）
+
+按 Reviewer 默认环境注册的 Module 可以选择 `codex_cli` 执行：本次调用、Workflow 或 workspace
+参数文件给出 `transport_kind=codex_cli`、模型与 effort，Runtime 绑定
+`codex_cli_agent_workspace_executor@v3`。无工具 Module 继续使用 `codex_cli_agent_executor@v4`。
+执行器参数与错误见 [CodexCliAgentWorkspaceModuleExecutor API](agent_runtime_reviewer_api.md#codexcliagentworkspacemoduleexecutor)。
+
+| 项目 | Codex workspace v3 的做法 |
+| --- | --- |
+| 支持的组合 | agent、inline、私有草稿、工具网络关闭，工具须含 `shell`。Codex 没有独立的 Read、Grep 工具，read、search 由 shell 承担；只有 read 或 search 的组合在准备时报告 `ADAPTER_CAPABILITY_UNSUPPORTED` |
+| 主文件夹 | 每个 Attempt 一个：私有 scratch，是 Codex 的工作目录，`TMPDIR` 为其中的 `.tmp`。给 Agent 的说明写明它是唯一可以修改的位置；trace 的 `main_folder` 记录绝对路径 |
+| 可读 | 冻结材料（`../materials`）、只读依赖、当前 Runtime Python、Codex 程序的入口与实际文件（不含所在目录） |
+| 不可读 | `/Users`、`/Volumes`、`/tmp`、`/private/tmp`、宿主临时根、本次 Provider 私有状态、认证文件所在目录、工作区根下的其他内容 |
+| 网络 | 工具网络关闭 |
+| 在册缺口 | 权限以 Codex 内置只读基线为起点，未列入上面的系统目录（如 `/Library`、`/opt`、`/Applications`、`/etc`）可读、不可写；trace 的 `isolation_gaps` 记录 `system_directories_readable` |
+| 本地命令 | 资源声明 commands 时挂载唯一的 MCP 服务 `runtime_commands`，只暴露 `sandbox_command_execute`；命令由 Runtime 在 §2.1 的命令 sandbox 中执行，记录进同一执行日志 |
+| 不加载 | Web 搜索、apps、plugins、hooks、项目指令、个人配置与登录 shell 配置 |
+
+读写与网络范围由每次调用生成的 Codex 权限配置落实，trace 的 `codex_permission_profile` 保存
+实际传给 Codex 的配置。更具体的授权会覆盖上层拒绝，因此只读依赖与用户主目录、凭据目录、
+Provider 私有状态或工作区根重叠，或是 `/`、被拒绝的根及宿主临时根的上层目录时，Runtime 在
+启动 Provider 前以 PermissionError 拒绝；声明的命令能经命令 sandbox 读到受保护位置时同样拒绝。
+
+能力测试使用已安装的 Codex CLI：由 Codex 自身的 sandbox 逐项核对一次真实 Attempt 的读写与网络
+边界（含非默认的临时目录与认证位置），并经 Test Run 执行一个注册 Reviewer 及其声明命令。
+边界以所用 Codex 版本（0.153.4）的实测为准，Codex 升级后重跑：
+
+```sh
+AGENT_RUNTIME_REAL_RUN=1 python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_codex_workspace.py
+```

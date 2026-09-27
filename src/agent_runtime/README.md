@@ -618,10 +618,10 @@ ModuleReviewer。实际适用项以 Module 的固定要求为准；提供资源�
 | 需要的能力 | 当前路径 | 调用者从哪里提供 |
 | --- | --- | --- |
 | 无任务工具的内联模型调用 | Claude CLI；或显式选择 Codex 的 `tool_free`、`inline`、空工具、workspace `none`、network `denied` 组合 | 已注册 Module 的要求；模型、effort 和程序路径使用 [执行参数](docs/agent_runtime_reviewer_api.md#run_local_workflow_test) |
-| 原生读取、搜索和 Shell | Claude 的 `agent`、`inline`、network `denied` 路径可使用声明的 `read/search/shell` 子集；workspace 为 `none` 或私有草稿 | 固定 Module 要求；本次材料与依赖通过已支持的 `--resources` / Python 参数提供，见 [ClaudeAdapter](docs/agent_runtime_reviewer_api.md#claudeadapter) |
-| 按 ID 执行并记录本地工程命令 | macOS Claude 路径；需要 `shell`、私有草稿和 `cli_tools` 依赖；普通 Bash 不被限制成该命令列表 | `--resources` 中的 `commands` 或 Python `commands` 参数；[原生命令说明](docs/agent_runtime_claude_native_tools.md#21-明确的本地工程资源与命令记录) |
+| 原生读取、搜索和 Shell | Claude 的 `agent`、`inline`、network `denied` 路径可使用声明的 `read/search/shell` 子集；workspace 为 `none` 或私有草稿。Codex 的 workspace v3 执行 Reviewer 默认环境：工具须含 `shell`（read、search 由 shell 承担），私有草稿为唯一可修改的主文件夹 | 固定 Module 要求；本次材料与依赖通过已支持的 `--resources` / Python 参数提供，见 [ClaudeAdapter](docs/agent_runtime_reviewer_api.md#claudeadapter) 与 [Codex workspace 执行](docs/agent_runtime_claude_native_tools.md#4-codex-workspace-执行reviewer-默认环境) |
+| 按 ID 执行并记录本地工程命令 | macOS 上的 Claude 路径与 Codex workspace v3；需要 `shell`、私有草稿和 `cli_tools` 依赖；普通 Shell 不被限制成该命令列表 | `--resources` 中的 `commands` 或 Python `commands` 参数；[原生命令说明](docs/agent_runtime_claude_native_tools.md#21-明确的本地工程资源与命令记录) |
 | 调用宿主明确提供的本地函数（callback） | Claude 自测路径，通过受控进程桥；工具名匹配 Module/Profile 的非原生工具，工具 schema 随 factory 定义固定；使用 `cli_tools` | Python `tool_session_factory`（或图入口的 `tool_session_factory_for_node`）；[函数及参数合同](docs/agent_runtime_reviewer_api.md#run_local_workflow_test)与[图调用合同](docs/agent_runtime_reviewer_api.md#localworkflowmodulebridge) |
-| 生产领域 Gateway、`gateway_read` / `hybrid` 输入、直接工具联网，或 Codex 的带工具工作区 | 随包 CLI 尚未接通这些路径；通用协议或候选实现的存在不代表可直接调用 | 返回所选入口/Adapter 的具体不支持结果，交对应集成维护者，不改 Module 要求或换 transport 来掩盖缺口 |
+| 生产领域 Gateway、`gateway_read` / `hybrid` 输入、直接工具联网，或 Codex 只有 read/search 而无 shell 的工具组合 | 随包 CLI 尚未接通这些路径；通用协议或候选实现的存在不代表可直接调用 | 返回所选入口/Adapter 的具体不支持结果，交对应集成维护者，不改 Module 要求或换 transport 来掩盖缺口 |
 
 Callback 是可信宿主程序提供的实际函数会话，不是从任务 JSON 加载代码或服务。普通 CLI 的
 资源 JSON 不接收 factory，`--example` 只使用样例自己的固定 factory；自定义 callback 使用上表的
@@ -696,14 +696,27 @@ to Codex. The Test Run record lists each parameter's source layer and file hash
 in `execution_parameter_sources`.
 
 Opt-in live smoke tests cover the remaining CLI implementations. The Codex
-test below covers the tool-free path. Claude CLI's native-tool cases and their
-environment prerequisites are documented in
+test below covers the tool-free path; the Codex workspace cases are in
+`tests/test_agent_runtime_codex_workspace.py`. Claude CLI's native-tool cases,
+the Codex workspace environment and their prerequisites are documented in
 `docs/agent_runtime_claude_native_tools.md`; none invokes Claude Agent SDK.
 
-For a registered tool-free Module, the `agent-runtime-test-run` command
-also accepts `--transport codex_cli --model MODEL --effort EFFORT`. Codex has no
-default model or effort; they come from this call or the same parameter-file layer
-as the transport. Omitting every layer keeps the Claude defaults.
+For a registered Module, the `agent-runtime-test-run` command also accepts
+`--transport codex_cli --model MODEL --effort EFFORT`. Codex has no default
+model or effort; they come from this call or the same parameter-file layer as
+the transport. Omitting every layer keeps the Claude defaults. A workspace
+parameter file that sends every Test Run to Codex:
+
+```json
+{"schema_version": "runtime_execution_parameters_v1", "transport_kind": "codex_cli", "model_id": "gpt-6-astra", "reasoning_profile": "xhigh"}
+```
+
+A tool-free Module binds `codex_cli_agent_executor@v4`. A Module with the
+Reviewer default environment (agent, tools including shell, a private draft,
+denied tool network, inline input) binds `codex_cli_agent_workspace_executor@v3`:
+one main folder per Attempt is the only writable location, frozen resources and
+declared commands are available, and readable system directories outside the
+denied locations are recorded in each trace as `isolation_gaps`.
 Codex v4 uses a fresh private Provider state and the host's one standard
 file-based login source, with Skills, plugins, MCP and task tools disabled.
 The real process launch is ordered against temporary-resource closure; no
@@ -714,10 +727,11 @@ as cleanup failure, not silently deleted or written back to the host credential.
 The v4 configuration replaces the executable v3 binding. Historical v3 Profiles
 and committed results remain readable; exact committed requests can replay
 without the retired Adapter. New execution requires an explicitly prepared v4
-Profile rather than rewriting a saved v3 record. Codex's tool-enabled workspace
-candidate remains unavailable; a Module's required tools are never dropped to
-fit this tool-free path. See the generated Codex API and registration runbook
-for the actual resource parameters, errors and supported combinations.
+Profile rather than rewriting a saved v3 record. The earlier workspace candidate
+(`codex_cli_agent_workspace_executor@v2`) stays readable and is refused by
+binding. A Module's required tools are never dropped to fit either path. See
+the generated Codex API and registration runbook for the actual resource
+parameters, errors and supported combinations.
 
 ```bash
 RUN_PROVIDER_INTEGRATION=1 python -m pytest \

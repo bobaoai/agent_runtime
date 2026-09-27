@@ -344,14 +344,20 @@ def test_codex_live_resources_cannot_be_reused_with_different_ports(environment,
     assert record["status"] == "failed" and calls == []
 
 
-def test_codex_does_not_shrink_reviewer_default_tools_to_make_a_profile(tmp_path):
-    from agent_runtime import ModuleReviewer
+@pytest.mark.deterministic
+def test_codex_binds_reviewer_default_tools_to_workspace_v3_without_shrinking(tmp_path):
     from test_agent_runtime_reviewer_registration_cli import _source, _register, MODULE_ID
     root = tmp_path / "host"
     source, _ = _source(tmp_path / "source")
     _register(root, source)
-    before = _files(root)
-    with pytest.raises(ValueError):
-        prepare_local_workflow_module(root, MODULE_ID, transport_kind="codex_cli",
-                                     model_id="gpt-6-astra", reasoning_profile="xhigh")
-    assert _files(root) == before
+    saved, selection = prepare_local_workflow_module(root, MODULE_ID, transport_kind="codex_cli",
+                                                     model_id="gpt-6-astra", reasoning_profile="xhigh")
+    binding = selection.policy_document()["bindings"][0]
+    profile = saved.registry.get_execution_profile(binding["execution_profile_release_ref"],
+                                                   binding["execution_profile_release_sha256"])
+    module = saved.registry.get_module(saved.release.nodes[0].module_release_ref,
+                                       saved.release.nodes[0].module_release_sha256)
+    assert (profile.executor_adapter_id, profile.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v3")
+    assert (profile.model_id, profile.reasoning_profile) == ("gpt-6-astra", "xhigh")
+    assert set(profile.tool_policy) == set(module.execution_requirements.tool_policy) >= {"shell"}
+    assert (profile.attempt_workspace_policy, profile.network_policy) == ("own_draft_read_write", "denied")

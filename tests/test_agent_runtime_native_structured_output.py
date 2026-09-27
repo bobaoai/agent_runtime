@@ -1395,7 +1395,8 @@ def test_tool_free_profile_rejects_undeclared_gateway_surface_before_provider(
     assert entered is False
 
 
-def test_run_module_rejects_codex_agent_draft_workspace_before_provider(
+@pytest.mark.deterministic
+def test_run_module_refuses_historical_codex_workspace_v2_profile_by_binding(
     tmp_path: Path,
 ) -> None:
     compiled = _compile_native_module(
@@ -1415,7 +1416,7 @@ def test_run_module_rejects_codex_agent_draft_workspace_before_provider(
     def invoker(**_fields) -> CodexCliInvocationResult:
         nonlocal entered
         entered = True
-        raise AssertionError("unadmitted Codex workspace reached Provider")
+        raise AssertionError("historical Codex workspace v2 Profile reached Provider")
 
     executor = CodexCliAgentWorkspaceModuleExecutor(
         release_registry=registry,
@@ -1430,19 +1431,19 @@ def test_run_module_rejects_codex_agent_draft_workspace_before_provider(
     authority, _ = _evaluation_authority(registry, request)
 
     original_profile = compiled.execution_profile.as_dict()
-    assert executor.descriptor.admission_state == "conformance_candidate"
-    result = run_module(
-        request,
-        release_registry=registry,
-        adapters=adapters,
-        artifact_host=artifact_host,
-        ledger=InMemoryModuleExecutionLedger(),
-        authority=authority,
-        clock=lambda: _TEST_TIME,
-    )
-    assert result.attempts[0].status == "failed"
-    assert result.attempts[0].failure_class == "authorization"
-    with pytest.raises(PermissionError, match="ambient-read isolation"):
+    assert (executor.descriptor.adapter_revision, executor.descriptor.admission_state) == ("v3", "integration_tested")
+    # The registered executor is v3; the kernel finds no adapter for the v2 binding.
+    with pytest.raises(KeyError, match="codex_cli_agent_workspace_executor@v2"):
+        run_module(
+            request,
+            release_registry=registry,
+            adapters=adapters,
+            artifact_host=artifact_host,
+            ledger=InMemoryModuleExecutionLedger(),
+            authority=authority,
+            clock=lambda: _TEST_TIME,
+        )
+    with pytest.raises(ValueError, match="requires its exact binding"):
         executor.execute(
             _direct_adapter_request(compiled, prompt_ref, suffix="workspace_direct"),
             _RecordingHost(),
@@ -1486,8 +1487,9 @@ def test_codex_tool_free_adapter_checks_actual_shell_before_provider(tmp_path, i
         assert len(calls) == 1
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("tool", ["read", "shell"])
-def test_codex_workspace_remains_unavailable_with_explicit_tools_before_effects(tmp_path, tool):
+def test_codex_workspace_v2_profile_is_refused_by_binding_before_effects(tmp_path, tool):
     compiled = _compile_native_module(tmp_path,
         executor_adapter_id="codex_cli_agent_workspace_executor", executor_adapter_revision="v2",
         execution_mode="agent", attempt_workspace_policy="own_draft_read_write", tool_policy=(tool,))
@@ -1497,7 +1499,7 @@ def test_codex_workspace_remains_unavailable_with_explicit_tools_before_effects(
     calls = []
     executor = CodexCliAgentWorkspaceModuleExecutor(release_registry=registry, artifact_host=artifacts,
         workspace_root=tmp_path / "workspaces", invoker=lambda **kw: calls.append(kw), codex_bin="controlled-codex")
-    with pytest.raises(PermissionError, match="workspace candidate lacks required ambient-read isolation"):
+    with pytest.raises(ValueError, match="requires its exact binding"):
         executor.execute(_direct_adapter_request(compiled, prompt, suffix="wrong_tool"), _RecordingHost())
     assert calls == [] and not (tmp_path / "workspaces").exists()
 

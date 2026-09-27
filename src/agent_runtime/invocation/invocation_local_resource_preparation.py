@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import sys
 
@@ -139,19 +140,24 @@ def _dependencies(values):
         seen.add(value)
 
 
+# Current bindings that accept frozen materials, dependencies and commands.
+_RESOURCE_BINDINGS = {("claude_cli_adapter", "v3", "claude_cli"),
+                      ("codex_cli_agent_workspace_executor", "v3", "codex_cli")}
+
+
 def _profile_resources(profile, *, used, commands):
     if type(profile) is not ExecutionProfileRelease:
         raise LocalResourceError("profile must be an exact ExecutionProfileRelease")
     profile.validate()
     if not used:
         return
-    if (sys.platform != "darwin" or profile.executor_adapter_id != "claude_cli_adapter"
-            or profile.executor_adapter_revision != "v3" or profile.transport_kind != "claude_cli"
+    if (sys.platform != "darwin" or (profile.executor_adapter_id, profile.executor_adapter_revision,
+            profile.transport_kind) not in _RESOURCE_BINDINGS
             or profile.execution_mode != "agent" or profile.semantic_input_delivery_mode != "inline"
             or profile.network_policy != "denied" or profile.gateway_access_reasons
             or not set(profile.tool_policy) & {"read", "search", "shell"}):
-        raise LocalResourceError("local files/dependencies/commands require the supported macOS Claude v3 agent resources",
-                                 error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
+        raise LocalResourceError("local files/dependencies/commands require a supported macOS agent binding "
+                                 "(Claude v3 or Codex workspace v3)", error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
     if commands and ("shell" not in profile.tool_policy or profile.attempt_workspace_policy != "own_draft_read_write"):
         raise LocalResourceError("local commands require shell and private draft workspace",
                                  error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
@@ -402,17 +408,82 @@ def materialize_local_resources(body: bytes, *, materials_root: Path) -> None:
     assert_local_materials_unchanged(body, materials_root=materials_root)
 
 
-def describe_local_resources(*, profile, body: bytes | None) -> str:
-    """Render the current and historical Claude layout for exact request rebuilding.
+def stage_attempt_materials(*, request, host, profile, materials: Path, dependencies, set_stage) -> tuple[dict, bytes | None]:
+    """Write one Attempt's authorized inputs and optional frozen resources under materials.
 
-    v2's original description remains required for committed replay; it grants
-    no execution capability. Earlier bindings and Codex retain empty descriptions.
+    Shared by the Claude and Codex workspace adapters. set_stage reports the
+    current stage to the caller: authorized_input_read while the host reads an
+    input, otherwise material_preparation. A symlinked or conflicting material
+    raises AttemptWorkspaceConflictError whose message is the policy refusal
+    reason. Returns the written material hashes and the resource package body,
+    or None when the request carries no local resources.
+    """
+    from ..contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
+    from .invocation_workspace_preparation import AttemptWorkspaceConflictError
+    material_hashes, resources_body = {}, None
+    names = [item.logical_name for item in request.authorized_inputs]
+    if len(names) != len(set(names)):
+        raise ValueError("material names must be unique")
+    for item in request.authorized_inputs:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}", item.logical_name):
+            raise ValueError("logical_name is not a safe material filename")
+        target = materials / item.logical_name
+        if target.is_symlink():
+            raise AttemptWorkspaceConflictError("material file is a symlink")
+        set_stage("authorized_input_read")
+        body = host.read_authorized_input(item.local_handle)
+        set_stage("material_preparation")
+        if hashlib.sha256(body).hexdigest() != item.input_sha256:
+            raise ValueError("authorized input hash mismatch")
+        if item.schema_ref == LOCAL_RESOURCES_SCHEMA_REF:
+            if (resources_body is not None or item.schema_sha256 != LOCAL_RESOURCES_SCHEMA_SHA256
+                    or item.media_type != LOCAL_RESOURCES_MEDIA_TYPE or item.logical_name != LOCAL_RESOURCES_LOGICAL_NAME):
+                raise ValueError("Local resource control input has invalid metadata")
+            if request.self_test_binding_ref is None:
+                raise PermissionError("Local resources require a live Runtime self-test binding")
+            resource = validate_local_resources(profile=profile, body=body)
+            if tuple(resource["read_only_dependencies"]) != tuple(map(str, dependencies)):
+                raise SelfTestResourceUnavailableError("Adapter dependencies differ from the bound local resources")
+            resources_body = body
+            materialize_local_resources(body, materials_root=materials)
+            continue
+        if target.exists() and target.read_bytes() != body:
+            raise AttemptWorkspaceConflictError("existing material content differs")
+        if not target.exists():
+            target.write_bytes(body)
+        material_hashes[str(target)] = item.input_sha256
+    return material_hashes, resources_body
+
+
+def describe_local_resources(*, profile, body: bytes | None) -> str:
+    """Render the Claude or Codex workspace layout for exact request rebuilding.
+
+    Claude v2's original description remains required for committed replay; it
+    grants no execution capability. Codex workspace v3 states its one main
+    folder. Earlier bindings and Codex v4 retain empty descriptions. Only
+    relative paths appear, so the prompt hash does not vary per Attempt.
     Resource capture/admission and the Adapter still require the current revision.
     The private material_root/read_only_dependencies
     fields and base64 file bodies are not rendered. Exact command argv and
     logical cwd remain explicit task data, including any supplied program locator.
     """
     document = validate_local_resources(profile=profile, body=body)
+    if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind) == (
+            "codex_cli_agent_workspace_executor", "v3", "codex_cli"):
+        sections = ["## Runtime Input Resources", "The task input is available at ../materials/task_input.",
+                    "Your current working directory is the only location you may modify; write temporary files "
+                    "in its .tmp directory, which is TMPDIR. Every other location is read-only or inaccessible."]
+        if document is not None:
+            sections.append("Frozen source files are under ../materials/source. Only the listed copies are task "
+                            "materials; their contents are not inlined here.")
+            sections.append(json.dumps([{key: row[key] for key in ("relative_path", "sha256", "executable")}
+                                       for row in document["material_files"]], ensure_ascii=False, sort_keys=True))
+            if document["commands"]:
+                sections.append("Use the MCP tool sandbox_command_execute of the runtime_commands server with only "
+                                "command_id to execute a listed command. The logical cwd selects source or scratch "
+                                "(your working directory); command results are execution facts, not a business verdict.")
+                sections.append(json.dumps(document["commands"], ensure_ascii=False, sort_keys=True))
+        return "\n\n".join(sections)
     if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind) not in {
             ("claude_cli_adapter", "v2", "claude_cli"), ("claude_cli_adapter", "v3", "claude_cli")}:
         return ""
@@ -434,4 +505,4 @@ def describe_local_resources(*, profile, body: bytes | None) -> str:
 __all__ = ["LOCAL_RESOURCES_SCHEMA_REF", "LOCAL_RESOURCES_SCHEMA_SHA256", "LOCAL_RESOURCES_MEDIA_TYPE",
            "LOCAL_RESOURCES_LOGICAL_NAME", "capture_local_resources", "parse_local_resources",
            "validate_local_resources", "materialize_local_resources", "assert_local_materials_unchanged",
-           "describe_local_resources", "LocalResourceError"]
+           "describe_local_resources", "stage_attempt_materials", "LocalResourceError"]

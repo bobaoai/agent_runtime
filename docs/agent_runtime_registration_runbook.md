@@ -240,7 +240,7 @@ DSN 只从所给环境变量读取，不进入输入、结果或 Provider 环境
 已完成并通过注册输出 schema 的执行退出 0（包括有效 non_pass），技术失败退出 1，
 用法错误退出 2，中断退出 130。所属语义 validator 仍由宿主调用，不能将 schema 通过当作审核通过。
 
-无工具普通Module也可以通过同一命令选择Codex：
+普通Module与Reviewer也可以通过同一命令选择Codex：
 
 ```sh
 agent-runtime-test-run --root /path/to/workspace --workflow summarize_note \
@@ -248,8 +248,11 @@ agent-runtime-test-run --root /path/to/workspace --workflow summarize_note \
   --cli-path /path/to/codex
 ```
 
-Codex要求显式模型与effort，只接纳tool_free、inline、空工具、workspace none和network denied。
-要求工具的Module不会被自动降为无工具。省略的transport依次取参数文件与原Claude默认；模型名不决定transport。
+Codex要求显式模型与effort。tool_free Module使用codex_cli_agent_executor@v4；Reviewer默认环境
+（agent、工具含shell、私有草稿、network denied、inline）使用codex_cli_agent_workspace_executor@v3，
+私有草稿是每个Attempt唯一可修改的主文件夹，读取范围与在册缺口见
+[Codex workspace 执行](agent_runtime_claude_native_tools.md#4-codex-workspace-执行reviewer-默认环境)。
+只有read或search而无shell的组合在准备时报告不支持；要求工具的Module不会被自动降为无工具。省略的transport依次取参数文件与原Claude默认；模型名不决定transport。
 命令使用宿主标准CODEX_HOME/auth.json，未设置CODEX_HOME时使用用户标准.codex/auth.json。
 当前Codex认证方式是file-based；缺文件就返回环境错误，不登录或寻找其他账号。
 Runtime为每次调用准备独立Provider state，不载入宿主Skills/Plugins/会话；实际启动受本次活资源
@@ -272,7 +275,7 @@ agent-runtime-test-run --root /path/to/workspace --workflow registered_workflow 
 和同版本 `--help`。调用者提供源工具生成的冻结清单，不把整个宿主 root 隐含交给模型。
 材料复制保持相对目录结构，实际完整 prompt 在保存 envelope 前形成。
 
-当前该资源组合使用 macOS 的 Claude v3。明确 commands 或任务 callback 时需安装当前包的
+当前该资源组合使用 macOS 的 Claude v3 或 Codex workspace v3。明确 commands 或任务 callback 时需安装当前包的
 `cli_tools` 可选依赖；没有这两类工具时不加载它。Runtime 的本地 MCP 命令工具取得真实进程退出码与原始输出，普通
 Read/Grep/Bash 仍可使用，未被限制成该命令清单。是否已完成全部必做命令由任务 owner 校验。
 统一日志按真实返回 ID 关联父进程和 CLI 观察；没有配对证据就明确不完整，不能凭命令名猜测。

@@ -6,6 +6,29 @@ historical implementations, not the current executable adapter support matrix.
 
 ## Unreleased
 
+### Codex workspace v3 for the Reviewer default environment
+
+- A Module with the Reviewer default environment (agent, tools including
+  shell, a private draft, denied tool network, inline input) can run on
+  `codex_cli`: preparation binds `codex_cli_agent_workspace_executor@v3`, while
+  tool-free Modules keep `codex_cli_agent_executor@v4` byte for byte. The v2
+  workspace candidate stays readable and is refused by binding. A tool policy
+  with read or search but no shell is reported as `ADAPTER_CAPABILITY_UNSUPPORTED`.
+- Each Attempt has one main folder, its private scratch: the cwd, the only
+  writable location and the home of `TMPDIR`. A Codex permission profile
+  generated per call denies user trees, external volumes, `/tmp`, the host
+  temporary root, the Provider private state, the credential directory and the
+  rest of the workspace root, and grants materials, read-only dependencies,
+  Runtime Python and the Codex program files for reading. Traces record
+  `main_folder`, `codex_permission_profile` and
+  `isolation_gaps: ["system_directories_readable"]`.
+- Read grants that would reopen a denied or credential location, and declared
+  commands that could read a protected location through the command sandbox,
+  are refused with PermissionError before the Provider starts.
+- Frozen resources and declared commands work on the Codex path through the
+  existing command session; Inspection pairs Codex MCP results with the
+  Runtime command records. Material staging is shared with the Claude adapter.
+
 ### Test Run entry and execution parameter layers
 
 - The installed command is now `agent-runtime-test-run` and the Python entry

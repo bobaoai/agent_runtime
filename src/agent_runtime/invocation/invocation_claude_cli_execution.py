@@ -35,9 +35,7 @@ from .invocation_schema_projection import NativeOutputSchemaProjectionError, cla
 from .invocation_tool_definition import ModuleArtifactHost, runtime_package_version
 from .invocation_provider_tool_execution import ProviderToolSessionBridge
 from .invocation_local_resource_preparation import (
-    LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256, LOCAL_RESOURCES_MEDIA_TYPE,
-    LOCAL_RESOURCES_LOGICAL_NAME, parse_local_resources, materialize_local_resources,
-    assert_local_materials_unchanged, validate_local_resources, LocalResourceError,
+    parse_local_resources, assert_local_materials_unchanged, LocalResourceError, stage_attempt_materials,
 )
 from .invocation_local_command_execution import LocalCommandSession, LOCAL_COMMAND_CLI_TOOL_NAME
 from .invocation_workspace_preparation import (
@@ -427,39 +425,16 @@ class ClaudeAdapter:
                 cli_temporary = Path(temporary).resolve()
                 material_hashes = {}
                 stage = "material_preparation"
-                names = [item.logical_name for item in request.authorized_inputs]
-                if len(names) != len(set(names)):
-                    raise ValueError("material names must be unique")
-                for item in request.authorized_inputs:
-                    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}", item.logical_name):
-                        raise ValueError("logical_name is not a safe material filename")
-                    target = materials / item.logical_name
-                    if target.is_symlink():
-                        policy_refusal = "material file is a symlink"
-                        raise AttemptWorkspaceConflictError(policy_refusal)
-                    stage = "authorized_input_read"
-                    body = host.read_authorized_input(item.local_handle)
-                    stage = "material_preparation"
-                    if hashlib.sha256(body).hexdigest() != item.input_sha256:
-                        raise ValueError("authorized input hash mismatch")
-                    if item.schema_ref == LOCAL_RESOURCES_SCHEMA_REF:
-                        if (resources_body is not None or item.schema_sha256 != LOCAL_RESOURCES_SCHEMA_SHA256
-                                or item.media_type != LOCAL_RESOURCES_MEDIA_TYPE or item.logical_name != LOCAL_RESOURCES_LOGICAL_NAME):
-                            raise ValueError("Local resource control input has invalid metadata")
-                        if request.self_test_binding_ref is None:
-                            raise PermissionError("Local resources require a live Runtime self-test binding")
-                        resource = validate_local_resources(profile=profile, body=body)
-                        if tuple(resource["read_only_dependencies"]) != tuple(map(str, self._dependencies)):
-                            raise SelfTestResourceUnavailableError("Adapter dependencies differ from the bound local resources")
-                        resources_body = body
-                        materialize_local_resources(body, materials_root=materials)
-                        continue
-                    if target.exists() and target.read_bytes() != body:
-                        policy_refusal = "existing material content differs"
-                        raise AttemptWorkspaceConflictError(policy_refusal)
-                    if not target.exists():
-                        target.write_bytes(body)
-                    material_hashes[str(target)] = item.input_sha256
+                def set_stage(value):
+                    nonlocal stage
+                    stage = value
+                try:
+                    material_hashes, resources_body = stage_attempt_materials(
+                        request=request, host=host, profile=profile, materials=materials,
+                        dependencies=self._dependencies, set_stage=set_stage)
+                except AttemptWorkspaceConflictError as exc:
+                    policy_refusal = str(exc)
+                    raise
                 python = _runtime_python_executable() if "shell" in profile.tool_policy else None
                 python_roots = _runtime_python_read_roots() if python is not None else ()
                 read_dependencies = tuple(dict.fromkeys((*python_roots, *self._dependencies)))

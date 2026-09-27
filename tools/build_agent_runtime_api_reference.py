@@ -50,7 +50,7 @@ API_SOURCES = {
     "src/agent_runtime/foundation/foundation_environment_setup.py": ("setup_runtime", "load_runtime_config"),
     "src/agent_runtime/inspection/inspection_execution_logging.py": ("read_execution_log", "parse_cli_log"),
     "src/agent_runtime/invocation/invocation_claude_cli_execution.py": ("ClaudeAdapter",),
-    "src/agent_runtime/invocation/invocation_codex_module_invocation.py": ("CodexCliModuleExecutor", "CodexCliInvocationResult", "build_command"),
+    "src/agent_runtime/invocation/invocation_codex_module_invocation.py": ("CodexCliModuleExecutor", "CodexCliAgentWorkspaceModuleExecutor", "CodexCliInvocationResult", "build_command"),
     "src/agent_runtime/inspection/inspection_postgres_querying.py": ("PostgresWorkflowInspectionRepository",),
 }
 ERROR_CONSTANTS = (
@@ -120,6 +120,7 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
         "PostgresWorkflowInspectionRepository": "agent_runtime.inspection",
         "ClaudeAdapter": "agent_runtime.invocation.invocation_claude_cli_execution",
         "CodexCliModuleExecutor": "agent_runtime.invocation.invocation_codex_module_invocation",
+        "CodexCliAgentWorkspaceModuleExecutor": "agent_runtime.invocation.invocation_codex_module_invocation",
         "CodexCliInvocationResult": "agent_runtime.invocation.invocation_codex_module_invocation",
         "build_command": "agent_runtime.invocation.invocation_codex_module_invocation",
         "run_agent_example": "agent_runtime.testing.conformance_agent_execution",
