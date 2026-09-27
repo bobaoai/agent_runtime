@@ -98,7 +98,8 @@ print(package.joinpath("docs/agent_runtime_registration_runbook.md"))
 print(package.joinpath("docs/agent_runtime_reviewer_api.md"))
 ```
 
-日常操作读 runbook §0.1 和 API reference 中的 CLI commands；底层兼容示例不需要逐个执行。
+日常新注册读 runbook §0.1 和 API reference 中的 CLI commands；已有 Reviewer 因新执行编码需要升级时，
+转到同一安装版本 runbook 的“升级已有 Reviewer”（anchor `upgrade-existing-reviewer`）。底层兼容示例不需要逐个执行。
 默认参数、退出码与错误处理查同版本 help 和自动接口说明，不另维护一套配置表。
 CLI、文档或构建身份不匹配时返回安装维护者，不回落到 sibling checkout。setup 的具体效果查自动手册
 中的 setup_runtime；本地 Skill 冲突按原错误交其 owner 处理，不手工覆盖。向共享目录写入新格式前，

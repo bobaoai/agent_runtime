@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0.dev9
+
+- Add one consumer upgrade procedure for existing Reviewers, with installation, new definition registration, exact readback and Test Run verification.
+- Route README and packaged operator Skills to that procedure; fix the local registration link that led to the PostgreSQL-specific section.
+- Clarify package, requirements encoding and definition version names; execution behavior is unchanged from 0.2.0.dev8.
+
 ## 0.2.0.dev8
 
 - Add four-layer `run_timeout_seconds` and `--run-timeout-seconds` for synchronous Test Run and packaged examples.

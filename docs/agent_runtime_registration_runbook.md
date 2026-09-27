@@ -41,8 +41,9 @@ CLI 查询仍只读注册定义，但首次调用可能补齐环境；普通 eva
 | 当前已有的东西 | 下一步 |
 | --- | --- |
 | 只有“我需要一个新的 Reviewer”的想法 | 由该审核对象的负责人完成 Reviewer 定义与审核；注册工具不会替你编写职责、prompt 或 schema |
-| 已批准的准确 Reviewer source，尚未注册 | [准备](#prepare-reviewer)，然后[注册固定定义](#register-reviewer) |
-| 已有准确 Module release，想运行一份新材料 | 直接进入[首次或再次测试](#test-reviewer)，不重新编译或注册 |
+| 已批准的准确 Reviewer source，尚未注册 | [通过本地 CLI 注册并回读](#prepare-reviewer) |
+| 已有当前 Runtime 可执行的准确 Module release，想运行一份新材料 | 直接进入[首次或再次测试](#test-reviewer)，不重新编译或注册 |
+| 已升级 Runtime，旧 Reviewer 定义需要采用新编码 | [升级已有 Reviewer](#upgrade-existing-reviewer)，完成一次新版本注册与验证 |
 | 已有 execution ID，想看结果或排错 | 进入[查询](#inspect-reviewer)，不再次调用模型 |
 
 参数含义以 [ModuleReviewer](agent_runtime_reviewer_api.md#modulereviewer) 及其公开方法说明为准。
@@ -225,9 +226,8 @@ agent-runtime-test-run --root /path/to/host --workflow example_reviewer \
 同一同步调用的准备、受管理同进程子调用及实际重试共享期限，子请求不能延长父剩余时间；清理
 可能在工作期限之后完成。结果的 execution_budget 记录请求、有效预算与观测耗时。
 
-若已有 Module 仍保存固定 timeout 的旧编码，用现有 register-reviewer 从同一已审 source 编译
-并注册一个新版本，准确回读后选择它。当前新编码为 module_execution_requirements_v2。
-普通运行不注册，旧ref/hash和历史结果不改写；预算变化不要求再次更换 Module 定义。
+已有 Module 仍保存固定 timeout 的旧编码时，先按[升级已有 Reviewer](#upgrade-existing-reviewer)
+完成一次定义采用；之后回到本节运行新材料。
 
 命令用临时资源执行已有单节点 Workflow，stdout 返回结果及内存执行事实，标注
 persistence=not_requested；不会写 PG、注册定义或持久请求回执。CLI 前置 setup 可能补齐环境文件。
@@ -423,6 +423,90 @@ package version。Adapter revision 表示参数转换与能力合同；本次结
 本轮注册、模型执行、输出校验、持久回读要分别有证据。注册成功不等于实际测试成功；测试环境缺件
 也不等于 Reviewer 对文稿给出 blocked。具体失败保留原生错误和所属负责人：源或 schema 问题找
 source owner，Profile/Adapter/入口不相容找宿主集成维护者，Registry/Ledger 不可用找存储维护者。
+
+<a id="upgrade-existing-reviewer"></a>
+
+### 0.5 升级已有 Reviewer / Upgrade an existing reviewer
+
+本节面向已经有 Reviewer、现在需要升级 Runtime 的宿主维护者。完成后，指定 root 能用当前安装包
+执行从已审 source 登记的新定义，并能在每次调用时选择运行时限。操作方法由本 Runbook 维护；
+宿主文档和操作 Skill 引用此入口。
+
+安装包与采用定义是两件事。普通 setup 只更新 Runtime 自身的环境文件和操作 Skill，保留既有
+Module/Workflow。旧定义若仍把 timeout 固定在执行要求中，新执行会要求
+`module_execution_requirements_v2`；从同一已审 source 重新注册一个新定义版本即可采用当前编码。
+已经符合当前要求的定义直接复用；一次包升级并不必然要求全部 Reviewer 重新注册。
+
+这里有三个不同的版本：安装包版本标识软件构建；`module_execution_requirements_v2` 是 Runtime
+生成的定义内部编码；CLI 的 `--version` 是采用方为 Module/Workflow 选定的定义版本名。后者不要求
+字面上叫 `v2`。注册 source 自身仍遵循当前 `runtime_module_registration_v4` 协议，操作者不通过
+改旧 JSON 的版本字符串完成升级。
+
+**准备本次操作。** 使用宿主已经选定的 Python 环境，确保 `python`、`agent-runtime-registry` 和
+`agent-runtime-test-run` 都来自该环境。取得已批准的 Runtime 安装包、目标 root、同一份已审
+Reviewer source、准确的 Skill/Module ID、一个获准且未使用的新定义版本名，以及符合其输入 schema
+的测试材料和已授权模型环境。source 若仍是旧协议，交 source owner 先完成迁移。下面所有路径和 ID
+均替换为这些实际值；示例采用与 Module 同名的单节点 Workflow。
+
+**安装已批准的软件包。** 例如已取得 wheel 时：
+
+```sh
+python -m pip install --upgrade /absolute/path/to/agent_runtime_core-0.2.0.dev9-py3-none-any.whl
+python -c 'import agent_runtime; from importlib.metadata import version; print(version("agent-runtime-core")); print(agent_runtime.__file__)'
+agent-runtime-registry register-reviewer --help
+agent-runtime-test-run --help
+```
+
+wheel 文件名中的版本换为本次批准的构建；使用既有固定 tag/commit 安装方式的宿主继续该方式。
+核对实际导入位置、版本和 CLI 能力，不能仅凭版本字符串相同认定安装相同。共享 catalog 的读取者
+先按[客户端兼容与升级顺序](#prepare-reviewer)统一到可读该编码的版本，再写新定义。
+
+**登记新定义并准确回读。** 以下公共 CLI 路径写入指定 root 的本地 `.runtime`：
+
+```sh
+review_root="/absolute/path/to/consumer"
+review_source="/absolute/path/to/approved-source"
+review_skill="approved-skill"
+review_module="approved_reviewer"
+review_version="runtime_budget_adoption"
+review_input="/absolute/path/to/prepared_input.json"
+
+agent-runtime-registry register-reviewer --root "$review_root" --source-root "$review_source" \
+  --skill-id "$review_skill" --module-id "$review_module" --version "$review_version"
+agent-runtime-registry load --root "$review_root" --kind module \
+  --id "$review_module" --version "$review_version"
+agent-runtime-registry load --root "$review_root" --kind workflow \
+  --id "$review_module" --version "$review_version"
+```
+
+注册结果应为 `readback=verified`；两次 load 的身份、版本、hash 应与本次注册返回值一致，Workflow
+应引用这份准确 Module。Runtime 在编译时产生新编码。重复旧定义版本会回读旧内容，不会应用新默认；
+若新 ref 已存在且内容冲突，回到发布负责人核对版本与 source，不覆盖旧记录或临时换名绕过冲突。
+已有显式 Workflow 名称或图装配要求的宿主继续使用其批准的图，并回读它实际引用的新 Module。
+
+**用准确版本验证运行。** 在已授权的模型/CLI 环境中，通过同一入口运行准备好的材料：
+
+```sh
+agent-runtime-test-run --root "$review_root" --workflow "$review_module" \
+  --version "$review_version" --input "$review_input" --run-timeout-seconds 3600
+```
+
+transport、model、effort 继续按四层参数取值，必要时在本次命令明确提供；注册本身不选择模型。
+检查运行记录的 `module_release_ref`、`workflow_release_ref` 与回读值一致，实际 Runtime 版本正确，
+执行达到 `completed`，且 `execution_budget.requested_timeout_seconds` 为 3600、对应来源为 `call`。
+随后由该 Reviewer 的所属 validator 核验结果与输入绑定。材料的 `passed`、`non_pass` 或 `blocked`
+是内容结论，不替代执行事实。缺少 CLI/登录、执行失败或校验失败时，保留原始结果，报告尚未验证的
+环节及实际错误，不把注册成功当作运行成功。
+
+**恢复日常使用。** 宿主若显式固定版本或 ref/hash，采用本次回读的准确 Workflow；使用本地最新定义
+选择时，由 Runtime 的注册顺序解析，不写另一份 active 指针。此后修改一次时限直接传
+`--run-timeout-seconds`，长期默认值使用现有参数文件，不再为 1200、3600 等时长重复注册。
+旧定义、旧 ref/hash 和历史结果保持原样。
+
+定义来源若是 PostgreSQL，上述本地注册不会改变 PG，也不会让固定旧 PG ref 的调用自动切换。
+由该 Registry 的发布负责人通过[已授权 PG 注册](#register-reviewer)及既有 Workflow 发布入口登记
+新定义，回读新的准确 ref/hash；调用者随后按[PG Test Run](#test-reviewer)验证这组引用。本地 CLI
+验证成功不能代替 PG 定义采用，升级软件也不授予生产数据库写入权限。
 
 ## 1. 开始前确认
 

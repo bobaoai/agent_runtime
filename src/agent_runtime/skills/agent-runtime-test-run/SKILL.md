@@ -55,8 +55,9 @@ denied 组合。Codex 不会把有工具 Module 降为无工具；完整相容�
 
 - 调用者明确的 root、普通路径的已注册单节点 Workflow ID 或样例路径的固定 example 名称，
   以及本次模型调用和材料使用的授权；样例还需要在该 root 注册其固定定义的授权。
-  新执行使用当前编码的 Module 要求。旧定义被拒绝时，通过 registration Skill 从已审 source
-  登记新版本并回读，随后使用准确新版本；不手改旧 JSON，也不为每个时间值另注册 Reviewer。
+  新执行使用当前编码的 Module 要求。旧 Reviewer 定义被拒绝时，按 §6.1 定位同版本 registration runbook
+  的“升级已有 Reviewer”（anchor `upgrade-existing-reviewer`），再交给 registration Skill；本 Skill 只在准确
+  新版本可读取后测试，不手改旧 JSON，也不为每个时间值另注册 Reviewer。
 - 普通路径二选一给出定义：本地定义用 Workflow ID，可选准确版本，未指定时由 Runtime 加载最新已注册
   定义；PG 定义用准确 `workflow_release_ref` 与 `workflow_release_sha256`，外加存放 DSN 的环境变量名和
   release schema。DSN 本身只放在该环境变量里，不写进命令、输入、证据文件或 Skill；变量名不能与
