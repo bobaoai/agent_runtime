@@ -142,7 +142,7 @@ def _module_export():
         semantic_input_delivery_mode="inline", attempt_workspace_policy="none",
         tool_policy=(), gateway_access_reasons=(), network_policy="denied",
         output_constraint_mode="native_structured_output",
-        timeout_seconds=900, max_attempts=3,
+        max_attempts=3,
     )
     return Module(source, execution_requirements=requirements,
                   entry_policy=ModuleEntryPolicy.WORKFLOW_BOUND).export(module_version="v1")

@@ -55,6 +55,8 @@ denied 组合。Codex 不会把有工具 Module 降为无工具；完整相容�
 
 - 调用者明确的 root、普通路径的已注册单节点 Workflow ID 或样例路径的固定 example 名称，
   以及本次模型调用和材料使用的授权；样例还需要在该 root 注册其固定定义的授权。
+  新执行使用当前编码的 Module 要求。旧定义被拒绝时，通过 registration Skill 从已审 source
+  登记新版本并回读，随后使用准确新版本；不手改旧 JSON，也不为每个时间值另注册 Reviewer。
 - 普通路径二选一给出定义：本地定义用 Workflow ID，可选准确版本，未指定时由 Runtime 加载最新已注册
   定义；PG 定义用准确 `workflow_release_ref` 与 `workflow_release_sha256`，外加存放 DSN 的环境变量名和
   release schema。DSN 本身只放在该环境变量里，不写进命令、输入、证据文件或 Skill；变量名不能与
@@ -62,11 +64,12 @@ denied 组合。Codex 不会把有工具 Module 降为无工具；完整相容�
 - 需要确认运行的是指定 Module 时，加 `--expected-module-id`；不一致时在读取材料和调用模型前停止。
 - 普通路径使用对象所属工具或 owner 按已注册 Module input schema 准备的 JSON 输入，以及适用的输出语义
   validator 或判断依据。未提供材料时先补齐，不从整个 Workspace 搜集输入。
-- 宿主已安装且可用的 Provider CLI，以及当前入口所需的登录条件。transport、model、effort 逐项取本次
+- 宿主已安装且可用的 Provider CLI，以及当前入口所需的登录条件。transport、model、effort 和同步运行时限逐项取本次
   参数、`root/.runtime/execution_parameters/workflows/<workflow_id>.json`、
   `root/.runtime/execution_parameters/workspace.json`，最后是 Runtime 默认。参数文件是 JSON 对象：
-  `schema_version` 为 `runtime_execution_parameters_v1`，另可含 `transport_kind`、`model_id`、
-  `reasoning_profile`，不含其他键，也不选择定义版本；格式说明见随包 `agent_runtime/README.md` 的执行
+  `runtime_execution_parameters_v1` 保留 `transport_kind`、`model_id`、`reasoning_profile` 三字段；
+  `runtime_execution_parameters_v2` 另外允许 `run_timeout_seconds`，其值为整数秒。未知键或非法值
+  均拒绝，文件不选择定义版本；格式说明见随包 `agent_runtime/README.md` 的执行
   参数段。文件无效时准备失败，不跳到下一层。model 或 effort 可以来自任一层，但该层及其以下各层得到的
   transport 必须等于最终 transport，否则 Runtime 拒绝；Codex 没有默认模型和 effort，不会从 Claude 默认
   补齐。不能从模型名或环境名推断 Provider。模型默认值和支持语法由 Runtime 与同版本 CLI 说明，不在
@@ -85,7 +88,8 @@ setup、注册定义和参数文件，不向模型开放整个项目，也不授
 
 保留 CLI 原始结果，报告实际 Module、Workflow 版本与 hash、本次模型和 effort 及
 `execution_parameter_sources` 中每项的来源层与参数文件 hash、执行状态、输出或 failure detail，以及
-实际可取得的用量。使用返回的 `execution_log` 查看每个 Attempt 已采集的
+实际可取得的用量。结果中的 `execution_budget` 区分请求时限、有效时限、耗时和父级限制；
+子调用请求一小时不代表实际获得一小时。旧记录缺失的预算信息不补造。使用返回的 `execution_log` 查看每个 Attempt 已采集的
 原始流、工具记录和完整性说明；未知或缺失的记录如实保留，不能由 Agent 补写执行日志。
 这个详细视图由 Test Run 显式调用 Inspection 取得。普通模型运行负责 metadata、最终 result 与原文
 归档，工具日志的解析缺口不改变其已记录终态；行为或证据是否合格按本次明确的评价要求判断。
@@ -112,6 +116,7 @@ Reviewer 返回有效 `non_pass` 是材料需要修改的结论，不是技术�
 | 本次资源由请求限定 | 把 root 当模型可读项目全集，或从业务配置搜 PG 凭据 |
 | DSN 只交给定义读取 | 把 DSN 写进命令行、输入、证据文件，或放进 Provider 会转交的环境变量 |
 | 执行参数与定义版本分开 | 在参数文件里写版本或定义目标，或手改注册文件来换模型 |
+| 同步预算包含受管理子调用与实际重试 | 为每次重试重置完整时限，或让子调用超过父级剩余期限 |
 | Runtime 负责执行配置 | 操作者叠加未声明 CLI 开关、拼 Provider 启动器或使用虚构的生产授权 |
 | 执行与语义结论分开 | 用退出成功代替材料通过，或反复重跑直到得到 passed |
 | 临时测试与持久恢复分开 | 把保存的 stdout 叫 Ledger，或声称可用此次 ID 跨进程重放 |
@@ -178,6 +183,12 @@ agent-runtime-test-run --root /path/to/host --workflow registered_workflow_id \
 
 `selected_model` 和 `selected_effort` 换成本次明确的真实值，不写入 source 或另存环境 Profile。
 长期固定的项目或 Workflow 选择写进上述参数文件，由 Runtime 取值并在结果中记录来源。
+
+需要临时延长一次运行时，在同一个命令增加 `--run-timeout-seconds 3600`。省略时按四层配置
+解析，Runtime 默认 1200 秒；合法范围和参数类型以同版本 CLI 为准。该参数不会写回长期配置。
+它约束本次同步工作及受管理的同进程子调用和实际重试；子调用不能延长父级期限。超时后的清理
+可能使返回略晚于工作期限，不能据此声称整个函数精确在秒数内返回。普通 Shell 子进程、跨进程
+Runtime 和跨调用 durable Workflow 寿命不自动继承这一保证。
 
 定义保存在 PG 时，只读取准确定义，root 仍用于 setup、资源配置和参数文件：
 

@@ -62,6 +62,7 @@ def test_register_load_latest_explicit_version_and_no_active(tmp_path):
     assert loaded.registry.get_execution_profile(env.profile.release_ref, env.profile.release_sha256) == env.profile
 
 
+@pytest.mark.fake_run
 def test_actual_local_execution_uses_saved_workflow_and_binding(tmp_path):
     env, first, second = _versions(tmp_path / "source")
     root = tmp_path / "host"
@@ -126,6 +127,7 @@ def test_file_failure_is_reported_after_registration_without_new_version(tmp_pat
     assert env.registry.get_workflow(env.kwargs["workflow"].release_ref, env.kwargs["workflow"].release_sha256)
 
 
+@pytest.mark.fake_run
 def test_cli_cold_register_and_load(tmp_path):
     env, first, second = _versions(tmp_path / "source")
     env.registry.register_bundle(second)

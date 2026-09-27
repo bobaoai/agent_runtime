@@ -24,7 +24,7 @@ from ..registry.registry_workflow_authoring import Workflow, WorkflowExport
 
 
 EXAMPLE_NAMES = ("agent_capability_example", "agent_evaluation_example")
-_VERSION = "v1"
+_VERSION = "v2"
 _OWNER = """# Runtime Agent capability examples
 
 Use only the provided test input, explicit fixture tools and private workspace.
@@ -67,7 +67,7 @@ def _module(name, instruction, input_schema, output_schema, *, tools=(), draft=F
         semantic_input_delivery_mode="inline",
         attempt_workspace_policy="own_draft_read_write" if draft else "none",
         tool_policy=tuple(tools), gateway_access_reasons=(), network_policy="denied",
-        output_constraint_mode="native_structured_output", timeout_seconds=300,
+        output_constraint_mode="native_structured_output",
         max_attempts=1,
     )
     return Module(source, execution_requirements=requirements,
@@ -113,7 +113,7 @@ def _workflow(name, modules, edges, *, parallel_groups=()):
         parallel_groups=parallel_groups,
         authorization_manifest_ref=f"authorization-manifest:{name}@v1",
         authorization_manifest_document={"required_operation_ids": ["model_execute"]},
-        execution_binding_ref=f"execution-binding:{name}@v1",
+        execution_binding_ref=f"execution-binding:{name}@{_VERSION}",
         execution_binding_document={"schema_version": "workflow_execution_binding_v1",
                                     "workflow_id": name, "variant_policy_family": "execution_variant_policy"},
     )

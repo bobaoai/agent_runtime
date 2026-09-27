@@ -1,4 +1,4 @@
-"""Resolve transport, model and effort from four layers before Profile preparation.
+"""Resolve model selection and synchronous run budget from four layers before Profile preparation.
 
 Layer 4 is this call's explicit arguments, layer 3 the Workflow parameter file,
 layer 2 the workspace parameter file and layer 1 the Runtime default applied by
@@ -11,7 +11,8 @@ folders so registration loading never reads them as versions.
     root/.runtime/execution_parameters/workflows/<workflow_id>.json
 
 File format: ``{"schema_version": "runtime_execution_parameters_v1",
-"transport_kind": ..., "model_id": ..., "reasoning_profile": ...}`` with every
+"transport_kind": ..., "model_id": ..., "reasoning_profile": ...}``. The v2 format
+additionally accepts integer run_timeout_seconds; v1 keeps its original fields. Each
 parameter optional. A missing file means that layer wrote nothing. A present
 file that is not a regular file, is not valid JSON, has another schema version,
 unknown keys (including version or definition-target keys) or empty values
@@ -29,8 +30,23 @@ import stat
 from ..foundation.foundation_contract_validation import validate_snake_case_name
 
 
-PARAMETER_NAMES = ("transport_kind", "model_id", "reasoning_profile")
-PARAMETER_FILE_FORMAT = "runtime_execution_parameters_v1"
+LEGACY_PARAMETER_FILE_FORMAT = "runtime_execution_parameters_v1"
+PARAMETER_FILE_FORMAT = "runtime_execution_parameters_v2"
+DEFAULT_RUN_TIMEOUT_SECONDS = 1200
+# One owner for the supported parameter set and its accepted Python/JSON types.
+PARAMETER_TYPES = {"transport_kind": str, "model_id": str, "reasoning_profile": str,
+                   "run_timeout_seconds": int}
+PARAMETER_NAMES = tuple(PARAMETER_TYPES)
+
+
+def _validate_parameter(name, value):
+    expected = PARAMETER_TYPES[name]
+    if type(value) is not expected:
+        raise ValueError(f"Execution parameter {name} must be {expected.__name__}")
+    if expected is str and not value.strip():
+        raise ValueError(f"Execution parameter {name} must be a non-empty string")
+    if name == "run_timeout_seconds" and not 1 <= value <= 86400:
+        raise ValueError("run_timeout_seconds must be between 1 and 86400")
 SOURCE_CALL = "call"
 SOURCE_WORKFLOW_FILE = "workflow_file"
 SOURCE_WORKSPACE_FILE = "workspace_file"
@@ -59,6 +75,7 @@ class ResolvedExecutionParameters:
     model_id: str | None
     reasoning_profile: str | None
     sources: tuple[tuple[str, ExecutionParameterSource], ...]
+    run_timeout_seconds: int = DEFAULT_RUN_TIMEOUT_SECONDS
 
     def source(self, name: str) -> ExecutionParameterSource:
         return dict(self.sources)[name]
@@ -94,9 +111,12 @@ def _read_parameter_file(root: Path, parts: tuple[str, ...]) -> tuple[dict, str,
         document = json.loads(body, object_pairs_hook=_unique_object)
     except ValueError as exc:
         raise ValueError(f"Execution parameter file is not valid JSON: {path}: {exc}") from exc
-    if type(document) is not dict or document.get("schema_version") != PARAMETER_FILE_FORMAT:
+    if type(document) is not dict or document.get("schema_version") not in {PARAMETER_FILE_FORMAT, LEGACY_PARAMETER_FILE_FORMAT}:
         raise ValueError(f"Execution parameter file requires schema_version {PARAMETER_FILE_FORMAT}: {path}")
-    unknown = sorted(set(document) - {"schema_version", *PARAMETER_NAMES})
+    allowed = set(PARAMETER_NAMES)
+    if document["schema_version"] == LEGACY_PARAMETER_FILE_FORMAT:
+        allowed.remove("run_timeout_seconds")
+    unknown = sorted(set(document) - {"schema_version", *allowed})
     if unknown:
         raise ValueError(
             f"Execution parameter file accepts only {', '.join(PARAMETER_NAMES)}; "
@@ -105,8 +125,7 @@ def _read_parameter_file(root: Path, parts: tuple[str, ...]) -> tuple[dict, str,
     for name in PARAMETER_NAMES:
         if name in document:
             value = document[name]
-            if type(value) is not str or not value.strip():
-                raise ValueError(f"Execution parameter {name} must be a non-empty string: {path}")
+            _validate_parameter(name, value)
             values[name] = value
     return values, "/".join(parts), hashlib.sha256(body).hexdigest()
 
@@ -114,6 +133,7 @@ def _read_parameter_file(root: Path, parts: tuple[str, ...]) -> tuple[dict, str,
 def resolve_execution_parameters(
     root: Path, workflow_subject_id: str, *, transport_kind: str | None = None,
     model_id: str | None = None, reasoning_profile: str | None = None,
+    run_timeout_seconds: int | None = None,
 ) -> ResolvedExecutionParameters:
     """Take each parameter from this call, the Workflow file, the workspace file or the default.
 
@@ -121,6 +141,8 @@ def resolve_execution_parameters(
         root: Host root; only the two parameter files below .runtime are read.
         workflow_subject_id: Workflow ID locating the layer-3 file. For a PG
             definition this is the loaded Workflow's own ID.
+        run_timeout_seconds: Total synchronous work budget, 1..86400 seconds;
+            None resolves lower layers and finally the 1200-second default.
         transport_kind, model_id, reasoning_profile: This call's explicit values;
             None means this call did not choose that parameter.
     Returns:
@@ -147,7 +169,11 @@ def resolve_execution_parameters(
         SOURCE_WORKFLOW_FILE: _read_parameter_file(root, (*_DIRECTORY, "workflows", workflow_subject_id + ".json")),
         SOURCE_WORKSPACE_FILE: _read_parameter_file(root, (*_DIRECTORY, "workspace.json")),
     }
-    explicit = {"transport_kind": transport_kind, "model_id": model_id, "reasoning_profile": reasoning_profile}
+    explicit = {"transport_kind": transport_kind, "model_id": model_id, "reasoning_profile": reasoning_profile,
+                "run_timeout_seconds": run_timeout_seconds}
+    for name, value in explicit.items():
+        if value is not None:
+            _validate_parameter(name, value)
 
     def written(layer: str, name: str):
         if layer == SOURCE_CALL:
@@ -170,7 +196,7 @@ def resolve_execution_parameters(
             value = None if layer == SOURCE_RUNTIME_DEFAULT else written(layer, name)
             if value is not None or layer == SOURCE_RUNTIME_DEFAULT:
                 loaded = files.get(layer)
-                values[name] = value
+                values[name] = DEFAULT_RUN_TIMEOUT_SECONDS if name == "run_timeout_seconds" and value is None else value
                 sources.append((name, ExecutionParameterSource(
                     layer, None if loaded is None else loaded[1], None if loaded is None else loaded[2])))
                 break
@@ -189,4 +215,4 @@ def resolve_execution_parameters(
                         for name in mixed)
             + "; write model_id and reasoning_profile in the same layer as transport_kind or above it")
     return ResolvedExecutionParameters(values["transport_kind"], values["model_id"],
-                                       values["reasoning_profile"], tuple(sources))
+                                       values["reasoning_profile"], tuple(sources), values["run_timeout_seconds"])

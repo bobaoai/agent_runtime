@@ -30,6 +30,9 @@ class ProviderToolSessionBridge:
         self._validate_factory()
         self._session = factory.open_session(request)
         try:
+            bind_parent = getattr(self._session, "bind_parent_run", None)
+            if bind_parent is not None:
+                bind_parent(host.parent_run_context(request))
             self._validate()
             from importlib.util import find_spec
             if find_spec("mcp") is None:

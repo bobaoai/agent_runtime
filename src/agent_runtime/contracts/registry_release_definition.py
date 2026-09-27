@@ -7,7 +7,7 @@ opaque; Runtime validates identity, hashes, dependency closure, and lifecycle.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from enum import StrEnum
 import hashlib
 import json
@@ -766,9 +766,8 @@ def _validate_execution_capabilities(
     gateway_access_reasons: tuple[str, ...],
     network_policy: str,
     output_constraint_mode: str,
-    timeout_seconds: int,
 ) -> None:
-    """Validate shared mode, tool, workspace, network and budget constraints."""
+    """Validate the capabilities shared by Module requirements and Profiles."""
 
     if execution_mode not in EXECUTION_MODES:
         raise ValueError("invalid Execution Profile execution_mode")
@@ -876,7 +875,6 @@ def _validate_execution_capabilities(
         raise ValueError(
             "draft workspace requires agent execution mode"
         )
-    validate_int("timeout_seconds", timeout_seconds, minimum=1, maximum=86_400)
 
 
 @dataclass(frozen=True)
@@ -964,8 +962,8 @@ class ExecutionProfileRelease:
             gateway_access_reasons=self.gateway_access_reasons,
             network_policy=self.network_policy,
             output_constraint_mode=self.output_constraint_mode,
-            timeout_seconds=self.timeout_seconds,
         )
+        validate_int("timeout_seconds", self.timeout_seconds, minimum=1, maximum=86_400)
         validate_sha256("release_sha256", self.release_sha256)
         if self.release_sha256 != _canonical_sha256(self._payload()):
             raise ValueError("Execution Profile release hash mismatch")
@@ -1018,9 +1016,9 @@ class ExecutionProfileRelease:
 class ModuleExecutionRequirements:
     """Frozen, provider-independent requirements embedded in an Agent Module.
 
-    No model, Adapter, transport or host paths belong here. An empty tool set
-    and no workspace are valid for a tool-free Module. max_attempts limits
-    existing attempt scheduling; it does not schedule retries.
+    New definitions freeze capabilities and retry count, not an invocation
+    timeout. Historical untagged definitions retain their exact timeout bytes.
+    max_attempts limits existing attempt scheduling; it does not schedule retries.
     """
 
     # Class naming metadata, not a payload field or independently registered ID.
@@ -1034,17 +1032,31 @@ class ModuleExecutionRequirements:
     gateway_access_reasons: tuple[str, ...]
     network_policy: str
     output_constraint_mode: str
-    timeout_seconds: int
     max_attempts: int
+    schema_version: str | None = "module_execution_requirements_v2"
+    timeout_seconds: int | None = None
+    _legacy_decoded: InitVar[bool] = False
 
     _profile_fields: ClassVar[tuple[str, ...]] = (
         "execution_mode", "semantic_input_delivery_mode",
         "attempt_workspace_policy", "tool_policy", "gateway_access_reasons",
-        "network_policy", "output_constraint_mode", "timeout_seconds",
+        "network_policy", "output_constraint_mode",
     )
     _fields: ClassVar[tuple[str, ...]] = (
-        "context_isolation", *_profile_fields, "max_attempts",
+        "schema_version", "context_isolation", *_profile_fields, "max_attempts",
     )
+    _legacy_fields: ClassVar[tuple[str, ...]] = (
+        "context_isolation", *_profile_fields, "timeout_seconds", "max_attempts",
+    )
+
+    def __post_init__(self, _legacy_decoded: bool) -> None:
+        if self.schema_version == "module_execution_requirements_v2":
+            if self.timeout_seconds is not None or _legacy_decoded:
+                raise ValueError("New Module requirements cannot fix timeout_seconds; select run_timeout_seconds per call")
+        elif self.schema_version is None and _legacy_decoded:
+            pass  # Only the exact historical decoder constructs an untagged value.
+        else:
+            raise ValueError("New Module requirements require schema_version module_execution_requirements_v2")
 
     def validate(self) -> None:
         """Validate complete requirements without selecting an executor."""
@@ -1059,28 +1071,42 @@ class ModuleExecutionRequirements:
         _validate_execution_capabilities(
             **{name: getattr(self, name) for name in self._profile_fields},
         )
+        if self.schema_version is None:
+            validate_int("timeout_seconds", self.timeout_seconds, minimum=1, maximum=86_400)
+        elif self.timeout_seconds is not None:
+            raise ValueError("New Module requirements cannot fix timeout_seconds")
 
     def as_dict(self) -> dict[str, Any]:
         """Return the complete JSON value included in the Module content hash."""
         self.validate()
+        fields = self._legacy_fields if self.schema_version is None else self._fields
         return {name: (list(value) if type(value) is tuple else value)
-                for name in self._fields for value in (getattr(self, name),)}
+                for name in fields for value in (getattr(self, name),)}
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ModuleExecutionRequirements":
         """Decode the exact shape without filling omissions or current defaults."""
-        if not isinstance(payload, Mapping) or set(payload) != set(cls._fields):
+        if not isinstance(payload, Mapping):
             raise ValueError("Module execution requirements have an invalid shape")
+        modern = "schema_version" in payload
+        expected = cls._fields if modern else cls._legacy_fields
+        if set(payload) != set(expected):
+            raise ValueError("Module execution requirements have an invalid shape")
+        if modern and payload["schema_version"] != "module_execution_requirements_v2":
+            raise ValueError("Module execution requirements have an unknown schema_version")
         for name in ("tool_policy", "gateway_access_reasons"):
             if type(payload[name]) is not list:
                 raise ValueError(f"{name} must be a JSON array")
-        result = cls(**{**payload, "tool_policy": tuple(payload["tool_policy"]),
-                        "gateway_access_reasons": tuple(payload["gateway_access_reasons"])})
+        values = {**payload, "tool_policy": tuple(payload["tool_policy"]),
+                  "gateway_access_reasons": tuple(payload["gateway_access_reasons"])}
+        if not modern:
+            values.update(schema_version=None, _legacy_decoded=True)
+        result = cls(**values)
         result.validate()
         return result
 
     def assert_profile(self, profile: ExecutionProfileRelease) -> None:
-        """Reject a Profile that changes any of the eight frozen capability fields.
+        """Reject changed capabilities; old definitions also retain exact timeout.
 
         Behavior context and Retry max_attempts are separate Policy dependencies;
         their consistency is checked at the compilation/Registry boundary.
@@ -1090,8 +1116,9 @@ class ModuleExecutionRequirements:
         if type(profile) is not ExecutionProfileRelease:
             raise ValueError("profile must be an ExecutionProfileRelease")
         profile.validate()
-        if any(getattr(profile, name) != getattr(self, name)
-               for name in self._profile_fields):
+        if (any(getattr(profile, name) != getattr(self, name)
+                for name in self._profile_fields)
+                or (self.schema_version is None and profile.timeout_seconds != self.timeout_seconds)):
             raise ValueError("Profile differs from Module execution requirements")
 
 
@@ -1322,15 +1349,15 @@ class ModuleRelease:
         previous = self.reviewer_defaults
         if previous is None:
             return None
-        result = ModuleExecutionRequirements(
+        result = ModuleExecutionRequirements.from_dict(dict(
             context_isolation=previous.context_isolation, execution_mode="agent",
             semantic_input_delivery_mode="inline",
             attempt_workspace_policy=previous.attempt_workspace_policy,
-            tool_policy=previous.tool_policy, gateway_access_reasons=(),
+            tool_policy=list(previous.tool_policy), gateway_access_reasons=[],
             network_policy=previous.network_policy,
             output_constraint_mode="native_structured_output",
             timeout_seconds=previous.timeout_seconds, max_attempts=previous.max_attempts,
-        )
+        ))
         result.validate()
         return result
 
@@ -1344,6 +1371,10 @@ class ModuleRelease:
     def build(cls, **fields: Any) -> "ModuleRelease":
         """Build a hash-complete immutable Module Release."""
 
+        requirements = fields.get("execution_requirements")
+        if (requirements is not None and type(requirements) is ModuleExecutionRequirements
+                and requirements.schema_version != "module_execution_requirements_v2"):
+            raise ValueError("New Module releases require module_execution_requirements_v2; historical requirements are read-only")
         provisional = cls(**fields, release_sha256="0" * 64)
         record = cls(**fields, release_sha256=_canonical_sha256(provisional._payload()))
         record.validate()

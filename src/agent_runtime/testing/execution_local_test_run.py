@@ -26,7 +26,7 @@ def build_parser(*, require_workflow=True, require_input=True):
                 "  Inspection: private detailed views on request; no execution-state changes.\n"
                 "  Test Run: execute, inspect and return facts for owner judgment.\n"
                 "  Task owner: input meaning and business acceptance; no host-side Adapter.\n"
-                "Execution parameters (--transport, --model, --effort) are taken per parameter from this call,\n"
+                "Execution parameters (--transport, --model, --effort, --run-timeout-seconds) are taken per parameter from this call,\n"
                 "  then root/.runtime/execution_parameters/workflows/<workflow_id>.json, then\n"
                 "  root/.runtime/execution_parameters/workspace.json, then the Runtime default.\n"
                 "  Parameter files never choose a definition version.\n"
@@ -46,6 +46,8 @@ def build_parser(*, require_workflow=True, require_input=True):
     parser.add_argument("--transport", help="This call's transport: claude_cli or codex_cli. Omit to use the parameter files or the claude_cli default.")
     parser.add_argument("--model", help="This call's concrete model ID. Omit to use the parameter files or the default; codex_cli has no default model.")
     parser.add_argument("--effort", help="This call's reasoning effort. Omit to use the parameter files or the default; codex_cli has no default effort.")
+    parser.add_argument("--run-timeout-seconds", type=int,
+        help="Total synchronous work budget (1..86400 seconds); four-layer default 1200. Managed children cannot extend the parent deadline.")
     parser.add_argument("--cli-path", type=Path, help="Installed executable; overrides root/.runtime/config.json provider_cli_paths, then PATH is used if unconfigured. Codex uses the host's standard file-based login.")
     parser.add_argument("--resources", type=Path, help="Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}]. Resource paths are relative to this file; command cwd is source/scratch-relative. python/python3 use current Runtime Python; other arguments are not interpolated. Empty dependencies clear additional host defaults, not the current Python runtime. No models, credentials or production grants here.")
     return parser

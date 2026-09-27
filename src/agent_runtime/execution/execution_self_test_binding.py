@@ -29,7 +29,7 @@ class ModuleSelfTestResources:
     def __init__(self, *, request, workflow, variant, registry, adapter,
                  artifact_host, ledger, workspace_root, workflow_resources=None,
                  tool_session_factory=None, tool_definitions=(), user_cancel_requested=None,
-                 resource_cancel_requested=None):
+                 resource_cancel_requested=None, run_budget=None):
         if type(request) is not WorkflowModuleExecutionRequest:
             raise ValueError("self-test requires a Workflow Module request")
         request.validate()
@@ -80,6 +80,7 @@ class ModuleSelfTestResources:
         self._parent = workflow_resources
         self._tool_factory = tool_session_factory
         self._tool_definitions = json.loads(json.dumps(tool_definitions, allow_nan=False))
+        self.run_budget = run_budget
         self._user_cancel = user_cancel_requested
         self._resource_cancel = resource_cancel_requested
         self._parent_scope = dict(request=request, workflow=workflow, variant=variant, registry=registry,
@@ -181,9 +182,12 @@ class ModuleSelfTestResources:
             raise SelfTestResourceUnavailableError("callback tools differ from the exact self-test resources")
 
     def user_cancel_requested(self):
-        return bool(self._user_cancel is not None and self._user_cancel())
+        return bool((self._user_cancel is not None and self._user_cancel()) or
+                    (self.run_budget is not None and self.run_budget.user_cancel_requested()))
 
     def cancel_requested(self):
+        if self.run_budget is not None and self.run_budget.resource_closed():
+            return True
         try:
             self.require_active()
         except PermissionError:

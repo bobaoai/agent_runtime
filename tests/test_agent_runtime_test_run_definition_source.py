@@ -87,7 +87,7 @@ def pg_schema(monkeypatch):
 def _registration(directory):
     """The tool-free summarize_note Workflow registered locally: its Registry and release."""
     if not (directory / "host").exists():
-        _module_root(directory, timeout_seconds=REAL_TIMEOUT_SECONDS)
+        _module_root(directory)
     saved = load_runtime_registration(directory / "host", "workflow", WORKFLOW)
     return saved.registry, saved.release
 
@@ -203,7 +203,7 @@ def test_cli_passes_pg_locator_and_constraints_to_the_api_unchanged(tmp_path, mo
                     "expected_module_id": "design_contract_reviewer", "version": None,
                     "release_database_url_env": "RUNTIME_RELEASE_DSN", "release_schema": "agent_runtime",
                     "workflow_release_ref": "runtime-workflow:x@v1", "workflow_release_sha256": "a" * 64,
-                    "transport_kind": "claude_cli", "model_id": None, "reasoning_profile": None,
+                    "transport_kind": "claude_cli", "model_id": None, "reasoning_profile": None, "run_timeout_seconds": None,
                     "cli_path": None, "resources_path": Path("resources.json")}
 
 
@@ -249,12 +249,20 @@ def test_real_pg_definition_runs_read_only_with_root_setup_and_parameter_files(t
                     model_id=REAL_MODEL, reasoning_profile=REAL_EFFORT)
     before = _row_counts(schema)
     record = run_local_workflow_test(root, input_payload={}, release_database_url_env=READER_DSN_VARIABLE,
-        release_schema=schema, workflow_release_ref=workflow.release_ref, workflow_release_sha256=workflow.release_sha256)
+        release_schema=schema, workflow_release_ref=workflow.release_ref, workflow_release_sha256=workflow.release_sha256,
+        run_timeout_seconds=3600)
     assert record["status"] == "completed", record["failure_detail"]
+    assert record["execution_budget"]["requested_timeout_seconds"] == 3600
+    assert record["execution_parameter_sources"]["run_timeout_seconds"]["layer"] == "call"
+    assert record["provider_trace"]["timeout_seconds"] == 3600
     assert (record["workflow_release_ref"], record["workflow_release_sha256"]) == (workflow.release_ref, workflow.release_sha256)
     argv = record["provider_trace"]["argv"]
     assert (argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]) == (REAL_MODEL, REAL_EFFORT)
     assert record["execution_parameter_sources"]["reasoning_profile"]["file_sha256"] == digest
+    evidence_dir = os.environ.get("AGENT_RUNTIME_BUDGET_EVIDENCE_DIR")
+    if evidence_dir:
+        with (Path(evidence_dir) / "pg_budget_record.json").open("x") as stream:
+            json.dump(record, stream, ensure_ascii=False, indent=2, allow_nan=False)
     assert _row_counts(schema) == before
     assert (root / ".runtime/setup.json").is_file() and not (root / ".runtime/workflow").exists()
     # Control: the identity Test Run used cannot register, so a write during the run would have failed it.

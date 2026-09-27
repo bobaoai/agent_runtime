@@ -62,6 +62,7 @@ _RUNTIME_DEFAULT_TRANSPORT = "claude_cli"
 def _execution_profile_for_requirements(
     requirements: ModuleExecutionRequirements, *, transport_kind: str | None = None,
     model_id: str | None = None, reasoning_profile: str | None = None,
+    run_timeout_seconds: int = 1200,
 ) -> ExecutionProfileRelease:
     """Derive one current invocation Profile from frozen general requirements.
 
@@ -72,6 +73,10 @@ def _execution_profile_for_requirements(
     check validates supported requirements. No executable/resources opened.
     """
     requirements.validate()
+    if requirements.schema_version != "module_execution_requirements_v2":
+        raise ValueError("New execution requires re-registration with module_execution_requirements_v2")
+    from .execution_parameter_resolution import _validate_parameter
+    _validate_parameter("run_timeout_seconds", run_timeout_seconds)
     transport = _RUNTIME_DEFAULT_TRANSPORT if transport_kind is None else transport_kind
     if transport == "claude_cli":
         from ..invocation.invocation_claude_cli_execution import _execution_expectation, _CURRENT_BINDING
@@ -96,7 +101,7 @@ def _execution_profile_for_requirements(
         executor_adapter_id=adapter_id, executor_adapter_revision=revision,
         transport_kind=transport, provider_id=provider, model_id=model, reasoning_profile=effort,
         **{name: getattr(requirements, name) for name in ModuleExecutionRequirements._profile_fields},
-        model_defaults_version=defaults,
+        timeout_seconds=run_timeout_seconds, model_defaults_version=defaults,
     )
     profile = compile_execution_profile_release(replace(spec, release_version=content_version(asdict(spec))))
     requirements.assert_profile(profile)
@@ -113,19 +118,19 @@ def _require_single_module_entry(workflow) -> None:
 def _prepare_local_workflow_module_with_sources(
     root: Path, workflow_id: str, *, version: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
-    reasoning_profile: str | None = None, release_store=None,
+    reasoning_profile: str | None = None, run_timeout_seconds: int | None = None, release_store=None,
 ):
     """Private form of prepare_local_workflow_module that also returns parameter sources."""
     saved = load_runtime_registration(root, "workflow", workflow_id, version)
     _require_single_module_entry(saved.release)
     return _prepare_loaded_workflow(saved, root=root, transport_kind=transport_kind, model_id=model_id,
-        reasoning_profile=reasoning_profile, release_store=release_store)
+        reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds, release_store=release_store)
 
 
 def prepare_local_workflow_module(
     root: Path, workflow_id: str, *, version: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
-    reasoning_profile: str | None = None, release_store=None,
+    reasoning_profile: str | None = None, run_timeout_seconds: int | None = None, release_store=None,
 ) -> tuple[LoadedRuntimeRegistration, ExecutionVariantPolicyRelease]:
     """Resolve a fixed single-node Module Workflow and this invocation's model.
 
@@ -149,7 +154,10 @@ def prepare_local_workflow_module(
             layers, ending at xhigh for claude_cli. codex_cli has no default.
             A model or effort cannot come from a layer whose transport differs
             from the resolved transport. Saved Profiles are never defaults.
-            Tools/network/workspace/budgets come from frozen Module requirements.
+            Tools/network/workspace come from frozen Module requirements.
+        run_timeout_seconds: Optional synchronous budget selection through the
+            same four layers, default 1200. Preparation creates a nominal Profile
+            cap, not a running clock; the run entry owns the live deadline.
         release_store: Optional explicit existing store providing register_bundle
             and load_release_registry, such as PostgresRuntimeReleaseStore.
             Its schema must already be ready. Here it writes and verifies exact
@@ -185,25 +193,25 @@ def prepare_local_workflow_module(
     """
     saved, variant, _ = _prepare_local_workflow_module_with_sources(root, workflow_id, version=version,
         transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile,
-        release_store=release_store)
+        run_timeout_seconds=run_timeout_seconds, release_store=release_store)
     return saved, variant
 
 
 def _prepare_local_workflow_with_sources(
     root: Path, workflow_id: str, *, version: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
-    reasoning_profile: str | None = None, release_store=None,
+    reasoning_profile: str | None = None, run_timeout_seconds: int | None = None, release_store=None,
 ):
     """Private form of prepare_local_workflow that also returns parameter sources."""
     saved = load_runtime_registration(root, "workflow", workflow_id, version)
     return _prepare_loaded_workflow(saved, root=root, transport_kind=transport_kind, model_id=model_id,
-        reasoning_profile=reasoning_profile, release_store=release_store)
+        reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds, release_store=release_store)
 
 
 def prepare_local_workflow(
     root: Path, workflow_id: str, *, version: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
-    reasoning_profile: str | None = None, release_store=None,
+    reasoning_profile: str | None = None, run_timeout_seconds: int | None = None, release_store=None,
 ) -> tuple[LoadedRuntimeRegistration, ExecutionVariantPolicyRelease]:
     """Prepare every Agent node through the same model conversion as one node.
 
@@ -219,11 +227,11 @@ def prepare_local_workflow(
     """
     saved, variant, _ = _prepare_local_workflow_with_sources(root, workflow_id, version=version,
         transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile,
-        release_store=release_store)
+        run_timeout_seconds=run_timeout_seconds, release_store=release_store)
     return saved, variant
 
 
-def _prepare_loaded_workflow(saved, *, root, transport_kind, model_id, reasoning_profile, release_store):
+def _prepare_loaded_workflow(saved, *, root, transport_kind, model_id, reasoning_profile, release_store, run_timeout_seconds=None):
     """Resolve execution parameters for the loaded Workflow and prepare its exact closure.
 
     Returns (LoadedRuntimeRegistration, Variant, ResolvedExecutionParameters).
@@ -231,7 +239,7 @@ def _prepare_loaded_workflow(saved, *, root, transport_kind, model_id, reasoning
     from .execution_parameter_resolution import resolve_execution_parameters
 
     resolved = resolve_execution_parameters(root, saved.release.workflow_id, transport_kind=transport_kind,
-        model_id=model_id, reasoning_profile=reasoning_profile)
+        model_id=model_id, reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds)
     workflow = saved.release
     saved.registry.assert_workflow_execution_allowed(workflow, ModuleExecutionPurpose.EVALUATION)
     fixed = _closure(saved.registry, workflow, supplied_variants=())
@@ -245,7 +253,7 @@ def _prepare_loaded_workflow(saved, *, root, transport_kind, model_id, reasoning
             raise ValueError("Independent model preparation requires frozen Module execution requirements; historical Profiles are not defaults")
         saved.registry.assert_module_execution_allowed(module, ModuleExecutionPurpose.EVALUATION)
         profile = _execution_profile_for_requirements(requirements, transport_kind=resolved.transport_kind,
-            model_id=resolved.model_id, reasoning_profile=resolved.reasoning_profile)
+            model_id=resolved.model_id, reasoning_profile=resolved.reasoning_profile, run_timeout_seconds=resolved.run_timeout_seconds)
         try:
             _assert_admitted_test_evaluation_profile(module, profile)
         except NotImplementedError as exc:
@@ -293,7 +301,7 @@ def _run_prepared_workflow_node(
     artifact_host, ledger, workspace_root, adapter, node_id=None,
     workflow_execution_id=None, dispatch_id=None, module_run_id=None,
     workflow_resources=None, local_resources=None, attempt_ordinal=1, parent_attempt_id=None,
-    tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None,
+    tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None, run_budget=None,
 ):
     """Execute an exact prepared node using shared stores and a private workspace.
 
@@ -318,6 +326,10 @@ def _run_prepared_workflow_node(
         if callback is not None and not callable(callback):
             raise ValueError(name + " must be a trusted callable or None")
 
+    if run_budget is None and workflow_resources is not None:
+        run_budget = getattr(workflow_resources, "run_budget", None)
+    if run_budget is not None:
+        run_budget.require_active()
     if workflow_resources is not None:
         workflow_resources.require_active()
     target = workflow.initial_node_id if node_id is None else node_id
@@ -349,7 +361,7 @@ def _run_prepared_workflow_node(
         registry=registry, adapter=adapter, artifact_host=artifact_host, ledger=ledger,
         workspace_root=workspace_root, workflow_resources=workflow_resources,
         tool_session_factory=tool_session_factory, tool_definitions=definitions,
-        user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested)
+        user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested, run_budget=run_budget)
     try:
         result = run_workflow_module(request, release_registry=registry, adapters=adapters,
             artifact_host=artifact_host, ledger=ledger, self_test=resources)
@@ -381,6 +393,8 @@ def _run_prepared_workflow_node(
                 "self_test_binding": json.loads(resources._body),
                 "provider_trace": content(attempt.provider_trace_ref, attempt.provider_trace_sha256)
                     if attempt.provider_trace_ref is not None else None}
+        if run_budget is not None:
+            record["execution_budget"] = run_budget.as_record()
         return result, record
     finally:
         resources.close()

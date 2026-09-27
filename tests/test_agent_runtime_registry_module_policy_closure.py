@@ -131,6 +131,7 @@ def _modern_export(tmp_path, **requirements_changes):
 def _profile_for_requirements(requirements, **changes):
     from agent_runtime.registry import ExecutionProfileReleaseSpec, compile_execution_profile_release
     values = {name: getattr(requirements, name) for name in requirements._profile_fields}
+    values["timeout_seconds"] = requirements.timeout_seconds if requirements.schema_version is None else 1200
     values.update(changes)
     return compile_execution_profile_release(ExecutionProfileReleaseSpec(
         execution_profile_id="consistency_probe", release_version="v1",
@@ -160,6 +161,7 @@ def _variant_delta(module, profile, *, origin=None, position=None):
                                 execution_variant_policies=(variant,))
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("field,value,base", [
     ("execution_mode", "tool_free", {"tool_policy": (), "attempt_workspace_policy": "none"}),
     ("semantic_input_delivery_mode", "managed_attachment", {"tool_policy": (), "attempt_workspace_policy": "none"}),
@@ -170,7 +172,6 @@ def _variant_delta(module, profile, *, origin=None, position=None):
       "network_policy": "gateway_only", "gateway_access_reasons": ("authorized_package_external_exploration",)}),
     ("network_policy", "direct_sandboxed", {"tool_policy": (), "attempt_workspace_policy": "none"}),
     ("output_constraint_mode", "prompt_only_json", {}),
-    ("timeout_seconds", 900, {}),
 ])
 def test_registry_checks_each_frozen_profile_field_atomically(tmp_path, field, value, base):
     exported = _modern_export(tmp_path, **base)
@@ -233,6 +234,7 @@ def test_workflow_variant_position_must_resolve_before_capability_check(tmp_path
     assert registry.snapshot() == before
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("record_kind", ["modern", "legacy_v1", "legacy_v2", "legacy_without_snapshot"])
 @pytest.mark.parametrize("position", ["alternative_slot", "another_slot"])
 def test_standalone_nondefault_position_uses_exact_origin_for_profile_checks(tmp_path, record_kind, position):
@@ -271,10 +273,14 @@ def test_standalone_nondefault_position_uses_exact_origin_for_profile_checks(tmp
     rejected = RuntimeReleaseRegistry()
     rejected.register_bundle(exported.origin_bundle)
     before = rejected.snapshot()
-    if requirements is not None:
+    if requirements is not None and requirements.schema_version is None:
         mismatched = _profile_for_requirements(requirements, timeout_seconds=1000)
         with pytest.raises(ValueError, match="(Module execution requirements|Reviewer capabilities)"):
             rejected.register_bundle(_variant_delta(module, mismatched, position=position))
+    elif requirements is not None:
+        changed_timeout = _profile_for_requirements(requirements, timeout_seconds=1000)
+        rejected.register_bundle(_variant_delta(module, changed_timeout, position=position))
+        assert rejected.get_execution_profile(changed_timeout.release_ref, changed_timeout.release_sha256) == changed_timeout
     else:
         # No snapshot means no invented budget; exact Profile hash resolution
         # still applies to the non-default label and may never be bypassed.
@@ -287,7 +293,8 @@ def test_standalone_nondefault_position_uses_exact_origin_for_profile_checks(tmp
         from dataclasses import replace
         with pytest.raises(ValueError, match="hash"):
             rejected.register_bundle(replace(delta, execution_variant_policies=(altered,)))
-    assert rejected.snapshot() == before
+    if requirements is None or requirements.schema_version is None:
+        assert rejected.snapshot() == before
 
 
 def test_legacy_snapshot_transport_list_is_history_not_variant_veto(tmp_path):

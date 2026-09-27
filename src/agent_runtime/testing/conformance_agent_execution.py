@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import asdict
 import hashlib
 import json
+import time
 from pathlib import Path
 import shutil
 import tempfile
@@ -109,6 +110,11 @@ class _ExampleToolFactory:
             def __init__(self):
                 self.request = request
                 self.closed = Event()
+                self.parent_run = None
+            def bind_parent_run(self, context):
+                if self.parent_run is not None:
+                    raise PermissionError("callback parent already bound")
+                self.parent_run = context
             def operation_intent(self, *_):
                 raise PermissionError("example tools have no production operation authority")
             def invoke(self, name, payload, authorization):
@@ -141,7 +147,7 @@ def _fixture_factory(facts):
 
 
 def run_agent_example(root: Path, example_name: str, *, scenario="accepted", input_payload=None,
-                      transport_kind=None, model_id=None, reasoning_profile=None, cli_path=None) -> dict:
+                      transport_kind=None, model_id=None, reasoning_profile=None, cli_path=None, run_timeout_seconds=None, parent_run=None) -> dict:
     """Register and run one packaged, non-persistent multi-Agent example.
 
     Args:
@@ -162,6 +168,10 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
             Current tool-capable examples require the admitted Claude CLI path.
         model_id: This call's model, or the same parameter-file layers/default.
         reasoning_profile: This call's effort, or the same layers/default.
+        run_timeout_seconds: Total synchronous work budget through the same four
+            layers; default 1200. Parent graph drives and managed children share
+            its live deadline; a child cannot extend parent remaining time.
+        parent_run: Optional live same-process context issued by the parent host.
         cli_path: Explicit executable; otherwise the root's configured executable
             or the resolved transport's PATH lookup is used, without fallback.
     Returns:
@@ -201,6 +211,12 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
     from ..invocation.invocation_claude_cli_execution import ClaudeAdapter
     from ..invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
 
+    entered = time.monotonic()
+    if parent_run is not None:
+        from ..execution.execution_run_budget import ParentRunContext
+        if type(parent_run) is not ParentRunContext:
+            raise TypeError("parent_run must be a live Runtime parent context")
+        parent_run.require_active()
     if example_name not in EXAMPLE_NAMES or scenario not in {"accepted", "revision", "wait"}:
         raise ValueError("unknown packaged example or scenario")
     if example_name == EXAMPLE_NAMES[1] and scenario != "accepted":
@@ -215,189 +231,204 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
     definition = (build_agent_capability_example if example_name == EXAMPLE_NAMES[0]
                   else build_agent_evaluation_example)()
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
-        example_name, "v1", definition.origin_bundle), root=root)
-    choice = dict(transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile)
-    saved, selection, parameters = _prepare_local_workflow_with_sources(root, example_name, version="v1", **choice)
+        example_name, "v2", definition.origin_bundle), root=root)
+    choice = dict(transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile,
+                  run_timeout_seconds=run_timeout_seconds)
+    saved, selection, parameters = _prepare_local_workflow_with_sources(root, example_name, version="v2", **choice)
     child = child_selection = child_parameters = None
     if example_name == EXAMPLE_NAMES[1]:
         exported = Module.to_workflow(build_example_reviewer()).export()
         register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
-            "agent_example_task_review", "v1", exported.origin_bundle), root=root)
+            "agent_example_task_review", "v2", exported.origin_bundle), root=root)
         child, child_selection, child_parameters = _prepare_local_workflow_module_with_sources(
-            root, exported.workflow_release.workflow_id, version="v1", **choice)
-    prepared = [(saved.registry, selection)] + ([] if child is None else [(child.registry, child_selection)])
-    transports = {registry.get_execution_profile(binding["execution_profile_release_ref"],
-                                                 binding["execution_profile_release_sha256"]).transport_kind
-                  for registry, variant in prepared for binding in variant.policy_document()["bindings"]}
-    if len(transports) != 1:
-        raise ValueError("Example nodes resolved different transports " + ", ".join(sorted(transports))
-                         + "; the example runs one executable, so align the execution parameter files")
-    transport, = transports
-    config = load_runtime_config(root)
-    executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(transport)
-    if executable is None:
-        executable = shutil.which({"claude_cli": "claude", "codex_cli": "codex"}[transport])
-    if executable is None:
-        raise FileNotFoundError(f"{transport} executable is unavailable")
-    executable = Path(executable).resolve(strict=True)
-    artifacts, ledger = InMemoryCellArtifactStore(), InMemoryModuleExecutionLedger()
-    initial = {**task, "scenario": scenario,
-               "criteria": list(_GRAPH_CRITERIA if example_name == EXAMPLE_NAMES[0] else _CRITERIA)}
-    if example_name == EXAMPLE_NAMES[0]:
-        initial["wait_policy"] = deepcopy(_WAIT_POLICY)
-    initial_schema = {"type": "object"}
-    schema_sha = hashlib.sha256(_bytes(initial_schema)).hexdigest()
-    content = artifacts.put_bytes(artifact_kind_id="module_input", schema_version="v1",
-        schema_ref="schema:agent_example_input@v1", schema_sha256=schema_sha, media_type="application/json",
-        content=_bytes(initial), idempotency_key="example_input", logical_name="example_input")
-    initial_binding = ModuleInputBinding("example_input", content.artifact_ref, content.artifact_sha256,
-        "schema:agent_example_input@v1", schema_sha, "application/json")
-    children, child_lock = [], Lock()
-    event_snapshots = []
+            root, exported.workflow_release.workflow_id, version="v2",
+            **{name: value for name, value in choice.items() if name != "run_timeout_seconds"})
+    from ..execution.execution_run_budget import RunBudget
+    budget = RunBudget(parameters.run_timeout_seconds, started=entered, parent_run=parent_run)
+    try:
+        budget.require_active()
+        prepared = [(saved.registry, selection)] + ([] if child is None else [(child.registry, child_selection)])
+        transports = {registry.get_execution_profile(binding["execution_profile_release_ref"],
+                                                     binding["execution_profile_release_sha256"]).transport_kind
+                      for registry, variant in prepared for binding in variant.policy_document()["bindings"]}
+        if len(transports) != 1:
+            raise ValueError("Example nodes resolved different transports " + ", ".join(sorted(transports))
+                             + "; the example runs one executable, so align the execution parameter files")
+        transport, = transports
+        config = load_runtime_config(root)
+        executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(transport)
+        if executable is None:
+            executable = shutil.which({"claude_cli": "claude", "codex_cli": "codex"}[transport])
+        if executable is None:
+            raise FileNotFoundError(f"{transport} executable is unavailable")
+        executable = Path(executable).resolve(strict=True)
+        artifacts, ledger = InMemoryCellArtifactStore(), InMemoryModuleExecutionLedger()
+        initial = {**task, "scenario": scenario,
+                   "criteria": list(_GRAPH_CRITERIA if example_name == EXAMPLE_NAMES[0] else _CRITERIA)}
+        if example_name == EXAMPLE_NAMES[0]:
+            initial["wait_policy"] = deepcopy(_WAIT_POLICY)
+        initial_schema = {"type": "object"}
+        schema_sha = hashlib.sha256(_bytes(initial_schema)).hexdigest()
+        content = artifacts.put_bytes(artifact_kind_id="module_input", schema_version="v1",
+            schema_ref="schema:agent_example_input@v1", schema_sha256=schema_sha, media_type="application/json",
+            content=_bytes(initial), idempotency_key="example_input", logical_name="example_input")
+        initial_binding = ModuleInputBinding("example_input", content.artifact_ref, content.artifact_sha256,
+            "schema:agent_example_input@v1", schema_sha, "application/json")
+        children, child_lock = [], Lock()
+        event_snapshots = []
 
-    def inspected(record):
-        result, = (
-            item for item in ledger.results_for_execution(record["workflow_execution_id"])
-            if item.module_run.module_run_id == record["module_run_id"]
-        )
-        return {**record, "execution_log": read_execution_log(
-            result.module_run, attempts=result.attempts,
-            read_content=artifacts.read_bytes, include_private_content=True,
-        )}
+        def inspected(record):
+            result, = (
+                item for item in ledger.results_for_execution(record["workflow_execution_id"])
+                if item.module_run.module_run_id == record["module_run_id"]
+            )
+            return {**record, "execution_log": read_execution_log(
+                result.module_run, attempts=result.attempts,
+                read_content=artifacts.read_bytes, include_private_content=True,
+            )}
 
-    response = {}
-    with _retain_cleanup_result(response), tempfile.TemporaryDirectory(prefix="agent-runtime-example-") as directory:
-        with WorkflowSelfTestResources(registry=saved.registry, workflow=saved.release, selection=selection,
-                input_bindings=(initial_binding,), artifact_host=artifacts, ledger=ledger,
-                workspace_root=Path(directory),
-                wait_policies=(initial["wait_policy"],) if "wait_policy" in initial else ()) as resources:
-            def adapter(registry, profile, artifact_host, workspace):
-                if profile.transport_kind == "claude_cli":
-                    return ClaudeAdapter(release_registry=registry, artifact_host=artifact_host, workspace_root=workspace,
-                        cli_path=executable, adapter_binding=(profile.executor_adapter_id, profile.executor_adapter_revision))
-                return CodexCliModuleExecutor(release_registry=registry, artifact_host=artifact_host,
-                                               workspace_root=workspace, codex_bin=str(executable))
+        response = {}
+        with _retain_cleanup_result(response), tempfile.TemporaryDirectory(prefix="agent-runtime-example-") as directory:
+            with WorkflowSelfTestResources(registry=saved.registry, workflow=saved.release, selection=selection,
+                    input_bindings=(initial_binding,), artifact_host=artifacts, ledger=ledger, run_budget=budget,
+                    workspace_root=Path(directory),
+                    wait_policies=(initial["wait_policy"],) if "wait_policy" in initial else ()) as resources:
+                def adapter(registry, profile, artifact_host, workspace):
+                    if profile.transport_kind == "claude_cli":
+                        return ClaudeAdapter(release_registry=registry, artifact_host=artifact_host, workspace_root=workspace,
+                            cli_path=executable, adapter_binding=(profile.executor_adapter_id, profile.executor_adapter_revision))
+                    return CodexCliModuleExecutor(release_registry=registry, artifact_host=artifact_host,
+                                                   workspace_root=workspace, codex_bin=str(executable))
 
-            def factory_for_node(node_id, profile, artifact_host, workspace):
-                if node_id == "gateway_researcher":
-                    return _fixture_factory(task["required_facts"])
-                if node_id != "tested_agent":
-                    return None
-                child_node = child.release.nodes[0]
-                child_module = child.registry.get_module(child_node.module_release_ref, child_node.module_release_sha256)
-                child_schema = child.registry.get_schema_asset(child_module.input_schema_ref, child_module.input_schema_sha256)
-                tool_schema = {"type": "object", "properties": {"input_payload": child_schema.schema_document()},
-                               "required": ["input_payload"], "additionalProperties": False}
-                counter = 0
-                def invoke(session, payload):
-                    nonlocal counter
-                    with child_lock:
-                        counter += 1
-                        number = counter
-                    with tempfile.TemporaryDirectory(prefix="child-review-", dir=directory) as child_directory:
-                        binding = child_selection.policy_document()["bindings"][0]
-                        chosen = child.registry.get_execution_profile(binding["execution_profile_release_ref"],
-                                                                      binding["execution_profile_release_sha256"])
-                        _, record = _run_prepared_workflow_node(
-                            registry=child.registry, workflow=child.release, selection=child_selection,
-                            input_payload=payload["input_payload"], idempotency_key=session.request.attempt_id + "_child_" + str(number),
-                            artifact_host=artifacts, ledger=ledger, workspace_root=Path(child_directory),
-                            adapter=adapter(child.registry, chosen, artifacts, Path(child_directory)),
-                            user_cancel_requested=resources.user_cancel_requested,
-                            resource_cancel_requested=session.closed.is_set)
-                        record = inspected(record)
-                    with child_lock:
-                        children.append({"parent_attempt_id": session.request.attempt_id,
-                                         "input_payload": deepcopy(payload["input_payload"]), "record": record})
-                    return {"child_execution_id": record["workflow_execution_id"], "module_run_id": record["module_run_id"],
-                            "attempt_id": record["attempt_id"], "status": record["status"],
-                            "output": record["output"], "failure_detail": record["failure_detail"]}
-                return _ExampleToolFactory(ProviderToolDefinition("review_candidate",
-                    "Submit the candidate to the fixed independently executed example reviewer.", tool_schema), invoke)
+                def factory_for_node(node_id, profile, artifact_host, workspace):
+                    if node_id == "gateway_researcher":
+                        return _fixture_factory(task["required_facts"])
+                    if node_id != "tested_agent":
+                        return None
+                    child_node = child.release.nodes[0]
+                    child_module = child.registry.get_module(child_node.module_release_ref, child_node.module_release_sha256)
+                    child_schema = child.registry.get_schema_asset(child_module.input_schema_ref, child_module.input_schema_sha256)
+                    tool_schema = {"type": "object", "properties": {"input_payload": child_schema.schema_document()},
+                                   "required": ["input_payload"], "additionalProperties": False}
+                    counter = 0
+                    def invoke(session, payload):
+                        nonlocal counter
+                        with child_lock:
+                            counter += 1
+                            number = counter
+                        if session.parent_run is None:
+                            raise PermissionError("managed child requires its actual Runtime parent context")
+                        child_budget = RunBudget(child_parameters.run_timeout_seconds, started=time.monotonic(), parent_run=session.parent_run)
+                        try:
+                            with tempfile.TemporaryDirectory(prefix="child-review-", dir=directory) as child_directory:
+                                binding = child_selection.policy_document()["bindings"][0]
+                                chosen = child.registry.get_execution_profile(binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
+                                _, record = _run_prepared_workflow_node(
+                                    registry=child.registry, workflow=child.release, selection=child_selection,
+                                    input_payload=payload["input_payload"], idempotency_key=session.request.attempt_id + "_child_" + str(number),
+                                    artifact_host=artifacts, ledger=ledger, workspace_root=Path(child_directory),
+                                    adapter=adapter(child.registry, chosen, artifacts, Path(child_directory)),
+                                    user_cancel_requested=resources.user_cancel_requested,
+                                    resource_cancel_requested=session.closed.is_set, run_budget=child_budget)
+                                record = inspected(record)
+                                record["execution_budget"] = child_budget.as_record()
+                            with child_lock:
+                                children.append({"parent_attempt_id": session.request.attempt_id,
+                                                 "input_payload": deepcopy(payload["input_payload"]), "record": record})
+                            return {"child_execution_id": record["workflow_execution_id"], "module_run_id": record["module_run_id"],
+                                    "attempt_id": record["attempt_id"], "status": record["status"],
+                                    "output": record["output"], "failure_detail": record["failure_detail"]}
+                        finally:
+                            child_budget.close()
+                    return _ExampleToolFactory(ProviderToolDefinition("review_candidate",
+                        "Submit the candidate to the fixed independently executed example reviewer.", tool_schema), invoke)
 
-            def input_for_node(dispatch, records):
-                node = dispatch.current_state_id
-                if node == "context_reader":
-                    return deepcopy(task)
-                if node == "gateway_researcher":
-                    return {"summary": _latest(records, "context_reader")["output"]["summary"], "fixture_key": "source_facts"}
-                if node == "draft_writer":
-                    feedback = [row["output"]["reason"] for row in records
-                                if row["dispatch"]["current_state_id"] == "selector" and row["output"] is not None]
-                    return {"facts": _latest(records, "gateway_researcher")["output"]["facts"], "feedback": feedback}
-                if node in {"reviewer_a", "reviewer_b"}:
-                    return {"draft": _latest(records, "draft_writer")["output"]["draft"], "required_facts": task["required_facts"]}
-                if node == "selector":
-                    first = not any(row["dispatch"]["current_state_id"] == "selector" for row in records)
-                    action = {"accepted": "decide", "revision": "revise", "wait": "wait"}[scenario] if first else "decide"
-                    return {"draft": _latest(records, "draft_writer")["output"]["draft"],
-                            "review_a": _latest(records, "reviewer_a")["output"],
-                            "review_b": _latest(records, "reviewer_b")["output"], "requested_action": action}
-                if node == "tested_agent":
-                    return {**deepcopy(task), "method": _METHOD}
-                if node == "evaluation_agent":
-                    with child_lock:
-                        child_evidence = [{"parent_attempt_id": row["parent_attempt_id"],
-                            "input_payload": deepcopy(row["input_payload"]), "execution": _evidence(row["record"])} for row in children]
-                    return {"criteria": list(_CRITERIA), "evidence": {
-                        "task": deepcopy(task), "tested_agent": _evidence(inspected(_latest(records, "tested_agent"))),
-                        "child_executions": child_evidence}}
-                raise ValueError("example input mapping has no such node")
+                def input_for_node(dispatch, records):
+                    node = dispatch.current_state_id
+                    if node == "context_reader":
+                        return deepcopy(task)
+                    if node == "gateway_researcher":
+                        return {"summary": _latest(records, "context_reader")["output"]["summary"], "fixture_key": "source_facts"}
+                    if node == "draft_writer":
+                        feedback = [row["output"]["reason"] for row in records
+                                    if row["dispatch"]["current_state_id"] == "selector" and row["output"] is not None]
+                        return {"facts": _latest(records, "gateway_researcher")["output"]["facts"], "feedback": feedback}
+                    if node in {"reviewer_a", "reviewer_b"}:
+                        return {"draft": _latest(records, "draft_writer")["output"]["draft"], "required_facts": task["required_facts"]}
+                    if node == "selector":
+                        first = not any(row["dispatch"]["current_state_id"] == "selector" for row in records)
+                        action = {"accepted": "decide", "revision": "revise", "wait": "wait"}[scenario] if first else "decide"
+                        return {"draft": _latest(records, "draft_writer")["output"]["draft"],
+                                "review_a": _latest(records, "reviewer_a")["output"],
+                                "review_b": _latest(records, "reviewer_b")["output"], "requested_action": action}
+                    if node == "tested_agent":
+                        return {**deepcopy(task), "method": _METHOD}
+                    if node == "evaluation_agent":
+                        with child_lock:
+                            child_evidence = [{"parent_attempt_id": row["parent_attempt_id"],
+                                "input_payload": deepcopy(row["input_payload"]), "execution": _evidence(row["record"])} for row in children]
+                        return {"criteria": list(_CRITERIA), "evidence": {
+                            "task": deepcopy(task), "tested_agent": _evidence(inspected(_latest(records, "tested_agent"))),
+                            "child_executions": child_evidence}}
+                    raise ValueError("example input mapping has no such node")
 
-            def outcome_for_node(dispatch, result, record):
-                node, output = dispatch.current_state_id, record["output"]
-                if record["status"] != "completed" and node != "tested_agent":
-                    raise RuntimeError(f"example node {node} did not complete: {record['status']}")
-                wait_ref = None
-                target = {"context_reader": "gateway_researcher", "gateway_researcher": "draft_writer",
-                          "draft_writer": "parallel_reviews", "reviewer_a": "selector", "reviewer_b": "selector",
-                          "tested_agent": "evaluation_agent", "evaluation_agent": RUNTIME_TERMINAL_STATE_ID}.get(node)
-                if node == "selector":
-                    decision = output["decision"]
-                    if decision == "wait_for_external_event":
-                        target, wait_ref = None, initial["wait_policy"]["policy_ref"]
-                    else:
-                        target = RUNTIME_TERMINAL_STATE_ID if decision == "accepted" else "draft_writer"
-                failures = [attempt.failure_class for attempt in result.attempts if attempt.status != "completed"]
-                return ModuleOutcome.build(dispatch_id=dispatch.dispatch_id, workflow_execution_id=dispatch.workflow_execution_id,
-                    expected_state_id=node, disposition=ModuleOutcomeDisposition.WAIT if wait_ref else ModuleOutcomeDisposition.TRANSITION,
-                    target_state_id=target, wait_policy_ref=wait_ref, module_run_id=result.module_run.module_run_id,
-                    attempt_ids=tuple(attempt.attempt_id for attempt in result.attempts), failure_class=failures[-1] if failures else None,
-                    evidence_artifact_refs=tuple(item.output_ref for item in result.outputs),
-                    outcome_ref="module-outcome:" + dispatch.dispatch_id)
+                def outcome_for_node(dispatch, result, record):
+                    node, output = dispatch.current_state_id, record["output"]
+                    if record["status"] != "completed" and node != "tested_agent":
+                        raise RuntimeError(f"example node {node} did not complete: {record['status']}")
+                    wait_ref = None
+                    target = {"context_reader": "gateway_researcher", "gateway_researcher": "draft_writer",
+                              "draft_writer": "parallel_reviews", "reviewer_a": "selector", "reviewer_b": "selector",
+                              "tested_agent": "evaluation_agent", "evaluation_agent": RUNTIME_TERMINAL_STATE_ID}.get(node)
+                    if node == "selector":
+                        decision = output["decision"]
+                        if decision == "wait_for_external_event":
+                            target, wait_ref = None, initial["wait_policy"]["policy_ref"]
+                        else:
+                            target = RUNTIME_TERMINAL_STATE_ID if decision == "accepted" else "draft_writer"
+                    failures = [attempt.failure_class for attempt in result.attempts if attempt.status != "completed"]
+                    return ModuleOutcome.build(dispatch_id=dispatch.dispatch_id, workflow_execution_id=dispatch.workflow_execution_id,
+                        expected_state_id=node, disposition=ModuleOutcomeDisposition.WAIT if wait_ref else ModuleOutcomeDisposition.TRANSITION,
+                        target_state_id=target, wait_policy_ref=wait_ref, module_run_id=result.module_run.module_run_id,
+                        attempt_ids=tuple(attempt.attempt_id for attempt in result.attempts), failure_class=failures[-1] if failures else None,
+                        evidence_artifact_refs=tuple(item.output_ref for item in result.outputs),
+                        outcome_ref="module-outcome:" + dispatch.dispatch_id)
 
-            bridge = LocalWorkflowModuleBridge(resources=resources, input_for_node=input_for_node,
-                outcome_for_node=outcome_for_node,
-                adapter_for_node=lambda node, profile, store, workspace: adapter(saved.registry, profile, store, workspace),
-                tool_session_factory_for_node=factory_for_node)
-            async def execute():
-                progress = await resources.drive(bridge, max_dispatches=18)
-                if progress.stop_reason.value == "wait" and scenario == "wait":
-                    event_snapshots.append(resources.execution_record()["snapshot"])
-                    policy = initial["wait_policy"]
-                    event = ExternalEvent(event_id="example_material_ready", event_type=policy["event_type"],
-                        workflow_execution_id=resources.execution.workflow_execution_id, expected_state=policy["expected_state"],
-                        target_state=policy["target_state"], evidence_ref=content.artifact_ref)
-                    await resources.resume_event(event)
-                    progress = await resources.drive(bridge, max_dispatches=12)
-                return progress
-            failure = None
-            try:
-                progress = asyncio.run(execute())
-            except Exception as exc:
-                progress = None
-                failure = {"error_type": type(exc).__name__, "detail": str(exc)}
-            record = resources.execution_record()
-            record["nodes"] = tuple(inspected(node) for node in record["nodes"])
-            status = record["snapshot"]["runtime_status_id"] if failure is None else "failed"
-            final_node = "selector" if example_name == EXAMPLE_NAMES[0] else "evaluation_agent"
-            final = [row for row in record["nodes"] if row["dispatch"]["current_state_id"] == final_node]
-            response.update({"example": example_name, "scenario": scenario, "status": status,
-                "input": deepcopy(initial), "input_binding": asdict(initial_binding),
-                "stop_reason": progress.stop_reason.value if progress else "execution_error", "failure": failure,
-                "output": final[-1]["output"] if final else None,
-                "execution": record, "child_executions": deepcopy(children), "wait_snapshots": event_snapshots,
-                "execution_parameter_sources": {"workflow": parameters.as_record(),
-                    "child_review": None if child_parameters is None else child_parameters.as_record()},
-                "persistence": "not_requested", "full_runtime_completed": False})
-    return response
+                bridge = LocalWorkflowModuleBridge(resources=resources, input_for_node=input_for_node,
+                    outcome_for_node=outcome_for_node,
+                    adapter_for_node=lambda node, profile, store, workspace: adapter(saved.registry, profile, store, workspace),
+                    tool_session_factory_for_node=factory_for_node)
+                async def execute():
+                    progress = await resources.drive(bridge, max_dispatches=18)
+                    if progress.stop_reason.value == "wait" and scenario == "wait":
+                        event_snapshots.append(resources.execution_record()["snapshot"])
+                        policy = initial["wait_policy"]
+                        event = ExternalEvent(event_id="example_material_ready", event_type=policy["event_type"],
+                            workflow_execution_id=resources.execution.workflow_execution_id, expected_state=policy["expected_state"],
+                            target_state=policy["target_state"], evidence_ref=content.artifact_ref)
+                        await resources.resume_event(event)
+                        progress = await resources.drive(bridge, max_dispatches=12)
+                    return progress
+                failure = None
+                try:
+                    progress = asyncio.run(execute())
+                except Exception as exc:
+                    progress = None
+                    failure = {"error_type": type(exc).__name__, "detail": str(exc)}
+                record = resources.execution_record()
+                record["nodes"] = tuple(inspected(node) for node in record["nodes"])
+                status = record["snapshot"]["runtime_status_id"] if failure is None else "failed"
+                final_node = "selector" if example_name == EXAMPLE_NAMES[0] else "evaluation_agent"
+                final = [row for row in record["nodes"] if row["dispatch"]["current_state_id"] == final_node]
+                response.update({"example": example_name, "scenario": scenario, "status": status,
+                    "input": deepcopy(initial), "input_binding": asdict(initial_binding),
+                    "stop_reason": progress.stop_reason.value if progress else "execution_error", "failure": failure,
+                    "output": final[-1]["output"] if final else None,
+                    "execution": record, "child_executions": deepcopy(children), "wait_snapshots": event_snapshots,
+                    "execution_parameter_sources": {"workflow": parameters.as_record(),
+                        "child_review": None if child_parameters is None else child_parameters.as_record()},
+                    "persistence": "not_requested", "full_runtime_completed": False})
+        response["execution_budget"] = budget.as_record()
+        return response
+    finally:
+        budget.close()

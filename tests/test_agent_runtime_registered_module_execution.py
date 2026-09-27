@@ -114,10 +114,12 @@ class _Host:
 
 
 def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
-                 input_schema=None, output_schema=None, pg=None, profile_revision="v4"):
+                 input_schema=None, output_schema=None, pg=None, profile_revision="v4",
+                 legacy_definition=False):
     options = {} if output_schema is None else {"output_schema_document": output_schema}
     compiled = _compile_native_module(tmp_path, output_resolution_policy=policy,
-                                      executor_adapter_revision=profile_revision, **options)
+                                      executor_adapter_revision=profile_revision,
+                                      legacy_definition=legacy_definition, **options)
     if input_schema is not None:
         changed = compile_agent_module_release(AgentModuleReleaseCandidate(
             module_id=compiled.module.module_id, module_version="candidate_v1",
@@ -128,7 +130,8 @@ def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
             output_schema_document=json.dumps(output_schema),
             instruction_source_ref="host-source:native-skill/native_module/prompt@candidate_v1",
             instruction_text="Produce the native result.\n", declared_operation_ids=("invoke_model",),
-            compatible_transport_kinds=("codex_cli",),
+            compatible_transport_kinds=("codex_cli",) if legacy_definition else (),
+            execution_requirements=compiled.module.execution_requirements,
             behavior_policy_ref=compiled.behavior_policy.release_ref, behavior_policy_sha256=compiled.behavior_policy.release_sha256,
             evaluation_policy_ref=compiled.evaluation_policy.release_ref, evaluation_policy_sha256=compiled.evaluation_policy.release_sha256,
             retry_policy_ref=compiled.retry_policy.release_ref, retry_policy_sha256=compiled.retry_policy.release_sha256,
@@ -177,7 +180,8 @@ def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
     calls = []
     state = {"payload": {"value": "done"}, "provider_error": False}
 
-    def invoke(*, argv, prompt, cwd, timeout_seconds, environment, launch_guard=None):
+    def invoke(*, argv, prompt, cwd, timeout_seconds, environment, launch_guard=None,
+               deadline_monotonic=None):
         assert timeout_seconds == compiled.execution_profile.timeout_seconds
         assert cwd.is_relative_to(tmp_path)
         assert "--output-schema" in argv
@@ -340,6 +344,7 @@ def _selection(env, *, position="run", origin="workflow", profile=None):
     return selection
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("case", ["workflow_bytes", "variant_bytes", "wrong_node", "wrong_origin", "agent_profile"])
 def test_registered_configuration_is_checked_before_provider(tmp_path, case):
     env = _environment(tmp_path)
@@ -359,7 +364,10 @@ def test_registered_configuration_is_checked_before_provider(tmp_path, case):
         compiled = _compile_native_module(tmp_path, execution_profile_id="draft_profile", execution_mode="agent",
                                           attempt_workspace_policy="own_draft_read_write")
         env.registry.register_bundle(RuntimeReleaseBundle(execution_profiles=(compiled.execution_profile,)))
-        changes["variant_policy"] = _selection(env, profile=compiled.execution_profile)
+        with pytest.raises(ValueError, match="Profile differs from Module execution requirements"):
+            _selection(env, profile=compiled.execution_profile)
+        assert env.host.calls == len(env.calls) == 0
+        return
     with pytest.raises((ValueError, PermissionError)):
         _run(env, **changes)
     assert env.host.calls == len(env.calls) == 0

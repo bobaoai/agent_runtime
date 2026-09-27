@@ -29,11 +29,13 @@ def test_resource_cancellation_is_not_user_interruption(tmp_path):
         timer.cancel()
 
 
+@pytest.mark.real_run
 def test_launch_guard_orders_actual_popen_not_the_whole_invocation(tmp_path, monkeypatch):
     observed = []
     popen = cli_process.subprocess.Popen
     def launch(*args, **kwargs):
-        observed.append("popen")
+        if args[0][0] == sys.executable:
+            observed.append("popen")
         return popen(*args, **kwargs)
     monkeypatch.setattr(cli_process.subprocess, "Popen", launch)
     def guard(create):

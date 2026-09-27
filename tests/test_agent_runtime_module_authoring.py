@@ -264,12 +264,14 @@ def _task_project(tmp_path: Path, *, module_id: str = MODULE_ID) -> Path:
 
 
 def _requirements(**changes):
+    if "timeout_seconds" in changes:
+        raise ValueError("Module requirements no longer accept timeout_seconds; select run_timeout_seconds per call")
     values = dict(context_isolation="workflow_execution_isolated", execution_mode="agent",
                   semantic_input_delivery_mode="inline",
                   attempt_workspace_policy="own_draft_read_write",
                   tool_policy=("read", "search", "shell"), gateway_access_reasons=(),
                   network_policy="denied", output_constraint_mode="native_structured_output",
-                  timeout_seconds=1200, max_attempts=3)
+                  max_attempts=3)
     return ModuleExecutionRequirements(**{**values, **changes})
 
 
@@ -600,10 +602,11 @@ def test_reviewer_source_gate_rejects_non_review_schema_not_generic_export(tmp_p
         module_id="summarize_note").export(module_version="v1")
 
 
+@pytest.mark.deterministic
 def test_tool_free_requirements_and_independent_model_bindings(tmp_path):
     source = load_module_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
     req = _requirements(execution_mode="tool_free", attempt_workspace_policy="none",
-                        tool_policy=(), timeout_seconds=900)
+                        tool_policy=())
     module = Module(source, execution_requirements=req,
                     output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE)
     exported = module.export(module_version="v1")
@@ -615,11 +618,12 @@ def test_tool_free_requirements_and_independent_model_bindings(tmp_path):
     assert exported.module_release.output_resolution_policy is OutputResolutionPolicy.DIRECT_SINGLE
 
 
+@pytest.mark.deterministic
 def test_gateway_and_real_domain_operations_are_preserved(tmp_path):
     source = load_module_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
     req = _requirements(semantic_input_delivery_mode="gateway_read",
         attempt_workspace_policy="none", network_policy="gateway_only",
-        tool_policy=("repository_read",), timeout_seconds=900,
+        tool_policy=("repository_read",),
         gateway_access_reasons=("authorized_package_external_exploration",))
     req.assert_profile(_gateway_profile())
     with pytest.raises(ValueError):
@@ -640,10 +644,11 @@ def test_invalid_model_operation_declaration_is_still_rejected(tmp_path, operati
     assert failure.value.error_code == MODULE_OPERATION_DECLARATION_INVALID
 
 
+@pytest.mark.deterministic
 def test_project_rejects_same_source_with_different_requirements_and_missing_dependencies(tmp_path):
     source = load_module_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
     first = Module(source, execution_requirements=_requirements())
-    second = Module(source, execution_requirements=_requirements(timeout_seconds=1100))
+    second = Module(source, execution_requirements=_requirements(max_attempts=4))
     a, b = first.export(module_version="v1"), second.export(module_version="v2")
     registry = RuntimeReleaseRegistry()
     registry.register_bundle(a.origin_bundle)
@@ -654,6 +659,7 @@ def test_project_rejects_same_source_with_different_requirements_and_missing_dep
     assert a.module_release.release_sha256 != b.module_release.release_sha256
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("field,value", [
     ("execution_mode", "tool_free"),
     ("semantic_input_delivery_mode", "managed_attachment"),
@@ -662,7 +668,6 @@ def test_project_rejects_same_source_with_different_requirements_and_missing_dep
     ("gateway_access_reasons", ("external_fact_verification",)),
     ("network_policy", "direct_sandboxed"),
     ("output_constraint_mode", "prompt_only_json"),
-    ("timeout_seconds", 1100),
 ])
 def test_each_profile_capability_difference_is_rejected(field, value):
     original = _native_profile()
@@ -676,9 +681,10 @@ def test_each_profile_capability_difference_is_rejected(field, value):
     _requirements().assert_profile(original)
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("changes", [
     {"context_isolation": "shared"}, {"max_attempts": 0}, {"max_attempts": 101},
-    {"max_attempts": True}, {"timeout_seconds": True}, {"timeout_seconds": 86401},
+    {"max_attempts": True},
     {"tool_policy": ("read", "read")}, {"tool_policy": ["read"]},
     {"gateway_access_reasons": ["external_fact_verification"]},
 ])

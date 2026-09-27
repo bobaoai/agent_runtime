@@ -352,6 +352,7 @@ def test_missing_live_host_rejected_before_private_state_preparation(tmp_path, m
     assert not env.calls
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("closed", [False, True])
 def test_default_invoker_real_process_launch_is_guarded(tmp_path, monkeypatch, closed):
     import sys
@@ -385,7 +386,8 @@ def test_default_invoker_real_process_launch_is_guarded(tmp_path, monkeypatch, c
 
     popen = processes.subprocess.Popen
     def recorded_popen(argv, **kwargs):
-        order.append("version" if "--version" in argv else "exec")
+        if str(argv[0]) == str(executable):
+            order.append("version" if "--version" in argv else "exec")
         return popen(argv, **kwargs)
     monkeypatch.setattr(processes.subprocess, "Popen", recorded_popen)
     env.host = Host()

@@ -637,7 +637,7 @@ def agent_graph_resources(tmp_path, *, callback=False):
         tools = ('inspect_note',) if callback and index == 0 else ()
         exports.append(Module(source, execution_requirements=_requirements(
             execution_mode='agent' if tools else 'tool_free', tool_policy=tools,
-            attempt_workspace_policy='none', timeout_seconds=30, max_attempts=1)).export(module_version='v1'))
+            attempt_workspace_policy='none', max_attempts=1)).export(module_version='v1'))
     base = _candidate()
     nodes_ = tuple(replace(base.nodes[0], node_id=node, module_release_ref=export.module_release.release_ref,
         module_release_sha256=export.module_release.release_sha256) for node, export in zip(('produce', 'second'), exports))

@@ -7,6 +7,8 @@ import hashlib
 import importlib.util
 import json
 import os
+from .invocation_process_execution import invocation_deadline
+
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
@@ -303,6 +305,7 @@ class LocalCommandSession:
                     return True
             process = run_cli_process(argv=["/usr/bin/sandbox-exec", "-f", str(self._profile_path), *argv],
                 prompt="", cwd=cwd, environment=self._environment, timeout_seconds=command["timeout_seconds"],
+                deadline_monotonic=invocation_deadline(self._host, self._request),
                 launch_guard=launch, cancel_requested=cancelled)
             response.update(returncode=process.returncode, stdout=process.stdout, stderr=process.stderr,
                             process_output_complete=True, **captured_cli_streams(process))

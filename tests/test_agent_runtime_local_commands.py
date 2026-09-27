@@ -580,7 +580,7 @@ def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monk
         monkeypatch.setattr(capture, "_stop_process_group", report_cleanup_failure)
     source = _task_project(tmp_path / "registration", module_id="summarize_note")
     module = Module.from_registration(source, skill_id=SKILL_ID, module_id="summarize_note",
-        execution_requirements=_requirements(timeout_seconds=30, max_attempts=1))
+        execution_requirements=_requirements(max_attempts=1))
     exported = module.to_workflow(module.export(module_version="v1")).export()
     root = tmp_path / "host"
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin("local_command_check", "v1", exported.origin_bundle), root=root)

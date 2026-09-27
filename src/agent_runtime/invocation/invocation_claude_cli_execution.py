@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from .invocation_process_execution import invocation_deadline, invocation_budget_expired, preflight_timeout
+
 from contextlib import ExitStack
 import json
 import os
@@ -484,9 +486,9 @@ class ClaudeAdapter:
                     GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
                 stage = "cli_preflight"
                 version = subprocess.run([str(self._cli_path), "--version"], capture_output=True, env=environment,
-                                         text=True, check=True, timeout=30).stdout.strip()
+                                         text=True, check=True, timeout=preflight_timeout(30, invocation_deadline(host, request), "claude preflight")).stdout.strip()
                 help_text = subprocess.run([str(self._cli_path), "--help"], capture_output=True, env=environment,
-                                           text=True, check=True, timeout=30).stdout
+                                           text=True, check=True, timeout=preflight_timeout(30, invocation_deadline(host, request), "claude preflight")).stdout
                 required = ("--safe-mode", "--restricted", "--tools", "--settings", "--effort", "--strict-mcp-config", "--add-dir")
                 if any(flag not in help_text for flag in required) or (native_schema is not None and "--json-schema" not in help_text):
                     raise ValueError("configured Claude CLI lacks a required option")
@@ -507,6 +509,7 @@ class ClaudeAdapter:
                         launch_options.update(cancellation)
                     process = self._run(argv=argv, prompt=prompt, cwd=cwd, environment=environment,
                                         timeout_seconds=profile.timeout_seconds, on_stdout_line=observe,
+                                        deadline_monotonic=invocation_deadline(host, request),
                                         **launch_options)
                     trace.update(exit_code=process.returncode, stdout=process.stdout, stderr=process.stderr,
                                  process_output_complete=True, **captured_cli_streams(process))
@@ -575,6 +578,8 @@ class ClaudeAdapter:
                     trace["stream_error"] = exc.stream_error
             if event_error:
                 trace["event_error"] = event_error
+            if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) and invocation_budget_expired(host, request):
+                fail("timeout", "claude_cli_timeout", "Runtime work deadline or Provider timeout expired", cause=exc)
             if isinstance(exc, SelfTestResourceUnavailableError):
                 fail("authorization", "self_test_resources_unavailable", str(exc), cause=exc)
             if policy_refusal:

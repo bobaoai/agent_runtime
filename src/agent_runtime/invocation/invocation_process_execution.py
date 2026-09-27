@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import os
+import math
+import time
 from pathlib import Path
 import signal
 import subprocess
 import sys
 from threading import Event, Thread, current_thread, main_thread
 from typing import Callable
+
+import psutil
 
 
 DEFAULT_PROCESS_OUTPUT_BYTES = 16 * 1024 * 1024
@@ -129,18 +133,76 @@ class CliProcessInterrupted(KeyboardInterrupt):
         self.prior_stop_reason = prior_stop_reason
 
 
-def _stop_process_group(process: subprocess.Popen) -> None:
-    if os.name == "posix":
+def _remember_descendants(process):
+    """Retain psutil identities while ancestry establishes invocation ownership.
+
+    No command lines or environments are read. A vanished intermediate parent
+    can hide never-observed descendants; this is not an OS daemon container.
+    """
+    owned = getattr(process, "_runtime_descendants", None)
+    if owned is None:
+        owned = process._runtime_descendants = set()
+    parent = getattr(process, "_runtime_process_identity", None)
+    if parent is None and process.poll() is None:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+            parent = psutil.Process(process.pid)
+            parent.create_time()
+            process._runtime_process_identity = parent
+        except psutil.NoSuchProcess:
+            parent = None
+    roots = ([parent] if parent is not None else []) + list(owned)
+    for root in roots:
+        try:
+            for child in root.children(recursive=True):
+                child.create_time()  # Identity must be observable before retention.
+                owned.add(child)
+        except psutil.NoSuchProcess:
+            continue
+
+
+def _stop_process_group(process: subprocess.Popen) -> None:
+    errors = []
+    try:
+        _remember_descendants(process)
+    except Exception as exc:
+        errors.append("descendant ownership could not be confirmed: " + str(exc))
+    owned = list(getattr(process, "_runtime_descendants", ()))
+    group_owned = process.poll() is None
+    for child in owned:
+        try:
+            if not child.is_running():
+                continue
+            if os.name == "posix" and os.getpgid(child.pid) == process.pid:
+                group_owned = True
+            child.kill()  # psutil checks PID reuse before signaling.
+        except (psutil.NoSuchProcess, ProcessLookupError):
             pass
-    elif process.poll() is None:
-        process.kill()
+        except (psutil.Error, OSError) as exc:
+            errors.append("owned descendant could not be stopped: " + str(exc))
+    # Discovery failure must not skip the original known-process termination.
+    try:
+        if os.name == "posix" and group_owned:
+            os.killpg(process.pid, signal.SIGKILL)
+        elif process.poll() is None:
+            process.kill()
+    except ProcessLookupError:
+        pass
+    except OSError as exc:
+        errors.append("Provider group could not be stopped: " + str(exc))
     try:
         process.wait(timeout=3)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("CLI process did not stop after cleanup") from exc
+        errors.append("CLI process did not stop after cleanup: " + str(exc))
+    try:
+        _, alive = psutil.wait_procs(owned, timeout=3)
+        survivors = [child for child in alive
+                     if child.is_running() and child.status() != psutil.STATUS_ZOMBIE]
+        if survivors:
+            errors.append("Runtime-owned background processes did not stop")
+    except psutil.Error as exc:
+        errors.append("descendant termination could not be confirmed: " + str(exc))
+    if errors:
+        raise RuntimeError("; ".join(errors))
 
 
 def _run_cli_process(
@@ -150,6 +212,7 @@ def _run_cli_process(
     launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
     user_cancel_requested: Callable[[], bool] | None = None,
+    deadline_monotonic: float | None = None,
     interrupted: _CliInterruptState,
 ) -> subprocess.CompletedProcess[str]:
     """Drain both streams, stop the group on failure, preserve exact captured bytes.
@@ -167,7 +230,12 @@ def _run_cli_process(
         raise ValueError("CLI process output limit must be positive")
     if type(timeout_seconds) is not int or timeout_seconds < 1:
         raise ValueError("CLI process timeout must be positive")
+    if deadline_monotonic is not None and (type(deadline_monotonic) not in (int, float) or not math.isfinite(deadline_monotonic)):
+        raise ValueError("deadline_monotonic must be a finite process-local value")
     def launch():
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise CliProcessTimeout(argv, 0, returncode=None, output="", stderr="",
+                                    stdout_bytes=b"", stderr_bytes=b"")
         if interrupted.requested or (user_cancel_requested is not None and user_cancel_requested()):
             raise CliProcessInterrupted(returncode=None, output="", stderr="",
                                         stdout_bytes=b"", stderr_bytes=b"")
@@ -242,11 +310,25 @@ def _run_cli_process(
                Thread(target=write_input, daemon=True)]
     for worker in workers:
         worker.start()
-    import time
-    deadline = time.monotonic() + timeout_seconds
+    process_started = time.monotonic()
+    deadline = process_started + timeout_seconds
+    if deadline_monotonic is not None:
+        deadline = min(deadline, deadline_monotonic)
     cleanup_errors: list[str] = []
+    ownership_check = 0.0
     try:
         while process.poll() is None:
+            if os.name == "posix" and time.monotonic() >= ownership_check:
+                try:
+                    _remember_descendants(process)
+                except psutil.Error as exc:
+                    cleanup_errors.append("descendant observation unavailable: " + str(exc))
+                    mark_failure("cleanup_error")
+                    break
+                ownership_check = time.monotonic() + 0.1
+            if time.monotonic() >= deadline:
+                mark_failure("timeout")
+                break
             if interrupted.requested or (user_cancel_requested is not None and user_cancel_requested()):
                 interrupted.requested = True
                 mark_failure("cancelled")
@@ -255,9 +337,6 @@ def _run_cli_process(
                 break
             if cancel_requested is not None and cancel_requested():
                 mark_failure("resource_closed")
-                break
-            if time.monotonic() >= deadline:
-                mark_failure("timeout")
                 break
             exhausted.wait(0.02)
     except KeyboardInterrupt:
@@ -300,7 +379,7 @@ def _run_cli_process(
             cleanup_error=cleanup_error, stream_error=stream_error,
             prior_stop_reason=failure if failure != "cancelled" else None)
     if failure == "timeout":
-        raise CliProcessTimeout(argv, timeout_seconds, returncode=process.returncode,
+        raise CliProcessTimeout(argv, max(0.0, deadline-process_started), returncode=process.returncode,
                                 output=stdout, stderr=stderr, cleanup_error=cleanup_error, stream_error=stream_error,
                                 stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes)
     if failure is not None:
@@ -328,6 +407,7 @@ def run_cli_process(
     launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
     user_cancel_requested: Callable[[], bool] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Capture bounded exact streams through process shutdown and output handoff.
 
@@ -347,7 +427,29 @@ def run_cli_process(
         return _run_cli_process(argv=argv, prompt=prompt, cwd=cwd, timeout_seconds=timeout_seconds,
             environment=environment, max_output_bytes=max_output_bytes, on_stdout_line=on_stdout_line,
             launch_guard=launch_guard, cancel_requested=cancel_requested,
-            user_cancel_requested=user_cancel_requested, interrupted=interrupted)
+            user_cancel_requested=user_cancel_requested, deadline_monotonic=deadline_monotonic, interrupted=interrupted)
 
 
 __all__ = ["CliProcessError", "CliProcessTimeout", "CliProcessInterrupted", "run_cli_process"]
+
+
+def invocation_deadline(host, request):
+    """Read a live budget only from the host bound to this exact request."""
+    reader = getattr(host, "run_deadline", None)
+    return None if reader is None else reader(request)
+
+
+def preflight_timeout(limit, deadline, command):
+    """Bound a Runtime subprocess preflight without restarting the run clock."""
+    if deadline is None:
+        return limit
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired(command, 0)
+    return min(limit, remaining)
+
+
+def invocation_budget_expired(host, request):
+    """Keep an enclosing deadline distinct from a subprocess's own timeout."""
+    deadline = invocation_deadline(host, request)
+    return deadline is not None and time.monotonic() >= deadline

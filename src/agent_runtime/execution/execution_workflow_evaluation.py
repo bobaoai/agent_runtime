@@ -157,7 +157,8 @@ class WorkflowSelfTestResources:
     """
 
     def __init__(self, *, registry, workflow, selection, input_bindings,
-                 artifact_host, ledger, workspace_root, workflow_execution_id=None, wait_policies=()):
+                 artifact_host, ledger, workspace_root, workflow_execution_id=None, wait_policies=(), run_budget=None):
+        self.run_budget = run_budget
         if type(artifact_host) is not InMemoryCellArtifactStore or type(ledger) is not InMemoryModuleExecutionLedger:
             raise TypeError("local Workflow requires its actual memory artifact store and Ledger")
         if type(input_bindings) is not tuple or not input_bindings:
@@ -406,6 +407,8 @@ class WorkflowSelfTestResources:
             and drains active work; it is not a resumable WAIT. After failure,
             retain available execution_record evidence before closing resources.
         """
+        if self.run_budget is not None:
+            self.run_budget.require_active()
         with self._lock:
             self.require_active()
             if self._driving:

@@ -15,6 +15,8 @@ Runtime finalization.
 
 from __future__ import annotations
 
+from .invocation_process_execution import invocation_deadline, invocation_budget_expired, preflight_timeout
+
 from contextlib import ExitStack
 from dataclasses import dataclass
 import hashlib
@@ -127,6 +129,7 @@ def _default_invoke(
     launch_guard: Callable | None = None,
     cancel_requested: Callable | None = None,
     user_cancel_requested: Callable | None = None,
+    deadline_monotonic: float | None = None,
 ) -> CodexCliInvocationResult:
     """Run v4 with explicit private environment and a launch-time resource guard.
 
@@ -135,7 +138,7 @@ def _default_invoke(
     no fallback to the historical four-argument execution contract.
     """
     cancellation = {name: value for name, value in (("cancel_requested", cancel_requested),
-        ("user_cancel_requested", user_cancel_requested)) if value is not None}
+        ("user_cancel_requested", user_cancel_requested), ("deadline_monotonic", deadline_monotonic)) if value is not None}
     version = run_cli_process(argv=[argv[0], "--version"], prompt="", cwd=cwd,
         timeout_seconds=min(timeout_seconds, 10), environment=environment,
         max_output_bytes=4096, launch_guard=launch_guard, **cancellation)
@@ -368,14 +371,14 @@ def _command(*, profile, workspace, codex_bin, schema_path, mcp_servers: str, sh
     return argv
 
 
-def _developer_tool_bins() -> list[str]:
+def _developer_tool_bins(deadline=None) -> list[str]:
     """The Xcode developer tool bin from xcode-select, avoiding the xcrun shims in /usr/bin.
 
     Returns nothing when unresolved; the other PATH entries still apply.
     """
     try:
         selected = subprocess.run(["/usr/bin/xcode-select", "-p"], capture_output=True, text=True,
-                                  timeout=10, check=True).stdout.strip()
+                                  timeout=preflight_timeout(10, deadline, "xcode-select"), check=True).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return []
     path = Path(selected) / "usr" / "bin"
@@ -903,7 +906,7 @@ class _CodexCliExecutorBase:
                 bins = [str(dep / "bin") for dep in self._dependencies if (dep / "bin").is_dir()]
                 environment.update(
                     TMPDIR=str(cwd / ".tmp"),
-                    PATH=os.pathsep.join(dict.fromkeys([str(python.parent), *bins, *_developer_tool_bins(),
+                    PATH=os.pathsep.join(dict.fromkeys([str(python.parent), *bins, *_developer_tool_bins(invocation_deadline(host, request)),
                                                         "/usr/bin", "/bin"])),
                     GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", PYTHONDONTWRITEBYTECODE="1")
                 trace.update(main_folder=str(cwd), codex_permission_profile=permission,
@@ -921,6 +924,7 @@ class _CodexCliExecutorBase:
             try:
                 result = self._invoker(argv=argv, prompt=prompt, cwd=cwd,
                                        timeout_seconds=profile.timeout_seconds, environment=environment,
+                                       deadline_monotonic=invocation_deadline(host, request),
                                        launch_guard=launch_guard, **cancellation)
                 if type(result) is not CodexCliInvocationResult:
                     raise TypeError("Codex CLI invoker returned an invalid result")
@@ -973,6 +977,8 @@ class _CodexCliExecutorBase:
             if isinstance(exc, KeyboardInterrupt):
                 fail("cancelled", "codex_cli_interrupted", "Codex CLI interrupted",
                      terminal_status="cancelled", cause=exc)
+            if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) and invocation_budget_expired(host, request):
+                fail("timeout", "codex_cli_timeout", "Runtime work deadline or Provider timeout expired", cause=exc)
             if isinstance(exc, SelfTestResourceUnavailableError):
                 fail("authorization", "self_test_resources_unavailable", str(exc), cause=exc)
             if policy_refusal:

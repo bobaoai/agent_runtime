@@ -123,6 +123,11 @@ Inspection 在明确请求详细日志时标明缺少或矛盾的事件，不从
 有 commands 时，Runtime 增加一个 `sandbox_command_execute` 本地 MCP 工具，让 Agent 按
 command_id 选择本次已经提供的命令；原生 Read/Grep/Bash 保留。父进程使用当前真实资源 guard，
 在 macOS sandbox-exec 内执行该命令，保存实际 argv/cwd/returncode、stdout/stderr 与原始 bytes。
+同步调用的工作期限还约束这些命令和受管理子调用。进程清理复用 psutil 的后代关系、创建身份和发信号前的 PID 重用检查，
+结束时终止已确认的后台后代并检查其不再运行；不会按命令名全局清理。身份检查不能消除所有平台的
+检查与发信号间竞态。查询失败也须尝试停止已知 Provider 进程组，并报告不完整清理。此机制不提供操作系统
+级 daemon 容器，不能保证发现瞬间脱离且从未被观察到的后代。需要长期后台工作的任务应使用
+明确的宿主作业入口，不把一次同步 Test Run 当作 daemon 管理器。
 IPC 代理和控制目录不进入模型或命令可读范围。这是本地资源工具，不是领域 Gateway 或生产 grant。
 
 命令与 callback 进程桥需要 `cli_tools` 可选依赖，使用 restricted、空 setting-sources、strict MCP，

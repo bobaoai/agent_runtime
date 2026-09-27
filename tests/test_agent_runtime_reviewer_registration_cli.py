@@ -182,6 +182,7 @@ def test_legacy_explicit_export_and_codec_keep_original_payload_shape(tmp_path):
     assert type(profile).from_dict(profile.as_dict()).as_dict() == profile.as_dict()
 
 
+@pytest.mark.deterministic
 def test_same_registration_retains_frozen_defaults_and_bytes(tmp_path, monkeypatch):
     from agent_runtime.registry import registry_module_authoring as authoring
     source, _ = _source(tmp_path / "source")
@@ -190,7 +191,7 @@ def test_same_registration_retains_frozen_defaults_and_bytes(tmp_path, monkeypat
     before = _files(root)
     def forbidden(*args, **kwargs):
         pytest.fail("repeat registration must reuse exact definitions and dependencies")
-    monkeypatch.setattr(ModuleReviewer, "_default_execution_requirements", _requirements(timeout_seconds=999))
+    monkeypatch.setattr(ModuleReviewer, "_default_execution_requirements", _requirements(max_attempts=2))
     monkeypatch.setattr(authoring, "compile_agent_module_release", forbidden)
     monkeypatch.setattr(authoring, "runtime_owned_policy_schema_assets", forbidden)
     second = _register(root, source).submitted_bundle
@@ -278,6 +279,7 @@ def test_v2_still_requires_its_original_policy_fields(tmp_path):
         _register(tmp_path / "host", source)
 
 
+@pytest.mark.deterministic
 def test_frozen_capabilities_and_hash_are_checked_at_registry_and_execution(tmp_path):
     from agent_runtime.execution.execution_module_invocation import _assert_admitted_test_evaluation_profile
     source, _ = _source(tmp_path / "source")
@@ -286,11 +288,11 @@ def test_frozen_capabilities_and_hash_are_checked_at_registry_and_execution(tmp_
     bundle = _prepared_bundle(root)
     module, profile = bundle.modules[0], bundle.execution_profiles[0]
     payload = module.as_dict()
-    payload["execution_requirements"]["timeout_seconds"] += 1
+    payload["execution_requirements"]["max_attempts"] += 1
     with pytest.raises(ValueError, match="hash mismatch"):
         type(module).from_dict(payload).validate()
     bad_profile = ExecutionProfileRelease.build(**{f.name: getattr(profile, f.name) for f in fields(profile)
-        if f.name not in {"release_sha256", "timeout_seconds"}}, timeout_seconds=profile.timeout_seconds + 1)
+        if f.name not in {"release_sha256", "tool_policy"}}, tool_policy=("read",))
     with pytest.raises(ValueError, match="Module execution requirements"):
         _assert_admitted_test_evaluation_profile(module, bad_profile)
     variant = bundle.execution_variant_policies[0]
@@ -542,6 +544,7 @@ def test_old_module_can_gain_workflow_without_current_policy_schema_or_export(tm
     assert _files(root) == all_files
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("failed_kind", ["module", "workflow"])
 def test_registration_retries_partial_file_save_without_changing_module(tmp_path, monkeypatch, failed_kind):
     source, _ = _source(tmp_path / "source")
@@ -562,7 +565,7 @@ def test_registration_retries_partial_file_save_without_changing_module(tmp_path
         before = module_path.read_bytes()
         before_document = json.loads(before)
         # Changing the software preset must not change the already saved Module.
-        monkeypatch.setattr(ModuleReviewer, "_default_execution_requirements", _requirements(timeout_seconds=999))
+        monkeypatch.setattr(ModuleReviewer, "_default_execution_requirements", _requirements(max_attempts=2))
     result = _register(root, source)
     assert load_runtime_registration(root, "workflow", MODULE_ID, "v1").release == result.submitted_bundle.workflows[0]
     if failed_kind == "workflow":
@@ -570,7 +573,8 @@ def test_registration_retries_partial_file_save_without_changing_module(tmp_path
         after_document = json.loads(module_path.read_bytes())
         for key in ("release_ref", "release_sha256", "registration_order"):
             assert after_document[key] == before_document[key]
-        assert result.submitted_bundle.modules[0].execution_requirements.timeout_seconds == 1200
+        assert result.submitted_bundle.modules[0].execution_requirements.schema_version == "module_execution_requirements_v2"
+        assert result.submitted_bundle.modules[0].execution_requirements.timeout_seconds is None
 
 
 @pytest.mark.parametrize("change", ["owner", "input_schema", "output_schema", "instruction", "skill_source"])

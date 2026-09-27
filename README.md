@@ -676,15 +676,17 @@ for the exact fields, relative-path rules and error boundaries. This ordinary
 self-test remains non-persistent; it reads PostgreSQL only when the caller
 selects an exact PostgreSQL definition, and never writes it.
 
-Transport, model and effort are resolved per parameter from four layers: this
+Transport, model, effort and synchronous run_timeout_seconds are resolved per parameter from four layers: this
 call's arguments, then `root/.runtime/execution_parameters/workflows/<workflow_id>.json`,
 then `root/.runtime/execution_parameters/workspace.json`, then the Runtime
 default (`claude_cli`, `claude-opus-5[1m]`, `xhigh`). Both files are optional
-JSON objects with `"schema_version": "runtime_execution_parameters_v1"` and any
-of `transport_kind`, `model_id` and `reasoning_profile`:
+JSON objects. Format `runtime_execution_parameters_v1` retains the three model
+fields. Format `runtime_execution_parameters_v2` also accepts run_timeout_seconds,
+an integer from 1 to 86400 (default 1200). Null, bool, fractional, out-of-range
+and unknown values fail instead of being ignored:
 
 ```json
-{"schema_version": "runtime_execution_parameters_v1", "model_id": "claude-fable-5-1[1m]", "reasoning_profile": "xhigh"}
+{"schema_version": "runtime_execution_parameters_v2", "model_id": "claude-fable-5-1[1m]", "reasoning_profile": "xhigh", "run_timeout_seconds": 3600}
 ```
 
 Parameter files never select a definition version; pass `--version` or an exact
@@ -694,6 +696,22 @@ instead of falling through. A model or effort written in a layer whose transport
 differs from the resolved transport is rejected, so a Claude model is never sent
 to Codex. The Test Run record lists each parameter's source layer and file hash
 in `execution_parameter_sources`.
+
+Use `--run-timeout-seconds 3600` for a one-call override. The work deadline starts
+at the synchronous entry, includes preparation, managed same-process children
+and any retries actually scheduled, and never extends a parent deadline. The
+nominal Profile timeout stays immutable; Invocation also enforces the remaining
+live allowance. `execution_budget` reports requested/effective durations, elapsed
+time and parent lineage. Bounded cleanup may finish after the work deadline.
+Cross-process children and persisted Workflow lifetimes are not covered.
+Process cleanup uses the declared psutil dependency to retain observed descendant
+identities and check PID reuse before signals; it does not provide arbitrary daemon containment.
+
+New executions require `module_execution_requirements_v2`, which keeps fixed
+capabilities separate from per-call time. Register the unchanged approved source
+once under a new definition version, then reuse it across time choices. Historical
+definitions and completed records retain their bytes and hashes; they are not
+silently upgraded. Reading or replaying old completed results starts no Provider.
 
 Opt-in live smoke tests cover the remaining CLI implementations. The Codex
 test below covers the tool-free path; the Codex workspace cases are in

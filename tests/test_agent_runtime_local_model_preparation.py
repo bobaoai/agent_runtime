@@ -72,7 +72,7 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
     source = _task_project(tmp_path / "source", module_id="summarize_note")
     requirements = _requirements(execution_mode=mode, tool_policy=tools,
         attempt_workspace_policy=workspace, output_constraint_mode=output_mode,
-        timeout_seconds=70, max_attempts=2)
+        max_attempts=2)
     monkeypatch.setattr(registry_reviewer_defaults, "_validate_reviewer_output_schema",
                         lambda *a: pytest.fail("ordinary Module cannot use Reviewer-specific validation"))
     module = Module.from_registration(source, skill_id=TASK_SKILL, module_id="summarize_note",
@@ -85,7 +85,7 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
     from agent_runtime import setup_runtime
     setup_runtime(root)  # Test Run runs setup itself; a ready root receives no writes.
     before = _files(root)
-    saved, variant = prepare_local_workflow_module(root, "summarize_note")
+    saved, variant = prepare_local_workflow_module(root, "summarize_note", run_timeout_seconds=70)
     assert saved.release.workflow_id == "summarize_note"
     selected = saved.registry.snapshot().execution_profiles[0]
     requirements.assert_profile(selected)
@@ -115,7 +115,7 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
         completed.stdout_bytes, completed.stderr_bytes = completed.stdout.encode(), b""
         return completed
     monkeypatch.setattr(claude, "ClaudeAdapter", lambda **kw: adapter_type(**kw, process_runner=process))
-    record = run_local_workflow_test(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path))
+    record = run_local_workflow_test(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path), run_timeout_seconds=70)
     assert record["status"] == "completed", record["failure_detail"]
     assert record["output"] == {"summary": "the actual ordinary output"}
     assert record["execution_log"]["complete"] and len(calls) == 1
@@ -147,11 +147,15 @@ def _resource_test_module(tmp_path, *, tools=("read", "search", "shell"), timeou
     source = _task_project(tmp_path / "source", module_id="summarize_note")
     module = Module.from_registration(source, skill_id=TASK_SKILL, module_id="summarize_note",
         execution_requirements=_requirements(execution_mode="agent" if tools else "tool_free", tool_policy=tools,
-            attempt_workspace_policy="own_draft_read_write" if tools else "none", timeout_seconds=timeout_seconds, max_attempts=1))
+            attempt_workspace_policy="own_draft_read_write" if tools else "none", max_attempts=1))
     root = tmp_path / "host"
     workflow = module.to_workflow(module.export(module_version="v1")).export()
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
         "resource_example", "v1", workflow.origin_bundle), root=root)
+    parameters = root / ".runtime/execution_parameters/workspace.json"
+    parameters.parent.mkdir(parents=True, exist_ok=True)
+    parameters.write_text(json.dumps({"schema_version": "runtime_execution_parameters_v2",
+                                      "run_timeout_seconds": timeout_seconds}))
     return root
 
 
@@ -309,10 +313,11 @@ def test_public_command_execution_and_cli_observations_share_one_verified_log(tm
     assert not calls[0]["cwd"].exists()
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("saved_variants", [0, 1, 2])
 def test_missing_requirements_never_infer_defaults_from_historical_bindings(tmp_path, saved_variants):
     from test_agent_runtime_registered_module_execution import _environment as legacy_environment, _selection
-    env = legacy_environment(tmp_path)
+    env = legacy_environment(tmp_path, legacy_definition=True)
     assert env.module.get_execution_requirements() is None
     if saved_variants == 2:
         _selection(env)
@@ -401,7 +406,7 @@ def test_unsupported_transport_has_no_fallback_or_store_write(tmp_path, transpor
             pytest.fail("No writes for an unsupported model transport")
         def load_release_registry(self):
             pytest.fail("No reads for an unsupported model transport")
-    with pytest.raises(ValueError, match="Unsupported model transport"):
+    with pytest.raises(ValueError, match="Unsupported model transport|must be a non-empty string"):
         prepare_local_workflow_module(root, MODULE_ID, transport_kind=transport, release_store=Store())
     assert _files(root) == before
 

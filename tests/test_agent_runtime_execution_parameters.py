@@ -32,14 +32,14 @@ def _write(root, relative, **values):
     return hashlib.sha256(body).hexdigest()
 
 
-def _module_root(tmp_path, *, version="v1", root=None, timeout_seconds=30):
+def _module_root(tmp_path, *, version="v1", root=None):
     """Register a tool-free single-node Workflow named summarize_note."""
     from agent_runtime import Module
     from test_agent_runtime_module_authoring import _task_project, _requirements, SKILL_ID as TASK_SKILL
     source = _task_project(tmp_path / ("source_" + version), module_id=WORKFLOW)
     module = Module.from_registration(source, skill_id=TASK_SKILL, module_id=WORKFLOW,
         execution_requirements=_requirements(execution_mode="tool_free", tool_policy=(),
-            attempt_workspace_policy="none", timeout_seconds=timeout_seconds, max_attempts=1))
+            attempt_workspace_policy="none", max_attempts=1))
     root = tmp_path / "host" if root is None else root
     workflow = module.to_workflow(module.export(module_version=version)).export()
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
@@ -58,7 +58,7 @@ def test_no_parameter_files_leave_every_value_to_the_runtime_default(tmp_path):
     resolved = resolve_execution_parameters(tmp_path, WORKFLOW)
     assert (resolved.transport_kind, resolved.model_id, resolved.reasoning_profile) == (None, None, None)
     assert resolved.as_record() == {name: {"layer": SOURCE_RUNTIME_DEFAULT, "file": None, "file_sha256": None}
-                                    for name in ("transport_kind", "model_id", "reasoning_profile")}
+                                    for name in ("transport_kind", "model_id", "reasoning_profile", "run_timeout_seconds")}
 
 
 @pytest.mark.deterministic
@@ -210,7 +210,7 @@ REAL_TIMEOUT_SECONDS = 300
 
 
 def _test_run_root(tmp_path):
-    root = _module_root(tmp_path, timeout_seconds=REAL_TIMEOUT_SECONDS)
+    root = _module_root(tmp_path)
     setup_runtime(root)
     return root
 

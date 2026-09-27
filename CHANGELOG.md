@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0.dev8
+
+- Add four-layer `run_timeout_seconds` and `--run-timeout-seconds` for synchronous Test Run and packaged examples.
+- Bound managed same-process child work by the parent's remaining deadline, retaining requested/effective budget observations.
+- New Module authoring uses `module_execution_requirements_v2`, separating fixed capabilities from per-call time. Register approved sources once under new versions before new execution; historical records retain their original encoding and hashes.
+- Existing exact-Profile APIs keep their explicit Attempt cap. Cross-process deadline propagation and persisted Workflow lifetime budgets remain outside this release.
+
+
 Notable changes to the standalone development line are recorded here. The
 current package version is declared in pyproject.toml. Earlier entries describe
 historical implementations, not the current executable adapter support matrix.

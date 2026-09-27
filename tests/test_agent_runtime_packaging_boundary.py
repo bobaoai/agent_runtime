@@ -115,7 +115,7 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
 
     assert configuration["project"]["name"] == "agent-runtime-core"
     assert configuration["project"]["readme"] == "README.md"
-    assert configuration["project"]["dependencies"] == ["jsonschema>=4.23"]
+    assert configuration["project"]["dependencies"] == ["jsonschema>=4.23", "psutil>=7.2.2,<8"]
     assert configuration["project"]["optional-dependencies"] == {
         "cli_tools": ["mcp>=1.29,<2"],
         "postgres": ["psycopg[binary]>=3.2"],

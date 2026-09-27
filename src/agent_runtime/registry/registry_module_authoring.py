@@ -184,6 +184,8 @@ class Module:
         if type(requirements) is not ModuleExecutionRequirements:
             raise ValueError("Module requires explicit ModuleExecutionRequirements")
         requirements.validate()
+        if requirements.schema_version != "module_execution_requirements_v2":
+            raise ValueError("New Module authoring requires module_execution_requirements_v2; historical requirements are read-only")
         object.__setattr__(self, "execution_requirements", requirements)
         try:
             partition_module_operation_ids(self.declared_operation_ids)
@@ -447,8 +449,8 @@ class ModuleReviewer(Module):
     """Supply a fixed environment and inherit Module authoring unchanged.
 
     Runtime fixes isolated context, read/search/shell, private scratch, denied
-    tool network, inline native output, a 1200-second budget and three attempts.
-    Model choice and concrete host resources are resolved at execution time.
+    tool network, inline native output and three attempts. Model choice, run
+    timeout and concrete host resources are resolved at execution time.
     The specialized load_reviewer_registration entry checks common output
     format; inherited generic loading/export does not grant that guarantee.
     """
@@ -459,7 +461,7 @@ class ModuleReviewer(Module):
         attempt_workspace_policy="own_draft_read_write",
         tool_policy=("read", "search", "shell"), gateway_access_reasons=(),
         network_policy="denied", output_constraint_mode="native_structured_output",
-        timeout_seconds=1200, max_attempts=3,
+        max_attempts=3,
     )
 
 

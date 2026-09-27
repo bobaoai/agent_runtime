@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 import shutil
 import tempfile
@@ -75,7 +76,8 @@ def run_local_workflow_test(
     release_store=None, release_database_url_env: str | None = None, release_schema: str | None = None,
     workflow_release_ref: str | None = None, workflow_release_sha256: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
-    reasoning_profile: str | None = None, cli_path: Path | str | None = None,
+    reasoning_profile: str | None = None, run_timeout_seconds: int | None = None, parent_run=None,
+    cli_path: Path | str | None = None,
     resources_path: Path | None = None,
     material_root: Path | None = None, material_files: tuple[dict, ...] = (),
     read_only_dependencies: tuple[Path, ...] | None = None, commands: tuple[dict, ...] = (),
@@ -131,6 +133,9 @@ def run_local_workflow_test(
             layers to Runtime's default. A model or effort written in a layer
             whose transport differs from the resolved transport is rejected.
             Required for codex_cli; no default is inferred from another Provider.
+        run_timeout_seconds: Total synchronous work budget in seconds through the four layers; default 1200.
+        parent_run: Optional live context issued by the active managed parent host.
+            JSON, arbitrary deadlines and cross-process contexts are rejected.
         cli_path: Explicit installed provider executable; otherwise use the
             selected transport's root/.runtime/config.json provider_cli_paths
             value, then host PATH when that value is absent. No login or
@@ -172,7 +177,10 @@ def run_local_workflow_test(
         tool_session_factory: Optional trusted in-process factory with read-only
             definitions and open_session(request). Definitions are frozen into
             the prompt and live resources before opening the session. Only the
-            exact non-native tool_policy set is accepted. No import locator or
+            exact non-native tool_policy set is accepted. A session may implement
+            bind_parent_run(context); Runtime supplies its active parent binding
+            after open_session. A managed nested run passes that object as
+            parent_run, never a deadline from model arguments. No import locator or
             serialized factory is read from task data, config or resources JSON.
         user_cancel_requested: Optional trusted callback for real user/workflow
             cancellation, also passed to the underlying running CLI process.
@@ -232,6 +240,12 @@ def run_local_workflow_test(
         Its private temporary workspace is removed on exit. The caller may
         explicitly save the returned result; Runtime does not save it by default.
     """
+    entered = time.monotonic()
+    if parent_run is not None:
+        from ..execution.execution_run_budget import ParentRunContext
+        if type(parent_run) is not ParentRunContext:
+            raise TypeError("parent_run must be a live Runtime parent context")
+        parent_run.require_active()
     source = _definition_source(workflow_id=workflow_id, version=version, release_store=release_store,
         release_database_url_env=release_database_url_env, release_schema=release_schema,
         workflow_release_ref=workflow_release_ref, workflow_release_sha256=workflow_release_sha256)
@@ -261,7 +275,8 @@ def run_local_workflow_test(
         material_files = resources.get("material_files", ())
         read_only_dependencies = resources.get("read_only_dependencies")
         commands = resources.get("commands", ())
-    choice = dict(transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile)
+    choice = dict(transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile,
+                  run_timeout_seconds=run_timeout_seconds)
     if source == "local":
         saved, selection, parameters = _prepare_local_workflow_module_with_sources(
             root, workflow_id, version=version, **choice)
@@ -274,58 +289,69 @@ def run_local_workflow_test(
         _require_single_module_entry(loaded)
         saved, selection, parameters = _prepare_loaded_workflow(
             LoadedRuntimeRegistration(loaded, registry), root=root, release_store=None, **choice)
-    workflow = saved.release
-    node = workflow.nodes[0]
-    module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
-    if expected_module_id is not None and module.module_id != expected_module_id:
-        raise ValueError(f"Selected Workflow runs Module {module.module_id}, not the expected {expected_module_id}")
-    binding = selection.policy_document()["bindings"][0]
-    selected_profile = saved.registry.get_execution_profile(
-        binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
-    config = load_runtime_config(root)
-    dependencies = read_only_dependencies
-    if dependencies is None:
-        dependencies = config["read_only_dependencies"] if selected_profile.tool_policy else ()
-    if type(dependencies) is not tuple:
-        raise ValueError("read_only_dependencies must be a tuple or None for host defaults")
-    resource_body = capture_local_resources(profile=selected_profile, material_root=material_root,
-        material_files=material_files, read_only_dependencies=dependencies, commands=commands)
-    dependencies = (() if resource_body is None else
-        tuple(Path(value) for value in parse_local_resources(resource_body)["read_only_dependencies"]))
-    program = {"claude_cli": "claude", "codex_cli": "codex"}[selected_profile.transport_kind]
-    executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(selected_profile.transport_kind)
-    if executable is None:
-        executable = shutil.which(program)
-    if executable is None:
-        raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path or host PATH")
-    executable = Path(executable).resolve(strict=True)
-    artifacts = InMemoryCellArtifactStore()
-    ledger = InMemoryModuleExecutionLedger()
-    with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:
-        workspace = Path(directory).resolve()
-        if selected_profile.transport_kind == "claude_cli":
-            adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
-                workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
-                adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
-        elif (selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision) == (
-                CodexCliAgentWorkspaceModuleExecutor.executor_adapter_id,
-                CodexCliAgentWorkspaceModuleExecutor.executor_adapter_revision):
-            adapter = CodexCliAgentWorkspaceModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
-                workspace_root=workspace, codex_bin=str(executable), read_only_dependencies=dependencies)
-        else:
-            adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
-                workspace_root=workspace, codex_bin=str(executable))
-        result, record = _run_prepared_workflow_node(registry=saved.registry, workflow=workflow,
-            selection=selection, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
-            artifact_host=artifacts, ledger=ledger, workspace_root=workspace, adapter=adapter,
-            local_resources=resource_body, tool_session_factory=tool_session_factory,
-            user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested)
-        record["execution_log"] = read_execution_log(
-            result.module_run, attempts=result.attempts,
-            read_content=artifacts.read_bytes, include_private_content=True,
-        )
-        record["execution_parameter_sources"] = parameters.as_record()
-        return record
+    from ..execution.execution_run_budget import RunBudget
+    budget = RunBudget(parameters.run_timeout_seconds, started=entered, parent_run=parent_run)
+    record = None
+    try:
+        budget.require_active()
+        workflow = saved.release
+        node = workflow.nodes[0]
+        module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
+        if expected_module_id is not None and module.module_id != expected_module_id:
+            raise ValueError(f"Selected Workflow runs Module {module.module_id}, not the expected {expected_module_id}")
+        binding = selection.policy_document()["bindings"][0]
+        selected_profile = saved.registry.get_execution_profile(
+            binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
+        config = load_runtime_config(root)
+        dependencies = read_only_dependencies
+        if dependencies is None:
+            dependencies = config["read_only_dependencies"] if selected_profile.tool_policy else ()
+        if type(dependencies) is not tuple:
+            raise ValueError("read_only_dependencies must be a tuple or None for host defaults")
+        resource_body = capture_local_resources(profile=selected_profile, material_root=material_root,
+            material_files=material_files, read_only_dependencies=dependencies, commands=commands)
+        dependencies = (() if resource_body is None else
+            tuple(Path(value) for value in parse_local_resources(resource_body)["read_only_dependencies"]))
+        program = {"claude_cli": "claude", "codex_cli": "codex"}[selected_profile.transport_kind]
+        executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(selected_profile.transport_kind)
+        if executable is None:
+            executable = shutil.which(program)
+        if executable is None:
+            raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path or host PATH")
+        executable = Path(executable).resolve(strict=True)
+        artifacts = InMemoryCellArtifactStore()
+        ledger = InMemoryModuleExecutionLedger()
+        budget.require_active()
+        with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:
+            workspace = Path(directory).resolve()
+            if selected_profile.transport_kind == "claude_cli":
+                adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
+                    workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
+                    adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
+            elif (selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision) == (
+                    CodexCliAgentWorkspaceModuleExecutor.executor_adapter_id,
+                    CodexCliAgentWorkspaceModuleExecutor.executor_adapter_revision):
+                adapter = CodexCliAgentWorkspaceModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
+                    workspace_root=workspace, codex_bin=str(executable), read_only_dependencies=dependencies)
+            else:
+                adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
+                    workspace_root=workspace, codex_bin=str(executable))
+            result, record = _run_prepared_workflow_node(registry=saved.registry, workflow=workflow,
+                selection=selection, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
+                artifact_host=artifacts, ledger=ledger, workspace_root=workspace, adapter=adapter,
+                local_resources=resource_body, tool_session_factory=tool_session_factory,
+                user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested, run_budget=budget)
+            record["execution_log"] = read_execution_log(
+                result.module_run, attempts=result.attempts,
+                read_content=artifacts.read_bytes, include_private_content=True,
+            )
+            record["execution_parameter_sources"] = parameters.as_record()
+            record["execution_budget"] = budget.as_record()
+            return record
+    finally:
+        if record is not None:
+            record["execution_budget"] = budget.as_record()
+        budget.close()
 
 
 def _execute_registered(args):
@@ -349,7 +375,7 @@ def _execute_registered(args):
             expected_module_id=args.expected_module_id, version=args.version,
             release_database_url_env=args.release_database_url_env, release_schema=args.release_schema,
             workflow_release_ref=args.workflow_ref, workflow_release_sha256=args.workflow_sha256,
-            transport_kind=args.transport, model_id=args.model, reasoning_profile=args.effort,
+            transport_kind=args.transport, model_id=args.model, reasoning_profile=args.effort, run_timeout_seconds=args.run_timeout_seconds,
             cli_path=args.cli_path, resources_path=args.resources)
         print(json.dumps(record, ensure_ascii=False, allow_nan=False))
         return 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
@@ -433,7 +459,7 @@ def main(argv=None):
     try:
         payload = None if args.input is None else json.loads(args.input.read_text(encoding="utf-8"))
         record = run_agent_example(args.root, args.example, scenario=args.scenario or "accepted", input_payload=payload,
-            transport_kind=args.transport, model_id=args.model, reasoning_profile=args.effort, cli_path=args.cli_path)
+            transport_kind=args.transport, model_id=args.model, reasoning_profile=args.effort, run_timeout_seconds=args.run_timeout_seconds, cli_path=args.cli_path)
         print(json.dumps(record, ensure_ascii=False, allow_nan=False))
         return 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
     except KeyboardInterrupt:

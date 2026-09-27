@@ -49,9 +49,9 @@ V4_ARGV = ["/bin/codex", "exec", "-m", "gpt-6-astra", "-c", 'model_reasoning_eff
     "--strict-config", "--ephemeral", "--json", "--output-schema", "/schema.json", "-"]
 
 
-def _codex_profile(**changes):
+def _codex_profile(*, run_timeout_seconds=1200, **changes):
     return _execution_profile_for_requirements(_requirements(**changes), transport_kind="codex_cli",
-                                               model_id=REAL_MODEL, reasoning_profile="xhigh")
+                                               model_id=REAL_MODEL, reasoning_profile="xhigh", run_timeout_seconds=run_timeout_seconds)
 
 
 def _option(argv, prefix):
@@ -66,7 +66,7 @@ def test_codex_binding_follows_the_module_execution_mode():
     assert (agent.executor_adapter_id, agent.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v3")
     assert agent.tool_policy == ("read", "search", "shell")
     tool_free = _codex_profile(execution_mode="tool_free", tool_policy=(), attempt_workspace_policy="none",
-                               timeout_seconds=30, max_attempts=1)
+                               run_timeout_seconds=30, max_attempts=1)
     assert (tool_free.executor_adapter_id, tool_free.executor_adapter_revision) == ("codex_cli_agent_executor", "v4")
     assert tool_free.release_sha256 == V4_PROFILE_SHA256
     assert codex.build_command(profile=tool_free, workspace=Path("/attempt/cwd"), codex_bin="/bin/codex",

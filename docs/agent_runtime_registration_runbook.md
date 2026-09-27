@@ -213,13 +213,21 @@ agent-runtime-test-run --root /path/to/host --workflow example_reviewer \
 ```
 
 输入由该 Reviewer 所属工具按注册 schema 准备。root 只定位已保存定义，不向模型开放整个项目。
-省略 --version 使用最近注册的新定义。--transport/--model/--effort 是本次选择；省略的项依次取
+省略 --version 使用最近注册的新定义。--transport/--model/--effort/--run-timeout-seconds 是本次选择；省略的项依次取
 `root/.runtime/execution_parameters/workflows/<workflow_id>.json`、
-`root/.runtime/execution_parameters/workspace.json`，最后是 Runtime 默认。参数文件只写这三项，
+`root/.runtime/execution_parameters/workspace.json`，最后是 Runtime 默认。v1 参数文件保留原三个模型字段；v2 另接受整数 run_timeout_seconds，
 不选择定义版本；也不读取旧文件保存的模型绑定。结果的 `execution_parameter_sources` 写明每项的
 来源层与文件哈希。支持范围和参数来自
 [Test Run CLI](agent_runtime_reviewer_api.md#test-run-cli) 与
 [run_local_workflow_test](agent_runtime_reviewer_api.md#run_local_workflow_test)。
+
+运行时间默认1200秒，单次增加 `--run-timeout-seconds 3600` 可选择一小时，不写回参数文件。
+同一同步调用的准备、受管理同进程子调用及实际重试共享期限，子请求不能延长父剩余时间；清理
+可能在工作期限之后完成。结果的 execution_budget 记录请求、有效预算与观测耗时。
+
+若已有 Module 仍保存固定 timeout 的旧编码，用现有 register-reviewer 从同一已审 source 编译
+并注册一个新版本，准确回读后选择它。当前新编码为 module_execution_requirements_v2。
+普通运行不注册，旧ref/hash和历史结果不改写；预算变化不要求再次更换 Module 定义。
 
 命令用临时资源执行已有单节点 Workflow，stdout 返回结果及内存执行事实，标注
 persistence=not_requested；不会写 PG、注册定义或持久请求回执。CLI 前置 setup 可能补齐环境文件。

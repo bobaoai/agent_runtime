@@ -345,6 +345,8 @@ def _source(
 
 
 RUNTIME_SOURCE_FILE_REGISTRATIONS = (
+    _source("execution", "run", "budget",
+            "designDoc/agent_runtime_00_execution_charter.md"),
     _source("execution", "workflow", "evaluation",
             "designDoc/agent_runtime_00_execution_charter.md"),
     _source("durability", "local", "coordination",

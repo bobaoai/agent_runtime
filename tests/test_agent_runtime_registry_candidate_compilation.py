@@ -93,10 +93,18 @@ def _execution_requirements():
         semantic_input_delivery_mode="inline", attempt_workspace_policy="own_draft_read_write",
         tool_policy=("read", "search", "shell"), gateway_access_reasons=(),
         network_policy="denied", output_constraint_mode="native_structured_output",
-        timeout_seconds=1200, max_attempts=3,
+        max_attempts=3,
     )
 
 
+def _legacy_execution_requirements():
+    payload = _execution_requirements().as_dict()
+    payload.pop("schema_version")
+    payload["timeout_seconds"] = 1200
+    return ModuleExecutionRequirements.from_dict(payload)
+
+
+@pytest.mark.deterministic
 @pytest.mark.parametrize("snapshot_version", [None, "v1", "v2"])
 def test_legacy_module_codec_and_requirements_view_preserve_exact_payload(snapshot_version):
     snapshot = None if snapshot_version is None else ReviewerDefaults(version=snapshot_version)
@@ -123,7 +131,7 @@ def test_legacy_module_codec_and_requirements_view_preserve_exact_payload(snapsh
     }
     assert restored.release_sha256 == golden_hashes[snapshot_version]
     requirements = restored.get_execution_requirements()
-    assert requirements == (None if snapshot is None else _execution_requirements())
+    assert requirements == (None if snapshot is None else _legacy_execution_requirements())
     assert json.dumps(restored.as_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")) == before
     assert restored.release_ref == module.release_ref
     assert restored.release_sha256 == module.release_sha256
@@ -134,6 +142,7 @@ def test_legacy_module_codec_and_requirements_view_preserve_exact_payload(snapsh
     assert restored.release_sha256 == expected_hash
 
 
+@pytest.mark.deterministic
 def test_new_requirements_codec_excludes_legacy_keys_and_rejects_mixed_payloads():
     from agent_runtime.registry import RuntimeReleaseBundle
     candidate = replace(_agent_candidate(), module_version="requirements_v1", compatible_transport_kinds=(),
@@ -155,11 +164,12 @@ def test_new_requirements_codec_excludes_legacy_keys_and_rejects_mixed_payloads(
         with pytest.raises(ValueError, match="shape"):
             ModuleRelease.from_dict({**payload, name: value})
     altered = {**payload, "execution_requirements": {
-        **payload["execution_requirements"], "timeout_seconds": 1000}}
+        **payload["execution_requirements"], "max_attempts": 2}}
     with pytest.raises(ValueError, match="hash mismatch"):
         ModuleRelease.from_dict(altered).validate()
 
 
+@pytest.mark.deterministic
 @pytest.mark.parametrize("field", ModuleExecutionRequirements._fields)
 def test_requirement_decoder_does_not_fill_missing_fields(field):
     payload = _execution_requirements().as_dict()

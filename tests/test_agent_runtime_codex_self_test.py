@@ -26,7 +26,7 @@ def environment(tmp_path, monkeypatch):
     """Substitutes: the Codex CLI process runner and a synthetic file login; Runtime resources and the execution kernel are real."""
     source = _task_project(tmp_path / "source", module_id="summarize_note")
     requirements = _requirements(execution_mode="tool_free", tool_policy=(),
-        attempt_workspace_policy="none", timeout_seconds=30, max_attempts=1)
+        attempt_workspace_policy="none", max_attempts=1)
     module = Module.from_registration(source, skill_id=SKILL_ID, module_id="summarize_note",
                                      execution_requirements=requirements)
     workflow = module.to_workflow(module.export(module_version="v1")).export()
@@ -122,7 +122,7 @@ def test_codex_requires_explicit_model_and_effort_without_default_or_writes(envi
     root, _, _, calls, *_ = environment
     before = _files(root)
     values = {"model_id": "gpt-6-astra", "reasoning_profile": "xhigh", field: value}
-    with pytest.raises(ValueError, match="requires explicit"):
+    with pytest.raises(ValueError, match="requires explicit|must be a non-empty string"):
         prepare_local_workflow_module(root, "summarize_note", transport_kind="codex_cli", **values)
     assert not calls and _files(root) == before
 

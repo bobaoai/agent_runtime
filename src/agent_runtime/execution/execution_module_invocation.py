@@ -282,8 +282,24 @@ class _AttemptExecutionHost:
             self.validate_self_test_binding(request, adapter=adapter,
                 artifact_host=artifact_host, workspace_root=workspace_root,
                 read_only_dependencies=read_only_dependencies)
+            if self._self_test.run_budget is not None:
+                self._self_test.run_budget.require_active()
             return launch()
         return self._self_test.guarded(guarded)
+
+    def run_deadline(self, request):
+        """Return this exact Attempt's live deadline, never an input claim."""
+        if request != self._request:
+            raise PermissionError("budget query differs from bound Attempt")
+        budget = None if self._self_test is None else self._self_test.run_budget
+        return None if budget is None else budget.deadline
+
+    def parent_run_context(self, request):
+        """Issue a live context to an already bound, managed Python callback."""
+        if self._self_test is None or request != self._request or self._self_test.run_budget is None:
+            raise PermissionError("managed child requires its active Runtime parent")
+        return self._self_test.run_budget.bind_parent(attempt_id=request.attempt_id,
+            active=self._self_test.require_active, cancelled=self._self_test.user_cancel_requested)
 
     def validate_provider_tool_session(self, request, *, factory, definitions):
         """Resolve this exact request's trusted callback factory, never a payload grant."""
@@ -1068,6 +1084,11 @@ def _run_module(
         request.module_release_ref,
         request.module_release_sha256,
     )
+    requirements = module.get_execution_requirements()
+    if module.module_kind.value == "agent" and (requirements is None or requirements.schema_version != "module_execution_requirements_v2"):
+        raise ValueError(f"New execution of {module.release_ref} requires registration from current source with module_execution_requirements_v2")
+    if self_test is not None and self_test.run_budget is not None:
+        self_test.run_budget.require_active()
     behavior_policy = release_registry.get_behavior_policy(
         module.behavior_policy_ref,
         module.behavior_policy_sha256,
@@ -1563,10 +1584,11 @@ def _execute_attempt(
     )
     ended_at_utc = clock()
 
-    if (result.terminal_status == "completed"
-        and parse_utc_timestamp("period_end_at_utc", ended_at_utc)
+    budget_expired = self_test is not None and self_test.run_budget is not None and self_test.run_budget.expired()
+    if (result.terminal_status == "completed" and (budget_expired or
+        parse_utc_timestamp("period_end_at_utc", ended_at_utc)
         > parse_utc_timestamp("recorded_at_utc", attempt_start.recorded_at_utc)
-          + timedelta(seconds=profile.timeout_seconds)):
+          + timedelta(seconds=profile.timeout_seconds))):
         return _record_failed_attempt(
             variant=variant, attempt_start=attempt_start, failure_class="timeout",
             usage=usage, ended_at_utc=ended_at_utc,
@@ -1641,6 +1663,15 @@ def _execute_attempt(
     def finalize(fence: ExecutionAuthorizationFence | None) -> tuple[
         ModuleAttemptRecord, tuple[ModuleOutputBinding, ...]
     ]:
+        if self_test is not None and self_test.run_budget is not None and self_test.run_budget.expired():
+            return _record_failed_attempt(
+                variant=variant, attempt_start=attempt_start, failure_class="timeout",
+                usage=usage, ended_at_utc=clock(),
+                payload={"failure_code": "run_budget_expired_before_commit"},
+                artifact_host=artifact_host, ledger=ledger, workflow_ledger=workflow_ledger,
+                workflow_request=run_request if type(run_request) is WorkflowModuleExecutionRequest else None,
+                module=module, profile=profile, tool_calls=result.tool_observations,
+                provider_trace=(result.cell_local_trace_ref, result.cell_local_trace_sha256))
         if fence is not None and fence.state is not (
             ExecutionAuthorizationFenceState.OPEN
         ):

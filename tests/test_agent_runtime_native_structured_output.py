@@ -57,6 +57,7 @@ from agent_runtime.contracts.ledger_record_definition import (
     WorkflowModuleRunRecord,
 )
 from agent_runtime.contracts.registry_release_definition import (
+    ModuleExecutionRequirements,
     ModuleExecutionPurpose,
     OutputResolutionPolicy,
 )
@@ -162,6 +163,7 @@ def _compile_native_module(
     network_policy: str = "denied",
     output_constraint_mode: str = NATIVE_STRUCTURED_OUTPUT,
     output_schema_document: dict[str, object] = _OUTPUT_SCHEMA,
+    legacy_definition: bool = False,
 ):
     del tmp_path
     behavior_policy = compile_behavior_policy_release(
@@ -193,6 +195,17 @@ def _compile_native_module(
         "required": ["value"],
         "additionalProperties": False,
     }
+    requirements = None if legacy_definition else ModuleExecutionRequirements(
+        context_isolation="workflow_execution_isolated",
+        execution_mode=execution_mode,
+        semantic_input_delivery_mode=semantic_input_delivery_mode,
+        attempt_workspace_policy=attempt_workspace_policy,
+        tool_policy=tool_policy,
+        gateway_access_reasons=gateway_access_reasons,
+        network_policy=network_policy,
+        output_constraint_mode=output_constraint_mode,
+        max_attempts=retry_policy.policy_document()["max_attempts"],
+    )
     compiled = compile_agent_module_release(
         AgentModuleReleaseCandidate(
             module_id="native_module",
@@ -210,7 +223,8 @@ def _compile_native_module(
             ),
             instruction_text="Produce the native result.\n",
             declared_operation_ids=declared_operation_ids,
-            compatible_transport_kinds=(transport_kind,),
+            compatible_transport_kinds=(transport_kind,) if legacy_definition else (),
+            execution_requirements=requirements,
             behavior_policy_ref=behavior_policy.release_ref,
             behavior_policy_sha256=behavior_policy.release_sha256,
             evaluation_policy_ref=evaluation_policy.release_ref,
@@ -3249,6 +3263,7 @@ def test_codex_projection_failure_prevents_process_invocation(
 
 
 
+@pytest.mark.fake_run
 def test_codex_native_structured_output_executes_end_to_end(
     tmp_path: Path,
     monkeypatch,
@@ -3292,6 +3307,7 @@ def test_codex_native_structured_output_executes_end_to_end(
         timeout_seconds: int,
         environment: dict,
         launch_guard=None,
+        deadline_monotonic=None,
     ) -> CodexCliInvocationResult:
         assert lease_events == ["enter:attempt_native_001"]
         captured["argv"] = list(argv)
