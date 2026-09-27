@@ -152,7 +152,7 @@ Registry 管理以下 release families：
 | Evaluation Policy | 执行用途准入机制，与业务审核标准、输出 Evaluation 分开 |
 | Retry Policy | 有界技术尝试规则；默认上限及失败处理来自同一版本化 Runtime 规则 |
 | Execution Variant Policy | Module/Workflow position 到 exact Execution Profile 的 binding |
-| Execution Profile | 独立模型选择与 Module 固定能力解析后的不可变执行配置；保存完整生效值及来源，不成为 Reviewer 工具权限的定义者 |
+| Execution Profile | 本次模型、Module 固定能力和名义 Attempt 时限解析后的不可变配置；保存生效值，参数来源由执行事实记录，不成为工具权限的定义者 |
 | Runtime Module | executable contract、owner、I/O Schema、Prompt/Policy refs、通用运行要求、entry 与 output-resolution policy |
 | Workflow | workflow-local node/edge graph 和 exact Module release refs |
 
@@ -196,6 +196,12 @@ Retry 和 Variant Policy 都是 Runtime execution mechanics，不表达 Product 
 本次模型、Adapter 和资源，Registry 只编译并保存已经明确的内容。工具、资源与参数映射由 T2 08
 执行；Registry 不导入 Provider SDK 或宿主配置来作选择。
 
+新编译的 Module 要求使用 `module_execution_requirements_v2`：固定上下文、执行模式、工具、网络、
+工作区、输入输出能力和现有 `max_attempts`，不包含一次运行的 `timeout_seconds`。旧的未标记要求
+包含固定 timeout，仍按原字段集合和 hash 读取；新编码明确自己的格式，不将旧字段静默丢弃。
+Profile 保留具体时限，通用校验对新编码比对固定能力并验证时限合法，对历史编码保持原精确相等规则。
+同一新 Module/Workflow 选择 1200 或 3600 秒时，其定义不变，本次 Profile 与 Variant 形成准确新身份。
+
 Registry 在 Variant Policy registration 时验证 exact origin release 与全部 exact Profile bindings 已注册且
 hash 匹配。Execution T2 在运行时选择一份 exact registered Variant Policy，并负责确认其 origin ref/hash
 等于本次解析出的 Module/Workflow target；不匹配是 Execution target failure，不是新的 Registry operation。
@@ -211,8 +217,9 @@ Module 拥有通用任务定义与运行契约，其加载、导出、投影和�
 定义导出与只读投影只回答任务和依赖是什么；本次模型、执行配置与可执行性由公共调用的执行准备回答。
 
 标准 Reviewer 环境提供独立上下文、读取、搜索、受限 Shell、审核材料只读、私有 scratch、关闭工具
-网络和有界尝试预算。具体默认值、调用参数和编码由发布代码及其文档定义。默认环境在构造时成为
-通用运行要求，后续升级不补写已注册内容。重试次数包含首次尝试；次数上限本身不承诺自动调度。
+网络，以及现有 Retry Policy 约束的有界尝试次数。默认环境不固定一次同步调用的时限；时限来自
+Execution 的参数解析并受父调用剩余期限约束。具体默认能力、调用参数和编码由公开代码及文档定义。
+固定能力在构造时成为通用要求，升级不补写已注册内容。尝试次数包含首次；次数上限不承诺自动调度。
 
 Runtime 拥有 Reviewer 共同结果格式及机械检查。该角色检查在专用 Reviewer source 检查入口执行，
 使用同一次加载取得的准确 schema；正式 Reviewer 注册入口负责消费这个保证。继承的通用加载和
@@ -226,12 +233,13 @@ Module 定义导出只固定任务内容、通用运行要求及依赖。模型�
 选择在 Runtime 统一公共调用的执行准备中完成，定义编译不承担这一选择。已经解析的 Profile/Variant
 内容继续使用 Registry 的共用纯编译、注册和读取接口，不产生第二套 Registry。
 
-模型选择按 Invocation T2（agent_runtime_08）§5.1 的四层来源取值：本次显式选择、该 Workflow 的执行参数文件、
-workspace 执行参数文件、随包公开的当前模型预设；显式选择不会被自动替换。宿主名称、active pointer
-或相邻项目配置不决定模型默认。实际程序和运行资源由宿主明确提供。
+模型与受支持的同步运行时限按 Invocation T2 §5.1 的四层来源逐项取值：本次显式参数、该 Workflow
+的参数文件、workspace 参数文件、Runtime 公开默认。宿主名称、active pointer 或相邻项目配置
+不决定这些默认。实际程序和运行资源由宿主明确提供。
 
-本次 Profile 必须保持 Module 的运行要求及技术 Policy 约束。更换模型不能增加工具、改变隔离或
-突破执行预算。实际 Adapter 无法履行要求时，执行准备返回准确缺口，不降级能力或自动换 Provider。
+Profile 保持 Module 固定能力和技术 Policy，其 timeout_seconds 表达本次单 Attempt 的名义上限；
+实际执行另受同步调用及受管理父调用的剩余期限约束。更换模型或选择时限不能增加工具、改变隔离或
+延长已开始的有效期限。Adapter 无法履行要求时，准备返回准确缺口，不降级能力或自动换 Provider。
 结构合法的定义不等于某个执行组合已被实现。
 
 ### 6.3 任务源、运行能力与真实领域操作
@@ -255,16 +263,17 @@ Evaluation Policy 表达执行用途限制，不保存 Reviewer 质量标准，�
 新正常定义的用途由通用 entry、request 和适用 Policy 决定；Reviewer 身份本身不增加候选测试限制。
 普通无工具和非 Agent Module 保持各自明确能力，不能因共用基类而获得模型、Prompt 或原生工具。
 
-已有 release 的内容、ref、hash 和已提交执行事实按原编码保真读取。旧快照存在时，只从已存内容和
-原合同明确含义取得运行要求；没有快照不等于缺少 Reviewer 身份，也不自动补入当前默认。
-旧 Profile 与操作等已有事实足以支持的通路继续由 Runtime 统一入口判断；信息不足时返回具体缺口。
+已有 release 的内容、ref、hash、固定 timeout 和已提交执行事实按原编码保真读取。旧要求与
+ReviewerDefaults 只从已存内容取得原含义，不补入当前默认；保留历史 transport 清单不恢复其对
+新定义模型选择的否决权。历史检查和已提交结果的回放不启动 Provider，也不改写旧 Profile。
 
-保留旧 payload 中的 transport 清单用于历史读取，不恢复它对新调用的 source-owned 否决权。
-新调用按准确 Module 运行要求、Profile/Adapter 和实际权限判断；历史已提交执行按记录回放，不重新
-选择配置或调用 Provider。显式用途、无工具、真实操作与资源限制仍然有效。
+新的 Provider Attempt 要求采用当前新编码的 Module。选择旧编码时，Execution 在效果发生前返回
+准确 release 与采用要求；先识别已提交结果的无 Provider 回放，再判断是否允许新 Attempt。不得
+借旧执行器、补字段或静默重编译继续。显式用途、无工具、真实操作与资源限制保持各自含义。
 
-读取兼容与新定义采用分别验证。新旧编码不能混写；相同 ref 不同内容仍冲突。迁移采用新定义及其
-消费者，不原地补写历史记录。读者支持新旧记录后才能写入新格式；能读旧记录不证明旧软件能读新记录。
+采用新编码由注册入口从已审 source 编译新版本并准确回读；旧版本不覆盖、不删除，普通运行不执行
+注册。同一新定义之后可选择不同时间预算，无需逐次改 Module。相同 ref 不同内容仍冲突，未知或
+混合编码拒绝。新旧字节与 hash 的读取保真、新执行准入分别验证；能读旧记录不证明旧软件能读新记录。
 
 ### 6.5 公共调用与宿主资源
 
@@ -331,8 +340,9 @@ Active pointer 只存在于 Module 或 Workflow subject，并只选择入口 rel
 匹配。Execution Profile 与 Execution Variant Policy 不属于 Module/Workflow 的 fixed dependency closure。
 
 Workflow/Standalone 由 Execution 通过 `runtime_release_resolve_active` 取得目标。Test/Evaluation/Replay
-通过 `runtime_release_resolve` 按 exact ref/hash 取得任意 registered release。需要回到旧 release 时，只把
-active pointer 重新指向旧的 immutable release。Execution 对 exact Variant Policy 与 target origin 的运行时
+通过 `runtime_release_resolve` 按 exact ref/hash 解析已注册 release。选择先前版本用于新执行时，该
+版本仍须满足当前准入；指针切换不赋予旧编码启动新 Provider 的资格。历史读取与已提交回放保持可用。
+Execution 对 exact Variant Policy 与 target origin 的运行时
 一致性检查遵循 §6 的责任分工；pointer switch 不选择或改写 Variant Policy/Profile。
 
 ## 9. Public Interface and Effects
@@ -411,8 +421,9 @@ Prohibited dependencies：
 ModuleReviewer 只提供默认环境并继承这些行为。无工具、非 Agent 与真实领域操作的限制保持；
 定义导出不解析模型、Adapter 或环境，Reviewer 共同格式仅在专用 source 检查边界落实。
 
-新旧 payload/ref/hash 的读取保真与新调用资格分别验证；旧 transport 清单不得否决已有明确运行依据的
-新调用，也不得通过补入当前默认掩盖缺失要求。Registry、公共执行准备和实际工具资源各有自己的
+新旧 payload/ref/hash 的读取保真与旧编码新 Attempt 拒绝分别验证；新 Module 在不同时间预算下
+只改变 Profile/Variant。旧 transport 清单不干预新定义选择，也不得通过补入默认掩盖缺失要求。
+Registry、公共执行准备和实际工具资源各有自己的
 完成证据；定义及纯编译层可以独立测试和审核，后续 source、注册与执行消费者未迁移前，不把中间
 结果宣称为整包可运行或可部署。后续调用仍需验证准确 origin/节点/Variant 与实际资源。
 

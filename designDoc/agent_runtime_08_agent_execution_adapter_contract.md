@@ -36,11 +36,13 @@ Evaluation 承担，不是普通模型运行的隐含步骤。
 ```mermaid
 flowchart TD
     M["已注册 Module<br/>任务定义与通用运行要求"] --> E["Execution 准备本次调用"]
-    C["独立模型选择<br/>按 §5.1 四层来源取值"] --> E
+    C["模型与同步运行时间预算<br/>按 §5.1 四层来源取值"] --> E
     H["宿主 root 与安装配置<br/>程序、认证来源、材料、存储<br/>workspace 与 Workflow 执行参数文件"] --> E
     H -->|执行参数文件| C
     I["本次输入及适用外部决定"] --> E
     E --> P["固定本次 Execution Profile<br/>输入、资源和 Attempt 身份"]
+    E --> B["Execution 持有本次总预算<br/>受管理子调用受父级剩余时间约束"]
+    B --> A
     P --> A["Invocation 解析 Adapter<br/>核对要求能否实际表达"]
     A -->|可表达| S["Adapter 准备工作区和实际参数"]
     A -->|缺少支持或资源| F["调用前返回具体错误"]
@@ -59,7 +61,8 @@ flowchart TD
 ## 2. User Intent
 
 调用者通过 Runtime 的同一公共入口运行已注册 Module，无需为 Claude、Codex 或不同 Reviewer
-分别拼装启动脚本。模型选择、工具能力和宿主资源可以分别说明，并在调用前成为可追溯的实际配置。
+分别拼装启动脚本。调用者可以为一次同步运行选择时间预算，无需为每次延长运行重新定义 Reviewer。
+模型选择、时间预算、工具能力和宿主资源分别说明，并在调用前成为可追溯的实际配置。
 配置要反映 Provider 与宿主真实能够执行的限制；一次被正确阻止的工具操作可以由 Agent 处理，
 不因这个正常拒绝就让整个 Attempt 失去输出资格。
 
@@ -76,7 +79,7 @@ flowchart TD
 | --- | --- | --- |
 | 任务 instruction、完整输入输出 schema、语义完成条件 | Module / domain owner | 已注册定义；不携带 Provider 启动参数 |
 | 通用 Module 运行要求与 Reviewer 默认环境 | Runtime 定义端 | 固定能力与 Policy 依赖；下游消费同一通用合同 |
-| 本次模型、Profile、Variant 与 Attempt | Execution，Registry 保存已确定的 release | 完整执行配置与身份；Invocation 不再次选择 |
+| 本次模型、时间预算、Profile、Variant 与 Attempt | Execution，Registry 保存已确定的 release | 完整执行配置、身份与活跃预算；Invocation 执行其剩余期限，不再次选择 |
 | 程序、依赖、认证来源、材料和可用存储 | 宿主与对应资源 owner | 明确安装配置及本次可用资源 |
 | 配置转换、进程调用、基本运行信息与最终结果解析 | Invocation / Provider Adapter | 实际请求、最终结果、原始日志和实际资源记录 |
 | 详细日志解析、请求与结果关联、完整性说明 | Inspection | 按需返回只读统一视图，不改变执行结果 |
@@ -95,8 +98,9 @@ Provider Adapter 是技术绑定，不是新的 Agent 角色。Runtime core 不 
 | 参数类别 | 来源与默认规则 | 进入哪里 |
 | --- | --- | --- |
 | instruction、输入输出 schema、任务完成条件 | Module 的固定定义 | Prompt 和结果校验；Profile 不改写其含义 |
-| execution mode、工具、输入交付、workspace、工具网络、上下文与预算要求 | 通用 Module 运行要求；ModuleReviewer 构造时提供 Runtime 默认 | 解析后的 Profile 和实际资源准备 |
-| provider、transport、model、effort 及模型参数 | 按四层来源取值，取第一个写了值的来源：本次调用的显式选择；该 Workflow 的执行参数文件；workspace 执行参数文件；Runtime 随包公开的模型默认 | 本次 Profile，并记录每项的来源层与所用参数文件哈希；不反向改变 Module 能力 |
+| execution mode、工具、输入交付、workspace、工具网络、上下文 | 通用 Module 固定能力要求；ModuleReviewer 构造时提供 Runtime 默认 | Profile 能力校验和实际资源准备 |
+| max_attempts | Module 与其准确 Retry Policy | 限制已有重试调度的次数，不因值大于一自动启动重试 |
+| transport、model、effort 与同步调用的 run_timeout_seconds | 按四层逐项取第一个写了值的来源：本次显式参数；该 Workflow 的参数文件；workspace 参数文件；Runtime 公开默认 | 模型选择和名义 Attempt 上限进入本次 Profile；总预算交给 Execution 的活跃运行上下文；记录每项来源及参数文件哈希 |
 | root、CLI executable、认证来源、依赖、运行目录、可用 stores | 宿主安装配置；明确的本次资源参数按公共接口覆盖对应宿主项 | 宿主资源解析与实际调用记录 |
 | 本次任务正文、材料和已提供的逻辑请求身份 | 本次请求 | 固定输入与执行记录；任务正文不能作为配置覆盖 |
 
@@ -107,23 +111,54 @@ Runtime 公开参数必须说明省略值、显式空值、允许覆盖的范围
 ### 5.2 Profile 的含义
 
 Execution Profile 是已经解析的执行配置快照，保存模型、Adapter、工具、网络、工作区、上下文、
-预算和输出方式的完整生效值。Module 运行要求回答需要什么能力；Profile 回答这一次选择了什么
-执行组合；宿主资源回答这个组合实际使用哪些程序、文件和连接。三者联合构成实际 invocation。
+名义 Attempt 时间上限和输出方式。Module 运行要求回答需要什么能力；Profile 回答这一次选择了什么
+执行组合；宿主资源回答这个组合使用哪些程序、文件和连接。Execution 的活跃总预算另外约束实际
+剩余时间。Profile 是不可变选择，不随时间流逝反复改变 hash。
 
 普通 Module 显式声明自己的运行要求。ModuleReviewer 继承相同构造与执行合同，只提供一套
 Runtime 发布的默认环境。Portable Reviewer source 提供任务身份、归属、prompt、schema 与相关
 任务文件，不声明 transport、模型或工具配置。定义导出不检查本机 CLI，也不选择本次 Profile。
 
-新的调用准备按 §5.1 的四层来源取得模型选择。root 下的 workspace 与 Workflow 执行参数文件是项目明确写下的
+新的调用准备按 §5.1 的四层来源取得模型选择与同步运行时间预算。root 下的 workspace 与 Workflow 执行参数文件是项目明确写下的
 选择，属于合法来源；root 的其他内容、环境名称、相邻项目或历史保存的 Profile 不当作模型选择规则。
-参数文件给出的值同样受 Module 运行要求约束，超出其能力时在 Provider 前拒绝，不改用其他模型。参数文件存在但不可读或内容无效时，本次调用在准备阶段失败，不视为该层未写值。已有低层接口明确传入的准确 Profile / Variant 继续按该绑定执行；读取
-旧记录和重放已提交结果保持原内容，不补入新的 Reviewer 默认。
+参数不能扩展 Module 固定能力。文件不可读、格式无效或参数不受支持时，在 Provider 前失败，不将
+错误当成该层未写值。低层 exact-Profile 接口继续消费准确 Profile / Variant，不隐式获得高层总预算。
+其新 Attempt 仍遵守 Registry 的定义版本准入；历史读取和已提交结果重放保留原内容，不补入当前默认。
 
-模型与能力分别变化：更换模型不修改 Module；更改 Module 的固定能力形成新定义。Profile 或
+执行选择与能力分别变化：更换模型或同步调用的时间预算不修改 Module；更改固定能力形成新定义。Profile 或
 其他影响执行行为的配置改变，按 Registry 和 Execution 的既有版本及 Variant 规则记录，不能覆盖
 旧记录或在正在运行的 Attempt 内切换。实际 CLI 安装版本和 Adapter revision 分别记录。
 
-### 5.3 独立的能力维度
+### 5.3 同步调用时间预算与受管理子调用
+
+`run_local_workflow_test` 的本地定义与只读 PG 定义路径，以及 `run_agent_example`，共同提供一次
+同步调用的总工作时间预算。默认 1200 秒，`run_timeout_seconds` 为 1 至 86400 的整数秒；
+`--run-timeout-seconds 3600` 只为本次调用选择一小时。Python 的 None 或省略 CLI 参数向较低层取值；
+参数文件中的 null、布尔值、浮点数、越界值和未知键均拒绝。`runtime_execution_parameters_v1`
+保留原三字段含义，`runtime_execution_parameters_v2` 在同一解析器增加运行时间字段；旧格式不接受新键。
+
+四层解析决定请求的预算，父子约束决定实际可用预算。Execution 从同步 API 进入时读取本地 monotonic
+clock，定义解析、输入检查和资源准备消耗同一预算。Provider 前检查若已过期，就停止新工作。
+Provider 预检和进程调用、声明命令、同一次调用中的图节点、实际重试和受管理子调用均受其剩余时间
+约束；等待子调用会消耗父调用时间，重试不会重置总期限。资源准备中的不可中断 I/O 和有界清理
+可能使 API 返回晚于工作期限，因此该参数不保证函数在精确秒数内返回。
+
+Profile 的 `timeout_seconds` 保留单 Attempt 名义上限的含义。新定义经高层准备时，以解析出的总预算
+填充该上限；Invocation 同时遵守 Execution 的活跃 deadline，不得通过重新启动进程、预检或向上
+取整剩余秒数延长期限。声明命令还受自己的 timeout 限制。Execution 在提交前拒绝预算已耗尽后的
+迟到结果；运行中不修改冻结 Profile，也不另建一套日志或超时状态机。
+
+受管理子调用通过可信 Python 接口取得 Runtime 签发的活跃父上下文。父上下文必须属于当前进程与
+准确父 Attempt；关闭、跨进程或不匹配的上下文被拒绝。子调用仍独立解析自己的配置，其实际 deadline
+取本地请求期限与父 deadline 中的较早者。父只剩两分钟时，子请求一小时仍受两分钟限制；子先完成
+不会终止父。并行子调用共享同一个父期限，不累加墙钟时长。父过期或取消会停止其受管理子工作并
+等待必要清理，不把已放弃的子工作报告为完成。
+
+父上下文不来自 prompt、模型工具参数、CLI JSON 或环境变量，不是第五层配置，也不授予额外能力。
+普通 Shell 中自行启动的 Runtime、远程 worker 和跨进程调用不自动获得此传递保证。跨同步 API
+调用的 durable WAIT、恢复及完整 Workflow 寿命继续由原 Durability 合同决定，不默认变成二十分钟。
+
+### 5.4 独立的能力维度
 
 工具清单、工具网络、文件可读范围、可写范围和输入交付分别表达。允许 Shell 不等于允许联网，
 允许读取不等于允许写入，agent mode 不等于启用全部工具。空工具清单表示明确关闭任务工具。
@@ -162,7 +197,8 @@ Profile 准备和实际调用固定同一结果，不重新从 root、latest 或
 提供。Provider 认证只交给 Provider 的认证机制，PG 凭据只交给对应存储接口。秘密不进入 Profile
 正文、prompt、argv 或共享日志。root 不自动授权建库、迁移 schema、保存执行数据或读取项目全集。
 
-具体配置文件名、键、schema / table、默认目录与 CLI 选项由当前公开代码和帮助导出。本文不创造
+§5.3 决定本能力的预算含义；其他配置文件名、键、schema / table、默认目录与 CLI 选项由公开代码
+和帮助导出。本文不创造
 一个新的环境配置服务，也不要求为目录、临时文件和凭据建立跨资源的通用管理框架。
 
 ### 6.2 实际资源与上下文来源
@@ -390,7 +426,11 @@ cache_creation_tokens 是可空子集，不再次累加。未提供的用量保�
 结果和日志。注册定义持久化与执行日志持久化是两件事。显式要求持久化而保存失败时报告该失败，
 不把内存结果称为已经保存。PG schema 与 table 由存储实现定义，Invocation 不维护另一套数据库。
 
-实际 Provider、模型、CLI 版本、Adapter revision、执行配置和输入随调用记录。兼容的 CLI 安装
+实际 Provider、模型、CLI 版本、Adapter revision、执行配置和输入随调用记录。同步结果在原记录中
+保留请求预算、受父级约束后的实际预算、观测耗时、限制来自本次调用还是父级，以及适用的准确父
+Attempt 身份；每项配置来源继续使用 execution_parameter_sources。时长使用有限非负 JSON 秒数，
+保留小数且不人为向上取整；实际执法只使用活跃时钟，不重新消费显示值。monotonic instant 不持久化，
+旧记录缺少这些观测时不补造。兼容的 CLI 安装
 升级供后续调用使用，不改写旧 Profile 或旧日志。参数转换行为改变时更新 Adapter 版本及对应
 绑定；运行中的 Attempt 不自动切换。只保留会话文件或模型摘要不能替代已提交执行记录的重放。
 
@@ -424,6 +464,8 @@ cache_creation_tokens 是可空子集，不再次累加。未提供的用量保�
 | --- | --- |
 | 工具报错、路径无权访问、网络被拒绝或 Provider 正常拒绝一次操作 | 保存真实工具结果；Agent 可在相同边界内继续；不自动使 Attempt failed |
 | 调用前无法表达所需工具或隔离，或必要资源缺失 | 不启动 Provider，返回能力或环境错误 |
+| 同步预算在 Attempt 创建前已经耗尽 | 返回 TimeoutError，说明工作期限已过，不编造执行身份或成功结果 |
+| 已启动的工作耗尽本地或父级预算 | 以既有 timeout 原因停止新工作，取消受管理子调用并清理；保留各 Attempt 已取得的输出和原始失败 |
 | CLI / Provider 整体失败、超时、取消或无合法最终输出 | 返回对应 failed / cancelled 结果，保留已有日志与用量 |
 | 实际资源接口报告授权、执行身份或资源边界失效，或冻结材料完整性检查失败 | 按所属接口拒绝接受输出并保存实际失败，不从工具日志另行推断 |
 | 外部授权失效、fence 关闭或资源 owner 要求终止 | 按原授权合同停止或隔离结果，保留真正的失败 owner |
@@ -453,7 +495,8 @@ Runtime 不新增工具行为巡检或全量 OS 拒绝检测承诺，不把 Bash
 
 Adapter 管理一次 Provider invocation，不暗中重新启动完整 Module。CLI 内部的工具调整和重试
 保留在同一 Attempt；Execution 按既有 Retry Policy 决定是否增加新的 Attempt，次数包括首次。
-新 Attempt 保持原配置和任务，使用独立工作资源；更换模型、输入或权限是新的明确执行选择。
+新 Attempt 保持原配置和任务，使用独立工作资源；同一同步调用内的实际重试继续消耗原预算。
+更换模型、输入、权限或延长已开始运行的总期限，均不能作为重试的隐式动作。新的明确调用可另选预算。
 
 Execution 在最终提交时验证身份、必要输出条件及适用 fence。已提交结果通过原记录重放；
 进程崩溃后尚未确认的效果不假定为未发生。Durability 与 Ledger 保留既有恢复职责，Invocation
@@ -476,7 +519,10 @@ Provider 退出并完成资源清理后，Adapter 使用已经取得的结果和
 2. 四层来源分别验证：本次显式选择、Workflow 执行参数文件、workspace 执行参数文件与 Runtime 默认
    各自生效，高优先层写了值时覆盖低优先层；记录写明每项来源层与参数文件哈希；参数文件的值超出 Module 能力时拒绝，文件无效时在准备阶段失败；
    更换模型不改变工具能力；root 的其他内容与历史 Profile 不决定新调用模型。准备结果和实际执行消费
-   同一份已解析配置。
+   同一份已解析配置。同步预算另外验证整数类型、默认、无效值与版本边界；一次覆盖不写回参数文件。
+   父短于子、子短于父、并行子调用及重试均不能延长所属总期限；过期前的准备成本被计入，过期后
+   不启动新 Provider。实际命令、Provider 和支持的 callback 子调用分别验证终止、清理与原始记录。
+   PG 准确定义模式在隔离测试库以只读身份验证 ref/hash、预算生效和执行阶段零写入，不能以本地模式替代。
 3. 工具集合、只读材料、可写目录、网络、输出模式与允许的上下文组合，均核对真实转换；未知或
    不支持组合在 Provider 前返回具体缺口，不以 Provider 身份或 Reviewer 名称一概拒绝。
 4. 正例证明允许的读取、搜索、Shell 命令和临时写入能执行；负例证明被禁止的效果被阻止。

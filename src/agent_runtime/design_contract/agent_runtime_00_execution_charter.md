@@ -163,11 +163,12 @@ release。它们约束执行机制，不表达 Product Authorization policy、�
 交换 durable command/state，并向 Ledger 提交事实；Inspection 只读取 Registry 与 Ledger。其他方向必须由
 具名 public interface 证明，不能由 source import 或当前技术反向推断。
 
-Reviewer 的共同运行底座由 Runtime 提供，业务审核定义由 Module owner 提供。Registry 冻结能力和
-默认规则依赖；独立模型配置选择执行该定义的模型；Invocation 映射并执行能力。宿主提供安装资源、
-存储和适用授权，Skill 说明其使用入口。环境名称不决定 Reviewer 默认能力，模型选择不改变工具权限。
-ModuleReviewer 是通用 Module authoring 的特化，不增加同层 Runtime responsibility，也不将 Reviewer
-默认能力传播给其他角色。具体定义和兼容边界由 Registry 与 Invocation T2 共同闭合。
+Reviewer 的共同运行底座由 Runtime 提供，业务审核定义由 Module owner 提供。Registry 冻结 Module
+所需能力及 Retry 等技术 Policy；Execution 在受支持的同步调用中解析模型和运行时限，形成准确
+Profile 与 Variant，并向 Invocation 传递同一工作期限。Invocation 按 Profile 与仍有效的期限调用
+Provider、声明命令或受管理的子执行。宿主提供安装资源、存储和适用授权，Skill 说明使用入口。
+模型和时限选择均不增加工具、网络、工作区或领域操作权限。ModuleReviewer 仍是通用 Module
+authoring 的特化，不增加同层责任，也不将其默认能力传播给其他角色。
 
 Runtime 提供注册与 Test Run 的操作 Skill，作为自身产品的随包使用说明。宿主通过明确的
 Workspace root 将它们接入已有 Skill 发现位置，使 Agent 能找到并使用 Runtime 的公开入口。
@@ -176,8 +177,8 @@ Runtime 拥有这些操作内容，Skill Management 保留 Skill 的结构、发
 随包资源与 Workspace 接入的交付要求由 Standalone Release T2 承接。
 
 宿主入口可以接受一个明确的项目 root，据此定位已准备的运行资源和连接配置，并允许显式指定
-凭据位置。该 root 是配置定位，不是模型可读范围。root 下由项目写明的执行参数文件可以提供模型等执行参数，按 Invocation T2 §5.1 的四层来源
-取值；root 的其他内容、相邻项目和历史保存的 Profile 都不决定新调用的模型，任何执行参数也不改变工具能力。凭据只交给相应
+凭据位置。该 root 是配置定位，不是模型可读范围。root 下由项目写明的执行参数文件可以提供模型和受支持的同步运行时限，按 Invocation T2 §5.1
+的四层来源逐项取值；root 的其他内容、相邻项目和历史保存的 Profile 都不决定新调用的模型，任何执行参数也不改变工具能力。凭据只交给相应
 可信存储或授权接口，模型仅获得本次允许的材料和隔离工作区。配置目录、临时运行目录和数据库
 自身的存储分别管理；提供项目 root 不自动授权创建数据库或向模型开放项目全集。
 
@@ -211,9 +212,14 @@ flowchart LR
 Registry 不给 immutable release 维护一套可变 lifecycle state。某个 `(subject_kind, subject_id)` 的
 active pointer 指向哪一份 registered release，该 release 就是 active；其余 registered release 都是
 inactive。正常 Workflow/Standalone 通过 active pointer 解析目标；Test/Evaluation/Replay 通过 exact
-release ref/hash 使用任意 registered release。Active pointer 不授权 caller 执行。Execution 固定所用
+release ref/hash 解析已注册对象。历史定义和已提交结果保持准确读取与无新 Provider 调用的回放；
+新 Provider Attempt 仍须通过现行定义格式与能力准入。Active pointer 不授权 caller 执行。Execution 固定所用
 release、input 和适用的资源绑定；需要外部授权时，同时固定该 context。Durability 可以恢复同一
 execution，但不能创建第二个 logical run，也不能扩大原资源范围。Terminal result 必须解析到 Ledger facts。
+
+受支持的同步 Test Run 与随包多 Agent 样例共享本次调用的工作期限。同进程受管理子调用只能取得
+父调用剩余时限，重试不重置期限。准备成本、Provider 和声明命令消耗同一预算，超时后的有界清理
+及事实保留由原负责人完成。durable Workflow 的等待、恢复和跨调用生命周期不获得隐含总时限。
 
 自测仍产生同一类 Runtime execution facts，其保留期限由明确的测试资源策略决定。临时存储在存续期间
 是该次执行的事实权威；清理后不能声称仍可从已销毁资源恢复或检查。已有持久 Release Registry records
@@ -286,7 +292,8 @@ execution-invalid failure；Registry 不执行 run，也不把 pointer failure �
    宿主的可变 authoring tree。宿主也可直接提交等价的 repository-independent candidate content。
 8. 测试用途不会放宽 exact identity、declared operation、Profile/Adapter compatibility、workspace、network
    或 output validation；资源越界在相应效果发生前拒绝。
-9. Reviewer 的默认能力与模型选择分别确定并冻结；参数可以省略，但其来源与生效值不可缺失。
+9. Reviewer 默认能力与模型、同步运行时限分别确定；Module 固定能力和 Retry Policy 不因一次调用改变。
+   省略的执行参数按准确来源解析并记录生效值。
 10. 已交付宿主入口消费完整注册结果。采用单节点 Workflow 时，必须形成准确的 Workflow 与节点 Variant；
     standalone Variant 不可替代。宿主只组合公开接口，不重新实现默认底座或 Provider 启动器。
 
@@ -304,7 +311,8 @@ Runtime 在效果发生前拒绝，不自动补生产授权或转入生产入口
 自测的必要条件是 release/input closure、compatible Execution Profile、admitted Adapter、declared
 operations，以及可执行的 workspace、network 和资源限制。它不需要 Product Authorization client、
 生产 Entitlement、execution grant 或伪造的生产批准。Provider 登录由已有 Adapter 和宿主环境处理，
-登录失败保留 Invocation/environment failure，不改写为缺少产品授权。
+登录失败保留 Invocation/environment failure，不改写为缺少产品授权。新 Provider Attempt 还须满足
+当前 Module 定义编码的执行准入和仍有效的同步工作期限；历史读取或无 Provider 回放保留原准确事实。
 
 Runtime 自测宿主提供临时 record store、artifact store 和其他测试资源。没有明确的外部 Ledger binding
 时，测试结果只写入这些资源。外部保存需要宿主显式提供目标 binding 及其必要的访问凭据，不能从业务
