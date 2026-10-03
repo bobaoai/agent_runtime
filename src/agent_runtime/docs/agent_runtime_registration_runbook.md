@@ -364,30 +364,35 @@ Runtime 原恢复入口；不要换 key 重复不明效果。是否激活或正�
 `claude_cli` 时才回调；其他 transport 接受该参数但从不回调，执行不变。
 
 下例的前提是 root 下已有按 0.1 注册的单节点 Workflow。`host_root`、`workflow_id`、`input_path`
-由调用者给出，输入文件由该 Reviewer 所属工具按注册 schema 准备。示例不指定模型，沿用上文的参数来源层。
+由调用者给出，输入文件由该 Reviewer 所属工具按注册 schema 准备。示例用 `transport_kind="claude_cli"`
+只选择 transport，模型和 effort 仍按上文的参数来源层取值。若参数文件中的模型或 effort 写在解析为 Codex
+的层，调用会在 setup 前以 transport 混用的 `ValueError` 拒绝；此时在调用中同时给出 Claude 的 `model_id`
+与 `reasoning_profile`。
 
 <!-- example:watch-claude-run:start -->
 ```python
 import json
-import sys
+import os
 from pathlib import Path
 
 from agent_runtime import run_local_workflow_test
 
 
 def show_progress(snapshot):
-    # Called on a Runtime thread: show safe fields only and return promptly.
+    # Called on a Runtime thread: write one safe line to stderr and return promptly.
     event = snapshot.current_cli_event
     current = None if event is None else (event.phase, event.tool_category, event.command_id)
-    print(f"claude pid={snapshot.process_id} running={snapshot.process_running} "
-          f"elapsed={snapshot.elapsed_seconds:.0f}s stdout={snapshot.stdout_byte_count}B "
-          f"stderr={snapshot.stderr_byte_count}B trigger={snapshot.update_trigger} "
-          f"event={current} dropped={snapshot.updates_dropped}", file=sys.stderr, flush=True)
+    line = (f"claude pid={snapshot.process_id} running={snapshot.process_running} "
+            f"elapsed={snapshot.elapsed_seconds:.0f}s stdout={snapshot.stdout_byte_count}B "
+            f"stderr={snapshot.stderr_byte_count}B trigger={snapshot.update_trigger} "
+            f"event={current} dropped={snapshot.updates_dropped}\n")
+    os.write(2, line.encode("utf-8"))
 
 
 result = run_local_workflow_test(
     Path(host_root), workflow_id,
     input_payload=json.loads(Path(input_path).read_text(encoding="utf-8")),
+    transport_kind="claude_cli",  # Selects the transport only; model and effort keep their layers.
     progress_observer=show_progress,
 )
 # The full result holds the in-memory trace and private raw streams; show status only.
