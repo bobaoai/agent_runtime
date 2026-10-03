@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+from typing import Callable
 
 from ..contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
 from .invocation_cli_logging import captured_cli_streams
@@ -57,13 +58,18 @@ class LocalCommandSession:
 
     def __init__(self, *, request, profile, host, adapter, artifact_host, workspace_root: Path,
                  resources_body: bytes, source_root: Path, scratch_root: Path,
-                 read_only_dependencies: tuple[Path, ...] = ()) -> None:
+                 read_only_dependencies: tuple[Path, ...] = (),
+                 on_declared_command: Callable[[str, bool], None] | None = None) -> None:
         """Bind one exact Profile/control input to the existing live self-test host.
 
         source_root and scratch_root must belong to workspace_root. The private
         IPC/control directory is created separately and is never a task resource.
         Creates no model/command process; missing cli_tools or sandbox capability,
         mismatched content or overlapping private roots fail before CLI launch.
+        on_declared_command, when given, is called with (command_id, False) right
+        after a command is bound to the frozen command table and (command_id, True)
+        when that invocation ends. It is for volatile display only: unknown IDs never
+        reach it, and its exceptions never change responses, records or processes.
         """
         if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
             raise NotImplementedError("Local command isolation requires macOS sandbox-exec")
@@ -93,6 +99,7 @@ class LocalCommandSession:
         self._condition = threading.Condition(threading.RLock())
         self._closed = threading.Event()
         self._records, self._running, self._ordinal, self._fatal = [], 0, 0, None
+        self._on_declared_command = on_declared_command
         self._server = self._thread = self._private = None
         self._validate_host()
         control = [item for item in request.authorized_inputs if item.schema_ref == LOCAL_RESOURCES_SCHEMA_REF]
@@ -268,6 +275,7 @@ class LocalCommandSession:
                     "allowed": False, "returncode": None, "stdout": "", "stderr": "",
                     "process_output_complete": False, "failure": None}
         process = None
+        bound = False
         try:
             try:
                 self._validate_host()
@@ -278,6 +286,8 @@ class LocalCommandSession:
             if not isinstance(command_id, str) or command_id not in self._commands:
                 raise PermissionError("Command is outside this Attempt's declared command set")
             command = self._commands[command_id]
+            bound = True
+            self._notify_declared_command(command_id, False)
             argv, cwd = self._resolve_command(command)
             response.update(argv=argv, cwd=str(cwd), declared_argv=list(command["argv"]), declared_cwd=command["cwd"])
             def launch(create):
@@ -344,7 +354,18 @@ class LocalCommandSession:
                 finally:
                     self._running -= 1
                     self._condition.notify_all()
+            if bound:
+                self._notify_declared_command(command_id, True)
         return copy.deepcopy(response)
+
+    def _notify_declared_command(self, command_id: str, finished: bool) -> None:
+        # Display-only: a hook fault never changes a command response or record.
+        if self._on_declared_command is None:
+            return
+        try:
+            self._on_declared_command(command_id, finished)
+        except Exception:
+            pass
 
     def validate_completion(self):
         """Reject resource/integrity/cleanup failures; never require every command."""

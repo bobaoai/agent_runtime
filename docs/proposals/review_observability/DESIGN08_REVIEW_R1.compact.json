@@ -1,0 +1,135 @@
+{
+  "status": "completed",
+  "verdict": "passed",
+  "semantic_validation": {
+    "status": "passed"
+  },
+  "output": {
+    "check_results": [
+      {
+        "assessment": "本次授权要求：显式请求的 Claude CLI 工程审核能实时显示真实进程和工具事件的安全类别，过程不持久化，普通运行与 Inspection 的职责不变。§9 末段与 §11.2 已覆盖这些要求：只有宿主明确请求时才交付易失的安全摘要，摘要可区分进程存活、已收到的输出量、初始化、工具请求和工具返回；摘要不保存逐次历史；未请求观察的运行保持原处理；无法关联的类别保持未知。修订没有改变默认的工具评价、日志存储或权限超时，§0、§2、§3 的 User Intent 与 Reader Gain 仍然有效。",
+        "check_id": "intent_and_reader_result",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "文稿层级为 T2，canonical_owner 与 parent 都与 T1 §9 第 08 行 Invocation 一致。实时摘要由 Invocation 在调用期间产生；详细视图、请求与结果的持久关联仍归 Inspection；评价仍归 Evaluation。没有出现新的职责重叠或缺口，修订也没有重整邻接系统。",
+        "check_id": "layer_owner_and_parent",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "修订内容停留在 T2 层：规定了交付什么摘要、什么情况下进行有界内存关联、哪些内容排除、哪些判断不参与。没有规定回调签名、缓冲大小或展示形式，这些都留给代码。也没有为本功能新增存储、状态机或 error code，符合“按实际需要使用机制”。",
+        "check_id": "layer_content_fit",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "与 Inspection T2 §7 的分工一致：Inspection 在请求详细日志时解析 Provider 格式、关联逐次请求与结果并返回统一视图；候选的实时摘要明确“不形成详细工具视图”，§11.2 也写明它“不是归档或 Inspection 的详细视图”，旧版 trace 中 tool_log 的引用保持不变。与 T1 §5 和 §8 的质量规则（执行参数不扩大能力、Ledger 为事实来源）也不冲突。摘要不形成时间相关的持久记录，因此不触发 Timestamp T0 的额外要求。",
+        "check_id": "peer_authority_and_inheritance",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "执行主体、处理对象和动作都可以识别：宿主发出观察请求；Invocation（Claude Adapter）在调用期间读取实际收到的结构化事件，在有界内存中关联工具请求与返回，并向调用者交付安全摘要；声明命令的类别按冻结命令计划和实际资源调用记录核对；宿主或调用者负责显示。摘要不交给权限、失败、重试或业务结论的判断方，交接终点明确。没有新增管理角色。",
+        "check_id": "boundary_coherence",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "修订段落以目标设计的语气描述能力，没有声称当前代码已经实现。文首与 §12 继续由公开代码和 docstring 定义准确接口，也没有要求为摘要新增无人消费的机器对象或持久记录。",
+        "check_id": "design_and_code_truth_separation",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "§1 流程图没有画出可选的观察旁路，但图中的 R 节点（解析基本 metadata、归档原始日志）与正文不矛盾。§9 与 §11.2 互相印证：两处都要求显式请求、即时交付、不归档、无法关联的事件保持未知。摘要不参与失败处理，因此不需要新增 error code。观察请求的具体参数通道由公开代码定义，属于合理的下层选择。",
+        "check_id": "flow_interface_and_error_closure",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "未收到的事件、无法关联的事件、超出有界内存的事件，以及 command_id 不相符的情况，结果都是类别保持未知，不由模型文字补造（§11.2）。摘要明确不参与权限、失败、重试或业务结论判断，所以观察结果不会改变 Attempt 的终态。摘要不持久化，不需要恢复或回滚。",
+        "check_id": "failure_completion_and_rollback",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "下一层可以直接实现：触发条件是宿主显式请求且使用 Claude CLI；摘要内容是进程存活、输出量、初始化、工具请求、工具返回和可确定的工具类别；排除内容是思考、正文、工具参数和输出；关联方式只限本次调用的有界内存，声明命令另需核对 command_id；不保存历史；未请求观察的运行不受影响。回调或流式通道、内存上限和展示格式属于合理的实现选择。",
+        "check_id": "implementability_without_redesign",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "§14 末段区分了 Design 审查通过、代码实现与真实 Provider 验证。修订没有引入额外的审批状态或重复授权；观察只需宿主显式请求，不改变生产授权或 Provider 登录的处理。",
+        "check_id": "review_approval_and_admission",
+        "disposition": "passed",
+        "finding_ids": []
+      },
+      {
+        "assessment": "修订段落总体能被冷读者准确理解：内容排除、非持久化和不参与判断这几条都写得清楚。有两处措辞可选择改进，分别记为 note：一是 §9 第三段“普通运行不逐条配对”与第五段的观察例外，二是 command_id 一句的作用对象。两者都不会导致错误的实现动作。",
+        "check_id": "prose_and_meaning_preservation",
+        "disposition": "passed",
+        "finding_ids": [
+          "note.s9_ordinary_run_pairing_wording",
+          "note.s9_command_id_role_wording"
+        ]
+      }
+    ],
+    "findings": [
+      {
+        "accountable_owner_ref": "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+        "affected_candidate_document_id": "candidate_1",
+        "correction_target_document_id": "candidate_1",
+        "evidence": {
+          "locator": "§9 第三段与第五段",
+          "observation": "第三段写“工具请求、结果与错误保留在日志中，普通运行不逐条配对或评价”。第五段允许宿主请求观察的调用“在本次调用的有界内存中关联实际收到的结构化请求与返回”，结尾又写“未请求观察的普通运行保持原有处理”。这样读者要把第五段理解成第三段的例外；而“原有处理”需要回头对照前文才知道指什么。",
+          "source_ref": "candidate_1"
+        },
+        "finding_class": "prose_or_communication_defect",
+        "finding_id": "note.s9_ordinary_run_pairing_wording",
+        "impact": "含义可以推出，不会导致错误实现。冷读者可能短暂误以为观察模式违反了第三段的规则，或者不清楚“原有处理”具体指什么。",
+        "required_change": "可选改进：在第三段注明实时观察的易失类别关联不在此列；或者把“保持原有处理”改为直接写出行为，例如“不生成摘要，也不在内存中关联工具事件”。不构成通过条件。",
+        "requirement": "Review Contract 表达检查：局部修改应与上下文的术语和逻辑一致，避免前后表面矛盾或引用错位。",
+        "severity": "note"
+      },
+      {
+        "accountable_owner_ref": "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+        "affected_candidate_document_id": "candidate_1",
+        "correction_target_document_id": "candidate_1",
+        "evidence": {
+          "locator": "§9 第五段“已声明命令的 `command_id` 还须与冻结命令计划及实际资源调用相符”",
+          "observation": "这句话没有写明“相符”是哪个动作的条件：是把该事件标为某个声明命令类别的前提，还是摘要中可以显示 command_id 的前提。同段又写“摘要不含……工具参数”，而 command_id 来自工具调用参数。",
+          "source_ref": "candidate_1"
+        },
+        "finding_class": "prose_or_communication_defect",
+        "finding_id": "note.s9_command_id_role_wording",
+        "impact": "摘要只是展示，且 command_id 来自冻结计划、不含敏感内容，所以两种理解都不会造成泄露，也不影响判断。实现者可能在“是否显示 command_id”上作出不同选择。",
+        "required_change": "可选改进：写明 command_id 核对相符后，是作为安全类别标签显示，还是只用于关联；并说明不相符时按 §11.2 保持未知。不构成通过条件。",
+        "requirement": "Review Contract 表达检查：冷读者应能准确理解条件作用于什么结果。",
+        "severity": "note"
+      }
+    ],
+    "safe_next_step": "候选已通过语义检查和表达检查，没有 block 或 fix。Primary Agent 可以在已授权范围内，把本次 §9 与 §11.2 的修订写回 designDoc/agent_runtime_08_agent_execution_adapter_contract.md 源文件。两条 note 默认不进入本轮；若采纳，只限于措辞澄清，不得改变含义。部署到其他环境、实现实时摘要以及补充对应测试，都按各自授权另行处理；本次审查通过不证明这些工作已完成。",
+    "verdict": "passed"
+  },
+  "candidate_sha256_by_document_id": {
+    "candidate_1": "3d8d883210cabcb7a4c18fa502678c9cc07e036e7f799bde9f47f8dd273a04c3"
+  },
+  "review_input_sha256": "a1baf24fd0e8c71b9f8b65e3dab26cb66eb4ca44b669f33786e0316afcb9f4ce",
+  "module_release_ref": "runtime-module:design_contract_reviewer@portable_3836d30d_budget_v2",
+  "module_release_sha256": "7d40b37aa4b512e7092033044bf6999b5f0c9a54cc5d702f15ddb059d06e4dba",
+  "workflow_execution_id": "execution_20bf4824123dd27890641bac",
+  "module_run_id": "module_run_ac81fd84683c4310fc12050c",
+  "attempt_id": "module_attempt_edf139c5cc7e2b7958d5b031",
+  "requested_model": "claude-opus-5-5",
+  "requested_effort": "xhigh",
+  "observed_response_models": [
+    "claude-opus-5-5"
+  ],
+  "failure_class": null,
+  "failure_code": null,
+  "exit_code": 0,
+  "stop_reason": null,
+  "elapsed_seconds": 180.87634037500538
+}

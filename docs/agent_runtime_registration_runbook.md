@@ -43,6 +43,7 @@ CLI 查询仍只读注册定义，但首次调用可能补齐环境；普通 eva
 | 只有“我需要一个新的 Reviewer”的想法 | 由该审核对象的负责人完成 Reviewer 定义与审核；注册工具不会替你编写职责、prompt 或 schema |
 | 已批准的准确 Reviewer source，尚未注册 | [通过本地 CLI 注册并回读](#prepare-reviewer) |
 | 已有当前 Runtime 可执行的准确 Module release，想运行一份新材料 | 直接进入[首次或再次测试](#test-reviewer)，不重新编译或注册 |
+| 想在测试运行期间看到 Claude 进程与当前步骤 | 调用时开启[运行中状态](#watch-claude-run) |
 | 已升级 Runtime，旧 Reviewer 定义需要采用新编码 | [升级已有 Reviewer](#upgrade-existing-reviewer)，完成一次新版本注册与验证 |
 | 已有 execution ID，想看结果或排错 | 进入[查询](#inspect-reviewer)，不再次调用模型 |
 
@@ -344,6 +345,85 @@ release_store 是宿主明确的现有 Registry，要求已建好 schema；准�
 无需重新读取 authoring source 或重新注册定义。明确更换模型使用新 key；
 相同 key 用于同一准确执行重放，不能换材料、模型或配置。已有 started 记录但没有 committed 结果时，使用
 Runtime 原恢复入口；不要换 key 重复不明效果。是否激活或正式部署另行决定。
+
+<a id="watch-claude-run"></a>
+
+#### 查看 Claude 运行中状态 / Watch a running Claude review
+
+审核运行时间较长时，可以让 Runtime 在 Claude CLI 进程运行期间交付易失的安全摘要，用来区分进程
+是否仍在运行、已收到多少输出、当前走到哪一步。摘要只供即时显示，不是执行记录。
+
+| 入口 | 如何开启 |
+| --- | --- |
+| Python 调用 [run_local_workflow_test](agent_runtime_reviewer_api.md#run_local_workflow_test) | 传 `progress_observer=callback`，见下方示例 |
+| 自行构造 [ClaudeAdapter](agent_runtime_reviewer_api.md#claudeadapter) 的宿主 | 构造时传同一个 `progress_observer` |
+| 通用 `agent-runtime-test-run` CLI | 没有观察开关；需要时改用上面的 Python 入口 |
+| Portable 正式 `engineering_review.py` | 自动在 stderr 逐行输出顶层键为 `runtime_process_progress` 的 JSON；其参数和保存结果以 Portable 文档为准 |
+
+只有解析后的 transport（本次调用、Workflow 参数文件、workspace 参数文件，最后 Runtime 默认）是
+`claude_cli` 时才回调；其他 transport 接受该参数但从不回调，执行不变。
+
+下例的前提是 root 下已有按 0.1 注册的单节点 Workflow。`host_root`、`workflow_id`、`input_path`
+由调用者给出，输入文件由该 Reviewer 所属工具按注册 schema 准备。示例用 `transport_kind="claude_cli"`
+只选择 transport，模型和 effort 仍按上文的参数来源层取值。若参数文件中的模型或 effort 写在解析为 Codex
+的层，调用会在 setup 前以 transport 混用的 `ValueError` 拒绝；此时在调用中同时给出 Claude 的 `model_id`
+与 `reasoning_profile`。
+
+<!-- example:watch-claude-run:start -->
+```python
+import json
+import os
+from pathlib import Path
+
+from agent_runtime import run_local_workflow_test
+
+
+def show_progress(snapshot):
+    # Called on a Runtime thread: write one safe line to stderr and return promptly.
+    event = snapshot.current_cli_event
+    current = None if event is None else (event.phase, event.tool_category, event.command_id)
+    line = (f"claude pid={snapshot.process_id} running={snapshot.process_running} "
+            f"elapsed={snapshot.elapsed_seconds:.0f}s stdout={snapshot.stdout_byte_count}B "
+            f"stderr={snapshot.stderr_byte_count}B trigger={snapshot.update_trigger} "
+            f"event={current} dropped={snapshot.updates_dropped}\n")
+    os.write(2, line.encode("utf-8"))
+
+
+result = run_local_workflow_test(
+    Path(host_root), workflow_id,
+    input_payload=json.loads(Path(input_path).read_text(encoding="utf-8")),
+    transport_kind="claude_cli",  # Selects the transport only; model and effort keep their layers.
+    progress_observer=show_progress,
+)
+# The full result holds the in-memory trace and private raw streams; show status only.
+print({"status": result["status"], "failure_class": result["failure_class"]})
+```
+<!-- example:watch-claude-run:end -->
+
+每个 snapshot 只有下列字段，不含思考、正文、工具参数、工具输出或逐次历史：
+
+| 字段 | 含义 |
+| --- | --- |
+| `update_trigger` | `process_started`、`event_received`、`heartbeat`、`process_finished`；事件摘要因内部故障停止时为 `observation_stopped`，进程事实继续交付 |
+| `process_id`、`process_running` | 当前 CLI 进程的 PID 与是否仍在运行；重试启动新进程，从 `process_started` 重新开始 |
+| `elapsed_seconds` | 该进程启动后的耗时 |
+| `stdout_byte_count`、`stderr_byte_count` | 已采集的输出字节数 |
+| `current_cli_event` | 最近一个已识别事件，或 None。`phase` 为 `init_observed`、`model_activity_observed`、`tool_requested`、`tool_result_observed`、`final_result_observed`、`declared_command_started`、`declared_command_finished`；`tool_category` 是安全类别或 None，无法关联到请求的返回为 `unknown`；`command_id` 仅在 Runtime 绑定了本次已声明命令时给出 |
+| `updates_dropped` | 自上次交付以来因观察者过慢而丢弃的 snapshot 数 |
+
+读数时注意：
+
+- 10 秒内没有新事件时发 `heartbeat`，重复上一个事件摘要。静默期的 heartbeat、不变或为 0 的字节数
+  都不是“模型没有进展”的证据。
+- 未交付的 snapshot 最多缓存 16 个，超出时丢弃最旧的，下一次交付用 `updates_dropped` 报告数量。
+- callback 在 Runtime 线程上按顺序调用，应快速返回，不在其中等待外部服务。callback 抛出的异常不会
+  传给调用者，之后也不再回调；执行、期限、清理和返回结果都不受影响。运行返回时不等待尚未交付的摘要。
+- `progress_observer` 不可调用时在 setup 前抛出 `TypeError`；其他错误、`status` 与返回值语义和不观察时相同，
+  `status=completed` 也不等于审核通过，见 [run_local_workflow_test](agent_runtime_reviewer_api.md#run_local_workflow_test)。
+- Runtime 不保存这些摘要，但这不表示返回结果里没有过程信息。通用 Test Run 的完整返回值（及其 CLI
+  stdout）包含内存 `execution_trace`、带原始流的 `execution_log` 和 `provider_trace`，可能含私有材料，
+  不要整体打印或写入共享日志；Portable 正式入口保存的是它自己的精简审核结果。需要详细工具日志时按
+  [0.4](#inspect-reviewer) 读取。
 
 <a id="inspect-reviewer"></a>
 

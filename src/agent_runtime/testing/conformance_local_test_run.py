@@ -82,6 +82,7 @@ def run_local_workflow_test(
     material_root: Path | None = None, material_files: tuple[dict, ...] = (),
     read_only_dependencies: tuple[Path, ...] | None = None, commands: tuple[dict, ...] = (),
     tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None,
+    progress_observer=None,
 ) -> dict:
     """Test-run a registered single-node Workflow using temporary test resources.
 
@@ -186,6 +187,19 @@ def run_local_workflow_test(
             cancellation, also passed to the underlying running CLI process.
         resource_cancel_requested: Optional trusted callback for parent resource
             closure. Stops the process as resource_closed, not user cancellation.
+        progress_observer: Optional callable for volatile live display. It is
+            attached only when the resolved transport (call, Workflow or
+            workspace parameter file, or Runtime default) is claude_cli; for
+            other transports it is accepted and never called, so no progress
+            is shown and the run is unchanged. It receives CliProcessProgress
+            snapshots on a Runtime thread and should return promptly: process
+            facts plus one safe current-event summary, published when an init,
+            model activity, tool request or result, final result or declared
+            command is received, and as a heartbeat after 10 s without one
+            (repeating the last event). Delivery is in order through a buffer
+            of at most 16 snapshots; updates_dropped reports any that were lost.
+            Snapshots are display-only, never records; zero bytes does not mean
+            the model made no progress. Observation never changes the result.
     Returns:
         JSON-compatible execution facts and output. execution_parameter_sources
         gives each parameter's source layer (call, workflow_file,
@@ -229,6 +243,7 @@ def run_local_workflow_test(
             rejected before setup, a PostgreSQL connection or a Provider call.
         jsonschema.exceptions.ValidationError: Input violates its registered schema.
         PermissionError: The requested operation is outside bounded test resources.
+        TypeError: progress_observer is not callable, checked before setup.
         Exception: Existing provider/environment errors retain their contracts.
     Effects:
         Runs lightweight setup_runtime(root), reads fixed definitions (reading
@@ -241,6 +256,8 @@ def run_local_workflow_test(
         explicitly save the returned result; Runtime does not save it by default.
     """
     entered = time.monotonic()
+    if progress_observer is not None and not callable(progress_observer):
+        raise TypeError("progress_observer must be callable")
     if parent_run is not None:
         from ..execution.execution_run_budget import ParentRunContext
         if type(parent_run) is not ParentRunContext:
@@ -325,9 +342,11 @@ def run_local_workflow_test(
         with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:
             workspace = Path(directory).resolve()
             if selected_profile.transport_kind == "claude_cli":
+                observation = {} if progress_observer is None else {"progress_observer": progress_observer}
                 adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
                     workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
-                    adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision))
+                    adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision),
+                    **observation)
             elif (selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision) == (
                     CodexCliAgentWorkspaceModuleExecutor.executor_adapter_id,
                     CodexCliAgentWorkspaceModuleExecutor.executor_adapter_revision):
