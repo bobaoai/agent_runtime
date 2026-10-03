@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import deque
 from contextlib import contextmanager
+from dataclasses import dataclass, replace
 import os
 import math
 import time
@@ -10,13 +12,186 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
-from threading import Event, Thread, current_thread, main_thread
+from threading import Event, Lock, Thread, current_thread, main_thread
 from typing import Callable
 
 import psutil
 
 
 DEFAULT_PROCESS_OUTPUT_BYTES = 16 * 1024 * 1024
+_PROGRESS_PENDING_LIMIT = 16
+_PROGRESS_HEARTBEAT_SECONDS = 10.0
+
+
+@dataclass(frozen=True)
+class CliEventSummary:
+    """Safe description of the latest recognized CLI activity; never content.
+
+    phase is one of init_observed, model_activity_observed, tool_requested,
+    tool_result_observed, final_result_observed, declared_command_started or
+    declared_command_finished. tool_category is a closed safe category or None;
+    command_id is set only when Runtime bound a declared command.
+    """
+
+    phase: str
+    tool_category: str | None = None
+    command_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CliProcessProgress:
+    """One volatile live-observation snapshot; display only, never a record.
+
+    update_trigger is process_started, event_received, heartbeat,
+    process_finished or observation_stopped. updates_dropped counts snapshots
+    lost since the previous delivery because the observer fell behind. Byte
+    counts are capture lengths; zero means no observable output, not lack of
+    model progress. elapsed_seconds is process-local monotonic time.
+    """
+
+    update_trigger: str
+    updates_dropped: int
+    process_id: int
+    process_running: bool
+    elapsed_seconds: float
+    stdout_byte_count: int
+    stderr_byte_count: int
+    current_cli_event: CliEventSummary | None
+
+
+class CliProgressChannel:
+    """Bounded, in-order, non-persistent delivery of live process snapshots.
+
+    Producers (an Adapter's stdout summarizer or declared-command hook) call
+    event or stop_events; the process host attaches, heartbeats after quiet
+    periods and finishes. Each publication builds an immutable snapshot under
+    one short lock and joins a buffer of at most 16 undelivered snapshots; the
+    oldest is dropped beyond that and the next delivery reports updates_dropped.
+    A daemon relay calls the observer outside every lock, in publication order.
+    Nothing is persisted and no history is kept. Every method an execution path
+    calls swallows its own Exception and disables the channel, so observation
+    never changes capture, deadlines, cleanup or results. _finish publishes the
+    last snapshot and returns without waiting for the relay or observer; a
+    blocked observer may therefore miss queued updates after the run returns.
+    An observer that raises is not called again.
+    """
+
+    def __init__(self, observer: Callable[[CliProcessProgress], None]) -> None:
+        if not callable(observer):
+            raise TypeError("progress observer must be callable")
+        self._observer = observer
+        self._lock = Lock()
+        self._ready = Event()
+        self._pending: deque[CliProcessProgress] = deque()
+        self._dropped = 0
+        self._current: CliEventSummary | None = None
+        self._events_stopped = False
+        self._process = None
+        self._started_monotonic = 0.0
+        self._byte_counts: Callable[[], tuple[int, int]] | None = None
+        self._last_published = 0.0
+        self._closed = False
+
+    def event(self, summary: CliEventSummary) -> None:
+        """Publish a recognized transition; a no-op after stop or finish."""
+        try:
+            with self._lock:
+                if self._closed or self._events_stopped:
+                    return
+                self._current = summary
+                if self._process is not None:
+                    self._publish("event_received")
+        except Exception:
+            self._fail()
+
+    def stop_events(self) -> None:
+        """Stop event summaries after a summarizer fault; process facts continue."""
+        try:
+            with self._lock:
+                if self._closed or self._events_stopped:
+                    return
+                self._events_stopped = True
+                self._current = None
+                if self._process is not None:
+                    self._publish("observation_stopped")
+        except Exception:
+            self._fail()
+
+    def _attach(self, process, started_monotonic: float, byte_counts: Callable[[], tuple[int, int]]) -> None:
+        try:
+            with self._lock:
+                if self._closed:
+                    return
+                self._process, self._started_monotonic, self._byte_counts = process, started_monotonic, byte_counts
+                self._publish("process_started")
+            Thread(target=self._deliver, daemon=True, name="agent-runtime-cli-progress").start()
+        except Exception:
+            self._fail()
+
+    def _heartbeat_if_quiet(self, now: float) -> None:
+        try:
+            with self._lock:
+                if (not self._closed and self._process is not None
+                        and now - self._last_published >= _PROGRESS_HEARTBEAT_SECONDS):
+                    self._publish("heartbeat")
+        except Exception:
+            self._fail()
+
+    def _finish(self) -> None:
+        try:
+            with self._lock:
+                if not self._closed and self._process is not None:
+                    self._publish("process_finished")
+                self._closed = True
+                self._ready.set()
+        except Exception:
+            self._fail()
+
+    def _publish(self, trigger: str) -> None:
+        # Caller holds self._lock; byte_counts takes the capture lock after it.
+        stdout_count, stderr_count = self._byte_counts()
+        now = time.monotonic()
+        snapshot = CliProcessProgress(
+            update_trigger=trigger, updates_dropped=0, process_id=self._process.pid,
+            process_running=self._process.poll() is None,
+            elapsed_seconds=max(0.0, now - self._started_monotonic),
+            stdout_byte_count=stdout_count, stderr_byte_count=stderr_count,
+            current_cli_event=None if self._events_stopped else self._current)
+        if len(self._pending) >= _PROGRESS_PENDING_LIMIT:
+            self._pending.popleft()
+            self._dropped += 1
+        self._pending.append(snapshot)
+        self._last_published = now
+        self._ready.set()
+
+    def _fail(self) -> None:
+        try:
+            with self._lock:
+                self._closed = True
+                self._pending.clear()
+                self._ready.set()
+        except Exception:
+            pass
+
+    def _deliver(self) -> None:
+        while True:
+            self._ready.wait()
+            with self._lock:
+                if self._pending:
+                    snapshot = self._pending.popleft()
+                    if self._dropped:
+                        snapshot = replace(snapshot, updates_dropped=self._dropped)
+                        self._dropped = 0
+                elif self._closed:
+                    return
+                else:
+                    self._ready.clear()
+                    continue
+            try:
+                self._observer(snapshot)
+            except Exception:
+                self._fail()
+                return
 
 
 def _runtime_python_executable() -> Path:
@@ -220,6 +395,7 @@ def _run_cli_process(
     cancel_requested: Callable[[], bool] | None = None,
     user_cancel_requested: Callable[[], bool] | None = None,
     deadline_monotonic: float | None = None,
+    progress_channel: CliProgressChannel | None = None,
     interrupted: _CliInterruptState,
 ) -> subprocess.CompletedProcess[str]:
     """Drain both streams, stop the group on failure, preserve exact captured bytes.
@@ -239,6 +415,8 @@ def _run_cli_process(
         raise ValueError("CLI process timeout must be positive")
     if deadline_monotonic is not None and (type(deadline_monotonic) not in (int, float) or not math.isfinite(deadline_monotonic)):
         raise ValueError("deadline_monotonic must be a finite process-local value")
+    if progress_channel is not None and not isinstance(progress_channel, CliProgressChannel):
+        raise TypeError("progress_channel must be a CliProgressChannel")
     def launch():
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             raise CliProcessTimeout(argv, 0, returncode=None, output="", stderr="",
@@ -315,6 +493,12 @@ def _run_cli_process(
     workers = [Thread(target=drain, args=(process.stdout, 0), daemon=True),
                Thread(target=drain, args=(process.stderr, 1), daemon=True),
                Thread(target=write_input, daemon=True)]
+    if progress_channel is not None:
+        # Attach before any worker starts, so fast stdout events are published.
+        def byte_counts() -> tuple[int, int]:
+            with lock:
+                return len(captured[0]), len(captured[1])
+        progress_channel._attach(process, time.monotonic(), byte_counts)
     for worker in workers:
         worker.start()
     process_started = time.monotonic()
@@ -333,6 +517,8 @@ def _run_cli_process(
                     mark_failure("cleanup_error")
                     break
                 ownership_check = time.monotonic() + 0.1
+            if progress_channel is not None:
+                progress_channel._heartbeat_if_quiet(time.monotonic())
             if time.monotonic() >= deadline:
                 mark_failure("timeout")
                 break
@@ -379,6 +565,8 @@ def _run_cli_process(
         mark_failure("cleanup_error")
     with lock:
         stdout_bytes, stderr_bytes = map(bytes, captured)
+    if progress_channel is not None:
+        progress_channel._finish()
     stdout, stderr = (value.decode("utf-8", errors="replace") for value in (stdout_bytes, stderr_bytes))
     if interrupted.requested or failure == "cancelled":
         raise CliProcessInterrupted(returncode=process.returncode, output=stdout, stderr=stderr,
@@ -415,6 +603,7 @@ def run_cli_process(
     cancel_requested: Callable[[], bool] | None = None,
     user_cancel_requested: Callable[[], bool] | None = None,
     deadline_monotonic: float | None = None,
+    progress_channel: CliProgressChannel | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Capture bounded exact streams through process shutdown and output handoff.
 
@@ -429,15 +618,22 @@ def run_cli_process(
     user_cancel_requested is a separate trusted callback for user cancellation
     from another thread; it stops the process and raises CliProcessInterrupted
     with captured bytes. It never converts resource closure into a user action.
+    An optional progress_channel receives volatile process snapshots: when the
+    process starts, after 10 s without a publication, and once at the end. Its
+    producers add event updates. It never alters capture, deadlines, cleanup or
+    the result, and the final snapshot is published without waiting for the
+    observer. None keeps the original behavior and threads.
     """
     with _capture_cli_interrupts() as interrupted:
         return _run_cli_process(argv=argv, prompt=prompt, cwd=cwd, timeout_seconds=timeout_seconds,
             environment=environment, max_output_bytes=max_output_bytes, on_stdout_line=on_stdout_line,
             launch_guard=launch_guard, cancel_requested=cancel_requested,
-            user_cancel_requested=user_cancel_requested, deadline_monotonic=deadline_monotonic, interrupted=interrupted)
+            user_cancel_requested=user_cancel_requested, deadline_monotonic=deadline_monotonic,
+            progress_channel=progress_channel, interrupted=interrupted)
 
 
-__all__ = ["CliProcessError", "CliProcessTimeout", "CliProcessInterrupted", "run_cli_process"]
+__all__ = ["CliEventSummary", "CliProcessError", "CliProcessInterrupted", "CliProcessProgress",
+           "CliProcessTimeout", "CliProgressChannel", "run_cli_process"]
 
 
 def invocation_deadline(host, request):

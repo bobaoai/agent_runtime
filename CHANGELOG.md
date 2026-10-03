@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0.dev10
+
+- Add optional `progress_observer` to `run_local_workflow_test` for volatile live observation of Claude CLI runs: process liveness, elapsed time, byte counts and one safe current-event summary (init, model activity, tool request or result with a safe category, final result, declared command start/finish by `command_id`). Updates are delivered on receipt through a bounded in-order buffer of 16 with an explicit `updates_dropped` count, plus a heartbeat after 10 s without output; nothing is persisted and no content, arguments or output are exposed.
+- Observation is attached only when the resolved transport is `claude_cli`; Codex runs accept and ignore the observer. Callers that omit it keep identical arguments, threads, records and failure mapping. Observation faults and blocked observers never change capture, deadlines, cleanup or results.
+- Regenerate the packaged Design Contract mirror for the committed Design 08 live-observation boundary.
+
 ## 0.2.0.dev9
 
 - Add one consumer upgrade procedure for existing Reviewers, with installation, new definition registration, exact readback and Test Run verification.

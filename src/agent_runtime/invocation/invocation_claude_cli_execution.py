@@ -24,8 +24,8 @@ from ..foundation.foundation_json_encoding import decode_cli_event
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from .invocation_context_preparation import InvocationExecutionExpectation, prepare_registered_invocation_context
 from .invocation_process_execution import (
-    run_cli_process, CliProcessInterrupted, _capture_cli_interrupts,
-    _runtime_python_executable, _runtime_python_read_roots,
+    run_cli_process, CliEventSummary, CliProcessInterrupted, CliProcessProgress, CliProgressChannel,
+    _capture_cli_interrupts, _runtime_python_executable, _runtime_python_read_roots,
 )
 from .invocation_cli_logging import captured_cli_streams
 from .invocation_prompt_assembly import NATIVE_STRUCTURED_OUTPUT
@@ -47,6 +47,115 @@ from .invocation_workspace_preparation import (
 
 NATIVE_TOOLS = {"read": "Read", "search": "Grep", "shell": "Bash"}
 _CURRENT_BINDING = ("claude_cli_adapter", "v3")
+# The CLI's native structured-output tool; an output mechanism, not a task tool.
+_STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
+_PENDING_TOOL_LIMIT = 64
+_NATIVE_TOOL_CATEGORIES = {name: category for category, name in NATIVE_TOOLS.items()}
+
+
+class _ClaudeEventProgress:
+    """Per-Attempt safe summary of Claude stream-json activity for live display.
+
+    Reads only event and block types, tool_use id and name, and tool_result
+    tool_use_id; never content, arguments, text, thinking or token values. A
+    bounded map of at most 64 pending requests correlates a result with its
+    request's category inside this call; uncorrelated results are unknown.
+    Malformed nesting is handled by explicit checks. Any unexpected fault stops
+    event summaries through the channel and is never raised to the caller.
+    """
+
+    def __init__(self, channel: CliProgressChannel, *, native_structured_output: bool) -> None:
+        self._channel = channel
+        self._native_structured_output = native_structured_output
+        self._callback_tools: frozenset[str] = frozenset()
+        self._pending: dict[str, str] = {}
+        self._model_active = False
+        self._stopped = False
+
+    def bind_callback_tools(self, names) -> None:
+        """Accept the frozen callback bridge's CLI tool names before the CLI starts."""
+        self._callback_tools = frozenset(name for name in names if isinstance(name, str))
+
+    def record(self, event: dict) -> None:
+        """Publish the recognized transition in one decoded event; never raises."""
+        if self._stopped:
+            return
+        try:
+            summary = self._summarize(event)
+            if summary is not None:
+                self._channel.event(summary)
+        except Exception:
+            self._stop()
+
+    def declared_command(self, command_id: str, finished: bool) -> None:
+        """Publish a declared command bound by LocalCommandSession; never raises."""
+        if self._stopped:
+            return
+        try:
+            phase = "declared_command_finished" if finished else "declared_command_started"
+            self._channel.event(CliEventSummary(phase, "declared_command", command_id))
+        except Exception:
+            self._stop()
+
+    def _stop(self) -> None:
+        self._stopped = True
+        self._channel.stop_events()
+
+    def _category(self, name) -> str:
+        if not isinstance(name, str):
+            return "other_tool"
+        if name in _NATIVE_TOOL_CATEGORIES:
+            return _NATIVE_TOOL_CATEGORIES[name]
+        if name == LOCAL_COMMAND_CLI_TOOL_NAME:
+            return "declared_command"
+        if name in self._callback_tools:
+            return "declared_callback"
+        if self._native_structured_output and name == _STRUCTURED_OUTPUT_TOOL:
+            return "structured_output"
+        return "other_tool"
+
+    def _transition(self, phase: str, category: str | None = None) -> CliEventSummary:
+        self._model_active = False
+        return CliEventSummary(phase, category)
+
+    def _activity(self) -> CliEventSummary | None:
+        if self._model_active:
+            return None
+        self._model_active = True
+        return CliEventSummary("model_activity_observed")
+
+    def _summarize(self, event: dict) -> CliEventSummary | None:
+        kind, subtype = event.get("type"), event.get("subtype")
+        if kind == "system" and subtype == "init":
+            return self._transition("init_observed")
+        if kind == "system" and subtype == "thinking_tokens":
+            return self._activity()
+        if kind == "result":
+            return self._transition("final_result_observed")
+        message = event.get("message")
+        blocks = message.get("content") if isinstance(message, dict) else None
+        blocks = [block for block in blocks if isinstance(block, dict)] if isinstance(blocks, list) else []
+        if kind == "assistant":
+            uses = [block for block in blocks if block.get("type") == "tool_use"]
+            if not uses:
+                return self._activity()
+            for use in uses:
+                identity = use.get("id")
+                if isinstance(identity, str) and identity:
+                    if identity not in self._pending and len(self._pending) >= _PENDING_TOOL_LIMIT:
+                        del self._pending[next(iter(self._pending))]
+                    self._pending[identity] = self._category(use.get("name"))
+            return self._transition("tool_requested", self._category(uses[-1].get("name")))
+        if kind == "user":
+            results = [block for block in blocks if block.get("type") == "tool_result"]
+            if results:
+                categories = []
+                for item in results:
+                    identity = item.get("tool_use_id")
+                    valid = isinstance(identity, str) and identity
+                    categories.append(self._pending.pop(identity, "unknown") if valid else "unknown")
+                return self._transition("tool_result_observed", categories[-1])
+        return None
 
 
 def _validate_binding(binding: tuple[str, str]) -> None:
@@ -131,7 +240,8 @@ class ClaudeAdapter:
     def __init__(self, *, release_registry: RuntimeReleaseRegistry, artifact_host: ModuleArtifactHost,
                  workspace_root: Path, cli_path: Path | str, read_only_dependencies: tuple[Path, ...] = (),
                  process_runner: Callable = run_cli_process,
-                 adapter_binding: tuple[str, str] = _CURRENT_BINDING) -> None:
+                 adapter_binding: tuple[str, str] = _CURRENT_BINDING,
+                 progress_observer: Callable[[CliProcessProgress], None] | None = None) -> None:
         """Bind trusted resources and the current executable Adapter identity.
 
         adapter_binding is claude_cli_adapter@v3. Old Profile records remain
@@ -157,13 +267,27 @@ class ClaudeAdapter:
             read_only_dependencies: Explicit trusted read roots; no task discovery.
             process_runner: Runtime process executor or a test-owned double.
             adapter_binding: Exact currently implemented pair.
+            progress_observer: Optional callable receiving volatile
+                CliProcessProgress snapshots while each CLI process runs: process
+                facts plus one safe current-event summary (init, model activity,
+                tool request or result with a safe category, final result, or a
+                declared command bound by Runtime). Never content, arguments,
+                output or history. Delivery is in order through a bounded
+                buffer, may drop updates for a slow observer (reported as
+                updates_dropped) and never changes execution, trace or result.
+                None keeps the original arguments to process_runner and
+                LocalCommandSession.
         Raises:
+            TypeError: progress_observer is not callable.
             ValueError: Unknown adapter identity or invalid descriptor.
             OSError: Executable or a dependency path cannot be resolved.
         Effects:
             Resolves paths only; no provider invocation, registration or login.
         """
         _validate_binding(adapter_binding)
+        if progress_observer is not None and not callable(progress_observer):
+            raise TypeError("progress_observer must be callable")
+        self._progress_observer = progress_observer
         self.executor_adapter_id, self.executor_adapter_revision = adapter_binding
         self._registry = release_registry
         self._artifacts = artifact_host
@@ -339,6 +463,7 @@ class ClaudeAdapter:
         local_commands = None
         provider_tools = None
         resources_body = None
+        channel = events = None
 
         def usage_fields():
             raw = result.get("usage")
@@ -397,6 +522,8 @@ class ClaudeAdapter:
                 models = trace.setdefault("response_models", [])
                 if message["model"] not in models:
                     models.append(message["model"])
+            if events is not None:
+                events.record(event)
             return event_error is None
 
         stage = "workspace_preparation"
@@ -445,15 +572,22 @@ class ClaudeAdapter:
                 if any(private.resolve().is_relative_to(dep) or dep.is_relative_to(private.resolve())
                        for private in private_paths for dep in read_dependencies):
                     raise PermissionError("Read-only dependencies overlap private Provider state or credentials")
+                if self._progress_observer is not None:
+                    channel = CliProgressChannel(self._progress_observer)
+                    events = _ClaudeEventProgress(channel, native_structured_output=native_schema is not None)
                 if resources_body is not None and parse_local_resources(resources_body)["commands"]:
                     stage = "local_command_preparation"
+                    observation = {} if events is None else {"on_declared_command": events.declared_command}
                     local_commands = cleanup.enter_context(LocalCommandSession(request=request, profile=profile, host=host, adapter=self,
                         artifact_host=self._artifacts, workspace_root=self._workspace_root, resources_body=resources_body,
-                        source_root=materials / "source", scratch_root=scratch, read_only_dependencies=self._dependencies))
+                        source_root=materials / "source", scratch_root=scratch, read_only_dependencies=self._dependencies,
+                        **observation))
                 if self._tool_factory is not None:
                     stage = "provider_tool_preparation"
                     provider_tools = cleanup.enter_context(ProviderToolSessionBridge(request=request, host=host,
                         factory=self._tool_factory, definitions=self._tool_definitions, timeout_seconds=profile.timeout_seconds))
+                    if events is not None:
+                        events.bind_callback_tools(provider_tools.cli_tools)
                 settings = {
                     "permissions": {"blockReadsOutsideWorkingDirectories": True,
                         "additionalDirectories": [str(materials), *map(str, read_dependencies)]},
@@ -507,6 +641,8 @@ class ClaudeAdapter:
                             request, launch, adapter=self, artifact_host=self._artifacts,
                             workspace_root=self._workspace_root, read_only_dependencies=self._dependencies)
                         launch_options.update(cancellation)
+                    if channel is not None:
+                        launch_options["progress_channel"] = channel
                     process = self._run(argv=argv, prompt=prompt, cwd=cwd, environment=environment,
                                         timeout_seconds=profile.timeout_seconds, on_stdout_line=observe,
                                         deadline_monotonic=invocation_deadline(host, request),
