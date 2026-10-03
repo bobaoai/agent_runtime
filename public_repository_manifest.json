@@ -35,6 +35,10 @@
     "tests/fixtures/claude_v2_replay/generate.py",
     "tests/fixtures/operator_skills_dev7/agent-runtime-evaluation.SKILL.md",
     "tests/fixtures/operator_skills_dev7/agent-runtime-registration.SKILL.md",
+    "tests/acceptance/review_observability/README.md",
+    "tests/acceptance/review_observability/commands.json",
+    "tests/acceptance/review_observability/plan.md",
+    "tests/acceptance/review_observability/verify_installed_review.py",
     "tests/test_workflow_execution_ledger_recording.py",
     "tools/registry_schema_migration_planning.py",
     "tests/test_registry_schema_migration_planning_tool.py"
