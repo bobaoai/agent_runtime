@@ -9,7 +9,6 @@ import time
 import pytest
 
 from agent_runtime.invocation.invocation_workspace_preparation import (
-    _WINDOWS_LEASE_LOCK_OFFSET,
     AttemptWorkspaceConflictError,
     lease_attempt_workspace,
     prepare_attempt_workspace,
@@ -145,10 +144,14 @@ def test_workspace_lock_is_released_when_holder_process_crashes(
         )
 
     if sys.platform == "win32":
+        from agent_runtime.invocation.invocation_windows_host_operation import (
+            WINDOWS_LEASE_LOCK_OFFSET,
+        )
+
         lock_holder = (
             "import msvcrt,os,sys; "
             "handle=open(sys.argv[1], 'a+'); "
-            f"os.lseek(handle.fileno(), {_WINDOWS_LEASE_LOCK_OFFSET}, os.SEEK_SET); "
+            f"os.lseek(handle.fileno(), {WINDOWS_LEASE_LOCK_OFFSET}, os.SEEK_SET); "
             "msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1); "
             "print('locked', flush=True); sys.stdin.read()"
         )
@@ -214,10 +217,10 @@ sys.path.insert(0, str(Path.cwd() / "src"))
 
 original_import = builtins.__import__
 def without_os_lock(name, globals=None, *args, **kwargs):
-    # Hide the lock modules only from the lease code: the standard library
-    # (subprocess on Windows) still needs msvcrt to import.
+    # Hide the lock modules only from the two host operation modules: the
+    # standard library (subprocess on Windows) still needs msvcrt to import.
     importer = (globals or {}).get("__name__", "")
-    if name in {"fcntl", "msvcrt"} and importer.endswith("invocation_workspace_preparation"):
+    if name in {"fcntl", "msvcrt"} and importer.endswith("_host_operation"):
         raise ModuleNotFoundError("simulated host without an OS file lock")
     return original_import(name, globals, *args, **kwargs)
 builtins.__import__ = without_os_lock

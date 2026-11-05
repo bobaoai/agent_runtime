@@ -666,6 +666,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "preparation",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
+    _source("invocation", "host_platform", "selection",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "posix_host", "operation",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "windows_host", "operation",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
     _source(
         "durability",
         "backend",

@@ -9,54 +9,12 @@ import os
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
-try:  # pragma: no branch - selected once for the host platform
-    import fcntl as _fcntl
-except ImportError:  # Windows has no fcntl module
-    _fcntl = None
-
-if _fcntl is None:
-    try:  # pragma: no branch - selected once for the host platform
-        import msvcrt as _msvcrt
-    except ImportError:  # Neither a POSIX nor a Windows host
-        _msvcrt = None
-else:
-    _msvcrt = None
-
 from ..foundation.foundation_contract_validation import validate_id
+from .invocation_host_platform_selection import HOST_PLATFORM, UnsupportedHostError
 
 
 _MARKER_NAME = ".agent_runtime_attempt.json"
 _LEASE_DIRECTORY_NAME = ".agent_runtime_attempt_leases"
-# Windows byte-range locks cover explicit offsets, not the whole file. The lease
-# locks one byte far past the PID record, so the record stays readable and
-# rewritable while the lock is held. Exported for tests that hold the lease.
-_WINDOWS_LEASE_LOCK_OFFSET = 1 << 30
-
-
-def _acquire_lease_lock(handle: Any) -> None:
-    """Take a non-blocking exclusive OS lock that the kernel drops on exit.
-
-    POSIX uses ``flock``. Windows uses a ``LockFileEx`` byte-range lock through
-    ``msvcrt.locking``; it conflicts with every other handle, including a second
-    open of the same file in this process. Windows releases it after the owning
-    process terminates, but asynchronously, so for a short time after a crash a
-    new lease can still see contention. Contention raises ``OSError`` with
-    ``EACCES`` or ``EAGAIN`` on both platforms.
-    """
-
-    if _fcntl is not None:
-        _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-        return
-    os.lseek(handle.fileno(), _WINDOWS_LEASE_LOCK_OFFSET, os.SEEK_SET)
-    _msvcrt.locking(handle.fileno(), _msvcrt.LK_NBLCK, 1)
-
-
-def _release_lease_lock(handle: Any) -> None:
-    if _fcntl is not None:
-        _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
-        return
-    os.lseek(handle.fileno(), _WINDOWS_LEASE_LOCK_OFFSET, os.SEEK_SET)
-    _msvcrt.locking(handle.fileno(), _msvcrt.LK_UNLCK, 1)
 
 
 class AttemptWorkspaceConflictError(RuntimeError):
@@ -68,9 +26,11 @@ def lease_attempt_workspace(workspace: Path) -> Iterator[Path]:
     """Hold an OS-backed exclusive lock for one provider invocation.
 
     The persistent lock file lives beside the provider-writable Attempt
-    directory, not inside it. The kernel releases the lock if the worker exits,
-    including after a crash; a same-process duplicate using a separate open
-    file description is fenced just like a duplicate in another process.
+    directory, not inside it. The operating system releases the lock if the
+    worker exits, including after a crash; on Windows that release can lag the
+    process exit briefly. A same-process duplicate using a separate open file
+    is fenced just like a duplicate in another process. The lock itself comes
+    from the selected host platform; a host without one fails closed.
     """
 
     workspace = workspace.resolve()
@@ -87,16 +47,6 @@ def lease_attempt_workspace(workspace: Path) -> Iterator[Path]:
         )
 
     lease_path = lease_directory / f"{workspace.name}.lock"
-    if _fcntl is None and _msvcrt is None:
-        # Crash-safe duplicate-dispatch fencing relies on a kernel-released
-        # lock (POSIX flock or a Windows byte-range lock). Without either there
-        # is no correct substitute, so fail closed rather than fence open.
-        raise AttemptWorkspaceConflictError(
-            "Attempt workspace leasing requires a POSIX host (fcntl) or a "
-            "Windows host (msvcrt); duplicate-dispatch fencing is unsupported "
-            "on this platform"
-        )
-
     try:
         handle = open(lease_path, "a+", encoding="utf-8")
     except OSError as exc:
@@ -105,7 +55,11 @@ def lease_attempt_workspace(workspace: Path) -> Iterator[Path]:
         ) from exc
     try:
         try:
-            _acquire_lease_lock(handle)
+            HOST_PLATFORM.acquire_lease_lock(handle)
+        except UnsupportedHostError as exc:
+            # Crash-safe duplicate-dispatch fencing needs a kernel-released
+            # lock; without one there is no correct substitute, so fail closed.
+            raise AttemptWorkspaceConflictError(str(exc)) from exc
         except OSError as exc:
             if exc.errno in {errno.EACCES, errno.EAGAIN}:
                 raise AttemptWorkspaceConflictError(
@@ -121,7 +75,7 @@ def lease_attempt_workspace(workspace: Path) -> Iterator[Path]:
         try:
             yield workspace
         finally:
-            _release_lease_lock(handle)
+            HOST_PLATFORM.release_lease_lock(handle)
     finally:
         handle.close()
 
