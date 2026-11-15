@@ -356,7 +356,7 @@ def test_installed_console_executes_without_checkout_or_pg(tmp_path):
     assert all(after[path] == content for path, content in before.items())
     assert set(_outside_attempts(root)) - set(before) == {".runtime/setup.json", *(
         f"{host}/skills/{name}/SKILL.md" for host in (".agents", ".claude")
-        for name in ("agent-runtime-registration", "agent-runtime-test-run"))}
+        for name in ("agent-runtime-registration", "agent-runtime-test-run", "agent-runtime-usage"))}
     refused = subprocess.run([*argv, "--save-to-pg"], cwd=tmp_path, env=child, capture_output=True, text=True)
     assert refused.returncode == 2 and not refused.stdout
 

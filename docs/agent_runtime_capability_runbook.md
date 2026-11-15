@@ -6,11 +6,24 @@
 
 wheel 随附本文档；完整测试和 fixtures 位于同版本 Runtime 源码 checkout。以下路径均相对源码根目录，命令中的 python 指安装了 Runtime 与测试依赖的解释器。测试依赖、可选 Provider/PG/Temporal 依赖以 pyproject.toml 为准。
 
-每组的样例 selector 指向真实测试函数。先读该函数及它直接使用的 fixture，再运行对应命令；fixture 中的 Provider 替身和测试授权对象用于验证，不是生产宿主配置。随包 agent_capability_example 与 agent_evaluation_example 使用同一Runtime图和Module内核。本地自测提供真实fixture工具与临时记录，生产Gateway和跨进程恢复保留各自独立准入。
+每组的样例 selector 指向真实测试函数。先读该函数及它直接使用的 fixture，再运行对应命令；fixture 中的 Provider 替身和测试授权对象用于验证，不是生产宿主配置。随包样例分两类：四种常用模式样例在所有宿主上运行一个普通 Module；agent_capability_example 与 agent_evaluation_example 使用同一Runtime图和Module内核，但依赖显式选择的 callback 工具，是宿主受限的高级样例。本地自测提供真实fixture工具与临时记录，生产Gateway和跨进程恢复保留各自独立准入。
 
-### 随包多Agent样例
+### 四种常用模式样例
 
-通过同一个已安装命令运行；root只定位注册和宿主程序，不授权读取项目全集。例子会注册自己的准确Module/Workflow定义，模型在本次调用单独选择，默认不写PG。
+每种模式（structured_output、file_review、code_change、mcp_data）对应同名的 module_requirements_preset 和一个随包样例，直接由已安装的包运行。每次在 ROOT 下新建运行文件夹，用公开注册接口登记 example_<pattern>@v1，再经 run_local_workflow_test 调用所选 CLI；不复用、不覆盖已有文件夹或宿主配置。
+
+```powershell
+$Root = "$HOME\Documents\Agent Runtime Examples"
+python -m agent_runtime.testing.conformance_pattern_examples run --pattern file_review --transport claude_cli --root $Root
+python -m agent_runtime.testing.conformance_pattern_examples run --pattern code_change --transport codex_cli --root $Root --model MODEL --effort EFFORT
+python -m agent_runtime.testing.conformance_pattern_examples check --run-dir RUN_FOLDER
+```
+
+运行固定版本 v1 与 --expected-module-id，并要求执行的 Workflow 与 Module 身份等于注册回读。check.json 的 passed 只在实际效果成立时为 true：structured_output 比对输出与本次输入；file_review 要求 scratch 中的 review.md 含只在材料里出现的事实，并在日志中有读回；code_change 要求只改 pricing.py、不新增文件、宿主独立复跑通过、日志中模型对最终代码运行了检查，且返回的改动文件、命令与检查结果行和实际一致；mcp_data 要求 fixture 审计到参数与任务一致的真实 tools/call、保存的 JSON 与返回的完整结果一致、日志中有读回、派生文件正确，且返回的文件名指向项目目录中的这两个文件。模型自我陈述不算证据。mcp_data 需要 cli_tools（mcp 包）；Codex 需要显式模型与 effort，根目录不能在受保护的 Temp 或被重定向的 AppData 下。真实 CLI 用例由 AGENT_RUNTIME_REAL_RUN=1 加 AGENT_RUNTIME_CLAUDE_BIN 或 AGENT_RUNTIME_CODEX_BIN 开启 tests/test_agent_runtime_pattern_examples.py 中的 real_run 用例；未开启时为 skipped。
+
+### 宿主受限的高级callback样例
+
+通过同一个已安装命令运行；root只定位注册和宿主程序，不授权读取项目全集。例子会注册自己的准确Module/Workflow定义，模型在本次调用单独选择，默认不写PG。两个图都使用显式选择的 callback 工具（fixture_read、review_candidate），需要 macOS/Linux 与 cli_tools；Windows 没有 Unix-domain socket，会在打开会话前报告不支持，Runtime 不为此增加 Windows IPC。工作目录是临时目录，结束并取得记录后删除。agent_capability_example 当前为 v3：Writer 的工具加入 edit，以便写出其指令要求的 scratch 草稿；其余节点保持 v2 定义。
 
 ```sh
 agent-runtime-test-run --root ROOT --example agent_capability_example
@@ -19,7 +32,7 @@ agent-runtime-test-run --root ROOT --example agent_capability_example --scenario
 agent-runtime-test-run --root ROOT --example agent_evaluation_example
 ```
 
-wait样例先保存实际等待快照，再由测试宿主提交一个匹配的fixture事件并在同一进程继续。评价样例的任务内审核由被测Agent的实际工具请求触发；独立评价读取Runtime记录，原始节点和child日志随JSON结果返回。工具或业务结论与技术完成状态分别判断。这些focused结果不代表42项完整Runtime验证；真实模型使用RUN_PROVIDER_INTEGRATION=1开启test_live_claude_agent_examples，未开启的gate仍为not_run。
+wait样例先保存实际等待快照，再由测试宿主提交一个匹配的fixture事件并在同一进程继续。评价样例的任务内审核由被测Agent的实际工具请求触发；独立评价读取Runtime记录，原始节点和child日志随JSON结果返回。工具或业务结论与技术完成状态分别判断。这些focused结果不代表42项完整Runtime验证；真实模型使用RUN_PROVIDER_INTEGRATION=1开启test_live_claude_agent_examples（仅 macOS/Linux），未开启的gate仍为not_run。
 
 ### 1.1 Runtime 与宿主环境各准备什么
 
@@ -71,15 +84,24 @@ python -B -m pytest --collect-only -q
 python -B -m pytest -q -rs -p no:cacheprovider
 ```
 
-默认不开启真实 Provider 和 Temporal。为避免继承了已开启的环境变量，普通批次可显式设置：
+默认不开启真实 Provider 和 Temporal。为避免继承了已开启的环境变量，普通批次先把三个开关都设为 0（RUN_PROVIDER_INTEGRATION、AGENT_RUNTIME_REAL_RUN、RUN_TEMPORAL_INTEGRATION），再运行同一命令。Windows PowerShell：
+
+```powershell
+$env:RUN_PROVIDER_INTEGRATION = "0"
+$env:AGENT_RUNTIME_REAL_RUN = "0"
+$env:RUN_TEMPORAL_INTEGRATION = "0"
+python -B -m pytest -q -rs -p no:cacheprovider
+```
+
+POSIX shell 的等价写法：
 
 ```sh
-RUN_PROVIDER_INTEGRATION=0 RUN_TEMPORAL_INTEGRATION=0 python -B -m pytest -q -rs -p no:cacheprovider
+RUN_PROVIDER_INTEGRATION=0 AGENT_RUNTIME_REAL_RUN=0 RUN_TEMPORAL_INTEGRATION=0 python -B -m pytest -q -rs -p no:cacheprovider
 ```
 
 提供 AGENT_RUNTIME_TEST_DATABASE_URL 后，同一批次也会运行 PG 测试；不提供时真实 PG 用例跳过。只使用已授权的测试数据库，fixtures 负责临时 schema 的创建和清理。SQL_ASCII 测试数据库可在连接环境设置 PGCLIENTENCODING=UTF8，不改变数据库编码。
 
-需要真实环境时，按第 4 节准备依赖，再显式开启 RUN_TEMPORAL_INTEGRATION=1 或 RUN_PROVIDER_INTEGRATION=1。Provider 调用可能计费；后者会开启现有 Codex 和 Claude 用例，不是选择某一个模型。模型、工具、超时和登录要求以所选测试的 Profile/fixture 为准。公共文档不填写 DSN、token 或密码。
+需要真实环境时，按第 4 节准备依赖，再显式开启 RUN_TEMPORAL_INTEGRATION=1 或 RUN_PROVIDER_INTEGRATION=1。Provider 调用可能计费；后者会开启较早的 Codex 和 Claude smoke 用例，不是选择某一个模型。AGENT_RUNTIME_REAL_RUN=1 是另一个开关，开启需要原生程序路径（AGENT_RUNTIME_CLAUDE_BIN、AGENT_RUNTIME_CODEX_BIN）的四种模式样例、外层 CLI 边界验收，以及 Codex workspace、时限与进度等真实运行用例；两个开关互不包含。模型、工具、超时和登录要求以所选测试的 Profile/fixture 为准。公共文档不填写 DSN、token 或密码。
 
 向同一 pytest 命令添加 --junitxml=PATH 可导出机器可读结果。PATH 由调用者选择新的报告路径，避免覆盖旧报告；pytest 默认终端输出已含真实计数与 -rs 的跳过原因。
 

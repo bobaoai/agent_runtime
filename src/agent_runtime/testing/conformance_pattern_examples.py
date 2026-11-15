@@ -1,0 +1,819 @@
+"""Four ordinary Runtime usage patterns as small, directly runnable examples.
+
+    python -m agent_runtime.testing.conformance_pattern_examples run \\
+        --pattern file_review --transport claude_cli --root "EXAMPLE_ROOT"
+
+Patterns: structured_output (tool-free structured output), file_review (frozen
+task material -> a written and read-back review file), code_change (a tiny
+project the model fixes and checks with a bounded command) and mcp_data (a
+declared MCP connection -> a saved, read-back data file -> a derived file).
+
+Each pattern is one ordinary Module composed only from public APIs, the same
+path a host uses: ModuleRegistrationSource and module_requirements_preset ->
+Module.export -> Module.to_workflow -> register_runtime_module_plugin, then
+run_local_workflow_test (the entry behind agent-runtime-test-run). This module
+adds no executor, tool routing, permission rule, sandbox or supervision: the
+selected CLI plans, reads and writes files, runs commands and calls MCP tools
+itself, under its own native permissions. After the run, check compares the
+actual file effects, the Inspection log returned in the record and, for MCP,
+the fixture server's own audit with the task. A model's self-report is never
+counted as evidence.
+
+Every prepare creates a new folder <root>/<pattern>-<cli>-<UTC time>-<hex> that
+holds its own Runtime host root (host/), Attempt folders (attempts/), input,
+materials or project, so re-running never collides with a registered
+definition version and never touches another folder, configuration or project.
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import secrets
+import shlex
+import subprocess
+import sys
+
+from ..registry.registry_module_authoring import MODULE_REQUIREMENT_PRESETS
+
+_MODULE = "agent_runtime.testing.conformance_pattern_examples"
+PATTERN_NAMES = MODULE_REQUIREMENT_PRESETS  # One example per requirements preset, with the same IDs.
+TRANSPORTS = ("claude_cli", "codex_cli")
+EXAMPLE_VERSION = "v1"
+MCP_CONNECTION = "example_data"
+MCP_TOOL = "get_stock_snapshot"
+_SKILL_ID = "runtime-pattern-examples"
+_OWNER = """# Runtime usage pattern examples
+
+Small synthetic tasks that show the four ordinary usage patterns. Use only the
+supplied input, task materials, project directory and declared connections.
+The example check reads actual files, the returned execution log and the
+fixture audit; a model's own report does not prove that a step happened.
+No production data, credentials or business approval are involved.
+"""
+_OWNER_REF = "owner-contract-sha256:" + hashlib.sha256(_OWNER.encode()).hexdigest()
+_STRING = {"type": "string"}
+_INTEGER = {"type": "integer"}
+_BOOLEAN = {"type": "boolean"}
+
+
+def _object(**properties):
+    return {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
+
+
+PATTERN_DEFINITIONS = {
+    "structured_output": {
+        "preset": {},
+        "instruction": (
+            "Extract the order in the input note. Use only the input; no tools are available. Return order_id "
+            "exactly as given, one entry in lines per SKU with the quantity the note asks for, total_quantity as "
+            "the sum of those quantities, and urgent true only when the note asks for urgent handling."),
+        "input": _object(order_id=_STRING, note=_STRING),
+        "output": _object(order_id=_STRING, lines={"type": "array", "items": _object(sku=_STRING, quantity=_INTEGER)},
+                          total_quantity=_INTEGER, urgent=_BOOLEAN),
+    },
+    "file_review": {
+        "preset": {},
+        "instruction": (
+            "Review the task material named by material_path. It is listed under Runtime Input Resources; its "
+            "contents are not in this prompt, so read it with your file tools or a read-only shell command.\n"
+            "1. Create the file named by review_file directly in your writable scratch area (not in a subfolder). "
+            "Line 1 is '# Review: ' followed by material_path. Line 2 is 'Release code: ' followed by the exact "
+            "release code stated in the material. Then write one bullet line starting with '- ' for each "
+            "inconsistency or risk you find in the material (at least one).\n"
+            "2. In a separate step, read the saved file back from disk with one plain read that succeeds: a "
+            "file-reading tool, or a read-only shell command on its own (for example Get-Content review.md in "
+            "PowerShell, cat review.md in a POSIX shell). Do not rely on what you meant to write. Keep that read "
+            "command simple: do not add other statements or build objects in the shell (PowerShell may run in "
+            "constrained language mode, where constructs such as [pscustomobject] fail the whole command). If a "
+            "read command fails, run a clean plain read again; a failed command does not count as reading back.\n"
+            "3. Return review_file as the file name, release_code and readback_first_line exactly as read back, "
+            "and finding_count as the number of bullet lines in the saved file. Your answer is the structured "
+            "output of this task, not something a shell command has to produce."),
+        "input": _object(material_path=_STRING, review_file=_STRING),
+        "output": _object(review_file=_STRING, release_code=_STRING, finding_count=_INTEGER,
+                          readback_first_line=_STRING),
+    },
+    "code_change": {
+        "preset": {},
+        "instruction": (
+            "Your working directory is a small Python project. The command in check_command currently fails "
+            "because the file named by edit_file has a bug. Fix that bug by editing only edit_file; do not change, "
+            "add or delete any other file. After your final edit, run check_command exactly as written, once, "
+            "from the working directory, as its own command (no cd, no wrapper and nothing chained). Return "
+            "changed_files (the files you edited), check_command as you ran it, check_result_line (the exact "
+            "last line the command printed) and passed (true only if that line starts with CHECK PASSED)."),
+        "input": _object(check_command=_STRING, edit_file=_STRING),
+        "output": _object(changed_files={"type": "array", "items": _STRING}, check_command=_STRING,
+                          check_result_line=_STRING, passed=_BOOLEAN),
+    },
+    "mcp_data": {
+        "preset": {"mcp_connections": (MCP_CONNECTION,)},
+        "instruction": (
+            f"1. Call the MCP tool {MCP_TOOL} of the {MCP_CONNECTION} connection exactly once, with warehouse and "
+            "request_tag from the input.\n"
+            "2. Save the complete data object the tool returned, as JSON, to the file named by data_file in your "
+            "working directory: every field of the payload (response_id, warehouse, request_tag, items and "
+            "source), taken from the structured content when the tool returns it, otherwise from the JSON in its "
+            "text content. Do not save the MCP protocol wrapper around it (content, structuredContent, isError).\n"
+            "3. In a separate step, read data_file back from disk with one plain read that succeeds: a "
+            "file-reading tool, or a read-only shell command on its own (for example Get-Content in PowerShell, "
+            "cat in a POSIX shell). Do not rely on memory, and do not add other statements or build objects in "
+            "that command (PowerShell may run in constrained language mode). If a read command fails, run a "
+            "clean plain read again; a failed command does not count as reading back.\n"
+            "4. Using only the values read back, write the file named by summary_file in your working directory "
+            "as a JSON object with response_id, warehouse, total_units (the sum of every item's units) and "
+            "sku_count (the number of items).\n"
+            "5. Return response_id, total_units, sku_count, data_file and summary_file."),
+        "input": _object(warehouse=_STRING, request_tag=_STRING, data_file=_STRING, summary_file=_STRING),
+        "output": _object(response_id=_STRING, total_units=_INTEGER, sku_count=_INTEGER, data_file=_STRING,
+                          summary_file=_STRING),
+    },
+}
+
+
+def module_id_for(pattern: str) -> str:
+    """Return the Module and one-node Workflow ID registered for a pattern."""
+    _require_pattern(pattern)
+    return "example_" + pattern
+
+
+def build_pattern_workflow(pattern: str):
+    """Build one pattern's ordinary Module and one-node Workflow without IO.
+
+    Args:
+        pattern: One of PATTERN_NAMES.
+    Returns:
+        WorkflowExport of Module example_<pattern> at version v1, with its
+        fixed instruction and input/output schemas. Its execution requirements
+        are exactly module_requirements_preset(<pattern>) with max_attempts 1
+        (mcp_data with the example_data connection). The same definition
+        serves claude_cli and codex_cli.
+    Raises:
+        ValueError: Unknown pattern.
+    Effects:
+        Pure construction; no registration, model selection or execution.
+    """
+    from ..registry.registry_module_authoring import Module, module_requirements_preset
+    from ..registry.registry_module_loading import ModuleRegistrationSource
+
+    module_id = module_id_for(pattern)
+    definition = PATTERN_DEFINITIONS[pattern]
+
+    def schema(ref, body):
+        return json.dumps({"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": ref, **body},
+                          sort_keys=True, separators=(",", ":"))
+
+    input_ref, output_ref = f"schema:{module_id}_input@v1", f"schema:{module_id}_output@v1"
+    source = ModuleRegistrationSource(
+        skill_id=_SKILL_ID, module_id=module_id, owner_contract_ref=_OWNER_REF, owner_contract_content=_OWNER,
+        instruction_text=definition["instruction"],
+        input_schema_ref=input_ref, input_schema_document=schema(input_ref, definition["input"]),
+        output_schema_ref=output_ref, output_schema_document=schema(output_ref, definition["output"]),
+        schema_version="runtime_module_registration_v4",
+    )
+    requirements = module_requirements_preset(pattern, **definition["preset"])
+    exported = Module(source, execution_requirements=requirements).export(module_version=EXAMPLE_VERSION)
+    return Module.to_workflow(exported).export()
+
+
+def _require_pattern(pattern):
+    if pattern not in PATTERN_NAMES:
+        raise ValueError(f"unknown pattern {pattern!r}; choose one of {', '.join(PATTERN_NAMES)}")
+
+
+def _require_transport(transport):
+    if transport not in TRANSPORTS:
+        raise ValueError(f"unknown transport {transport!r}; choose claude_cli or codex_cli")
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _write(path: Path, text: str) -> bytes:
+    """Write UTF-8 with LF line endings on every host so hashes and shell scripts are stable."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = text.encode("utf-8")
+    path.write_bytes(data)
+    return data
+
+
+def _write_json(path: Path, value) -> None:
+    _write(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+
+def _read_json(path: Path):
+    """Read JSON written by Python or redirected by PowerShell (UTF-8 with/without BOM, or UTF-16)."""
+    data = Path(path).read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return json.loads(data.decode("utf-16"))
+    return json.loads(data.decode("utf-8-sig"))
+
+
+def _powershell_quote(value) -> str:
+    """Quote one PowerShell argument when it is not a plain word (spaces, quotes, operators)."""
+    text = str(value)
+    if text and all(character.isalnum() or character in "-_.:/\\=" for character in text):
+        return text
+    return "'" + text.replace("'", "''") + "'"
+
+
+# --- Per-pattern task material --------------------------------------------------------------
+
+_MATERIAL_PATH = "release_notes.md"
+_RELEASE_NOTES = """# Release notes: stock sync service
+
+Release code: {code}
+
+- Adds a nightly reconciliation of warehouse stock counts.
+- Rollback window: 30 minutes after the release starts.
+- Owner: platform operations.
+
+## Rollout runbook
+
+1. Announce the release in the operations channel.
+2. If more than 2% of sync jobs fail, roll back within 15 minutes.
+3. Confirm the next morning that stock counts match the warehouse system.
+"""
+
+_PRICING = '''"""Order pricing helpers for the example project."""
+
+
+def line_total(unit_price_cents: int, quantity: int) -> int:
+    """Return the price of one order line in cents."""
+    return unit_price_cents + quantity
+
+
+def order_total(lines: list[tuple[int, int]]) -> int:
+    """Return the price of all order lines in cents."""
+    return sum(line_total(price, quantity) for price, quantity in lines)
+'''
+
+_CHECK = '''"""Bounded check for pricing.py. Prints one result line; exit 0 only when every case passes."""
+import hashlib
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+NONCE = "{nonce}"
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import pricing  # noqa: E402
+
+CASES = [((250, 4), 1000), ((199, 3), 597), ((0, 7), 0)]
+failures = ["line_total%r = %r, expected %r" % (args, pricing.line_total(*args), expected)
+            for args, expected in CASES if pricing.line_total(*args) != expected]
+if pricing.order_total([(250, 4), (199, 3)]) != 1597:
+    failures.append("order_total is not 1597")
+digest = hashlib.sha256((HERE / "pricing.py").read_bytes()).hexdigest()
+if failures:
+    print("CHECK FAILED nonce=%s pricing_sha256=%s: %s" % (NONCE, digest, "; ".join(failures)))
+    sys.exit(1)
+print("CHECK PASSED nonce=%s pricing_sha256=%s" % (NONCE, digest))
+'''
+
+_SHELL_CHECK = """#!/bin/sh
+# Runs the bounded pricing check with the Python interpreter that prepared this example.
+exec {interpreter} check_pricing.py
+"""
+
+
+def _check_command(transport: str, project: Path) -> tuple[str, tuple[str, ...]]:
+    """Return the check command written into the task input and the Claude permits for it.
+
+    Claude's Bash tool runs a POSIX shell (Git Bash on Windows) and needs a host
+    permit; the fixed relative command keeps the permit exact whatever the
+    interpreter path contains. Codex has no per-command permits; its shell is
+    PowerShell on Windows, so the interpreter is started with the call operator.
+    """
+    if transport == "claude_cli":
+        interpreter = Path(sys.executable).as_posix() if os.name == "nt" else sys.executable
+        _write(project / "run_check.sh", _SHELL_CHECK.format(interpreter=shlex.quote(interpreter)))
+        return "sh run_check.sh", ("sh run_check.sh",)
+    if os.name == "nt":
+        return f"& {_powershell_quote(sys.executable)} check_pricing.py", ()
+    return f"{shlex.quote(sys.executable)} check_pricing.py", ()
+
+
+def _host_check(project: Path) -> dict:
+    """Run check_pricing.py directly with this interpreter, independently of any model."""
+    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    completed = subprocess.run([sys.executable, "check_pricing.py"], cwd=project, capture_output=True,
+                               text=True, timeout=120, env=environment)
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    return {"returncode": completed.returncode, "last_line": lines[-1] if lines else "",
+            "stderr_tail": completed.stderr[-400:]}
+
+
+def _project_hashes(project: Path) -> dict[str, str]:
+    return {path.relative_to(project).as_posix(): _sha256(path.read_bytes())
+            for path in sorted(project.rglob("*")) if path.is_file() and "__pycache__" not in path.parts}
+
+
+def _mcp_connection(transport: str, audit: Path) -> dict:
+    """The fixture's ordinary MCP connection entry, in the selected CLI's native form."""
+    if importlib.util.find_spec("mcp") is None:
+        raise ModuleNotFoundError("The mcp_data example's fixture server needs the mcp package in this Python; "
+                                  "install agent-runtime-core[cli_tools] (or mcp) first")
+    server = Path(__file__).resolve().with_name("conformance_fixture_mcp_serving.py")
+    config = {"command": sys.executable, "args": [str(server), "--audit", str(audit)]}
+    if transport == "codex_cli":
+        config["default_tools_approval_mode"] = "approve"
+    return {"mcp_servers": {transport: {MCP_CONNECTION: {"config": config, "environment_keys": []}}}}
+
+
+# --- Prepare, run and check -----------------------------------------------------------------
+
+def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_path=None, model_id=None,
+                            reasoning_profile=None, run_timeout_seconds=None) -> dict:
+    """Create one fresh example folder, register its definition and write its task.
+
+    Args:
+        root: Example root, created when missing. Each call creates a new
+            <pattern>-<cli>-<UTC yymmddHHMMSS>-<hex> folder below it and writes
+            only there; an existing folder is never reused or overwritten. Use
+            a short ordinary user folder (for example under Documents): Codex's
+            Windows sandbox cannot enter protected temporary or redirected
+            app-data folders, and that CLI failure is reported as it occurs.
+        pattern: One of PATTERN_NAMES.
+        transport: claude_cli or codex_cli. It shapes only per-call inputs
+            (the code_change check command and Claude permit, the MCP entry
+            form); the registered definition is the same for both.
+        cli_path, model_id, reasoning_profile, run_timeout_seconds: Optional
+            values copied into the printed agent-runtime-test-run command.
+    Returns:
+        The manifest also saved as run.json: run_directory, host_root,
+        workflow_id, version, registered (the exact local readback's Workflow
+        and Module release refs and hashes), input/resources/project paths,
+        command_permits, the equivalent agent-runtime-test-run argv and
+        PowerShell line (pinned with --version and --expected-module-id), the
+        check command, and the expectations the check uses.
+    Raises:
+        ValueError: Unknown pattern or transport.
+        ModuleNotFoundError: mcp_data without the mcp package for its fixture.
+        FileExistsError: The generated run folder already exists.
+        RuntimeError: The readback differs from the registered definition, or
+            the code_change project did not start in its failing state.
+    Effects:
+        Writes the run folder; registers the definition under host/ with the
+        public register_runtime_module_plugin; writes host/.runtime/config.json
+        with attempt_workspace_root RUN_FOLDER/attempts (short Windows paths)
+        and, for mcp_data, the one MCP connection. Never starts a model.
+    """
+    from ..registry.registry_local_persistence import load_runtime_registration
+    from ..registry.registry_plugin_registration import RuntimeModulePlugin, register_runtime_module_plugin
+    from ..registry.registry_release_registration import RuntimeReleaseRegistry
+
+    _require_pattern(pattern)
+    _require_transport(transport)
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    root = root.resolve()
+    nonce = secrets.token_hex(4)
+    stamp = datetime.now(timezone.utc).strftime("%y%m%d%H%M%S")
+    # Short names: Attempt folders nest materials and CLI files below this folder,
+    # and Windows paths stay limited to 260 characters unless long paths are enabled.
+    run_directory = root / f"{pattern}-{transport.removesuffix('_cli')}-{stamp}-{nonce[:4]}"
+    run_directory.mkdir()
+    host = run_directory / "host"
+    config = {"attempt_workspace_root": str(run_directory / "attempts")}
+    workflow = build_pattern_workflow(pattern)
+    register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
+        "example_" + pattern, EXAMPLE_VERSION, workflow.origin_bundle), root=host)
+    module_id = module_id_for(pattern)
+    # Exact readback: the run is pinned to this version and the check compares the executed identity with it.
+    saved = load_runtime_registration(host, "workflow", module_id, EXAMPLE_VERSION)
+    (node,) = saved.release.nodes
+    module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
+    registered = {"workflow_release_ref": saved.release.release_ref, "workflow_release_sha256": saved.release.release_sha256,
+                  "module_release_ref": module.release_ref, "module_release_sha256": module.release_sha256}
+    if module.module_id != module_id or registered["workflow_release_sha256"] != workflow.workflow_release.release_sha256:
+        raise RuntimeError(f"registered example differs from its readback: {registered}")
+    manifest = {"schema_version": "runtime_pattern_example_v1", "pattern": pattern, "transport": transport,
+                "nonce": nonce, "run_directory": str(run_directory), "host_root": str(host),
+                "workflow_id": module_id, "version": EXAMPLE_VERSION, "registered": registered,
+                "input_path": str(run_directory / "input.json"),
+                "resources_path": None, "project_directory": None, "command_permits": [], "expected": {}}
+    if pattern == "structured_output":
+        quantities = {sku: 1 + secrets.randbelow(9) for sku in ("A-100", "B-220", "C-310")}
+        urgent = secrets.randbelow(2) == 1
+        order_id = "ORD-" + nonce.upper()
+        note = (f"Order {order_id} from the Harbor Street shop: please send {quantities['A-100']} boxes of A-100, "
+                f"{quantities['B-220']} boxes of B-220 and {quantities['C-310']} boxes of C-310. "
+                + ("This is urgent: the shop shelves are empty." if urgent else
+                   "No rush: the shop still has enough stock for this week."))
+        payload = {"order_id": order_id, "note": note}
+        manifest["expected"] = {"order_id": order_id, "lines": quantities, "total_quantity": sum(quantities.values()),
+                                "urgent": urgent}
+    elif pattern == "file_review":
+        code = "RC-" + secrets.token_hex(3).upper()
+        material = _write(run_directory / "materials" / _MATERIAL_PATH, _RELEASE_NOTES.format(code=code))
+        resources = run_directory / "resources.json"
+        _write_json(resources, {"material_root": "materials", "material_files": [
+            {"relative_path": _MATERIAL_PATH, "sha256": _sha256(material), "executable": False}],
+            "read_only_dependencies": [], "commands": []})
+        payload = {"material_path": _MATERIAL_PATH, "review_file": "review.md"}
+        manifest["resources_path"] = str(resources)
+        manifest["expected"] = {"material_sha256": _sha256(material)}
+    elif pattern == "code_change":
+        project = run_directory / "project"
+        _write(project / "pricing.py", _PRICING)
+        _write(project / "check_pricing.py", _CHECK.format(nonce=nonce))
+        command, permits = _check_command(transport, project)
+        initial = _host_check(project)
+        if initial["returncode"] != 1 or not initial["last_line"].startswith("CHECK FAILED"):
+            raise RuntimeError(f"code_change project did not start failing: {initial}")
+        payload = {"check_command": command, "edit_file": "pricing.py"}
+        manifest.update(project_directory=str(project), command_permits=list(permits))
+        manifest["expected"] = {"initial_files": _project_hashes(project), "initial_check": initial}
+    else:
+        project = run_directory / "project"
+        project.mkdir()
+        audit = run_directory / "mcp_fixture_audit.jsonl"
+        config.update(_mcp_connection(transport, audit))
+        payload = {"warehouse": "north-" + nonce[:4], "request_tag": "tag-" + nonce,
+                   "data_file": "stock_snapshot.json", "summary_file": "stock_summary.json"}
+        manifest["project_directory"] = str(project)
+        manifest["expected"] = {"audit_path": str(audit)}
+    _write_json(host / ".runtime" / "config.json", config)
+    _write_json(run_directory / "input.json", payload)
+    argv = ["agent-runtime-test-run", "--root", str(host), "--workflow", module_id, "--version", EXAMPLE_VERSION,
+            "--expected-module-id", module_id, "--input", manifest["input_path"], "--transport", transport]
+    for flag, value in (("--resources", manifest["resources_path"]), ("--project-directory", manifest["project_directory"]),
+                        ("--cli-path", cli_path), ("--model", model_id), ("--effort", reasoning_profile),
+                        ("--run-timeout-seconds", run_timeout_seconds)):
+        if value is not None:
+            argv += [flag, str(value)]
+    for permit in manifest["command_permits"]:
+        argv += ["--command-permit", permit]
+    record_path = run_directory / "record.json"
+    manifest["test_run_argv"] = argv
+    manifest["powershell"] = (" ".join([argv[0], *map(_powershell_quote, argv[1:])])
+                              + " | Out-File -Encoding utf8 " + _powershell_quote(record_path))
+    manifest["check_argv"] = [sys.executable, "-m", _MODULE, "check", "--run-dir", str(run_directory)]
+    _write_json(run_directory / "run.json", manifest)
+    return manifest
+
+
+def run_pattern_example(root: Path, pattern: str, transport: str, *, cli_path=None, model_id=None,
+                        reasoning_profile=None, run_timeout_seconds=None) -> dict:
+    """Prepare one example, run it through run_local_workflow_test and check its actual effects.
+
+    Args:
+        root, pattern, transport: As in prepare_pattern_example.
+        cli_path: Native claude/codex executable; None uses Runtime's normal
+            lookup (the host root's provider_cli_paths, then PATH).
+        model_id, reasoning_profile, run_timeout_seconds: Passed unchanged to
+            run_local_workflow_test. Codex requires an explicit model and
+            effort; Claude falls back to Runtime defaults. Never inferred here.
+    Returns:
+        The check result (see check_pattern_example). record.json and
+        check.json are saved in the run folder.
+    Raises:
+        Exception: Preparation and run_local_workflow_test errors keep their
+            own types (for example a missing CLI or an unsupported option).
+    Effects:
+        Starts the selected CLI once through Runtime's ordinary Test Run,
+        pinned to the registered version and expected Module. The Attempt
+        folder stays under RUN_FOLDER/attempts; Runtime never deletes the
+        project folder.
+    """
+    from .conformance_local_test_run import run_local_workflow_test
+
+    manifest = prepare_pattern_example(root, pattern, transport, cli_path=cli_path, model_id=model_id,
+                                       reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds)
+    run_directory = Path(manifest["run_directory"])
+    project = manifest["project_directory"]
+    record = run_local_workflow_test(
+        Path(manifest["host_root"]), manifest["workflow_id"], version=EXAMPLE_VERSION,
+        expected_module_id=manifest["workflow_id"], input_payload=_read_json(Path(manifest["input_path"])), transport_kind=transport, model_id=model_id,
+        reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds, cli_path=cli_path,
+        resources_path=None if manifest["resources_path"] is None else Path(manifest["resources_path"]),
+        project_directory=None if project is None else Path(project),
+        command_permits=tuple(manifest["command_permits"]))
+    _write(run_directory / "record.json", json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
+    return check_pattern_example(run_directory, record)
+
+
+class _Checks:
+    def __init__(self):
+        self.rows = []
+
+    def add(self, name, passed, detail=""):
+        self.rows.append({"check": name, "passed": bool(passed), "detail": str(detail)[:600]})
+        return bool(passed)
+
+
+def _tool_calls(record) -> list[dict]:
+    attempts = ((record or {}).get("execution_log") or {}).get("attempts") or []
+    return [call for attempt in attempts for call in (attempt.get("tool_calls") or []) if isinstance(call, dict)]
+
+
+def _text(value) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _succeeded(call) -> bool:
+    """The log recorded the call as completed, without a native error flag or a nonzero exit."""
+    if call.get("status") != "completed":
+        return False
+    response = call.get("response")
+    if isinstance(response, dict):
+        if isinstance(response.get("tool_result"), dict) and response["tool_result"].get("is_error") is True:
+            return False
+        if isinstance(response.get("tool_use_result"), dict) and response["tool_use_result"].get("interrupted"):
+            return False
+        if response.get("exit_code") not in (None, 0):
+            return False
+    return True
+
+
+_READ_STEPS = {"Read", "Bash", "command_execution"}
+
+
+def _readbacks(calls, *, file_name: str, marker: str, after: int = -1) -> list[int]:
+    """Indices of completed read steps after `after` that name file_name and whose result, not request, shows marker."""
+    found = []
+    for index, call in enumerate(calls):
+        if index <= after or call.get("tool_name") not in _READ_STEPS or not _succeeded(call):
+            continue
+        request = _text(call.get("request"))
+        if file_name in request and marker not in request and marker in _text(call.get("response")):
+            found.append(index)
+    return found
+
+
+def _command_results(calls, marker: str) -> list[int]:
+    """Indices of completed shell commands whose own output, not request text, carries marker."""
+    return [index for index, call in enumerate(calls)
+            if call.get("tool_name") in {"Bash", "command_execution"} and _succeeded(call)
+            and marker not in _text(call.get("request")) and marker in _text(call.get("response"))]
+
+
+def _names_file(value, folder: Path, expected: str) -> bool:
+    """Whether a returned path names folder/expected (relative to folder, or absolute)."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    candidate = Path(value.strip())
+    candidate = candidate if candidate.is_absolute() else folder / candidate
+    return os.path.normcase(os.path.abspath(candidate)) == os.path.normcase(os.path.abspath(folder / expected))
+
+
+def _attempt_row(record):
+    rows = (record or {}).get("attempt_workspaces") or []
+    return rows[-1] if rows else {}
+
+
+def _check_structured_output(checks, manifest, record, calls, output):
+    expected = manifest["expected"]
+    checks.add("output_order_id", output.get("order_id") == expected["order_id"], output.get("order_id"))
+    try:
+        lines = {row["sku"]: row["quantity"] for row in output.get("lines") or []}
+    except (TypeError, KeyError):
+        lines = None
+    checks.add("output_lines", lines == expected["lines"], f"got {lines}, expected {expected['lines']}")
+    checks.add("output_total_quantity", output.get("total_quantity") == expected["total_quantity"],
+               f"got {output.get('total_quantity')}, expected {expected['total_quantity']}")
+    checks.add("output_urgent", output.get("urgent") is expected["urgent"],
+               f"got {output.get('urgent')}, expected {expected['urgent']}")
+    # Claude delivers native structured output through its own StructuredOutput step; that is not a task tool.
+    used = [call.get("tool_name") for call in calls if call.get("tool_name") != "StructuredOutput"]
+    checks.add("no_task_tools", not used, f"tool calls recorded: {used}")
+    return {}
+
+
+def _check_file_review(checks, manifest, record, calls, output):
+    run_directory = Path(manifest["run_directory"])
+    payload = _read_json(Path(manifest["input_path"]))
+    material = (run_directory / "materials" / payload["material_path"]).read_bytes()
+    checks.add("material_unchanged", _sha256(material) == manifest["expected"]["material_sha256"])
+    code = next((line.split(":", 1)[1].strip() for line in material.decode("utf-8").splitlines()
+                 if line.startswith("Release code:")), "")
+    checks.add("material_fact_absent_from_input", code and code not in _text(payload) and code not in _text(
+        (record or {}).get("input_payload")), "the release code exists only in the material file")
+    workspace = _attempt_row(record).get("workspace_path")
+    review = None if not workspace else Path(workspace) / "work" / "scratch" / payload["review_file"]
+    text = review.read_text(encoding="utf-8", errors="replace") if review is not None and review.is_file() else None
+    checks.add("review_file_written", text is not None, review)
+    lines = [] if text is None else [line.rstrip("\r") for line in text.splitlines()]
+    first = lines[0].strip() if lines else ""
+    bullets = [line for line in lines if line.lstrip().startswith("- ")]
+    checks.add("review_first_line", first == f"# Review: {payload['material_path']}", first)
+    checks.add("review_contains_material_fact", f"Release code: {code}" in lines, f"expected 'Release code: {code}'")
+    checks.add("review_has_findings", len(bullets) >= 1, f"{len(bullets)} bullet lines")
+    readbacks = _readbacks(calls, file_name=payload["review_file"], marker=code) if code else []
+    checks.add("review_read_back_in_log", readbacks, f"read steps showing the saved fact: {readbacks}")
+    checks.add("output_review_file", isinstance(output.get("review_file"), str)
+               and Path(output["review_file"].strip()).name == payload["review_file"], output.get("review_file"))
+    checks.add("output_release_code", output.get("release_code") == code, output.get("release_code"))
+    checks.add("output_readback_first_line", str(output.get("readback_first_line", "")).strip() == first,
+               output.get("readback_first_line"))
+    checks.add("output_finding_count", output.get("finding_count") == len(bullets),
+               f"got {output.get('finding_count')}, file has {len(bullets)}")
+    return {"review_file": None if review is None else str(review), "material": str(
+        run_directory / "materials" / payload["material_path"])}
+
+
+def _check_code_change(checks, manifest, record, calls, output):
+    project = Path(manifest["project_directory"])
+    initial_files = manifest["expected"]["initial_files"]
+    checks.add("project_started_failing", manifest["expected"]["initial_check"]["returncode"] == 1,
+               manifest["expected"]["initial_check"]["last_line"])
+    current = _project_hashes(project)
+    changed = sorted(name for name, digest in initial_files.items() if current.get(name) != digest)
+    checks.add("only_pricing_changed", changed == ["pricing.py"], f"changed: {changed}")
+    # The task allows editing pricing.py only; __pycache__ (bytecode) is the one ignored generated folder.
+    added = sorted(set(current) - set(initial_files))
+    checks.add("no_files_added", not added, f"added: {added}")
+    rerun = _host_check(project)
+    nonce = manifest["nonce"]
+    marker = f"CHECK PASSED nonce={nonce} pricing_sha256={current.get('pricing.py')}"
+    checks.add("host_rerun_passes", rerun["returncode"] == 0 and rerun["last_line"] == marker, rerun)
+    results = _command_results(calls, marker)
+    checks.add("model_ran_check_on_final_code", results, f"shell calls with the final pass line: {results}")
+    command = _read_json(Path(manifest["input_path"]))["check_command"]
+    changed_files = output.get("changed_files")
+    checks.add("output_changed_files", isinstance(changed_files, list) and bool(changed_files)
+               and all(_names_file(entry, project, "pricing.py") for entry in changed_files), changed_files)
+    checks.add("output_check_command", str(output.get("check_command", "")).strip() == command,
+               f"got {output.get('check_command')!r}, expected {command!r}")
+    checks.add("output_check_result", output.get("passed") is True
+               and str(output.get("check_result_line", "")).strip() == marker,
+               f"got {output.get('check_result_line')!r}, observed {marker!r}")
+    return {"project_directory": str(project), "added_files": added, "host_rerun": rerun}
+
+
+def _audit_calls(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("event") == "tools/call" and row.get("tool") == MCP_TOOL:
+            rows.append(row)
+    return rows
+
+
+def _load_json_file(path: Path):
+    try:
+        return _read_json(path)
+    except (OSError, ValueError):
+        return None
+
+
+def _check_mcp_data(checks, manifest, record, calls, output):
+    payload = _read_json(Path(manifest["input_path"]))
+    project = Path(manifest["project_directory"])
+    requested = {"warehouse": payload["warehouse"], "request_tag": payload["request_tag"]}
+    received = _audit_calls(Path(manifest["expected"]["audit_path"]))
+    # Every audited call the fixture answered for exactly this task's arguments; a CLI may legitimately retry.
+    audit = [row for row in received if row.get("arguments") == requested
+             and all((row.get("result") or {}).get(key) == value for key, value in requested.items())]
+    checks.add("fixture_received_tools_call", audit,
+               f"{len(audit)} audited calls with this task's arguments; {len(received) - len(audit)} with other arguments")
+    data = _load_json_file(project / payload["data_file"])
+    saved_id = data.get("response_id") if isinstance(data, dict) else None
+    # Compare with the audited response the saved file names; otherwise with the last one received.
+    result = next((row["result"] for row in audit if row["result"].get("response_id") == saved_id),
+                  audit[-1]["result"] if audit else {})
+    response_id = result.get("response_id", "")
+    mcp = [index for index, call in enumerate(calls)
+           if str(call.get("tool_name", "")).split("__")[-1] == MCP_TOOL and _succeeded(call)
+           and response_id and response_id in _text(call.get("response"))]
+    checks.add("mcp_call_in_log", mcp, f"log calls returning the audited response: {mcp}")
+    checks.add("data_file_matches_fixture_response", bool(result) and data == result,
+               "the saved JSON must equal the complete audited result")
+    readbacks = _readbacks(calls, file_name=payload["data_file"], marker=response_id,
+                           after=mcp[0] if mcp else -1) if response_id else []
+    checks.add("data_file_read_back_in_log", readbacks, f"read steps showing the saved response_id: {readbacks}")
+    items = result.get("items") or []
+    expected = {"response_id": response_id, "warehouse": result.get("warehouse"),
+                "total_units": sum(item.get("units", 0) for item in items), "sku_count": len(items)}
+    summary = _load_json_file(project / payload["summary_file"])
+    checks.add("summary_file_derived", isinstance(summary, dict) and bool(result)
+               and all(summary.get(key) == value for key, value in expected.items()),
+               f"got {summary}, expected {expected}")
+    checks.add("output_matches_fixture", bool(result) and all(output.get(key) == expected[key]
+                                                              for key in ("response_id", "total_units", "sku_count")),
+               {key: output.get(key) for key in ("response_id", "total_units", "sku_count")})
+    checks.add("output_artifact_paths", _names_file(output.get("data_file"), project, payload["data_file"])
+               and _names_file(output.get("summary_file"), project, payload["summary_file"]),
+               {key: output.get(key) for key in ("data_file", "summary_file")})
+    return {"project_directory": str(project), "audit": manifest["expected"]["audit_path"]}
+
+
+_PATTERN_CHECKS = {"structured_output": _check_structured_output, "file_review": _check_file_review,
+                   "code_change": _check_code_change, "mcp_data": _check_mcp_data}
+
+
+def check_pattern_example(run_directory: Path, record: dict | None = None) -> dict:
+    """Check one example run against actual effects, never the model's self-report.
+
+    Args:
+        run_directory: Folder created by prepare_pattern_example (holds run.json).
+        record: The Test Run record; None reads run_directory/record.json,
+            for example saved from agent-runtime-test-run stdout (UTF-8, with or
+            without BOM, or UTF-16 from Windows PowerShell redirection).
+    Returns:
+        pattern, transport, run_directory, status (the record's technical
+        status), passed (all checks passed), checks (name, passed, detail),
+        artifacts (paths to inspect) and attempt_workspace (the retained
+        Attempt folder row). Evidence: the executed Workflow and Module
+        identity equal to the registered readback, file bytes on disk (only
+        the allowed file changed, nothing added; complete saved MCP result),
+        the record's Inspection tool-call log, an independent host rerun of the
+        code check and the MCP fixture's audit of what it returned for exactly
+        this task's arguments. The final output must agree with these facts
+        (artifact names and locations, changed files, command, checker line).
+    Effects:
+        Reads the run folder, re-runs check_pricing.py for code_change and
+        writes check.json. Changes no other file and starts no model.
+    """
+    run_directory = Path(run_directory)
+    manifest = _read_json(run_directory / "run.json")
+    _require_pattern(manifest.get("pattern"))
+    if record is None:
+        record = _read_json(run_directory / "record.json")
+    checks = _Checks()
+    calls = _tool_calls(record)
+    output = record.get("output") if isinstance(record.get("output"), dict) else {}
+    checks.add("execution_completed", record.get("status") == "completed",
+               record.get("failure_detail") or record.get("status"))
+    executed = {key: record.get(key) for key in manifest["registered"]}
+    checks.add("executed_the_registered_definition", executed == manifest["registered"],
+               f"executed {executed}, registered readback {manifest['registered']}")
+    row = _attempt_row(record)
+    checks.add("attempt_folder_retained", row.get("archive_path") and Path(row["archive_path"]).is_file(),
+               row.get("workspace_path"))
+    artifacts = _PATTERN_CHECKS[manifest["pattern"]](checks, manifest, record, calls, output)
+    result = {"pattern": manifest["pattern"], "transport": manifest["transport"],
+              "run_directory": str(run_directory), "status": record.get("status"),
+              "passed": all(row["passed"] for row in checks.rows), "checks": checks.rows,
+              "output": output, "artifacts": artifacts, "attempt_workspace": row,
+              "record": str(run_directory / "record.json")}
+    _write_json(run_directory / "check.json", result)
+    return result
+
+
+def build_parser():
+    """Return the prepare/run/check argument grammar."""
+    parser = argparse.ArgumentParser(
+        prog="python -m " + _MODULE,
+        description="Run, or prepare and check, one of the four ordinary Runtime usage-pattern examples. "
+                    "run = prepare + run_local_workflow_test + check. Each run uses a new folder under --root.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("prepare", "run"):
+        command = commands.add_parser(name)
+        command.add_argument("--pattern", required=True, choices=PATTERN_NAMES)
+        command.add_argument("--transport", required=True, choices=TRANSPORTS,
+                             help="The CLI to run; never switched automatically")
+        command.add_argument("--root", required=True, type=Path,
+                             help="Example root; each run creates a new subfolder (use an ordinary user folder)")
+        command.add_argument("--cli-path", type=Path, help="Native claude.exe/codex.exe (default: PATH lookup)")
+        command.add_argument("--model", help="Model for this call (required for codex_cli)")
+        command.add_argument("--effort", help="Effort for this call (required for codex_cli)")
+        command.add_argument("--run-timeout-seconds", type=int, help="Outer time limit for this call (default 1200)")
+    check = commands.add_parser("check")
+    check.add_argument("--run-dir", required=True, type=Path, help="Folder created by prepare or run")
+    check.add_argument("--record", type=Path, help="Saved Test Run JSON (default RUN_DIR/record.json)")
+    return parser
+
+
+def main(argv=None) -> int:
+    """Print JSON on stdout. Exit 0: every check passed (or prepare finished); 1: a check failed or an error."""
+    args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        if args.command == "check":
+            record = None if args.record is None else _read_json(args.record)
+            result = check_pattern_example(args.run_dir, record)
+        else:
+            options = dict(cli_path=args.cli_path, model_id=args.model, reasoning_profile=args.effort,
+                           run_timeout_seconds=args.run_timeout_seconds)
+            entry = prepare_pattern_example if args.command == "prepare" else run_pattern_example
+            result = entry(args.root, args.pattern, args.transport, **options)
+    except KeyboardInterrupt:
+        print(json.dumps({"error_type": "KeyboardInterrupt", "detail": "example interrupted"}), file=sys.stderr)
+        return 130
+    except Exception as exc:
+        print(json.dumps({"error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", None),
+                          "detail": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if args.command == "prepare" or result["passed"] else 1
+
+
+__all__ = ["PATTERN_NAMES", "TRANSPORTS", "EXAMPLE_VERSION", "MCP_CONNECTION", "MCP_TOOL",
+           "build_pattern_workflow", "module_id_for", "prepare_pattern_example", "run_pattern_example",
+           "check_pattern_example", "main"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -828,6 +828,18 @@ RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
         owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
     ),
     RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/testing/conformance_pattern_examples.py",
+        supporting_plane_id="conformance", source_directory_id="testing",
+        subject="pattern", nominalized_action="examples",
+        owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/testing/conformance_fixture_mcp_serving.py",
+        supporting_plane_id="conformance", source_directory_id="testing",
+        subject="fixture_mcp", nominalized_action="serving",
+        owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
         source_path="src/agent_runtime/foundation/foundation_environment_setup.py",
         supporting_plane_id="foundation",
         source_directory_id="foundation",

@@ -133,10 +133,12 @@ from .registry.registry_module_authoring import (
     EXECUTION_PROFILE_UNAVAILABLE,
     MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
     MODULE_OPERATION_DECLARATION_INVALID,
+    MODULE_REQUIREMENT_PRESETS,
     Module,
     ModuleAuthoringError,
     ModuleExport,
     ModuleReviewer,
+    module_requirements_preset,
 )
 from .registry.registry_module_loading import load_reviewer_registration
 from .registry.registry_local_persistence import LoadedRuntimeRegistration, load_runtime_registration, save_runtime_registration
@@ -283,6 +285,8 @@ __all__ = [
     "ReviewerDefaults",
     "ModuleExecutionRequirements",
     "ModuleReviewer",
+    "MODULE_REQUIREMENT_PRESETS",
+    "module_requirements_preset",
     "LoadedRuntimeRegistration",
     "load_reviewer_registration",
     "load_runtime_registration",

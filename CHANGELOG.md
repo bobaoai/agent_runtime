@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0.dev12
+
+- Add `module_requirements_preset(preset_id, *, mcp_connections=(), max_attempts=1)` and `MODULE_REQUIREMENT_PRESETS` (`structured_output`, `file_review`, `code_change`, `mcp_data`): explicit `ModuleExecutionRequirements` values for the four common usage patterns, passed as an ordinary Module's `execution_requirements`. `file_review` uses `ModuleReviewer`'s capability fields; `ModuleReviewer` keeps its fixed preset (3 attempts). Presets add no registry, Profile or policy; transport, model, effort and time stay per call, and saved definitions keep their saved tool and network policies.
+- Add four directly runnable usage-pattern examples, packaged in the wheel: `python -m agent_runtime.testing.conformance_pattern_examples run|prepare|check --pattern PRESET --transport claude_cli|codex_cli --root ROOT`. Each run creates a fresh folder, registers one ordinary Module through the public registration API, runs it through `run_local_workflow_test`, and checks actual file effects, the returned Inspection log, an independent host re-run (code_change) and the audit of a packaged credential-free stdio MCP fixture (`mcp_data`, needs `cli_tools`). A model's self-report is never counted as evidence.
+- Add the third packaged operator Skill `agent-runtime-usage` (choose a pattern, inspect its preset, run its example, then use ordinary registration and Test Run). `setup_runtime` installs it with the other two; a root prepared by an earlier version receives it on its next setup. Packaged Skills are kept with LF bytes.
+- `agent_capability_example` is now v3: its draft writer's tools include `edit` for the scratch draft its instruction asks for; its other Modules and `agent_evaluation_example` keep their v2 definitions and bytes. Both `--example` graphs are documented as host-limited advanced callback examples (macOS/Linux with `cli_tools`; Windows reports the extension unsupported). No Windows callback IPC is added.
+- Update README, runbooks, operator Skills and the generated API reference: Codex workspace/file/MCP capability, `--project-directory`, Claude `--command-permit` versus macOS-only recorded `commands`, the `AGENT_RUNTIME_REAL_RUN` and `RUN_PROVIDER_INTEGRATION` live-run gates, Attempt retention versus the callback examples' temporary folders, and the token fields (unknown ordinary input is omitted when stored, so only events with a known value carry the extra key).
+- Execution behavior of existing entry points and stored record bytes are unchanged; no database migration.
+
 ## 0.2.0.dev11
 
 - Add `ordinary_input_tokens`: Provider-reported input that is neither cache read nor cache creation (Claude today; unknown for Codex). `input_tokens` keeps its meaning, the cache-inclusive total; unknown stays unknown and ordinary input is never derived by subtracting cache from the total.

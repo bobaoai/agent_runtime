@@ -18,10 +18,12 @@ from .registry_module_authoring import (
     EXECUTION_PROFILE_UNAVAILABLE,
     MODULE_EXECUTION_PROFILE_INCOMPATIBLE,
     MODULE_OPERATION_DECLARATION_INVALID,
+    MODULE_REQUIREMENT_PRESETS,
     Module,
     ModuleAuthoringError,
     ModuleExport,
     ModuleReviewer,
+    module_requirements_preset,
 )
 from .registry_workflow_authoring import (
     WORKFLOW_MODULE_CLOSURE_INVALID,
@@ -116,6 +118,8 @@ __all__ = [
     "ModuleExport",
     "ModuleRegistrationSource",
     "ModuleReviewer",
+    "MODULE_REQUIREMENT_PRESETS",
+    "module_requirements_preset",
     "RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS",
     "RUNTIME_LOGICAL_RESPONSIBILITY_REGISTRATIONS",
     "RUNTIME_MIGRATION_DEBT_PATHS",

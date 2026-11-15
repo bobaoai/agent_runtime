@@ -13,6 +13,7 @@ FIXTURES = Path(__file__).parent / "fixtures/operator_skills_dev7"
 OLD = "agent-runtime-evaluation"
 NEW = "agent-runtime-test-run"
 REGISTRATION = "agent-runtime-registration"
+USAGE = "agent-runtime-usage"  # Added in 0.2.0.dev12; a dev7 root receives it with the migration.
 HOSTS = (".agents", ".claude")
 
 
@@ -49,9 +50,10 @@ def _assert_migrated(root):
     for host in HOSTS:
         assert (root / host / "skills" / NEW / "SKILL.md").read_bytes() == _packaged(NEW)
         assert (root / host / "skills" / REGISTRATION / "SKILL.md").read_bytes() == _packaged(REGISTRATION)
+        assert (root / host / "skills" / USAGE / "SKILL.md").read_bytes() == _packaged(USAGE)
         assert not (root / host / "skills" / OLD).exists()
     state = json.loads((root / ".runtime/setup.json").read_text())
-    assert state["skill_sha256"] == {NEW: _digest(_packaged(NEW)), REGISTRATION: _digest(_packaged(REGISTRATION))}
+    assert state["skill_sha256"] == {name: _digest(_packaged(name)) for name in (NEW, REGISTRATION, USAGE)}
 
 
 @pytest.mark.deterministic
@@ -125,7 +127,7 @@ def test_new_skills_are_written_before_retired_files_are_removed_and_metadata_is
 
 
 @pytest.mark.deterministic
-@pytest.mark.parametrize("fail_at", range(7))
+@pytest.mark.parametrize("fail_at", range(9))
 def test_an_interrupted_migration_converges_when_setup_is_repeated(tmp_path, monkeypatch, fail_at):
     root = _dev7_root(tmp_path)
     with monkeypatch.context() as patch:

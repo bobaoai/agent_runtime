@@ -8,3 +8,6 @@ src/agent_runtime/docs/agent_runtime_reviewer_api.md text eol=lf
 # Historical dev7 operator Skill fixtures: setup admits only their exact packaged LF bytes
 # (hash allow-list), so the checkout must keep those bytes.
 tests/fixtures/operator_skills_dev7/*.SKILL.md text eol=lf
+# Packaged operator Skills: setup installs and hashes the exact packaged bytes, and
+# governance mounts must match them, so every checkout and wheel keeps LF.
+src/agent_runtime/skills/*/SKILL.md text eol=lf

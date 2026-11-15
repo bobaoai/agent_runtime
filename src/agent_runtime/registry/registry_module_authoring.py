@@ -468,12 +468,86 @@ class ModuleReviewer(Module):
     )
 
 
+MODULE_REQUIREMENT_PRESETS = ("structured_output", "file_review", "code_change", "mcp_data")
+
+
+def module_requirements_preset(
+    preset_id: str, *, mcp_connections: tuple[str, ...] = (), max_attempts: int = 1,
+) -> ModuleExecutionRequirements:
+    """Return the fixed requirements of one common usage pattern for an ordinary Module.
+
+    Ordinary Module has no default tools. A preset is an explicit, reusable
+    value for its execution_requirements argument; it is registered with the
+    definition and never changes later. Per-call choices stay outside it:
+    transport, model, effort and run_timeout_seconds come from the call or the
+    execution parameter files; task material, the project directory, Claude
+    command permits and MCP connection entries come from each call or host root.
+
+    Args:
+        preset_id: One of MODULE_REQUIREMENT_PRESETS.
+            structured_output: tool_free, workspace none, no tools, network
+            denied; text in, schema-checked structured output back.
+            file_review: ModuleReviewer's capability fields: agent with edit,
+            read, search and shell in a private draft (materials read-only,
+            scratch writable), provider_managed tool network.
+            code_change: the same tools and network in the caller's
+            explicit_project_read_write project directory.
+            mcp_data: agent with edit, read, shell and mcp__<name> for each
+            declared connection, in the caller's project directory,
+            provider_managed. Codex reaches files only through shell, so shell
+            stays in every file preset; Claude Bash still runs only its
+            read-only commands plus the host's per-call command permits.
+        mcp_connections: Host MCP connection names, required for mcp_data and
+            rejected for the other presets. Each becomes mcp__<name>; the
+            connection itself is configured by the host per transport.
+        max_attempts: Attempt limit fixed with the definition (1 to 100).
+            ModuleReviewer keeps its own fixed value of 3.
+    Returns:
+        A new ModuleExecutionRequirements (module_execution_requirements_v2)
+        with workflow_execution_isolated context, inline input and native
+        structured output. No Profile, transport or model is selected.
+    Raises:
+        ValueError: Unknown preset, missing or unexpected connection names,
+            an invalid name, or an invalid max_attempts.
+    Effects:
+        Pure value construction; no IO, registration or execution.
+    """
+    from dataclasses import replace
+    from ..foundation.foundation_environment_setup import validate_mcp_connection_entries
+
+    if preset_id not in MODULE_REQUIREMENT_PRESETS:
+        raise ValueError(f"Unknown requirements preset {preset_id!r}; choose one of {', '.join(MODULE_REQUIREMENT_PRESETS)}")
+    if type(mcp_connections) is not tuple:
+        raise ValueError("mcp_connections must be a tuple of connection names")
+    if (preset_id == "mcp_data") != bool(mcp_connections):
+        raise ValueError("mcp_data requires at least one MCP connection name; other presets accept none")
+    validate_mcp_connection_entries({name: {"config": {}} for name in mcp_connections})
+    if len(set(mcp_connections)) != len(mcp_connections):
+        raise ValueError("mcp_connections must not repeat a name")
+    reviewer = ModuleReviewer._default_execution_requirements
+    if preset_id == "structured_output":
+        requirements = replace(reviewer, execution_mode="tool_free", attempt_workspace_policy="none",
+                               tool_policy=(), network_policy="denied")
+    elif preset_id == "file_review":
+        requirements = reviewer
+    elif preset_id == "code_change":
+        requirements = replace(reviewer, attempt_workspace_policy="explicit_project_read_write")
+    else:
+        tools = tuple(sorted({"edit", "read", "shell", *("mcp__" + name for name in mcp_connections)}))
+        requirements = replace(reviewer, attempt_workspace_policy="explicit_project_read_write", tool_policy=tools)
+    requirements = replace(requirements, max_attempts=max_attempts)
+    requirements.validate()
+    return requirements
+
+
 __all__ = [
     "EXECUTION_PROFILE_UNAVAILABLE",
     "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
     "MODULE_OPERATION_DECLARATION_INVALID",
+    "MODULE_REQUIREMENT_PRESETS",
     "Module",
     "ModuleAuthoringError",
     "ModuleExport",
     "ModuleReviewer",
+    "module_requirements_preset",
 ]

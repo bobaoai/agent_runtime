@@ -25,7 +25,8 @@ from ..registry.registry_plugin_registration import RuntimeModulePlugin, registe
 from ..registry.registry_release_registration import RuntimeReleaseRegistry
 from ..invocation.invocation_tool_definition import ProviderToolDefinition
 from .conformance_agent_examples import (
-    EXAMPLE_NAMES, build_agent_capability_example, build_agent_evaluation_example, build_example_reviewer,
+    CAPABILITY_EXAMPLE_VERSION, EVALUATION_EXAMPLE_VERSION, EXAMPLE_NAMES, build_agent_capability_example,
+    build_agent_evaluation_example, build_example_reviewer,
 )
 
 __all__ = ["run_agent_example"]
@@ -166,6 +167,12 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
             workspace parameter file and the default. The parent graph and the
             child Reviewer resolve separately and must reach the same transport.
             Current tool-capable examples require the admitted Claude CLI path.
+            Both graphs use explicitly selected callback tools (fixture_read,
+            review_candidate) served through a Unix-domain socket bridge: a
+            host-limited advanced extension for macOS/Linux with the cli_tools
+            extra. On Windows the bridge reports the extension unsupported
+            before a session opens; Runtime adds no Windows callback IPC. The
+            four ordinary usage patterns are in conformance_pattern_examples.
         model_id: This call's model, or the same parameter-file layers/default.
         reasoning_profile: This call's effort, or the same layers/default.
         run_timeout_seconds: Total synchronous work budget through the same four
@@ -196,7 +203,9 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
         Registers only the fixed example definitions through the public Registry,
         prepares models in memory, invokes real Runtime Modules and returns logs.
         No PG, production authorization, Digestion data or ambient project access.
-        Each run owns temporary workspaces, removed after capturing its records.
+        Each run owns temporary workspaces, removed after capturing its records
+        (unlike ordinary Test Run Attempt folders, which are retained and
+        sealed for host cleanup with maintain_attempt_workspaces).
         Python remains the interpreter running Runtime. No additional environment.
         Every invocation creates a fresh Workflow execution. Saved JSON preserves
         evidence but does not resume a closed graph or a Provider CLI session.
@@ -230,18 +239,19 @@ def run_agent_example(root: Path, example_name: str, *, scenario="accepted", inp
     setup_runtime(root)
     definition = (build_agent_capability_example if example_name == EXAMPLE_NAMES[0]
                   else build_agent_evaluation_example)()
+    version = CAPABILITY_EXAMPLE_VERSION if example_name == EXAMPLE_NAMES[0] else EVALUATION_EXAMPLE_VERSION
     register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
-        example_name, "v2", definition.origin_bundle), root=root)
+        example_name, version, definition.origin_bundle), root=root)
     choice = dict(transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile,
                   run_timeout_seconds=run_timeout_seconds)
-    saved, selection, parameters = _prepare_local_workflow_with_sources(root, example_name, version="v2", **choice)
+    saved, selection, parameters = _prepare_local_workflow_with_sources(root, example_name, version=version, **choice)
     child = child_selection = child_parameters = None
     if example_name == EXAMPLE_NAMES[1]:
         exported = Module.to_workflow(build_example_reviewer()).export()
         register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
-            "agent_example_task_review", "v2", exported.origin_bundle), root=root)
+            "agent_example_task_review", EVALUATION_EXAMPLE_VERSION, exported.origin_bundle), root=root)
         child, child_selection, child_parameters = _prepare_local_workflow_module_with_sources(
-            root, exported.workflow_release.workflow_id, version="v2",
+            root, exported.workflow_release.workflow_id, version=EVALUATION_EXAMPLE_VERSION,
             **{name: value for name, value in choice.items() if name != "run_timeout_seconds"})
     from ..execution.execution_run_budget import RunBudget
     budget = RunBudget(parameters.run_timeout_seconds, started=entered, parent_run=parent_run)

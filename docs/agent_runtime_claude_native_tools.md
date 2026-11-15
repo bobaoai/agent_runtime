@@ -131,7 +131,8 @@ Inspection 在明确请求详细日志时标明缺少或矛盾的事件，不从
 任务全文、确定的相对材料位置和命令说明。实际 stdin 与保存的 Prompt Envelope 使用相同字节。
 可选 `.runtime/config.json` 提供程序/依赖 locator 默认、Attempt 文件夹根（`attempt_workspace_root`）和可选
 MCP 连接（`mcp_servers`），完整参数见自动 API 中的 load_runtime_config。材料与依赖在所有宿主可用；
-commands 需要 macOS。
+commands 需要 macOS。普通 Shell 命令的逐次许可（`--command-permit`，渲染为 Claude 的 `Bash(<permit>)` 允许规则）
+是另一项能力，在所有宿主上可用；记录型 commands 不限制普通 Bash，也不是普通文件、代码或 MCP 任务的前提。
 
 有 commands 时，Runtime 增加一个 `sandbox_command_execute` 本地 MCP 工具，让 Agent 按
 command_id 选择本次已经提供的命令；原生 Read/Grep/Bash 保留。父进程使用当前真实资源 guard，
@@ -237,6 +238,34 @@ python -B -m pytest -q -s -p no:cacheprovider \
 缺少 CLI/登录/运行库/PG/schema/source/input 时，补宿主对应的环境或注册输入；Runtime 公共入口、
 Adapter、记录或查询实现有缺陷时，回到 Runtime 修复并随包交付。审核内容本身的缺陷交给所属
 Reviewer/文稿负责人，不通过改启动参数或替换 schema 让它通过。
+
+### 3.4 四种常用模式的随包样例
+
+`structured_output`、`file_review`、`code_change`、`mcp_data` 四个样例由已安装的包直接运行，各在 `--root` 下新建
+运行文件夹，用公开注册接口登记一个普通 Module，经 `run_local_workflow_test` 调用所选 CLI，再按实际文件、
+执行日志和 MCP fixture 审计检查结果（命令与产物见 README 的“可运行样例”）。`mcp_data` 的 fixture 是随包的
+无凭据 stdio MCP 服务器（标准 `mcp` 包，即 `cli_tools`），经普通 `mcp_servers` 连接配置交给 CLI，不是 Runtime
+callback。PowerShell 示例：
+
+```powershell
+$Root = "$HOME\Documents\Agent Runtime Examples"
+python -m agent_runtime.testing.conformance_pattern_examples run --pattern code_change --transport claude_cli --root $Root --cli-path "C:\path\to\claude.exe"
+python -m agent_runtime.testing.conformance_pattern_examples run --pattern mcp_data --transport codex_cli --root $Root --cli-path "C:\path\to\codex.exe" --model MODEL --effort EFFORT
+```
+
+Claude 的 `code_change` 样例以固定命令 `sh run_check.sh`（在 Git Bash 中运行项目内的检查脚本）配合同名
+`--command-permit`；Codex 不接受逐条许可，直接在 PowerShell 中以调用运算符运行检查。
+
+Windows 上 Codex 的 PowerShell 可能处于受限语言模式：`[pscustomobject]` 之类的构造会让整条命令失败，失败的命令
+不算读回。样例指令因此要求用单独、简单的读命令（例如 `Get-Content review.md`）完成读回，失败时重新做一次干净的读取；
+最终答案是任务的结构化输出，不需要在 shell 里拼对象。`mcp_data` 保存的是工具返回的数据对象（有 structured content
+时即它，否则是文本内容中的 JSON），不是 MCP 协议外层（`content`、`structuredContent`、`isError`）。源码 checkout 中的真实用例：
+
+```powershell
+$env:AGENT_RUNTIME_REAL_RUN = "1"
+$env:AGENT_RUNTIME_CODEX_BIN = "C:\path\to\codex.exe"
+python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_pattern_examples.py -k "real_cli and codex_cli"
+```
 
 ## 4. Codex workspace 执行（Reviewer 默认环境）
 

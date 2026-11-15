@@ -12,7 +12,7 @@ import stat
 import tempfile
 
 
-_SKILLS = ("agent-runtime-registration", "agent-runtime-test-run")
+_SKILLS = ("agent-runtime-registration", "agent-runtime-test-run", "agent-runtime-usage")
 _HOSTS = (".agents", ".claude")
 _FORMAT = "agent_runtime_setup_v1"
 # Exact predecessor operator content accepted for the initial source migration.
@@ -200,7 +200,11 @@ def setup_runtime(root: Path) -> tuple[Path, ...]:
         root: Explicit host directory, interpreted as a pathlib path. Tilde is
             not expanded here; a shell may expand it before calling a CLI.
             Creates .runtime when missing and places
-            the two bundled operator Skills in .agents/skills and .claude/skills.
+            the three bundled operator Skills (agent-runtime-registration,
+            agent-runtime-test-run and agent-runtime-usage) in .agents/skills
+            and .claude/skills. A root prepared by an earlier version receives
+            the new Skill on its next setup; the others are upgraded only when
+            they still hold the content recorded in .runtime/setup.json.
             A retired agent-runtime-evaluation Skill with exactly its packaged
             content or its previously recorded hash is removed after the
             replacement Skill is written.
@@ -217,7 +221,7 @@ def setup_runtime(root: Path) -> tuple[Path, ...]:
             writes may have completed; repeat setup with the same installed
             package to finish preparation, not the model operation blindly.
     Effects:
-        Reads only two packaged Skill files, four fixed host Skill files, two
+        Reads only three packaged Skill files, six fixed host Skill files, two
         retired host Skill files and
         .runtime/setup.json. The latter records its format and last installed
         Skill SHA-256 values, covering raw UTF-8 file bytes, not Module identity.

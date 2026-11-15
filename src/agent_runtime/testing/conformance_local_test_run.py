@@ -498,9 +498,16 @@ def build_parser():
     parser.description = ("Test-run a registered single-Module Workflow, from root/.runtime or read-only from an exact "
                           "PostgreSQL release, or a packaged multi-Agent example. Select exactly one target: --workflow, "
                           "--workflow-ref with --workflow-sha256, or --example. No production authorization; nothing is persisted.")
-    parser.epilog += "\n\nPackaged examples register fixed definitions and run a fresh execution. Saved JSON is evidence, not cross-process resume. See docs/agent_runtime_capability_runbook.md for example use and result interpretation."
+    parser.epilog += ("\n\nPackaged --example graphs register fixed definitions and run a fresh execution. Saved JSON is "
+                      "evidence, not cross-process resume. They use explicitly selected callback tools: host-limited "
+                      "advanced examples for macOS/Linux with the cli_tools extra; Windows reports the callback extension "
+                      "unsupported before a session opens. The four ordinary usage patterns (structured_output, "
+                      "file_review, code_change, mcp_data) run on every host with: python -m "
+                      "agent_runtime.testing.conformance_pattern_examples run --pattern PATTERN --transport TRANSPORT "
+                      "--root ROOT. See docs/agent_runtime_capability_runbook.md for example use and result "
+                      "interpretation.")
     parser.add_argument("--example", choices=("agent_capability_example", "agent_evaluation_example"),
-        help="Register and run a packaged example. capability covers query/writer/parallel reviews; evaluation covers Agent-requested child review and independent evaluation. Definitions are saved under root; execution is temporary. --input is optional and accepts exactly task and required_facts; omission uses the packaged finite fixture.")
+        help="Register and run a packaged multi-Agent callback example (host-limited: macOS/Linux with cli_tools; not Windows). capability covers query/writer/parallel reviews; evaluation covers Agent-requested child review and independent evaluation. Definitions are saved under root; execution uses temporary folders removed afterwards. --input is optional and accepts exactly task and required_facts; omission uses the packaged finite fixture.")
     parser.add_argument("--scenario", choices=("accepted", "revision", "wait"),
         help="Capability example only: first selector decision. revision returns to the Writer; wait records WAIT then supplies one matching material_ready fixture event in the same process. Default accepted; not cross-process resume.")
     return parser

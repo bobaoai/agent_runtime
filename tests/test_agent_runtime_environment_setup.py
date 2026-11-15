@@ -106,7 +106,7 @@ def test_first_setup_and_ready_path_only_touch_fixed_local_resources(tmp_path, p
     other.write_text("user content")
     before = _snapshot(root)
     written = setup_runtime(root)
-    assert len(written) == 5
+    assert len(written) == 2 * len(setup._SKILLS) + 1
     assert definition.read_text() == "opaque registered definition"
     assert other.read_text() == "user content"
     for host in setup._HOSTS:
@@ -127,7 +127,7 @@ def test_first_setup_and_ready_path_only_touch_fixed_local_resources(tmp_path, p
 @pytest.mark.deterministic
 def test_setup_creates_absent_root_and_repairs_only_missing_resource(tmp_path, package):
     root = tmp_path / "new/host"
-    assert len(setup_runtime(root)) == 5
+    assert len(setup_runtime(root)) == 2 * len(setup._SKILLS) + 1
     missing = root / ".agents/skills/agent-runtime-test-run/SKILL.md"
     missing.unlink()
     assert setup_runtime(root) == (missing,)
@@ -144,6 +144,26 @@ def test_managed_resource_upgrade_and_same_content_adoption(tmp_path, package):
     assert setup_runtime(root) == (metadata,)
 
 
+@pytest.mark.deterministic
+def test_root_prepared_with_two_operator_skills_gains_the_usage_skill_once(tmp_path, package, monkeypatch):
+    """A root set up by 0.2.0.dev11 (two Skills recorded) receives agent-runtime-usage, then setup is a no-op."""
+    root = tmp_path / "host"
+    earlier = ("agent-runtime-registration", "agent-runtime-test-run")
+    monkeypatch.setattr(setup, "_SKILLS", earlier)
+    setup_runtime(root)
+    recorded = json.loads((root / ".runtime/setup.json").read_text())["skill_sha256"]
+    assert set(recorded) == set(earlier) and not (root / ".claude/skills/agent-runtime-usage").exists()
+    monkeypatch.undo()
+    monkeypatch.setattr(setup, "files", lambda _: package)
+    before = _snapshot(root)
+    written = setup_runtime(root)
+    assert set(written) == {root / host / "skills" / "agent-runtime-usage" / "SKILL.md" for host in setup._HOSTS} | {
+        root / ".runtime/setup.json"}
+    assert all(_snapshot(root)[path] == value for path, value in before.items() if path.name != "setup.json")
+    assert set(json.loads((root / ".runtime/setup.json").read_text())["skill_sha256"]) == set(setup._SKILLS)
+    assert setup_runtime(root) == ()
+
+
 def test_known_predecessor_uses_exact_content_not_name(tmp_path, package, monkeypatch):
     root = tmp_path / "host"
     target = root / ".agents/skills/agent-runtime-registration/SKILL.md"
@@ -151,7 +171,7 @@ def test_known_predecessor_uses_exact_content_not_name(tmp_path, package, monkey
     target.write_bytes(b"reviewed predecessor")
     monkeypatch.setattr(setup, "_LEGACY_SKILL_SHA256", {
         "agent-runtime-registration": {hashlib.sha256(target.read_bytes()).hexdigest()}})
-    assert len(setup_runtime(root)) == 5
+    assert len(setup_runtime(root)) == 2 * len(setup._SKILLS) + 1
     target.write_bytes(b"locally modified predecessor")
     before = _snapshot(root)
     with pytest.raises(ValueError, match="local Skill content"):

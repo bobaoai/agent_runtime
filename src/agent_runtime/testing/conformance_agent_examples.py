@@ -24,7 +24,12 @@ from ..registry.registry_workflow_authoring import Workflow, WorkflowExport
 
 
 EXAMPLE_NAMES = ("agent_capability_example", "agent_evaluation_example")
-_VERSION = "v2"
+# Definition versions are immutable. v3 of the capability graph gives its draft
+# writer the edit tool its scratch-draft task needs; the evaluation graph and the
+# task reviewer keep their unchanged v2 definitions and bytes.
+CAPABILITY_EXAMPLE_VERSION = "v3"
+EVALUATION_EXAMPLE_VERSION = "v2"
+_VERSION = EVALUATION_EXAMPLE_VERSION
 _OWNER = """# Runtime Agent capability examples
 
 Use only the provided test input, explicit fixture tools and private workspace.
@@ -47,7 +52,7 @@ _REVIEW_INPUT = _object(draft=_TEXT, required_facts=_TEXTS)
 _REVIEW_OUTPUT = _object(accepted={"type": "boolean"}, reason=_TEXT)
 
 
-def _module(name, instruction, input_schema, output_schema, *, tools=(), draft=False):
+def _module(name, instruction, input_schema, output_schema, *, tools=(), draft=False, version=_VERSION):
     module_id = "capability_" + name
     input_ref, output_ref = f"schema:{module_id}_input@v1", f"schema:{module_id}_output@v1"
     def schema(ref, body):
@@ -72,7 +77,7 @@ def _module(name, instruction, input_schema, output_schema, *, tools=(), draft=F
     )
     return Module(source, execution_requirements=requirements,
                   entry_policy=ModuleEntryPolicy.STANDALONE_ALLOWED,
-                  output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE).export(module_version=_VERSION)
+                  output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE).export(module_version=version)
 
 
 def build_example_reviewer() -> ModuleExport:
@@ -89,13 +94,13 @@ def build_example_reviewer() -> ModuleExport:
         _REVIEW_INPUT, _REVIEW_OUTPUT)
 
 
-def _workflow(name, modules, edges, *, parallel_groups=()):
+def _workflow(name, modules, edges, *, parallel_groups=(), version=_VERSION):
     nodes = tuple(WorkflowNodeReleaseCandidate(
         node_id=node_id, node_kind=WorkflowNodeKind.MODULE,
         module_release_ref=exported.module_release.release_ref,
         module_release_sha256=exported.module_release.release_sha256,
         input_mapping_ref=f"input-map:{name}/{node_id}@v1",
-        input_mapping_document={"example": name, "node": node_id, "version": _VERSION},
+        input_mapping_document={"example": name, "node": node_id, "version": version},
     ) for node_id, exported in modules.items())
     if parallel_groups:
         nodes += tuple(WorkflowNodeReleaseCandidate(
@@ -104,7 +109,7 @@ def _workflow(name, modules, edges, *, parallel_groups=()):
             input_mapping_ref=None, input_mapping_document=None,
         ) for group in parallel_groups)
     candidate = WorkflowReleaseCandidate(
-        workflow_id=name, workflow_version=_VERSION, workflow_contract_version="contract_v1",
+        workflow_id=name, workflow_version=version, workflow_contract_version="contract_v1",
         owner_contract_ref=_OWNER_REF, owner_contract_content=_OWNER,
         graph_ref=f"workflow-graph:{name}@v1", initial_node_id=next(iter(modules)),
         nodes=nodes, edges=tuple(WorkflowEdge(
@@ -113,7 +118,7 @@ def _workflow(name, modules, edges, *, parallel_groups=()):
         parallel_groups=parallel_groups,
         authorization_manifest_ref=f"authorization-manifest:{name}@v1",
         authorization_manifest_document={"required_operation_ids": ["model_execute"]},
-        execution_binding_ref=f"execution-binding:{name}@{_VERSION}",
+        execution_binding_ref=f"execution-binding:{name}@{version}",
         execution_binding_document={"schema_version": "workflow_execution_binding_v1",
                                     "workflow_id": name, "variant_policy_family": "execution_variant_policy"},
     )
@@ -131,6 +136,9 @@ def build_agent_capability_example() -> WorkflowExport:
     Effects:
         Pure construction only. The fixture_read capability requires a trusted
         host-supplied tool; the graph does not enable production Gateway access.
+        Version v3: the draft writer's tools include edit so it can write the
+        scratch draft its instruction asks for; the other five Modules keep
+        their v2 definitions unchanged.
     """
     modules = {
         "context_reader": _module("context_reader",
@@ -144,7 +152,7 @@ def build_agent_capability_example() -> WorkflowExport:
             "Write a concise note containing every supplied fact. Use your permitted private scratch workspace "
             "to write and check a draft, then return its complete text in draft. Apply supplied review feedback.",
             _object(facts=_TEXTS, feedback=_TEXTS), _object(draft=_TEXT),
-            tools=("read", "search", "shell"), draft=True),
+            tools=("edit", "read", "search", "shell"), draft=True, version=CAPABILITY_EXAMPLE_VERSION),
         "reviewer_a": _module("reviewer_a",
             "Independently check every required fact against the draft. Return accepted and the reason. "
             "Do not assume another reviewer has checked it.", _REVIEW_INPUT, _REVIEW_OUTPUT),
@@ -171,7 +179,8 @@ def build_agent_capability_example() -> WorkflowExport:
     ), parallel_groups=(WorkflowParallelGroupBinding(
         group_id="independent_reviews", control_node_id="parallel_reviews",
         branch_node_ids=("reviewer_a", "reviewer_b"), join_node_id="selector",
-        completion_outcome_id="all_completed", join_policy=WorkflowParallelJoinPolicy.ALL_REQUIRED),))
+        completion_outcome_id="all_completed", join_policy=WorkflowParallelJoinPolicy.ALL_REQUIRED),),
+        version=CAPABILITY_EXAMPLE_VERSION)
 
 
 def build_agent_evaluation_example() -> WorkflowExport:

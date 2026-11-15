@@ -286,7 +286,10 @@ def test_runbook_index_batch_commands_and_result_boundaries_are_explicit() -> No
         assert f'(agent_runtime_capability_runbook.md#{case.case_id})' in catalog
         assert case.command.argv[:len(subject._PYTEST_ARGV)] == subject._PYTEST_ARGV
     assert "python -B -m pytest --collect-only -q" in runbook
-    assert "RUN_PROVIDER_INTEGRATION=0 RUN_TEMPORAL_INTEGRATION=0" in runbook
+    # The ordinary batch disables all three live gates, in PowerShell and in an equivalent POSIX line.
+    for gate in ("RUN_PROVIDER_INTEGRATION", "AGENT_RUNTIME_REAL_RUN", "RUN_TEMPORAL_INTEGRATION"):
+        assert f'$env:{gate} = "0"' in runbook
+    assert "RUN_PROVIDER_INTEGRATION=0 AGENT_RUNTIME_REAL_RUN=0 RUN_TEMPORAL_INTEGRATION=0 python -B -m pytest" in runbook
     assert "AGENT_RUNTIME_TEST_DATABASE_URL" in runbook
     assert "PGCLIENTENCODING=UTF8" in runbook
     assert "--junitxml=PATH" in runbook

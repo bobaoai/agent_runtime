@@ -310,7 +310,7 @@ def test_clean_wheel_import_uses_public_namespace_without_domain_packages(
         for member in members
     )
     assert "agent_runtime/README.md" in members
-    for name in ("agent-runtime-registration", "agent-runtime-test-run"):
+    for name in ("agent-runtime-registration", "agent-runtime-test-run", "agent-runtime-usage"):
         resource = f"agent_runtime/skills/{name}/SKILL.md"
         assert resource in members
         with zipfile.ZipFile(wheel_path) as wheel:

@@ -20,8 +20,9 @@ drift。
 
 安装当前 Runtime 包后，直接使用下面的现有注册、查询或 evaluation 命令，并提供明确 root。
 这些入口在参数解析成功后共用 [setup_runtime](agent_runtime_reviewer_api.md#setup_runtime)：
-首次准备 `.runtime` 和两个随包操作 Skill，放入宿主的 `.agents/skills` 与 `.claude/skills`；
-已就绪时只做固定少量本地检查，不重复写文件，无需另执行 Skill 安装命令。
+首次准备 `.runtime` 和三个随包操作 Skill（`agent-runtime-registration`、`agent-runtime-test-run`、
+`agent-runtime-usage`），放入宿主的 `.agents/skills` 与 `.claude/skills`；较早版本准备过的 root 在下次 setup
+时补上新增的 Skill。已就绪时只做固定少量本地检查，不重复写文件，无需另执行 Skill 安装命令。
 
 setup 不扫描项目或注册历史，不安装软件、连接 PG 或登录 Provider。它只维护自身的 setup 元数据
 和可识别的操作 Skill，保留 Module、Workflow 定义和其他用户内容。同名本地修改或非法元数据会
@@ -46,6 +47,7 @@ CLI 查询仍只读注册定义，但首次调用可能补齐环境；普通 eva
 | 想在测试运行期间看到 Claude 进程与当前步骤 | 调用时开启[运行中状态](#watch-claude-run) |
 | 已升级 Runtime，旧 Reviewer 定义需要采用新编码 | [升级已有 Reviewer](#upgrade-existing-reviewer)，完成一次新版本注册与验证 |
 | 已有 execution ID，想看结果或排错 | 进入[查询](#inspect-reviewer)，不再次调用模型 |
+| 普通（非 Reviewer）任务，要选择文件、命令或 MCP 运行要求 | 使用[四种常用模式的预设](#usage-presets)，再按下文注册与测试 |
 
 参数含义以 [ModuleReviewer](agent_runtime_reviewer_api.md#modulereviewer) 及其公开方法说明为准。
 下列示例只组合现有 public API，不创建新的 wrapper、数据库结构或测试 Reviewer。
@@ -215,7 +217,9 @@ agent-runtime-test-run --root /path/to/host --workflow example_reviewer \
 ```
 
 输入由该 Reviewer 所属工具按注册 schema 准备。root 只定位已保存定义，不向模型开放整个项目。
-省略 --version 使用最近注册的新定义。--transport/--model/--effort/--run-timeout-seconds 是本次选择；省略的项依次取
+省略 --version 使用最近注册的新定义。要验证刚注册并回读的那个定义时，加回读得到的 `--version` 和
+`--expected-module-id`，并核对结果中的 `workflow_release_ref`、`workflow_release_sha256`、`module_release_ref`、
+`module_release_sha256` 与回读一致；同一 root 之后若注册了更高版本，省略版本会执行那个版本。--transport/--model/--effort/--run-timeout-seconds 是本次选择；省略的项依次取
 `root/.runtime/execution_parameters/workflows/<workflow_id>.json`、
 `root/.runtime/execution_parameters/workspace.json`，最后是 Runtime 默认。v1 参数文件保留原三个模型字段；v2 另接受整数 run_timeout_seconds，
 不选择定义版本；也不读取旧文件保存的模型绑定。结果的 `execution_parameter_sources` 写明每项的
@@ -298,7 +302,9 @@ Claude 的 Shell 命令只按宿主给出的 `--command-permit RULE`（可重复
 多节点入口使用 `tool_session_factory_for_node`。它们不是 `--resources` 字段，也不是普通 CLI
 可从 JSON 导入的函数或服务。非原生工具名须匹配 Module/Profile 声明，工具 schema 由 factory 定义并固定；
 准确参数见上方执行 API 及 [LocalWorkflowModuleBridge](agent_runtime_reviewer_api.md#localworkflowmodulebridge)。
-随包 `--example` 使用自己的固定 callback，不授予生产领域 Gateway 访问权。
+随包 `--example` 使用自己的固定 callback，不授予生产领域 Gateway 访问权；callback 需要 Unix-domain socket，
+只在 macOS/Linux（需要 `cli_tools`）上运行，Windows 在打开会话前报告不支持。四种常用模式的随包样例不依赖 callback，
+在所有宿主上运行，见 README 的“可运行样例”。
 
 宿主可在可选 `.runtime/config.json` 中提供程序路径（`provider_cli_paths`）、只读依赖默认
 （`read_only_dependencies`）、Attempt 文件夹根（`attempt_workspace_root`，默认 `root/.runtime/attempt_workspaces`）
@@ -686,7 +692,7 @@ reviewer = ModuleReviewer(source)
 exported = reviewer.export(module_version=module_version)
 ```
 
-普通 Agent 直接使用 Module.from_registration(..., execution_requirements=requirements)，可接受自己的非审核 schema；无需创建一个 Reviewer 或新 subclass。固定环境类型可以继承 Module。当前 loader 只读取调用方明确提供的 project root 下的固定
+普通 Agent 直接使用 Module.from_registration(..., execution_requirements=requirements)，可接受自己的非审核 schema；无需创建一个 Reviewer 或新 subclass。固定环境类型可以继承 Module。常用任务的 requirements 用下面的预设取得。当前 loader 只读取调用方明确提供的 project root 下的固定
 authoring closure：
 
 ```text
@@ -702,6 +708,35 @@ authoring closure：
 
 Module release 与 Execution Profile 分开。Profile 或 provider 变化通过新的 Profile 与 Variant Policy
 release 表达，不要求重写未变化的 Module。
+
+<a id="usage-presets"></a>
+
+### 4.1 四种常用模式的预设 / Requirement presets
+
+普通 Module 没有默认工具。四种常用模式的固定要求由
+[module_requirements_preset](agent_runtime_reviewer_api.md#module_requirements_preset) 给出，作为
+`execution_requirements` 明确传入；preset ID 与模式同名：
+
+| preset | 固定要求 | 每次调用另需 |
+| --- | --- | --- |
+| `structured_output` | `tool_free`、workspace `none`、无工具、network `denied` | `--input` |
+| `file_review` | `agent`、`edit, read, search, shell`、`own_draft_read_write`、`provider_managed`（与 ModuleReviewer 能力相同） | `--resources` |
+| `code_change` | `agent`、`edit, read, search, shell`、`explicit_project_read_write`、`provider_managed` | `--project-directory`；Claude `--command-permit` |
+| `mcp_data` | `agent`、`edit, read, shell` 与 `mcp__<name>`、`explicit_project_read_write`、`provider_managed` | `root/.runtime/config.json` 的 `mcp_servers`；`--project-directory` |
+
+```python
+from agent_runtime import Module, module_requirements_preset
+
+module = Module.from_registration(project_root, skill_id=skill_id, module_id=module_id,
+                                  execution_requirements=module_requirements_preset("code_change"))
+exported = module.export(module_version=module_version)
+workflow = Module.to_workflow(exported).export()
+```
+
+预设默认 `max_attempts=1`，可传入其他合法值；`ModuleReviewer` 仍使用其固定预设（3 次）。预设只在注册时取值：
+已保存的定义保持其保存的工具与网络要求，不按版本标签或之后的预设重新推断。transport、模型、effort 与时限
+仍由每次调用或执行参数文件决定。完整的选择方法与随包样例见随包 Skill `agent-runtime-usage`；
+样例中的 `build_pattern_workflow` 是同一组合的可读实例。
 
 ## 5. 可选 Workflow assembly
 
