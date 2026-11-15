@@ -257,20 +257,20 @@ agent-runtime-test-run --root /path/to/workspace --workflow summarize_note \
   --cli-path /path/to/codex
 ```
 
-Codex要求显式模型与effort。tool_free Module使用codex_cli_agent_executor@v4；Reviewer默认环境
-（agent、工具含shell、私有草稿、network denied、inline）使用codex_cli_agent_workspace_executor@v3，
-私有草稿是每个Attempt唯一可修改的主文件夹，读取范围与在册缺口见
+Codex要求显式模型与effort。tool_free Module使用codex_cli_agent_executor@v5；agent Module（工具含shell
+并有私有草稿或显式project_directory，或只声明MCP连接而shell关闭；network denied或provider_managed；inline）
+使用codex_cli_agent_workspace_executor@v4，可写范围见
 [Codex workspace 执行](agent_runtime_claude_native_tools.md#4-codex-workspace-执行reviewer-默认环境)。
-只有read或search而无shell的组合在准备时报告不支持；要求工具的Module不会被自动降为无工具。省略的transport依次取参数文件与原Claude默认；模型名不决定transport。
-命令使用宿主标准CODEX_HOME/auth.json，未设置CODEX_HOME时使用用户标准.codex/auth.json。
-当前Codex认证方式是file-based；缺文件就返回环境错误，不登录或寻找其他账号。
-Runtime为每次调用准备独立Provider state，不载入宿主Skills/Plugins/会话；实际启动受本次活资源
-约束。凭据内容不进入模型材料，CLI仍自行管理认证。CLI替换临时认证引用时，Runtime保留独立
-state并返回清理失败，私有诊断给出恢复目录；不自动覆盖源凭据。该目录只提供本机临时恢复。
+只有read、search或edit而无shell的组合在准备时报告不支持；要求工具的Module不会被自动降为无工具。省略的transport依次取参数文件与原Claude默认；模型名不决定transport。
+Windows上`--cli-path`须指向原生codex.exe（npm安装的`codex.cmd`启动器不被启动）。
+命令沿用宿主自身的Codex登录：CODEX_HOME原样传递（未设置时CLI使用其默认位置），Runtime不读取认证文件、
+不发起登录，也不选择其他账号；宿主的config.toml与execpolicy规则正常加载。项目文档、Skills、agents、
+Web搜索与plugins等功能按次关闭；宿主配置中的MCP服务器只有被Module声明的才保持启用，其余按次关闭
+（见上链接）。实际启动受本次活资源约束，凭据内容不进入模型材料。
 
-新的Codex配置使用codex_cli_agent_executor@v4。旧v3 Profile和已保存结果保持原样；相同准确
-请求的committed结果可在没有旧Adapter时重放。再次执行需通过prepare或现有compiler创建v4
-Profile/Variant，不能把旧v3静默改成v4。Module/Workflow定义不因新执行配置而修改。
+新的Codex配置使用codex_cli_agent_executor@v5与workspace v4。旧Profile和已保存结果保持原样；相同准确
+请求的committed结果可在没有旧Adapter时重放。再次执行需通过prepare或现有compiler创建当前
+Profile/Variant，不能把旧记录静默改成新绑定。Module/Workflow定义不因新执行配置而修改。
 
 普通工程材料仍通过同一命令提供：
 
@@ -284,9 +284,14 @@ agent-runtime-test-run --root /path/to/workspace --workflow registered_workflow 
 和同版本 `--help`。调用者提供源工具生成的冻结清单，不把整个宿主 root 隐含交给模型。
 材料复制保持相对目录结构，实际完整 prompt 在保存 envelope 前形成。
 
-当前该资源组合使用 macOS 的 Claude v3 或 Codex workspace v3。明确 commands 或任务 callback 时需安装当前包的
+冻结材料与只读依赖在所有宿主使用 Claude v4 或 Codex workspace v4；commands 仅在 macOS 可用。明确 commands 或任务 callback 时需安装当前包的
 `cli_tools` 可选依赖；没有这两类工具时不加载它。Runtime 的本地 MCP 命令工具取得真实进程退出码与原始输出，普通
-Read/Grep/Bash 仍可使用，未被限制成该命令清单。是否已完成全部必做命令由任务 owner 校验。
+原生工具仍按各自许可使用，未被限制成该命令清单。是否已完成全部必做命令由任务 owner 校验。
+
+编辑调用者已有项目时，Module 记录 `explicit_project_read_write`，每次调用以 `--project-directory DIR`
+（Python `project_directory`）提供一个已存在、与 Attempt 文件夹根不重叠的绝对目录；Runtime 不删除、封存或清理它。
+Claude 的 Shell 命令只按宿主给出的 `--command-permit RULE`（可重复，Python `command_permits`）预批准，
+例如 `--command-permit "python -m pytest:*"`；未给许可时 Runtime 不添加 Bash 允许规则。Codex 不支持逐次许可。
 统一日志按真实返回 ID 关联父进程和 CLI 观察；没有配对证据就明确不完整，不能凭命令名猜测。
 
 自定义 callback 使用 Python 的 `tool_session_factory`，由可信宿主提供函数定义与实际会话；
@@ -295,10 +300,15 @@ Read/Grep/Bash 仍可使用，未被限制成该命令清单。是否已完成�
 准确参数见上方执行 API 及 [LocalWorkflowModuleBridge](agent_runtime_reviewer_api.md#localworkflowmodulebridge)。
 随包 `--example` 使用自己的固定 callback，不授予生产领域 Gateway 访问权。
 
-宿主可在可选 `.runtime/config.json` 中提供程序路径和只读依赖默认，
-[load_runtime_config](agent_runtime_reviewer_api.md#load_runtime_config) 给出完整格式。
+宿主可在可选 `.runtime/config.json` 中提供程序路径（`provider_cli_paths`）、只读依赖默认
+（`read_only_dependencies`）、Attempt 文件夹根（`attempt_workspace_root`，默认 `root/.runtime/attempt_workspaces`）
+和可选 MCP 连接（`mcp_servers`，按 `claude_cli` / `codex_cli` 分组，每项为 `{"config": {...}, "environment_keys": [...]}`），
+[load_runtime_config](agent_runtime_reviewer_api.md#load_runtime_config) 给出完整格式。Module 只获得它以
+`mcp__<name>` 声明的连接；Codex 连接只接受以环境变量名引用的凭据字段。
 显式 CLI 路径覆盖对应默认；依赖 None 使用默认，显式空列表清空。无工具调用不暴露未使用的依赖。
 这个文件不保存模型、Profile、任务材料或 PG 权限，也不自动创建或连接数据库。
+每个 Attempt 文件夹在该根下保留，含 `archive/execution_record.json`；运行结束且进程停止已确认时封存。
+宿主按自己的保留策略用 `maintain_attempt_workspaces` 查询或清理已封存且到期的文件夹。
 
 需要外部授权和持久记录时，使用已有宿主项目文档的“Reviewer 测试/运行”入口。宿主提供授权和存储，
 使用 Runtime 的执行准备接口解析本次固定定义与独立模型选择，不复制 Reviewer 默认工具参数：
@@ -516,6 +526,11 @@ source owner，Profile/Adapter/入口不相容找宿主集成维护者，Registr
 Module/Workflow。旧定义若仍把 timeout 固定在执行要求中，新执行会要求
 `module_execution_requirements_v2`；从同一已审 source 重新注册一个新定义版本即可采用当前编码。
 已经符合当前要求的定义直接复用；一次包升级并不必然要求全部 Reviewer 重新注册。
+
+当前 ModuleReviewer 预设为工具 `edit, read, search, shell`、私有草稿与 network `provider_managed`。
+已注册的 Reviewer 保留其记录的工具与 `denied`：没有 `edit` 时不获得写文件工具；在没有 Claude sandbox 的
+宿主上（例如 Windows），记录 `denied` 且含 Shell 的 Reviewer 会得到 Claude 自身的 sandbox 拒绝。需要新预设时，
+由其负责人从同一已审 source 重新注册一个新定义版本；Runtime 不改写已保存的记录。
 
 这里有三个不同的版本：安装包版本标识软件构建；`module_execution_requirements_v2` 是 Runtime
 生成的定义内部编码；CLI 的 `--version` 是采用方为 Module/Workflow 选定的定义版本名。后者不要求

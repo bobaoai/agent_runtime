@@ -6,6 +6,7 @@ normal record/content validation, without any registered Provider Adapter.
 """
 from dataclasses import asdict
 import base64
+import copy
 import json
 import sys
 from pathlib import Path
@@ -17,7 +18,12 @@ from agent_runtime.contracts.ledger_content_definition import RuntimeExecutionCo
 from agent_runtime.contracts.ledger_record_definition import LegacyRuntimeRecordBatch
 from agent_runtime.execution import AgentExecutionAdapterRegistry, InMemoryCellArtifactStore
 from agent_runtime.ledger import InMemoryRuntimeExecutionRecordStore
-from agent_runtime.ledger.ledger_postgres_persistence import deserialize_runtime_record
+from agent_runtime.ledger.ledger_postgres_persistence import (
+    _canonical_sha256,
+    _json_bytes,
+    _persisted_record_as_dict,
+    deserialize_runtime_record,
+)
 from agent_runtime.registry import RuntimeReleaseBundle, RuntimeReleaseRegistry
 from test_agent_runtime_registered_module_execution import _Contents
 
@@ -68,9 +74,23 @@ def test_predecessor_v2_committed_request_replays_without_an_adapter(tmp_path, w
         artifact_host=staging, record_store=store, content_store=contents,
         claim_token_secret=b"host-claim-material-never-model-visible")
     replay = run_registered_workflow_module(**kwargs)
-    assert json.loads(json.dumps(asdict(replay))) == case["original_result"]
-    assert store.load_trace(execution_id) == records_before
+    # 1. In memory: the original result plus exactly one key, an unknown ordinary input count, per Attempt.
+    expected = copy.deepcopy(case["original_result"])
+    for attempt in expected["attempts"]:
+        assert "ordinary_input_tokens" not in attempt["usage"]
+        attempt["usage"]["ordinary_input_tokens"] = None
+    assert json.loads(json.dumps(asdict(replay))) == expected
+    # 2. No Provider call and no authorization request.
     assert registry.snapshot() == registry_before and calls == []
+    # 3. Stored history is byte-identical: payload bytes, record hashes and transaction hashes.
+    records_after = store.load_trace(execution_id)
+    assert records_after == records_before
+    assert [_json_bytes(_persisted_record_as_dict(record)) for record in records_after.records] == [
+        _json_bytes(item) for item in case["records"]]
+    assert [_canonical_sha256(_persisted_record_as_dict(record)["record"]) for record in records_after.records] == [
+        _canonical_sha256(item["record"]) for item in case["records"]]
+    assert [receipt.transaction_sha256 for receipt in records_after.commit_receipts] == [
+        receipt.transaction_sha256 for receipt in records_before.commit_receipts]
     assert run_registered_workflow_module(**kwargs) == replay
     # A new key is not replay and must still refuse the retired execution pair.
     from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter

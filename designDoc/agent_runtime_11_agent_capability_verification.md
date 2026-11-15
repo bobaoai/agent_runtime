@@ -171,10 +171,18 @@ Profile/Adapter compatibility、declared operation、资源隔离与 canonical o
 | Tool-free execution | tools empty、workspace none、network denied | 08 Invocation | subject-bound executable case |
 | Runtime-hosted self-test | 真实 model call 使用可信测试资源 boundary，不构造生产 context、decision 或 grant；伪造 purpose 和资源越界仍拒绝 | 08 Invocation；09 owns boundary validation | subject-bound executable case |
 | Authorized Gateway read | 只有 Module 声明且 Profile 允许的 Gateway tools 可进入 callable | 08 Invocation；09 owns external authorization handoff | subject-bound executable case |
-| Attempt workspace | 私有草稿与显式项目工作区按所选 Profile 限制读写；其他 Attempt、秘密与未授权材料不可见 | 08 Invocation | subject-bound executable case |
+| Attempt workspace | 为本次提供准确材料与独立工作目录，向 CLI 配置明确读写范围；不自动交付其他任务或登录材料，不据此宣称任意脚本的系统隔离 | 08 Invocation | subject-bound executable case |
 | Context isolation | sibling Variant、Attempt 与 Module Run 不共享 provider context 或 workspace | 08 Invocation | subject-bound executable case |
-| Network enforcement | `denied` 与 `gateway_only` 由 Adapter 能力机械执行 | 08 Invocation | subject-bound executable case |
+| Network configuration | 普通调用的 `provider_managed` 与所选 CLI／宿主配置一致；明确声明的严格模式按其实际接口验证，未知或未执行的隔离不报告为通过 | 08 Invocation | subject-bound executable case |
 | Provider failure normalization | auth、quota、timeout、tool、policy 与 output failure 进入 bounded Runtime failure taxonomy | 08 Invocation | subject-bound executable case |
+
+Invocation §4.3 的四个常用场景使用本节已有 capability 组合验证，不新增另一套场景 Registry：
+纯文本任务验证内联输入、空工具集与结构化结果；文件审核验证准确材料、原生读取／必要命令与
+审核证据；代码开发验证指定目标的真实改动、检查结果及外部项目不被清理；MCP 查询验证已选连接、
+实际工具结果、取数后本地保存与读回、输出归属及秘密不进入普通日志。最小 MCP-only 用例不代替
+常用 MCP 加本地文件能力的链路。基础读写的验收必须有模型实际保存并读回文件的证据，宿主
+写日志或最终结果不替代它。每项都区分确定性配置检查和真实 Provider／连接运行，设计中
+列出场景不表示已有实现通过。普通场景不以 OS 沙箱或统一断网为共同验收前置。
 
 ### 4.3 Execution and decision capabilities
 
@@ -185,7 +193,7 @@ Profile/Adapter compatibility、declared operation、资源隔离与 canonical o
 | Evaluation and selection | evaluated candidate set 完整后才能形成 Selection 与 output resolution | Execution；Runtime T1 | subject-bound executable case |
 | Retry budget | Retry Policy 是 `max_attempts` 唯一 authority；每个 Attempt 具有 parent lineage | Execution；Runtime T1，07 owns durable retry coordination | subject-bound executable case |
 | Idempotent replay | exact request 重放返回同一 committed result；宿主首次保存并在重发时继续传递同一身份，不重复产生 side effect | Execution；Runtime T1，07 owns durable replay | subject-bound executable case |
-| Operation boundary enforcement | 自测操作在进入 callable 前满足测试资源约束；外部受保护操作满足所属 owner 的真实前置决定；效果后观察不能成为同次调用的前置 | 09 External Authority Integration；08 owns callback/result delivery | subject-bound executable case |
+| Operation boundary enforcement | Runtime 明确发起的自测／受保护操作满足实际资源约束及 owner 决定；CLI 原生工具和已有 MCP 不合成逐次 Runtime 授权；事后观察不替代真实前置 | 09 External Authority Integration；08 owns invocation/result delivery | subject-bound executable case |
 | Cancellation | cancellation request 只改变指定 execution，并产生可检查 terminal fact | 07 Durability，10 owns terminal execution result | subject-bound executable case |
 
 ### 4.4 Workflow graph capabilities
@@ -304,9 +312,9 @@ case 类型或证据对象。Code-owned inventory 把要求并入对应 case；�
 | 已有 capability 与位置 | 证据来源及归属 | 本项必须证明的结果 |
 | --- | --- | --- |
 | Generic Profile compatibility、Tool-free execution（§4.1、§4.2） | executable_owner_case；01 Registry、08 Invocation | Module 能力、默认来源、生效工具与参数映射一致；空清单不暴露工具，未知选择在 Provider 前拒绝；旧配置不能隐式获得新默认权限 |
-| Attempt workspace、Context isolation、Network enforcement（§4.2） | executable_owner_case；08 Invocation | 项目入口、Skill 发现和读写范围分别生效；安装依赖不扩大模型权限 |
-| Registered Module transport（§4.6） | 静态 closure 使用 executable_owner_case；真实调用使用对应 transport 的 environment_gate；08 Invocation，01 保留注册职责 | 通过 Runtime 启动真实 Provider，验证原生工具可读输入、运行 Python、写指定目标，越界读和源码写被拒绝；不能只以参数探针证明支持 |
-| Persistent Registry、Persistent Ledger、Persistent Inspection（§4.6） | 对应 persistent-store environment_gate；01、04、06 各保留原行职责 | 使用新连接回读本次 Profile、输入、Attempt、输出或失败和公开事件；工具网络关闭不妨碍可信 Runtime 按安装绑定记账 |
+| Attempt workspace、Context isolation、Network configuration（§4.2） | executable_owner_case；08 Invocation | 项目入口、Skill 发现和读写范围分别生效；安装依赖不扩大模型权限 |
+| Registered Module transport（§4.6） | 静态 closure 使用 executable_owner_case；真实调用使用对应 transport 的 environment_gate；08 Invocation，01 保留注册职责 | 通过 Runtime 启动真实 Provider，验证原生工具读输入、运行 Python、写指定目标；文件工具按其目录规则验证拒绝，源码完整性单独核对；不附加任意脚本的操作系统隔离要求，也不只以参数探针证明支持 |
+| Persistent Registry、Persistent Ledger、Persistent Inspection（§4.6） | 对应 persistent-store environment_gate；01、04、06 各保留原行职责 | 使用新连接回读本次 Profile、输入、Attempt、输出或失败和公开事件；工具网络选择不替代可信 Runtime 自己的安装绑定或存储权限 |
 | Sequential and branch routing、Cancellation、Attempt and Workflow Ledger（§4.3 至 §4.5） | executable_owner_case；Execution；Runtime T1、07 Durability、04 Ledger | 验证 §7.2 的成功、失败、取消和证据接续；实际模型节点的执行另由 Registered Module transport environment_gate 证明 |
 | 测试/runbook 同源要求（§7）与 code-owned Example package（§10） | executable_owner_case；本 T2 的 case inventory 绑定该生成与调用一致性检查 | 验证 sample、runbook 与包内公共 API 使用同一配置转换，安装后不需要另写启动或日志脚本；05 的 package result 只证明其既有 wheel/exports/bundle 范围，不替代本项 |
 
@@ -321,10 +329,15 @@ environment_gate。§7.2 的两个 Agent 接续是已有顺序/分支 case 的�
 
 ### 4.10 Reviewer 默认与宿主完整路径
 
-默认能力的确定性验证至少覆盖：只有模型操作声明的 Reviewer，以及另有明确 repository read、
-search、sandbox command 等非模型操作声明的 Reviewer。两类都要有默认解析和兼容正例，并对
-未知操作、缺少授权、材料越界和命令约束旁路做拒绝验证。不能使用两个只有 prompt 不同的
-model-only Module 代替，也不能删除非模型声明或只证明后一类被拒绝后声称兼容。
+默认能力验证覆盖普通 Reviewer 的读取、搜索、必要检查与 `provider_managed` 网络配置，证明
+构造、准入和 Adapter 不额外要求断网或沙箱。另核对本次允许范围有历史真实用量与当前审核需要
+的依据，未因 Reviewer 名称或一次命令需求直接开放全量 Shell。历史命令声明、实际请求和完成
+记录分别核对，宿主写入不计作模型文件工具使用；验证所选 CLI／工具入口的允许正例与范围外
+拒绝，不把未执行的限制写成通过。文件工具范围、材料完整性与 OS 隔离按各自接口判断。
+
+另行验证已有调用者明确请求的 repository read、search、sandbox command 等 Runtime 扩展，
+保留它们真实适用的操作声明、授权和命令约束。扩展兼容正例按受支持宿主报告，不能只证明拒绝
+就声称兼容；其平台限制和额外前置也不能成为普通 CLI 调用的要求。
 
 模型选择独立性须比较固定能力、材料读写、工具网络和默认版本。真实 provider 支持状态分别报告，
 未被接纳的执行器即使通过拒绝负例也不产生 supported evidence。默认预设更新不能改变已有 Module、

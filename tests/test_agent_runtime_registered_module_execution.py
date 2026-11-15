@@ -114,7 +114,7 @@ class _Host:
 
 
 def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
-                 input_schema=None, output_schema=None, pg=None, profile_revision="v4",
+                 input_schema=None, output_schema=None, pg=None, profile_revision="v5",
                  legacy_definition=False):
     options = {} if output_schema is None else {"output_schema_document": output_schema}
     compiled = _compile_native_module(tmp_path, output_resolution_policy=policy,
@@ -207,12 +207,8 @@ def _environment(tmp_path, *, policy=OutputResolutionPolicy.EVALUATED_SINGLE,
         return original_authorize(request)
 
     adapters = AgentExecutionAdapterRegistry()
-    authentication = tmp_path / "synthetic_codex_auth.json"
-    authentication.parent.mkdir(parents=True, exist_ok=True)
-    authentication.write_text('{"test_only":"not-a-credential"}')
     adapters.register(CodexCliModuleExecutor(release_registry=registry, artifact_host=cell,
-        workspace_root=tmp_path / "attempts", invoker=invoke, codex_bin="controlled-codex",
-        auth_file=authentication))
+        workspace_root=tmp_path / "attempts", invoker=invoke, codex_bin="controlled-codex"))
     kwargs = dict(release_registry=registry, workflow=workflow, variant_policy=selection, authorize=authorize,
         context_client=host, operation_client=host, enforcing_gateway_id="agent_runtime_module_kernel",
         environment_id="development", adapters=adapters, artifact_host=cell, record_store=store,

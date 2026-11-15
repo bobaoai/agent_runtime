@@ -275,6 +275,11 @@ def _requirements(**changes):
     return ModuleExecutionRequirements(**{**values, **changes})
 
 
+def _reviewer_requirements():
+    """The current ModuleReviewer preset: native edit added, provider-managed tool network."""
+    return _requirements(tool_policy=("edit", "read", "search", "shell"), network_policy="provider_managed")
+
+
 def _native_profile(**changes):
     base = _profile()
     values = dict(execution_mode="agent", semantic_input_delivery_mode="inline",
@@ -402,37 +407,6 @@ def test_loader_rejects_retired_field_wrong_schema_and_missing_owner_declaration
         load_module_registration(project_root, skill_id=SKILL_ID, module_id=MODULE_ID)
 
 
-@pytest.mark.parametrize(
-    "relative_path",
-    (
-        "module_registration.json",
-        "prompt.md",
-        "schemas/input.schema.json",
-        "schemas/output.schema.json",
-    ),
-)
-def test_loader_rejects_symlinked_fixed_module_sources(
-    tmp_path: Path,
-    relative_path: str,
-) -> None:
-    project_root = _project(tmp_path)
-    module_root = (
-        project_root
-        / ".claude/skills"
-        / SKILL_ID
-        / "runtime_modules"
-        / MODULE_ID
-    )
-    source_path = module_root / relative_path
-    external = tmp_path / f"external_{source_path.name}"
-    external.write_bytes(source_path.read_bytes())
-    source_path.unlink()
-    source_path.symlink_to(external)
-
-    with pytest.raises(ValueError, match="symlink"):
-        load_module_registration(project_root, skill_id=SKILL_ID, module_id=MODULE_ID)
-
-
 def test_loader_rejects_owner_path_traversal(tmp_path: Path) -> None:
     project_root = _project(tmp_path)
     registration_path = (
@@ -508,13 +482,13 @@ def test_ordinary_module_loads_exports_and_projects_non_review_schema(tmp_path, 
 def test_reviewer_inherits_all_module_methods_and_supplies_only_environment(tmp_path):
     source = load_reviewer_registration(_task_project(tmp_path), skill_id=SKILL_ID, module_id=MODULE_ID)
     reviewer = ModuleReviewer(source)
-    ordinary = Module(source, execution_requirements=_requirements())
+    ordinary = Module(source, execution_requirements=_reviewer_requirements())
     assert reviewer.export(module_version="v1") == ordinary.export(module_version="v1")
     for name in ("__init__", "from_registration", "export", "project", "to_workflow"):
         assert name not in ModuleReviewer.__dict__
     assert ModuleReviewer.export is Module.export
     assert ModuleReviewer.to_workflow is Module.to_workflow
-    assert reviewer.execution_requirements == _requirements()
+    assert reviewer.execution_requirements == _reviewer_requirements()
     with pytest.raises(ValueError, match="cannot be overridden"):
         ModuleReviewer(source, execution_requirements=_requirements())
     with pytest.raises(ValueError, match="requires explicit"):

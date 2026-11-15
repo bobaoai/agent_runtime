@@ -150,7 +150,7 @@ def _compile_native_module(
     ),
     execution_profile_id: str = "native_profile",
     executor_adapter_id: str = "codex_cli_agent_executor",
-    executor_adapter_revision: str = "v4",
+    executor_adapter_revision: str = "v5",
     transport_kind: str = "codex_cli",
     provider_id: str = "openai",
     model_id: str = "native_model",
@@ -1464,8 +1464,8 @@ def test_run_module_refuses_historical_codex_workspace_v2_profile_by_binding(
     authority, _ = _evaluation_authority(registry, request)
 
     original_profile = compiled.execution_profile.as_dict()
-    assert (executor.descriptor.adapter_revision, executor.descriptor.admission_state) == ("v3", "integration_tested")
-    # The registered executor is v3; the kernel finds no adapter for the v2 binding.
+    assert (executor.descriptor.adapter_revision, executor.descriptor.admission_state) == ("v4", "integration_tested")
+    # The registered executor is v4; the kernel finds no adapter for the v2 binding.
     with pytest.raises(KeyError, match="codex_cli_agent_workspace_executor@v2"):
         run_module(
             request,
@@ -2370,7 +2370,7 @@ def test_operation_free_module_cannot_use_a_provider_transport(
     registry, module, profile = _operation_free_release(
         transport_kind="codex_cli",
         executor_adapter_id="codex_cli_agent_executor",
-        executor_adapter_revision="v4",
+        executor_adapter_revision="v5",
         provider_id="openai",
     )
     artifact_host = InMemoryCellArtifactStore()

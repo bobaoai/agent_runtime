@@ -46,14 +46,20 @@ PREDECESSOR_RUNTIME_PACKAGE_PREFIXES = (
 )
 
 
+def _raise_with_child_stderr(completed: subprocess.CompletedProcess) -> None:
+    """Fail with the isolated probe's own traceback instead of a bare exit status."""
+    if completed.returncode != 0:
+        raise AssertionError(f"isolated probe exited {completed.returncode}:\n{completed.stderr}")
+
+
 def _run_isolated_python(source: str, *args: str, cwd: Path) -> dict[str, object]:
     completed = subprocess.run(
         [sys.executable, "-I", "-S", "-c", textwrap.dedent(source), *args],
         cwd=cwd,
-        check=True,
         capture_output=True,
         text=True,
     )
+    _raise_with_child_stderr(completed)
     return json.loads(completed.stdout)
 
 
@@ -67,10 +73,10 @@ def _run_isolated_python_with_dependencies(
     completed = subprocess.run(
         [sys.executable, "-I", "-c", textwrap.dedent(source), *args],
         cwd=cwd,
-        check=True,
         capture_output=True,
         text=True,
     )
+    _raise_with_child_stderr(completed)
     return json.loads(completed.stdout)
 
 
@@ -115,12 +121,13 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
 
     assert configuration["project"]["name"] == "agent-runtime-core"
     assert configuration["project"]["readme"] == "README.md"
-    assert configuration["project"]["dependencies"] == ["jsonschema>=4.23", "psutil>=7.2.2,<8"]
+    assert configuration["project"]["dependencies"] == ["jsonschema>=4.23"]
     assert configuration["project"]["optional-dependencies"] == {
         "cli_tools": ["mcp>=1.29,<2"],
         "postgres": ["psycopg[binary]>=3.2"],
         "temporal": ["temporalio>=1.31"],
-        "test": ["build>=1.2", "psycopg[binary]>=3.2",
+        # psutil observes test processes only; Runtime itself controls just the process it started.
+        "test": ["build>=1.2", "psutil>=7.2.2,<8", "psycopg[binary]>=3.2",
                  "pytest>=8", "setuptools>=77", "temporalio>=1.31"],
     }
     assert configuration["project"]["scripts"] == {
@@ -204,7 +211,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
         sys.meta_path.insert(0, RejectClaudeSdk())
         sys.path.insert(0, sys.argv[1])
         import agent_runtime
-        assert agent_runtime.__file__.startswith(sys.argv[1] + '/')
+        assert Path(agent_runtime.__file__).is_relative_to(Path(sys.argv[1]))  # Any host path separator.
         from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter
         from agent_runtime.invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
         from agent_runtime.execution.execution_content_staging import InMemoryCellArtifactStore
@@ -229,7 +236,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
             assert 'usage:' in output.getvalue().lower()
         profile = compile_execution_profile_release(ExecutionProfileReleaseSpec(
             execution_profile_id='claude_cli_probe',
-            executor_adapter_id='claude_cli_adapter', executor_adapter_revision='v3',
+            executor_adapter_id='claude_cli_adapter', executor_adapter_revision='v4',
             transport_kind='claude_cli', provider_id='anthropic',
             model_id='claude-opus-5', reasoning_profile='high',
             execution_mode='tool_free', semantic_input_delivery_mode='inline',

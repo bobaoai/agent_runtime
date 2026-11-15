@@ -1,6 +1,8 @@
 """Execute declared local commands using live Runtime resources, not domain grants."""
 from __future__ import annotations
 
+from .invocation_host_platform_selection import HOST_PLATFORM
+
 import copy
 import errno
 import hashlib
@@ -13,7 +15,6 @@ from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from typing import Callable
@@ -21,7 +22,7 @@ from typing import Callable
 from ..contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
 from .invocation_cli_logging import captured_cli_streams
 from .invocation_local_resource_preparation import (
-    validate_local_resources, assert_local_materials_unchanged, _directory,
+    validate_local_resources, assert_local_materials_unchanged,
     LOCAL_RESOURCES_SCHEMA_REF, LOCAL_RESOURCES_SCHEMA_SHA256, LOCAL_RESOURCES_MEDIA_TYPE, LOCAL_RESOURCES_LOGICAL_NAME,
 )
 from .invocation_process_execution import (
@@ -34,6 +35,18 @@ LOCAL_COMMAND_TOOL_NAME = "sandbox_command_execute"
 LOCAL_COMMAND_SERVER_NAME = "runtime_commands"
 LOCAL_COMMAND_CLI_TOOL_NAME = "mcp__runtime_commands__sandbox_command_execute"
 _SYSTEM_READ_ROOTS = ("/bin", "/sbin", "/usr", "/System", "/Library", "/private/etc", "/private/var/db/dyld", "/dev")
+
+
+def provider_private_locations() -> tuple[Path, ...]:
+    """Provider login and state locations the explicit extensions keep out of their read roots.
+
+    Used only by the explicit command/callback extension branch (macOS/Unix),
+    whose existing check refuses read dependencies overlapping these locations.
+    Ordinary CLI calls do not consult it.
+    """
+    home = Path.home()
+    return tuple(path.resolve() for path in (home / ".codex", home / ".claude", home / ".claude.json",
+                                             home / "Library/Keychains"))
 
 
 class LocalCommandSession:
@@ -109,7 +122,7 @@ class LocalCommandSession:
                 or host.read_authorized_input(control[0].local_handle) != resources_body):
             raise SelfTestResourceUnavailableError("Local commands are not the exact authorized resource input")
         self._verify_materials()
-        self._private = Path(tempfile.mkdtemp(prefix="rc-", dir="/tmp")).resolve()
+        self._private = HOST_PLATFORM.create_private_directory(prefix="rc-", short_path=True)
         try:
             dependencies = (*self._python_roots, *self._dependencies)
             readable = (self._source, self._scratch, *dependencies)
@@ -212,6 +225,9 @@ class LocalCommandSession:
         # Native Bash can change scratch concurrently. Every mkdir is relative
         # to an already-open directory, never a previously checked pathname.
         # Replacing a parent with a symlink cannot redirect this trusted write.
+        # This extension runs only on macOS (sandbox-exec), so the POSIX no-follow
+        # directory helper is imported here, never on other hosts.
+        from .invocation_posix_host_operation import _directory
         try:
             with _directory(root) as root_fd:
                 descriptor = os.dup(root_fd)

@@ -13,8 +13,12 @@ from decimal import Decimal
 from typing import Any
 
 
+# input_tokens is the total including cache; ordinary input and the two cache
+# counts are its reported parts. Each part is summed on its own and is never
+# derived from the total.
 TOKEN_FIELDS = (
     "input_tokens",
+    "ordinary_input_tokens",
     "output_tokens",
     "cache_read_tokens",
     "cache_creation_tokens",

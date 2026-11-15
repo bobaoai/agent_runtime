@@ -4,8 +4,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import tempfile
-import shlex
 import subprocess
 import sys
 from threading import Event, Thread
@@ -20,6 +18,7 @@ from agent_runtime.contracts.invocation_adapter_definition import AuthorizedAgen
 from agent_runtime.testing.conformance_local_test_run import main
 from test_agent_runtime_claude_native_tools import _fake_cli, _init, _result
 from test_agent_runtime_reviewer_registration_cli import _source, _register, _files, MODULE_ID
+from test_agent_runtime_codex_self_test import _assert_retained, _outside_attempts
 
 
 @pytest.fixture
@@ -28,7 +27,7 @@ def environment(tmp_path, monkeypatch):
     source, _ = _source(tmp_path / "source")
     root = tmp_path / "host"
     _register(root, source)
-    executable = _fake_cli(tmp_path)
+    executable = _fake_cli(tmp_path, monkeypatch)
     calls, handles = [], []
     output = {"verdict": "passed", "check_results": [], "findings": [], "safe_next_step": "done"}
     adapter_type = claude.ClaudeAdapter
@@ -65,9 +64,6 @@ def environment(tmp_path, monkeypatch):
         return adapter
     monkeypatch.setattr(claude, "ClaudeAdapter", make_adapter)
     monkeypatch.setattr(local, "ModuleSelfTestResources", resources)
-    temporary_directory = tempfile.TemporaryDirectory
-    monkeypatch.setattr(tempfile, "TemporaryDirectory",
-        lambda *args, **kw: temporary_directory(*args, **{**kw, "dir": tmp_path}))
     for name in ("PLATFORM_DATABASE_URL", "AGENT_RUNTIME_TEST_DATABASE_URL", "DDM_REVIEW_EXECUTOR"):
         monkeypatch.delenv(name, raising=False)
     # Any accidental attempt to connect is a test failure, not a skipped test.
@@ -96,16 +92,28 @@ def test_self_test_runs_without_pg_or_product_authorization(environment):
     assert record["attempt_id"] == record["execution_trace"]["attempts"][0]["attempt_id"]
     assert record["usage"] == record["execution_trace"]["attempts"][0]["usage"]
     assert record["workflow_release_ref"].startswith("runtime-workflow:")
-    assert _files(root) == before
+    assert _outside_attempts(root) == before  # Only the retained Attempt folder is new.
+    _assert_retained(root, record)
     assert "entitlement" not in json.dumps(record)
-    resources = handles[0][0]
-    assert not resources._workspace.exists()
+    resources = handles[0][0]  # Closed after the run; the sealed Attempt folder is what remains.
     assert record["execution_log"]["schema_version"] == "runtime_execution_log_v1"
     assert len(record["execution_log"]["attempts"]) == len(record["execution_trace"]["attempts"])
     assert record["execution_log"]["attempts"][-1]["provider_log"] == record["provider_trace"]
     assert record["execution_log"]["complete"]
     with pytest.raises(PermissionError, match="closed"):
         resources.require_active()
+
+
+@pytest.mark.fake_run
+def test_test_run_usage_reports_ordinary_input_beside_the_cache_inclusive_total(environment):
+    environment[4]["result"] = {"usage": {"input_tokens": 2, "output_tokens": 3, "cache_read_input_tokens": 11,
+                                          "cache_creation_input_tokens": 13}}
+    record = invoke(environment)
+    assert record["status"] == "completed", record["failure_detail"]
+    expected = {"input_tokens": 26, "ordinary_input_tokens": 2, "output_tokens": 3, "cache_read_tokens": 11,
+                "cache_creation_tokens": 13}
+    assert record["usage"] == expected
+    assert record["execution_trace"]["attempts"][0]["usage"] == expected
 
 
 @pytest.mark.fake_run
@@ -118,7 +126,7 @@ def test_new_model_is_new_call_not_a_saved_binding(environment):
     assert a["workflow_release_sha256"] == b["workflow_release_sha256"]
     assert a["execution_profile_sha256"] != b["execution_profile_sha256"]
     assert a["workflow_execution_id"] != b["workflow_execution_id"]
-    assert _files(root) == before and len(calls) == 2
+    assert _outside_attempts(root) == before and len(calls) == 2
 
 
 @pytest.mark.fake_run
@@ -151,6 +159,7 @@ def test_self_test_rejects_actual_model_mismatch(environment):
 
 
 @pytest.mark.fake_run
+@pytest.mark.skipif(os.name != "posix", reason="unverified on this host: POSIX execute permission bits")
 def test_cli_executable_permission_is_not_a_closed_test_resource(environment):
     environment[1].chmod(0o600)
     record = invoke(environment)
@@ -279,9 +288,31 @@ def test_self_test_fields_do_not_change_legacy_request_hash(environment):
     assert invoke(environment)["status"] == "completed"
 
 
+# Loaded by the installed console process on Windows only. That process cannot inherit this
+# test's monkeypatch, so the same scoped launch seam as _scripted_cli is applied there: an argv
+# naming exactly the provider fixture script runs through the base interpreter. It imports
+# agent_runtime from the installed wheel on PYTHONPATH, never from this checkout.
+_WINDOWS_CONSOLE_LAUNCH_SEAM = '''import os, sys
+from pathlib import Path
+from agent_runtime.invocation import invocation_process_execution as _processes
+_SCRIPT = {script!r}
+_create = _processes.HOST_PLATFORM.create_cli_process
+def _create_cli_process(argv, **kwargs):
+    program = Path(str(argv[0]))
+    if not program.is_absolute():
+        program = Path(kwargs.get("cwd") or ".") / program
+    if os.path.normcase(os.path.abspath(program)) == os.path.normcase(_SCRIPT):
+        argv = [sys._base_executable, _SCRIPT, *list(argv)[1:]]
+    return _create(argv, **kwargs)
+_processes.HOST_PLATFORM.create_cli_process = _create_cli_process
+'''
+
+
 @pytest.mark.fake_run
 def test_installed_console_executes_without_checkout_or_pg(tmp_path):
-    """Substitutes: a shell script standing in for the Claude CLI; the built wheel and console entry are real."""
+    """Substitutes: a Python script standing in for the Claude CLI; the built wheel and console entry are real."""
+    from test_agent_runtime_claude_native_tools import SYNTHETIC_CLAUDE_HELP, SYNTHETIC_CLAUDE_VERSION
+    from test_agent_runtime_codex_self_test import _outside_attempts
     from test_agent_runtime_packaging_boundary import _build_runtime_wheel
     wheel = _build_runtime_wheel(tmp_path / "build")
     installed = tmp_path / "installed"
@@ -294,25 +325,36 @@ def test_installed_console_executes_without_checkout_or_pg(tmp_path):
     before = _files(root)
     executable = tmp_path / "provider_fixture"
     output = {"verdict": "passed", "check_results": [], "findings": [], "safe_next_step": "done"}
-    events = " ".join(shlex.quote(json.dumps(event)) for event in (_init(), _result(structured_output=output)))
-    executable.write_text("#!/bin/sh\ncase \"$1\" in\n--version|--help) "
-        "printf '%s\\n' '2.1.999 --safe-mode --restricted --tools --settings --effort --strict-mcp-config --json-schema --add-dir';;\n"
-        "*) /bin/cat >/dev/null; printf '%s\\n' " + events + ";;\nesac\n")
+    events = [json.dumps(event) for event in (_init(), _result(structured_output=output))]
+    executable.write_text(f"#!{sys.executable}\nimport sys\n"
+        f"if sys.argv[1:] == ['--version']:\n    print({SYNTHETIC_CLAUDE_VERSION!r})\n"
+        f"elif sys.argv[1:] == ['--help']:\n    print({SYNTHETIC_CLAUDE_HELP!r})\n"
+        f"else:\n    sys.stdin.read()\n    print('\\n'.join({events!r}))\n", encoding="utf-8")
     executable.chmod(0o700)
     payload = tmp_path / "input.json"
     payload.write_text("{}")
     child = {key:value for key,value in os.environ.items()
              if key not in {"PLATFORM_DATABASE_URL", "AGENT_RUNTIME_TEST_DATABASE_URL", "DDM_REVIEW_EXECUTOR"}}
     child["PYTHONPATH"] = str(installed)
-    argv = [str(installed/"bin/agent-runtime-test-run"), "--root", str(root), "--workflow", MODULE_ID,
+    if os.name == "nt":
+        seam = tmp_path / "console_launch_seam"
+        seam.mkdir()
+        (seam / "sitecustomize.py").write_text(_WINDOWS_CONSOLE_LAUNCH_SEAM.format(script=str(executable)),
+                                               encoding="utf-8")
+        child["PYTHONPATH"] = os.pathsep.join((str(installed), str(seam)))
+    console = installed / "bin" / ("agent-runtime-test-run.exe" if os.name == "nt" else "agent-runtime-test-run")
+    argv = [str(console), "--root", str(root), "--workflow", MODULE_ID,
             "--input", str(payload), "--cli-path", str(executable)]
     completed = subprocess.run(argv, cwd=tmp_path, env=child, capture_output=True, text=True, timeout=60)
     assert completed.returncode == 0, (completed.stdout, completed.stderr)
     record = json.loads(completed.stdout)
     assert record["output"] == output and record["persistence"] == "not_requested"
+    assert record["provider_trace"]["cli_version"] == SYNTHETIC_CLAUDE_VERSION
+    (row,) = record["attempt_workspaces"]  # The Attempt folder is retained under the root and sealed.
+    assert row["sealed"] and Path(row["workspace_path"]).is_relative_to(root)
     after = _files(root)
     assert all(after[path] == content for path, content in before.items())
-    assert set(after) - set(before) == {".runtime/setup.json", *(
+    assert set(_outside_attempts(root)) - set(before) == {".runtime/setup.json", *(
         f"{host}/skills/{name}/SKILL.md" for host in (".agents", ".claude")
         for name in ("agent-runtime-registration", "agent-runtime-test-run"))}
     refused = subprocess.run([*argv, "--save-to-pg"], cwd=tmp_path, env=child, capture_output=True, text=True)

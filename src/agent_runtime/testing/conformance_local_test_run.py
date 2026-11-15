@@ -14,9 +14,9 @@ import re
 import sys
 import time
 from pathlib import Path
-import shutil
-import tempfile
 import uuid
+
+from ..invocation.invocation_host_platform_selection import HOST_PLATFORM
 
 from ..execution.execution_local_invocation import (
     _prepare_local_workflow_module_with_sources, _prepare_loaded_workflow,
@@ -61,7 +61,7 @@ def _definition_source(*, workflow_id, version, release_store, release_database_
     if type(release_database_url_env) is not str or not _ENVIRONMENT_NAME.fullmatch(release_database_url_env):
         raise ValueError("release_database_url_env must be an environment variable name")
     from ..invocation.invocation_claude_cli_execution import _ENVIRONMENT_KEYS as claude_keys
-    from ..invocation.invocation_codex_environment import _ENVIRONMENT_KEYS as codex_keys
+    from ..invocation.invocation_codex_module_invocation import _ENVIRONMENT_KEYS as codex_keys
     if release_database_url_env in claude_keys | codex_keys:
         raise ValueError(f"release_database_url_env {release_database_url_env} is forwarded to Provider processes; "
                          "keep the DSN in a variable no Adapter passes through")
@@ -82,9 +82,9 @@ def run_local_workflow_test(
     material_root: Path | None = None, material_files: tuple[dict, ...] = (),
     read_only_dependencies: tuple[Path, ...] | None = None, commands: tuple[dict, ...] = (),
     tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None,
-    progress_observer=None,
+    progress_observer=None, project_directory: Path | None = None, command_permits: tuple[str, ...] = (),
 ) -> dict:
-    """Test-run a registered single-node Workflow using temporary test resources.
+    """Test-run a registered single-node Workflow with retained Attempt folders.
 
     Args:
         root: Required in both definition modes. Locates Runtime setup,
@@ -115,15 +115,15 @@ def run_local_workflow_test(
             fallback to a same-named local definition.
         transport_kind: This call's transport. None takes the Workflow parameter
             file, then the workspace parameter file, then Runtime's claude_cli
-            default. claude_cli supports empty or selected native tool sets,
-            inline input, and no write area or a private draft as defined.
-            codex_cli supports tool_free, inline, empty tools, workspace none
-            and denied tool network (v4), and the agent workspace
-            environment: tools including shell, inline input, a private
-            draft and denied tool network (workspace v3, which also takes
-            the frozen resources and commands). It requires explicit
-            model_id and effort; unsupported requirements are rejected,
-            never reduced to fit.
+            default. claude_cli (v4) maps the recorded tools exactly (read: Read;
+            search: Grep, Glob; edit: Edit, Write; shell: Bash; mcp__<name>: a
+            declared host connection) with no write area, a private draft or an
+            explicit project directory. codex_cli supports tool_free (v5) and
+            agent Modules (workspace v4): Shell-capable tools in a private draft
+            or project directory, or only declared MCP connections with the
+            shell tool off; both take denied or provider_managed network. It
+            requires explicit model_id and effort; unsupported requirements are
+            rejected, never reduced to fit.
         model_id: This call's concrete model ID; None falls back through the same
             layers to the Claude default.
             Codex requires an explicit model. Claude verifies observed model
@@ -141,11 +141,12 @@ def run_local_workflow_test(
             selected transport's root/.runtime/config.json provider_cli_paths
             value, then host PATH when that value is absent. No login or
             installation is performed. Model selection does not come from config.
-            Relative paths are resolved from the caller's working directory
-            before entering the temporary Attempt directory. Both definition
-            modes use the same root configuration.
-            Codex uses file-based auth from the host's standard CODEX_HOME/auth.json
-            (default ~/.codex/auth.json), never from task JSON or a fallback account.
+            Relative paths are resolved from the caller's working directory.
+            Both definition modes use the same root configuration. On Windows
+            the PATH lookup finds the native program (claude.exe, codex.exe);
+            a .cmd/.bat/.ps1 launcher is not started because it would re-parse
+            the exact arguments. Each CLI uses the host's own login and
+            configuration, never credentials from task JSON.
         resources_path: Declarative resource JSON with material_root,
             material_files, read_only_dependencies and commands; relative paths
             resolve against that file. Excludes the four decomposed resource
@@ -200,6 +201,17 @@ def run_local_workflow_test(
             of at most 16 snapshots; updates_dropped reports any that were lost.
             Snapshots are display-only, never records; zero bytes does not mean
             the model made no progress. Observation never changes the result.
+        project_directory: The caller's existing writable directory (checkout,
+            worktree, task copy or output directory) for a Module whose
+            attempt_workspace_policy is explicit_project_read_write; required
+            exactly for that policy. Runtime never deletes, seals or cleans it.
+        command_permits: Host-prepared Shell command permits for this call, in
+            Claude Bash rule syntax (for example "python -m pytest:*"), usually
+            chosen from earlier calls' recorded tool use and this task's needs.
+            Claude renders them as Bash(<permit>) allow rules under dontAsk: they
+            pre-approve those commands, Claude's built-in read-only commands still
+            run, and other commands are denied. Without permits Runtime adds no
+            Bash allow rule. Codex cannot express per-call permits and refuses them.
     Returns:
         JSON-compatible execution facts and output. execution_parameter_sources
         gives each parameter's source layer (call, workflow_file,
@@ -222,17 +234,21 @@ def run_local_workflow_test(
         claude_cli_model_identity_unavailable; closed resources use
         self_test_resources_unavailable. Executable/dependency faults retain
         ADAPTER_BINDING_UNAVAILABLE rather than pretending resources expired.
-        Temporary-resource cleanup failure uses claude_cli_cleanup_failed while
-        preserving the received trace. User cancellation uses claude_cli_interrupted
+        A private temporary directory kept because the started CLI process was not
+        confirmed stopped gives claude_cli_cleanup_failed naming its location
+        while preserving the received trace. User cancellation uses claude_cli_interrupted
         and denies retry. Interrupted capture retains prior_stop_reason; a failure
         already received by the Adapter remains in provider_log.adapter_failure.
         Each execution_log Attempt includes its final private failure_detail.
         Codex uses codex_cli_interrupted/codex_cli_cleanup_failed for the same
-        interruption/cleanup distinction. If CLI authentication replaces its
-        temporary auth reference, cleanup fails and preserves the separate
-        private state; its recovery locator is in the private failure detail.
-        The caller must inspect that state before reuse. This is local temporary
-        recovery, not durable credential backup or automatic writeback.
+        interruption/cleanup distinction. attempt_workspaces lists, per Attempt,
+        attempt_id, workspace_path, archive_path (the record saved as
+        archive/execution_record.json, or None), project_directory (or None),
+        sealed and seal_skipped_reason (archive_not_saved,
+        process_stop_unconfirmed, execution_not_ended or None). A folder is
+        sealed only when its execution ended, its started process was confirmed
+        stopped and its archive was saved; otherwise it stays as the recovery
+        scene. maintain_attempt_workspaces later cleans expired sealed folders.
     Raises:
         FileNotFoundError: Missing registration, version or provider executable.
         KeyError: The exact PostgreSQL Workflow release is absent.
@@ -252,8 +268,10 @@ def run_local_workflow_test(
         and returns facts. Does not write PostgreSQL, register definitions,
         write execution parameters, manufacture production authorization, or
         persist a request receipt.
-        Its private temporary workspace is removed on exit. The caller may
-        explicitly save the returned result; Runtime does not save it by default.
+        Attempt folders are retained under root/.runtime/config.json
+        attempt_workspace_root (default root/.runtime/attempt_workspaces); each
+        holds its materials, scratch and the archived record. Caller project
+        directories are never included in Runtime cleanup.
     """
     entered = time.monotonic()
     if progress_observer is not None and not callable(progress_observer):
@@ -332,45 +350,108 @@ def run_local_workflow_test(
         program = {"claude_cli": "claude", "codex_cli": "codex"}[selected_profile.transport_kind]
         executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(selected_profile.transport_kind)
         if executable is None:
-            executable = shutil.which(program)
+            executable = HOST_PLATFORM.resolve_cli_program(program, os.environ)
         if executable is None:
-            raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path or host PATH")
+            raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path, provider_cli_paths "
+                                    "or a native program on host PATH")
         executable = Path(executable).resolve(strict=True)
         artifacts = InMemoryCellArtifactStore()
         ledger = InMemoryModuleExecutionLedger()
         budget.require_active()
-        with tempfile.TemporaryDirectory(prefix="agent-runtime-self-test-") as directory:
-            workspace = Path(directory).resolve()
-            if selected_profile.transport_kind == "claude_cli":
-                observation = {} if progress_observer is None else {"progress_observer": progress_observer}
-                adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
-                    workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
-                    adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision),
-                    **observation)
-            elif (selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision) == (
-                    CodexCliAgentWorkspaceModuleExecutor.executor_adapter_id,
-                    CodexCliAgentWorkspaceModuleExecutor.executor_adapter_revision):
-                adapter = CodexCliAgentWorkspaceModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
-                    workspace_root=workspace, codex_bin=str(executable), read_only_dependencies=dependencies)
-            else:
-                adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
-                    workspace_root=workspace, codex_bin=str(executable))
-            result, record = _run_prepared_workflow_node(registry=saved.registry, workflow=workflow,
-                selection=selection, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
-                artifact_host=artifacts, ledger=ledger, workspace_root=workspace, adapter=adapter,
-                local_resources=resource_body, tool_session_factory=tool_session_factory,
-                user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested, run_budget=budget)
-            record["execution_log"] = read_execution_log(
-                result.module_run, attempts=result.attempts,
-                read_content=artifacts.read_bytes, include_private_content=True,
-            )
-            record["execution_parameter_sources"] = parameters.as_record()
-            record["execution_budget"] = budget.as_record()
-            return record
+        workspace = Path(config["attempt_workspace_root"])
+        workspace.mkdir(parents=True, exist_ok=True)
+        workspace = workspace.resolve()
+        connections = config["mcp_servers"].get(selected_profile.transport_kind, {})
+        resources = dict(mcp_servers=connections, project_directory=project_directory,
+                         command_permits=tuple(command_permits))
+        if selected_profile.transport_kind == "claude_cli":
+            observation = {} if progress_observer is None else {"progress_observer": progress_observer}
+            adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
+                workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
+                adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision),
+                **observation, **resources)
+        elif (selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision) == (
+                CodexCliAgentWorkspaceModuleExecutor.executor_adapter_id,
+                CodexCliAgentWorkspaceModuleExecutor.executor_adapter_revision):
+            adapter = CodexCliAgentWorkspaceModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
+                workspace_root=workspace, codex_bin=str(executable), read_only_dependencies=dependencies, **resources)
+        else:
+            adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
+                workspace_root=workspace, codex_bin=str(executable), **resources)
+        result, record = _run_prepared_workflow_node(registry=saved.registry, workflow=workflow,
+            selection=selection, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
+            artifact_host=artifacts, ledger=ledger, workspace_root=workspace, adapter=adapter,
+            local_resources=resource_body, tool_session_factory=tool_session_factory,
+            user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested, run_budget=budget)
+        record["execution_log"] = read_execution_log(
+            result.module_run, attempts=result.attempts,
+            read_content=artifacts.read_bytes, include_private_content=True,
+        )
+        record["execution_parameter_sources"] = parameters.as_record()
+        record["execution_budget"] = budget.as_record()
+        record["attempt_workspaces"] = _archive_and_seal(record, workspace_root=workspace,
+                                                         project_directory=project_directory)
+        return record
     finally:
         if record is not None:
             record["execution_budget"] = budget.as_record()
         budget.close()
+
+
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _archive_and_seal(record: dict, *, workspace_root: Path, project_directory) -> list[dict]:
+    """Test-host step: archive the returned record in each Attempt folder, then seal it.
+
+    The record (without this field) is written once per Attempt to
+    archive/execution_record.json with exclusive create, only inside the
+    Attempt's own ordinary archive folder (write_attempt_archive); a link or
+    reparse point there is refused, reported in archive_error and leaves the
+    scene as found. A folder is sealed with
+    the current UTC instant only when the run ended, the Attempt's started CLI
+    process was confirmed stopped (no cleanup_error in its provider log and no
+    *_cleanup_failed failure) and the archive was saved; otherwise it stays as
+    the recovery scene with seal_skipped_reason. A seal that the workspace
+    itself refuses is reported in seal_error. Caller project directories are
+    reported, never archived into, sealed or cleaned.
+    """
+    from ..invocation.invocation_workspace_preparation import (
+        seal_attempt_workspace, utc_now_instant, write_attempt_archive,
+    )
+    snapshot = json.dumps(record, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    ended = record.get("status") in _TERMINAL_STATUSES
+    rows = []
+    for attempt in (record.get("execution_log") or {}).get("attempts", ()):
+        attempt_id = attempt.get("attempt_id")
+        folder = Path(workspace_root) / str(attempt_id)
+        provider_log = attempt.get("provider_log") or {}
+        unconfirmed = bool(provider_log.get("cleanup_error")) or "_cleanup_failed" in json.dumps(
+            attempt.get("failure_detail"), ensure_ascii=False, default=str)
+        archive_path, archive_error = None, None
+        try:
+            # Only inside this Attempt's own ordinary archive folder; a link or
+            # reparse point there is refused and the scene is left as found.
+            archive_path = str(write_attempt_archive(workspace_root=workspace_root, attempt_id=attempt_id,
+                                                     file_name="execution_record.json", content=snapshot))
+        except (OSError, RuntimeError, ValueError) as exc:
+            archive_error = f"{type(exc).__name__}: {exc}"
+        reason = ("execution_not_ended" if not ended else "process_stop_unconfirmed" if unconfirmed
+                  else "archive_not_saved" if archive_path is None else None)
+        row = {"attempt_id": attempt_id, "workspace_path": str(folder), "archive_path": archive_path,
+               "project_directory": None if project_directory is None else str(Path(project_directory).resolve()),
+               "sealed": False, "seal_skipped_reason": reason}
+        if archive_error is not None:
+            row["archive_error"] = archive_error
+        if reason is None:
+            try:
+                seal_attempt_workspace(workspace_root=workspace_root, attempt_id=attempt_id,
+                                       effective_at_utc=utc_now_instant())
+                row["sealed"] = True
+            except (OSError, RuntimeError, ValueError) as exc:
+                row["seal_error"] = f"{type(exc).__name__}: {exc}"
+        rows.append(row)
+    return rows
 
 
 def _execute_registered(args):
@@ -395,7 +476,9 @@ def _execute_registered(args):
             release_database_url_env=args.release_database_url_env, release_schema=args.release_schema,
             workflow_release_ref=args.workflow_ref, workflow_release_sha256=args.workflow_sha256,
             transport_kind=args.transport, model_id=args.model, reasoning_profile=args.effort, run_timeout_seconds=args.run_timeout_seconds,
-            cli_path=args.cli_path, resources_path=args.resources)
+            cli_path=args.cli_path, resources_path=args.resources,
+            project_directory=None if args.project_directory is None else args.project_directory.resolve(),
+            command_permits=tuple(args.command_permits))
         print(json.dumps(record, ensure_ascii=False, allow_nan=False))
         return 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
     except KeyboardInterrupt:

@@ -153,7 +153,7 @@ release。它们约束执行机制，不表达 Product Authorization policy、�
 | --- | --- | --- |
 | Registry | 产生可精确解析的 immutable Runtime releases 和 active pointer | 不执行 Module，不选择业务 owner |
 | Execution | 协调 Workflow、Module、Evaluation、Selection 和 terminal Resolution | 不调用 provider，不拥有 durability backend |
-| Invocation | 组装 Context，并调用 Execution Profile 选择的 code-owned provider/tool adapter binding | 不选择 release 或 Workflow edge |
+| Invocation | 按 Profile 准备参数与输入，调用所选外部执行器，接收日志和最终结果 | 不接管执行器内部工具流程，不选择 release 或 Workflow edge |
 | Durability | 协调 wait、retry、replay、recovery 和 cancellation | 不改变业务结果或 Ledger facts |
 | Ledger | 保存权威 Attempt、usage、failure、Outcome 和 Resolution | 不驱动执行或形成 UI authority |
 | Inspection | 提供授权只读 release/execution projection | 不修改 Registry、Execution 或 Ledger |
@@ -165,10 +165,39 @@ release。它们约束执行机制，不表达 Product Authorization policy、�
 
 Reviewer 的共同运行底座由 Runtime 提供，业务审核定义由 Module owner 提供。Registry 冻结 Module
 所需能力及 Retry 等技术 Policy；Execution 在受支持的同步调用中解析模型和运行时限，形成准确
-Profile 与 Variant，并向 Invocation 传递同一工作期限。Invocation 按 Profile 与仍有效的期限调用
-Provider、声明命令或受管理的子执行。宿主提供安装资源、存储和适用授权，Skill 说明使用入口。
+Profile 与 Variant，并向 Invocation 传递同一工作期限。Invocation 按明确参数启动外部执行器，管理
+自己发起调用的时间、取消和结果交接。宿主提供安装资源、存储及已配置的工具连接，Skill 说明入口。
 模型和时限选择均不增加工具、网络、工作区或领域操作权限。ModuleReviewer 仍是通用 Module
 authoring 的特化，不增加同层责任，也不将其默认能力传播给其他角色。
+
+### 5.1 外部执行器与资源范围
+
+对于 `claude -p`、`codex exec`，Runtime 的调用单元是这次外部执行器调用。Runtime 准备参数、
+输入和工作目录，接收日志、公开事件、退出状态与最终结果；CLI 内部怎样规划、重试或调用工具，
+由 CLI 自己负责，包括任务内的文件存取、命令／MCP 调用和内部调整。内部工具事件不自动成为新的
+Runtime Module、Attempt 或授权操作。普通 agent 调用与标准 Reviewer
+默认采用所选 CLI／宿主的网络和工具许可配置，不附加强制断网或沙箱；具体配置含义由 Invocation
+承接。文件工具的范围配置不被解释为任意 Shell／脚本的操作系统隔离保证。
+
+三段外层合同使用同一调用身份：
+
+| 阶段 | Runtime 的动作 | 交接给谁 |
+| --- | --- | --- |
+| 启动前 | 按已定任务定义和本次配置组装 instruction、输入、输出格式、模型、目录、工具／MCP 与原生允许项，启动选定 CLI | CLI 接收准确的任务与运行配置 |
+| 运行中 | 接收 stdout、stderr、公开事件，维护本次外层调用的时限、取消和进程状态 | CLI 自行推进内部任务；Runtime 保存实际收到的过程信息 |
+| 结束时 | 接收退出状态、最终结果及文件位置，校验约定输出格式，保存记录并按策略留档 | Execution／Ledger 与宿主取得结果；业务验证方判断任务结论 |
+
+普通 agent 的基础运行配置应提供原生文件读写能力及明确目录，使模型能在任务中保存、读回和继续
+处理数据；明确选择的纯内联 `tool_free` 是例外。提供这项能力是调用组装，不由 Runtime 重新实现
+模型文件工具。Reviewer 的具体允许范围仍按实际审核需要收窄。
+
+本次资源范围包括可读文件、可写目录、可用 MCP，以及通过哪个网关访问哪个数据库。任务 owner
+与宿主明确提供范围，Invocation 使用现有 Provider／宿主接口传入。MCP、网关和数据库内部的
+账户授权、角色、权限规则与凭据管理留在服务侧；Runtime 不查询或复制它们，也不再作一次许可判断。
+
+已有外部 MCP 连接可以经所选 CLI 使用，不以 Runtime 自建 MCP、回调桥或沙箱为前置。Runtime
+自己的执行身份、取消、时限和结果提交检查继续存在，但不能扩大成对 CLI 内部流程的监督。只有
+Runtime 明确发起的独立子调用或受保护资源操作，才按对应 Runtime 合同处理。
 
 Runtime 提供注册与 Test Run 的操作 Skill，作为自身产品的随包使用说明。宿主通过明确的
 Workspace root 将它们接入已有 Skill 发现位置，使 Agent 能找到并使用 Runtime 的公开入口。
@@ -179,8 +208,31 @@ Runtime 拥有这些操作内容，Skill Management 保留 Skill 的结构、发
 宿主入口可以接受一个明确的项目 root，据此定位已准备的运行资源和连接配置，并允许显式指定
 凭据位置。该 root 是配置定位，不是模型可读范围。root 下由项目写明的执行参数文件可以提供模型和受支持的同步运行时限，按 Invocation T2 §5.1
 的四层来源逐项取值；root 的其他内容、相邻项目和历史保存的 Profile 都不决定新调用的模型，任何执行参数也不改变工具能力。凭据只交给相应
-可信存储或授权接口，模型仅获得本次允许的材料和隔离工作区。配置目录、临时运行目录和数据库
+可信存储或授权接口，不作为模型任务内容。文件和工具的实际访问由选定 Provider、宿主与网关按配置
+处理。配置目录、临时运行目录和数据库
 自身的存储分别管理；提供项目 root 不自动授权创建数据库或向模型开放项目全集。
+
+### 5.2 常用调用场景
+
+以下四种场景描述如何使用同一 Runtime 调用合同，不新增 Module 类型、权限层或场景注册表。
+Module 定义表达所需能力；任务 owner 与宿主提供本次材料、目录及连接；Invocation 将它们交给
+所选 Claude／Codex。具体配置与验收见 [Invocation §4.3](agent_runtime_08_agent_execution_adapter_contract.md#43-常用调用场景)。
+
+| 场景 | 任务提供什么 | 执行器做什么 | Runtime 交付什么 |
+| --- | --- | --- | --- |
+| 纯文本／结构化输出 | 任务说明、完整内联材料、输出 schema | 使用模型处理输入，不开放任务工具 | 校验后的结构化结果、日志、状态与用量 |
+| 文件审核 | 准确材料、审核标准、只读来源、必要 scratch，以及从同类历史与本次要求确定的检查范围 | 使用实际需要的读取／搜索工具；只运行本次允许的检查命令或调用已选受限检查工具 | 审核结果、实际检查证据、材料完整性与日志缺口说明 |
+| 代码开发并运行命令 | 任务、可读依赖、明确可写的 checkout／worktree 或任务副本、验证要求 | 用原生文件工具和 Shell 修改、测试，内部步骤由 CLI 决定 | 改动与测试结果的交付位置、日志和退出状态 |
+| 已有 MCP／网关查询数据 | 选定连接、查询任务、网关／数据库绑定，以及本次可读资料、可写工作／输出目录 | 查询、保存本地数据并按任务继续读取处理；服务执行自己的授权 | 结果与数据文件位置、可得来源引用及实际服务返回 |
+
+文件读取与写入是这些场景可组合的基本能力：审核材料只读、必要 scratch 可写；开发目录读写；
+数据研究可把 MCP 数字保存为本地文件并继续读取处理。纯内联任务不必给模型文件工具，Runtime／
+宿主仍可保存日志和最终结果。Reviewer 的本次允许范围由真实历史用量与当前审核需要共同确定，
+不因具备 Shell 能力就默认允许所有命令，也不把历史里出现过的操作自动批准给下一次任务。
+
+四类都不默认要求操作系统沙箱或统一断网。文件范围使用 CLI 已有配置表达；这不承诺任意
+Shell／脚本的系统可达范围。模型、时限、工具及连接仍按本次准确选择记录。一次调用不会因属于
+某种场景就自动增加内部步骤、独立审核、重试或其他 Agent；需要组合时由已有 Workflow／宿主明确组织。
 
 ## 6. Inherited T0 Constraints
 
@@ -188,6 +240,7 @@ Runtime 拥有这些操作内容，Skill Management 保留 Skill 的结构、发
 - Product Authorization 的 `user_key` 只随 database operation 原样进入 project data-access adapter；它不授权
   Workflow start、Module start 或 Runtime inspection。
 - Data Governance 与 domain owner 提供受控 data-access boundary；Runtime 不解析 credential 或接管 SQL。
+- 外部 MCP／网关按各自既有服务合同授权；普通 CLI 接入不需要 Runtime 查询其权限后台或新增一次许可判断。
 - 普通自测不要求生产 Entitlement、execution grant 或模拟的 allow-all 决定。涉及外部受治理数据库时，
   仍由数据所属方提供适用的访问决定；测试用途不扩大其权限。
 - Timestamp Semantics 约束 Runtime time-bearing records。
@@ -290,8 +343,9 @@ execution-invalid failure；Registry 不执行 run，也不把 pointer failure �
 7. Registry 的公开 authoring loader 只读取调用者明确给出的项目 root 和 source closure，返回 path-free
    candidate。编译消费已捕获内容，注册和生产执行解析已冻结定义；不进行环境发现或在执行时重读
    宿主的可变 authoring tree。宿主也可直接提交等价的 repository-independent candidate content。
-8. 测试用途不会放宽 exact identity、declared operation、Profile/Adapter compatibility、workspace、network
-   或 output validation；资源越界在相应效果发生前拒绝。
+8. 测试用途不改变 exact identity、declared operation、Profile/Adapter compatibility、明确选择的
+   workspace/network 配置或 output validation。Runtime 自己发起的资源操作继续核对适用边界；
+   CLI 内部操作由所选执行器与服务处理，不借自测用途增补未声明的断网、沙箱或逐工具拦截要求。
 9. Reviewer 默认能力与模型、同步运行时限分别确定；Module 固定能力和 Retry Policy 不因一次调用改变。
    省略的执行参数按准确来源解析并记录生效值。
 10. 已交付宿主入口消费完整注册结果。采用单节点 Workflow 时，必须形成准确的 Workflow 与节点 Variant；
@@ -309,7 +363,7 @@ frozen input。Runtime 测试宿主明确提供可用的测试资源，调用者
 Runtime 在效果发生前拒绝，不自动补生产授权或转入生产入口。
 
 自测的必要条件是 release/input closure、compatible Execution Profile、admitted Adapter、declared
-operations，以及可执行的 workspace、network 和资源限制。它不需要 Product Authorization client、
+operations，以及能按公开接口表达本次 workspace、network 和资源范围的配置。它不需要 Product Authorization client、
 生产 Entitlement、execution grant 或伪造的生产批准。Provider 登录由已有 Adapter 和宿主环境处理，
 登录失败保留 Invocation/environment failure，不改写为缺少产品授权。新 Provider Attempt 还须满足
 当前 Module 定义编码的执行准入和仍有效的同步工作期限；历史读取或无 Provider 回放保留原准确事实。
@@ -325,8 +379,8 @@ Runtime 自测宿主提供临时 record store、artifact store 和其他测试�
 Registry 或外部记录。独立进程的重试与恢复继续遵守 §7 的同一 execution lineage 和资源边界。
 
 这一路径不改变外部生产请求的 acceptance、Replay/control request 的既有约束，也不把测试通过解释成
-业务接受、生产部署或 subject-specific review approval。Registry 提供 release facts，Execution 与
-Invocation 执行资源边界，Ledger 保存执行事实；Agent Capability Verification 组织并汇总其验证证据。
+业务接受、生产部署或 subject-specific review approval。Registry 提供 release facts，Execution 与 Invocation 固定并传入本次配置，Ledger 保存执行事实；
+所选执行器和服务实施其实际限制，Agent Capability Verification 汇总对应外部调用的验证证据。
 
 ## 9. T2 Partition and Dependencies
 
@@ -342,8 +396,8 @@ Invocation 执行资源边界，Ledger 保存执行事实；Agent Capability Ver
 | 05 Standalone Release | T1-delegated cross-cutting conformance | verify package、Design bundle、dependency isolation 与 release unit | release conformance failed，Standalone Release owns |
 | 06 Inspection | Inspection | validate exact query；read and project release/execution facts | inspection query invalid / unavailable，Inspection owns；host denial retains host owner |
 | 07 Durability | Durability | wait、timer、retry、replay、recovery、cancel 与 backend coordination | durability unavailable / recovery conflict，Durability owns |
-| 08 Invocation | Invocation | prepare Context and invoke Execution Profile-selected code-owned provider/tool adapter binding；在自测中同样执行声明的 capability 与资源限制，隔离 provider 登录和产品授权 | adapter binding unavailable / invocation failed / output invalid，Invocation owns |
-| 09 External Authority Integration | Execution boundary integration | 区分自测资源边界与外部受保护效果；仅对需要外部决定的效果 validate and carry authorization context、protected-operation intent 与 data-access handoff；普通自测不要求生产批准 | external denial retains its actual external authority；database permission retains Product Authorization or Data Governance/domain owner；Runtime owns only invalid ref、fence and late-result quarantine |
+| 08 Invocation | Invocation | 准备并传入参数、输入、工作目录与现有连接配置；管理自己启动的外部调用，接收日志与结果，不接管 CLI 内部工具或授权流程 | adapter binding unavailable / invocation failed / output invalid，Invocation owns |
+| 09 External Authority Integration | Execution boundary integration | 区分自测资源边界与外部受保护效果；仅对需要外部决定的效果 validate and carry authorization context、protected-operation intent 与 data-access handoff；普通自测不要求生产批准；不把 Provider 内部 MCP 调用逐项纳入 Runtime 的授权交接 | external denial retains its actual external authority；database permission retains Product Authorization or Data Governance/domain owner；Runtime owns only invalid ref、fence and late-result quarantine |
 | Execution；本 T1 直接承接 | Execution | resolve target by execution_purpose；start、advance、evaluate、select、resolve and terminate Workflow/Module execution；接口与错误由 Execution code-owned contract 落实 | execution purpose/target invalid / terminal failure，Execution owns；不交给归档 T2 |
 | 11 Agent Capability Verification | T1-delegated cross-cutting conformance | consume owner-qualified peer capability evidence，verify complete inventory、canonical Example/runbook 与 required environment-gate closure；验证自测独立性、临时资源策略与显式外部保存边界，不接管 peer 的存储或执行语义 | verification case failed / environment unavailable / coverage incomplete，Agent Capability Verification owns；peer capability failure retains its peer owner |
 

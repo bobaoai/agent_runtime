@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from agent_runtime.registry import RuntimeReleaseRegistry
+from test_agent_runtime_provider_tools import UNIX_BRIDGE
 from agent_runtime.testing.conformance_agent_examples import (
     build_agent_capability_example, build_agent_evaluation_example, build_example_reviewer,
 )
@@ -125,12 +126,17 @@ def _fake_models(monkeypatch, *, skip_review=False, fail_task=False):
     return calls
 
 
+# Both examples use the explicitly selected callback tools, which need a Unix-domain socket bridge.
+# Elsewhere the bridge refuses before any session opens; that refusal is covered in
+# test_agent_runtime_cli_boundary.py::test_callback_bridge_reports_the_socket_gap_before_opening_a_session.
+@pytest.mark.fake_run
+@UNIX_BRIDGE
 @pytest.mark.parametrize("scenario,visits", [("accepted", 6), ("revision", 10), ("wait", 10)])
 def test_full_example_uses_real_graph_and_runtime_tools_with_provider_double(tmp_path, monkeypatch, scenario, visits):
     from agent_runtime.testing.conformance_agent_execution import run_agent_example
     from test_agent_runtime_claude_native_tools import _fake_cli
     calls = _fake_models(monkeypatch)
-    result = run_agent_example(tmp_path / "root", "agent_capability_example", scenario=scenario, cli_path=_fake_cli(tmp_path))
+    result = run_agent_example(tmp_path / "root", "agent_capability_example", scenario=scenario, cli_path=_fake_cli(tmp_path, monkeypatch))
     assert result["status"] == "completed", result
     assert result["output"]["decision"] == "accepted"
     assert len(calls) == len(result["execution"]["nodes"]) == visits
@@ -140,12 +146,14 @@ def test_full_example_uses_real_graph_and_runtime_tools_with_provider_double(tmp
     assert bool(result["wait_snapshots"]) == (scenario == "wait")
 
 
+@pytest.mark.fake_run
+@UNIX_BRIDGE
 @pytest.mark.parametrize("skip_review,fail_task", [(False, False), (True, False), (False, True)])
 def test_independent_evaluation_uses_child_facts_never_outer_substitution(tmp_path, monkeypatch, skip_review, fail_task):
     from agent_runtime.testing.conformance_agent_execution import run_agent_example
     from test_agent_runtime_claude_native_tools import _fake_cli
     calls = _fake_models(monkeypatch, skip_review=skip_review, fail_task=fail_task)
-    result = run_agent_example(tmp_path / "root", "agent_evaluation_example", cli_path=_fake_cli(tmp_path))
+    result = run_agent_example(tmp_path / "root", "agent_evaluation_example", cli_path=_fake_cli(tmp_path, monkeypatch))
     assert result["status"] == "completed", result
     expected = not (skip_review or fail_task)
     assert result["output"]["reviewer_called"] is expected
@@ -236,7 +244,10 @@ def test_example_help_preserves_inherited_execution_guidance(monkeypatch, capsys
     assert inherited.epilog in capsys.readouterr().out
 
 
-@pytest.mark.skipif(os.environ.get("RUN_PROVIDER_INTEGRATION") != "1", reason="explicit live Agent example gate")
+@pytest.mark.real_run
+@UNIX_BRIDGE
+@pytest.mark.skipif(os.environ.get("RUN_PROVIDER_INTEGRATION") != "1",
+                    reason="unverified: explicit live Agent example run; set RUN_PROVIDER_INTEGRATION=1 with an authenticated Claude CLI")
 @pytest.mark.parametrize("example", ["agent_capability_example", "agent_evaluation_example"])
 def test_live_claude_agent_examples(tmp_path, example):
     from agent_runtime.testing.conformance_agent_execution import run_agent_example

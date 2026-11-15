@@ -1,16 +1,16 @@
 """Request-scoped callback tools served by Runtime, not a sandboxed command."""
 import copy
+from .invocation_host_platform_selection import HOST_PLATFORM
 import json
 from pathlib import Path
 import shutil
-import tempfile
 import threading
 
 from jsonschema import Draft202012Validator, ValidationError
 
 from .invocation_process_execution import _runtime_python_executable
 from .invocation_tool_definition import tool_definition_records
-from .invocation_tool_transport import start_tool_server
+from .invocation_tool_transport import start_tool_server, unix_socket_transport_available
 
 
 class ProviderToolSessionBridge:
@@ -20,6 +20,9 @@ class ProviderToolSessionBridge:
     def __init__(self, *, request, host, factory, definitions, timeout_seconds):
         if request.self_test_binding_ref is None or request.has_operation_evidence:
             raise PermissionError("callback bridge accepts only actual self-test resources")
+        if not unix_socket_transport_available():
+            raise NotImplementedError("Provider callback tools need a Unix-domain socket transport, "
+                                      "which this host lacks")
         self._request, self._host, self._factory = request, host, factory
         self._definitions = copy.deepcopy(definitions)
         self._records, self._fatal = [], None
@@ -37,7 +40,7 @@ class ProviderToolSessionBridge:
             from importlib.util import find_spec
             if find_spec("mcp") is None:
                 raise ImportError("callback tools require agent-runtime-core[cli_tools]")
-            self._private = Path(tempfile.mkdtemp(prefix="runtime-tools-")).resolve()
+            self._private = HOST_PLATFORM.create_private_directory(prefix="runtime-tools-")
             self._endpoint = self._private / "tools.sock"
             self._server, self._thread = start_tool_server(self._endpoint, self._dispatch, max_request_bytes=4 * 1024 * 1024)
             proxy = Path(__file__).with_name("invocation_local_command_mcp.py")

@@ -1,0 +1,10 @@
+# Byte-checked files: the Design contract bundle (its manifest hashes the exact
+# canonical and packaged bytes) and the generated API reference. Keep the stored
+# LF bytes in every checkout, whatever core.autocrlf says.
+designDoc/*.md text eol=lf
+src/agent_runtime/design_contract/** text eol=lf
+docs/agent_runtime_reviewer_api.md text eol=lf
+src/agent_runtime/docs/agent_runtime_reviewer_api.md text eol=lf
+# Historical dev7 operator Skill fixtures: setup admits only their exact packaged LF bytes
+# (hash allow-list), so the checkout must keep those bytes.
+tests/fixtures/operator_skills_dev7/*.SKILL.md text eol=lf

@@ -179,7 +179,8 @@ def test_events_drained_before_the_input_worker_starts_are_still_published(tmp_p
     monkeypatch.setattr(cli_process, "Thread", HeldInputThread)
     request = CliEventSummary("tool_requested", "shell")
     result = CliEventSummary("tool_result_observed", "shell")
-    code = "import sys\nsys.stdout.write('request\\nresult\\n'); sys.stdout.flush()"
+    # Fixed bytes: a text-mode stdout would write CRLF on Windows; Runtime keeps whatever bytes it receives.
+    code = "import sys\nsys.stdout.buffer.write(b'request\\nresult\\n'); sys.stdout.flush()"
     def publisher(channel_box):
         seen = []
         def on_line(line):
@@ -312,11 +313,12 @@ def test_snapshots_carry_no_stream_content(tmp_path):
 
 # ---- A2: Claude stream summarizer, declared-command hook and Adapter wiring ----
 
+import _thread
 import base64
 import functools
 import json
 from pathlib import Path
-from unittest.mock import patch
+import signal
 
 from agent_runtime.execution import AgentExecutionAdapterRegistry, InMemoryCellArtifactStore
 from agent_runtime.execution.execution_module_invocation import run_module
@@ -553,6 +555,7 @@ def test_delivered_snapshots_never_contain_event_content(tmp_path):
 
 
 @pytest.mark.real_run
+@local_commands.MACOS_COMMAND_EXTENSION
 def test_declared_command_hook_sees_only_bound_commands(tmp_path, monkeypatch):
     calls = []
     def hook(command_id, finished):
@@ -568,6 +571,7 @@ def test_declared_command_hook_sees_only_bound_commands(tmp_path, monkeypatch):
 
 
 @pytest.mark.real_run
+@local_commands.MACOS_COMMAND_EXTENSION
 def test_raising_declared_command_hook_changes_nothing(tmp_path, monkeypatch):
     def normalized(session_records, responses):
         return ([(row["status"], row["request"], row["response"]["returncode"], row["response"]["stdout"])
@@ -591,48 +595,69 @@ def test_raising_declared_command_hook_changes_nothing(tmp_path, monkeypatch):
 
 # ---- fake_run: same Adapter run with and without an observer (scripted local Claude CLI) ----
 
-def _scripted_claude(directory, lines, *, exit_code=0, interrupt=False, flag=None):
-    """Substitute named for these comparisons: a local script standing in for the Claude CLI."""
+def _scripted_claude(directory, lines, monkeypatch, *, exit_code=0, interrupt=False, flag=None):
+    """Named substitute for these comparisons: a local script standing in for the Claude CLI.
+
+    It answers the preflight, writes ran.marker when its Provider mode starts, prints the given
+    stream-json lines and exits with exit_code. For a user cancellation it writes
+    interrupt.ready after its lines and waits for the Runtime to stop it.
+    """
     stream = directory / "stream.json"
     stream.write_text(json.dumps({"lines": [line if isinstance(line, str) else json.dumps(line) for line in lines],
-                                  "exit": exit_code, "interrupt": interrupt,
+                                  "exit": exit_code, "marker": str(directory / "ran.marker"),
+                                  "ready": str(directory / "interrupt.ready") if interrupt else None,
                                   "flag": None if flag is None else str(flag)}))
-    executable = directory / "claude"
-    executable.write_text(
-        f"#!{sys.executable}\n"
-        "import json, os, signal, sys, time\n"
-        "if '--version' in sys.argv or '--help' in sys.argv:\n"
-        "    print('2.1.999 --safe-mode --restricted --tools --settings --effort --json-schema '\n"
-        "          '--setting-sources --strict-mcp-config --add-dir'); sys.exit(0)\n"
+    return native._scripted_cli(directory / "claude", (
+        "import json, sys, time\n"
+        "if sys.argv[1:] == ['--version']:\n"
+        f"    print({native.SYNTHETIC_CLAUDE_VERSION!r}); sys.exit(0)\n"
+        "if sys.argv[1:] == ['--help']:\n"
+        f"    print({native.SYNTHETIC_CLAUDE_HELP!r}); sys.exit(0)\n"
         f"plan = json.load(open({str(stream)!r}))\n"
+        "open(plan['marker'], 'w').close()\n"
         "for line in plan['lines']:\n"
         "    print(line, flush=True); time.sleep(0.02)\n"
-        "if plan['interrupt']:\n"
-        "    os.kill(os.getppid(), signal.SIGINT); time.sleep(30)\n"
+        "if plan['ready']:\n"
+        "    open(plan['ready'], 'w').close(); time.sleep(30)\n"
         "time.sleep(0.5)  # stay alive so a Runtime stop deterministically ends the process\n"
         "if plan['flag']:\n"
         "    open(plan['flag'], 'w').close()\n"
-        "sys.exit(plan['exit'])\n")
-    executable.chmod(0o700)
-    return executable
+        "sys.exit(plan['exit'])\n"), monkeypatch)
 
 
-def _adapter_run(directory, lines, *, observer=None, exit_code=0, interrupt=False):
+def _interrupt_when_ready(ready):
+    """Simulated user interrupt: deliver SIGINT to the Runtime's main thread once the CLI is waiting.
+
+    The portable stand-in for a terminal Ctrl+C; os.kill(parent, SIGINT) would terminate the
+    parent outright on Windows. Returns the started watcher thread.
+    """
+    def deliver():
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if ready.exists():
+            _thread.interrupt_main(signal.SIGINT)
+    watcher = threading.Thread(target=deliver, daemon=True)
+    watcher.start()
+    return watcher
+
+
+def _adapter_run(directory, lines, monkeypatch, *, observer=None, exit_code=0, interrupt=False):
     directory.mkdir(parents=True)
     compiled, registry, cell, request, authority = native._environment(directory)
     adapter = claude.ClaudeAdapter(
         release_registry=registry, artifact_host=cell, workspace_root=directory / "attempts",
-        cli_path=_scripted_claude(directory, lines, exit_code=exit_code, interrupt=interrupt),
+        cli_path=_scripted_claude(directory, lines, monkeypatch, exit_code=exit_code, interrupt=interrupt),
         adapter_binding=(compiled.execution_profile.executor_adapter_id,
                          compiled.execution_profile.executor_adapter_revision),
         **({} if observer is None else {"progress_observer": observer}))
     adapters = AgentExecutionAdapterRegistry()
     adapters.register(adapter)
-    temporary_directory = claude.tempfile.TemporaryDirectory
-    with patch.object(claude.tempfile, "TemporaryDirectory",
-                      lambda *args, **kw: temporary_directory(*args, **{**kw, "dir": directory})):
-        run = run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
-                         ledger=InMemoryModuleExecutionLedger(), authority=authority, clock=lambda: native._TEST_TIME)
+    watcher = _interrupt_when_ready(directory / "interrupt.ready") if interrupt else None
+    run = run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
+                     ledger=InMemoryModuleExecutionLedger(), authority=authority, clock=lambda: native._TEST_TIME)
+    if watcher is not None:
+        watcher.join(10)
     attempt = run.attempts[-1]
     detail = (json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
               if attempt.failure_detail_ref else {})
@@ -661,23 +686,36 @@ STREAMS = {
 }
 
 
+# The terminal result each scripted stream must produce, with or without an observer.
+EXPECTED_TERMINAL = {
+    "valid_with_malformed": ("completed", None),
+    "duplicate_result": ("failed", "claude_cli_result_missing_or_invalid"),
+    "missing_init": ("failed", "claude_cli_result_missing_or_invalid"),
+    "error_exit": ("failed", "claude_cli_error_result"),
+    "user_cancellation": ("cancelled", "claude_cli_interrupted"),
+}
+
+
 @pytest.mark.fake_run
 @pytest.mark.parametrize("case", sorted(STREAMS))
 @pytest.mark.parametrize("fault", [None, "summarizer", "channel"])
 def test_adapter_terminal_result_is_identical_with_or_without_observer(tmp_path, monkeypatch, case, fault):
     lines, options = STREAMS[case]
-    baseline = _adapter_run(tmp_path / "off", lines, **options)
+    baseline = _adapter_run(tmp_path / "off", lines, monkeypatch, **options)
     if fault == "summarizer":
         monkeypatch.setattr(claude._ClaudeEventProgress, "_summarize", lambda self, event: 1 / 0)
     if fault == "channel":
         monkeypatch.setattr(CliProgressChannel, "_publish", lambda self, trigger: 1 / 0)
     observer = Recorder()
-    observed = _adapter_run(tmp_path / "on", lines, observer=observer, **options)
+    observed = _adapter_run(tmp_path / "on", lines, monkeypatch, observer=observer, **options)
+    # Both runs reached the scripted Provider and returned this scenario's own terminal result,
+    # so the equality below compares two real runs, not two identical early failures.
+    for side in ("off", "on"):
+        assert (tmp_path / side / "ran.marker").is_file()
+    assert (observed["status"], observed["failure_code"]) == EXPECTED_TERMINAL[case]
+    assert observed["streams"]["stdout"].startswith(
+        (lines[0] if isinstance(lines[0], str) else json.dumps(lines[0])).encode())
     assert observed == baseline
-    if case == "user_cancellation":
-        assert observed["status"] == "cancelled" and observed["failure_code"] == "claude_cli_interrupted"
-    if case == "valid_with_malformed":
-        assert observed["status"] == "completed"
     if fault is None:
         assert observer.wait_finished()
         assert "event_received" in observer.triggers()
@@ -774,7 +812,7 @@ def test_codex_test_run_ignores_the_observer_and_is_unchanged(environment, monke
 
 @pytest.mark.fake_run
 @pytest.mark.parametrize("selection", ["explicit", "workflow_file", "workspace_file", "runtime_default"])
-def test_test_run_attaches_claude_observation_after_transport_resolution(tmp_path, selection):
+def test_test_run_attaches_claude_observation_after_transport_resolution(tmp_path, monkeypatch, selection):
     """Substitute: a scripted local Claude executable; Test Run, ClaudeAdapter and process runner are real."""
     records, observers = [], []
     for observed in (False, True):
@@ -790,7 +828,7 @@ def test_test_run_attaches_claude_observation_after_transport_resolution(tmp_pat
         if observed:
             options["progress_observer"] = observer
         record = run_local_workflow_test(root, "summarize_note", input_payload={},
-                                         cli_path=_scripted_claude(directory, CLAUDE_LINES), **options)
+                                         cli_path=_scripted_claude(directory, CLAUDE_LINES, monkeypatch), **options)
         observers.append(list(observer.snapshots))
         records.append(record)
     assert records[0]["status"] == "completed", records[0]["failure_detail"]
@@ -836,7 +874,7 @@ def test_blocked_display_cannot_turn_a_near_deadline_completion_into_timeout(tmp
         try:
             record = run_local_workflow_test(_claude_root(directory), "summarize_note", input_payload={},
                 transport_kind="claude_cli", run_timeout_seconds=600,
-                cli_path=_scripted_claude(directory, CLAUDE_LINES, flag=flag), **options)
+                cli_path=_scripted_claude(directory, CLAUDE_LINES, monkeypatch, flag=flag), **options)
             if observed:
                 assert observer.entered.is_set() and not observer.release.is_set()
         finally:

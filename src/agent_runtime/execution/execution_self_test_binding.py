@@ -52,10 +52,10 @@ class ModuleSelfTestResources:
         requirements = module.get_execution_requirements()
         if requirements is not None:
             requirements.assert_profile(profile)
-        if (profile.network_policy != "denied"
+        if (profile.network_policy not in {"denied", "provider_managed"}
                 or profile.gateway_access_reasons or profile.semantic_input_delivery_mode != "inline"
                 or profile.execution_mode not in {"agent", "tool_free"}
-                or profile.attempt_workspace_policy not in {"none", "own_draft_read_write"}):
+                or profile.attempt_workspace_policy not in {"none", "own_draft_read_write", "explicit_project_read_write"}):
             raise PermissionError("Profile is not admitted for temporary inline evaluation")
         if (registry.get_workflow(workflow.release_ref, workflow.release_sha256) != workflow
                 or registry.get_execution_variant_policy(variant.release_ref, variant.release_sha256) != variant):

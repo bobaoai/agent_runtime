@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -110,6 +112,23 @@ def test_workspace_lock_is_outside_provider_writable_directory(
     assert not list(workspace.glob("*.lock"))
 
 
+@pytest.mark.deterministic
+def test_held_lease_records_holder_pid_readable_by_other_handles(
+    tmp_path: Path,
+) -> None:
+    workspace = prepare_attempt_workspace(
+        workspace_root=tmp_path,
+        attempt_identity=_identity(),
+    )
+
+    with lease_attempt_workspace(workspace):
+        lease = tmp_path / _LEASE_DIRECTORY_NAME / f"{workspace.name}.lock"
+        # A Windows byte-range lock must not cover the PID record itself.
+        assert lease.read_text(encoding="utf-8") == str(os.getpid())
+        assert lease.stat().st_size == len(str(os.getpid()))
+
+
+@pytest.mark.deterministic
 def test_workspace_lock_is_released_when_holder_process_crashes(
     tmp_path: Path,
 ) -> None:
@@ -124,18 +143,27 @@ def test_workspace_lock_is_released_when_holder_process_crashes(
             / f"{workspace.name}.lock"
         )
 
+    if sys.platform == "win32":
+        from agent_runtime.invocation.invocation_windows_host_operation import (
+            WINDOWS_LEASE_LOCK_OFFSET,
+        )
+
+        lock_holder = (
+            "import msvcrt,os,sys; "
+            "handle=open(sys.argv[1], 'a+'); "
+            f"os.lseek(handle.fileno(), {WINDOWS_LEASE_LOCK_OFFSET}, os.SEEK_SET); "
+            "msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1); "
+            "print('locked', flush=True); sys.stdin.read()"
+        )
+    else:
+        lock_holder = (
+            "import fcntl,sys; "
+            "handle=open(sys.argv[1], 'a+'); "
+            "fcntl.flock(handle.fileno(), fcntl.LOCK_EX); "
+            "print('locked', flush=True); sys.stdin.read()"
+        )
     holder = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import fcntl,sys; "
-                "handle=open(sys.argv[1], 'a+'); "
-                "fcntl.flock(handle.fileno(), fcntl.LOCK_EX); "
-                "print('locked', flush=True); sys.stdin.read()"
-            ),
-            str(lease),
-        ],
+        [sys.executable, "-c", lock_holder, str(lease)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -148,8 +176,19 @@ def test_workspace_lock_is_released_when_holder_process_crashes(
                 pytest.fail("duplicate invocation acquired the Attempt workspace")
         holder.kill()
         holder.wait()
-        with lease_attempt_workspace(workspace) as recovered:
-            assert recovered == workspace
+        # Windows releases a dead process's byte-range locks asynchronously, so
+        # recovery is polled within a bounded window. A lock that is never
+        # released still fails the test when the window ends.
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                with lease_attempt_workspace(workspace) as recovered:
+                    assert recovered == workspace
+                break
+            except AttemptWorkspaceConflictError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
     finally:
         if holder.poll() is None:
             holder.kill()
@@ -166,7 +205,8 @@ def test_attempt_workspace_rejects_path_like_attempt_identity(tmp_path: Path) ->
     assert not (tmp_path.parent / "outside").exists()
 
 
-def test_workspace_module_imports_without_fcntl_but_leasing_requires_posix() -> None:
+@pytest.mark.deterministic
+def test_workspace_module_imports_without_os_lock_but_leasing_fails_closed() -> None:
     source = """
 import builtins
 import sys
@@ -176,11 +216,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path.cwd() / "src"))
 
 original_import = builtins.__import__
-def without_fcntl(name, *args, **kwargs):
-    if name == "fcntl":
-        raise ModuleNotFoundError("simulated Windows host")
-    return original_import(name, *args, **kwargs)
-builtins.__import__ = without_fcntl
+def without_os_lock(name, globals=None, *args, **kwargs):
+    # Hide the lock modules only from the two host operation modules: the
+    # standard library (subprocess on Windows) still needs msvcrt to import.
+    importer = (globals or {}).get("__name__", "")
+    if name in {"fcntl", "msvcrt"} and importer.endswith("_host_operation"):
+        raise ModuleNotFoundError("simulated host without an OS file lock")
+    return original_import(name, globals, *args, **kwargs)
+builtins.__import__ = without_os_lock
 
 from agent_runtime.invocation.invocation_workspace_preparation import (
     AttemptWorkspaceConflictError,

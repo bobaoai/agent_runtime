@@ -23,7 +23,7 @@ from test_agent_runtime_reviewer_registration_cli import _files
 
 @pytest.fixture
 def environment(tmp_path, monkeypatch):
-    """Substitutes: the Codex CLI process runner and a synthetic file login; Runtime resources and the execution kernel are real."""
+    """Substitutes: the Codex CLI process runner and a synthetic host CODEX_HOME; Runtime resources and the execution kernel are real."""
     source = _task_project(tmp_path / "source", module_id="summarize_note")
     requirements = _requirements(execution_mode="tool_free", tool_policy=(),
         attempt_workspace_policy="none", max_attempts=1)
@@ -60,13 +60,19 @@ def environment(tmp_path, monkeypatch):
     adapter.executor_adapter_id = adapter_type.executor_adapter_id
     adapter.executor_adapter_revision = adapter_type.executor_adapter_revision
     def process(**fields):
-        assert fields["environment"]["CODEX_HOME"] != str(credential_root)
+        # The host login is reused as configured: CODEX_HOME passes through, never read by Runtime.
+        assert fields["environment"]["CODEX_HOME"] == str(credential_root)
         assert "never-pass-to-model" not in fields["prompt"] + json.dumps(fields["argv"])
         assert callable(fields.get("launch_guard"))
         if "--version" in fields["argv"]:
             fields["launch_guard"](lambda: None)
             result = subprocess.CompletedProcess(fields["argv"], 0, "codex-cli 0.153.4\n", "")
             result.stdout_bytes, result.stderr_bytes = b"codex-cli 0.153.4\n", b""
+            return result
+        if fields["argv"][-3:] == ["mcp", "list", "--json"]:
+            fields["launch_guard"](lambda: None)
+            result = subprocess.CompletedProcess(fields["argv"], 0, "[]", "")
+            result.stdout_bytes, result.stderr_bytes = b"[]", b""
             return result
         if controls.get("before_launch"):
             controls["before_launch"]()
@@ -92,6 +98,21 @@ def environment(tmp_path, monkeypatch):
     return root, requirements, resources, calls, controls, adapters
 
 
+def _outside_attempts(root):
+    """Host files apart from the retained Attempt folders a Test Run now keeps."""
+    return {name: body for name, body in _files(root).items() if not name.startswith(".runtime/attempt_workspaces/")}
+
+
+def _assert_retained(root, record):
+    """Each Attempt folder stays under root/.runtime/attempt_workspaces, archived and sealed."""
+    (row,) = record["attempt_workspaces"]
+    folder = Path(row["workspace_path"])
+    assert folder.parent == (root / ".runtime" / "attempt_workspaces").resolve() and folder.is_dir()
+    assert row["sealed"] is True and row["seal_skipped_reason"] is None and row["project_directory"] is None
+    assert Path(row["archive_path"]) == folder / "archive" / "execution_record.json"
+    assert (folder / ".agent_runtime_attempt_seal.json").is_file()
+
+
 def invoke(environment, **changes):
     return run_local_workflow_test(environment[0], "summarize_note", input_payload={},
         transport_kind="codex_cli", model_id="gpt-6-astra", reasoning_profile="xhigh",
@@ -106,14 +127,17 @@ def test_public_codex_evaluation_uses_live_resources_and_same_log(environment):
     assert record["status"] == "completed", record["failure_detail"]
     assert record["output"] == {"summary": "non_pass"}
     assert record["persistence"] == "not_requested" and record["managed_runtime"]
-    assert len(calls) == 1 and _files(root) == before
-    assert record["self_test_binding"]["adapter"]["adapter_revision"] == "v4"
+    assert len(calls) == 1 and _outside_attempts(root) == before
+    _assert_retained(root, record)
+    assert record["self_test_binding"]["adapter"]["adapter_revision"] == "v5"
     assert "entitlement" not in json.dumps(record) and "never-pass-to-model" not in json.dumps(record)
     assert record["execution_log"]["complete"]
     assert record["execution_log"]["attempts"][0]["provider_log"] == record["provider_trace"]
     assert record["usage"] == record["execution_trace"]["attempts"][0]["usage"]
-    assert not resources[0]._workspace.exists()
-    assert not Path(calls[0]["environment"]["CODEX_HOME"]).exists()
+    assert resources[0]._workspace == (root / ".runtime" / "attempt_workspaces").resolve()
+    # The host login folder is passed through and left exactly as it was.
+    assert (Path(calls[0]["environment"]["CODEX_HOME"]) / "auth.json").read_text() == \
+        '{"synthetic_secret":"never-pass-to-model"}'
 
 
 @pytest.mark.fake_run
@@ -130,7 +154,6 @@ def test_codex_requires_explicit_model_and_effort_without_default_or_writes(envi
 @pytest.mark.fake_run
 @pytest.mark.parametrize("effort", ["two words", "line\nbreak", "quoted\"value"])
 def test_codex_invalid_nonempty_effort_precedes_store_resources_and_process(environment, monkeypatch, effort):
-    from agent_runtime.invocation import invocation_codex_environment as private_state
     root, _, resources, calls, _, adapters = environment
     before = _files(root)
     touched = []
@@ -141,8 +164,9 @@ def test_codex_invalid_nonempty_effort_precedes_store_resources_and_process(envi
         register_bundle = forbidden
         load_release_registry = forbidden
     monkeypatch.setattr(tempfile, "TemporaryDirectory", forbidden)
-    monkeypatch.setattr(private_state, "prepare_codex_environment", forbidden)
     monkeypatch.setattr(subprocess, "Popen", forbidden)
+    from agent_runtime.invocation.invocation_host_platform_selection import HOST_PLATFORM
+    monkeypatch.setattr(HOST_PLATFORM, "create_cli_process", forbidden)
     selection = dict(transport_kind="codex_cli", model_id="gpt-6-astra", reasoning_profile=effort)
     with pytest.raises(ValueError, match="effort|reasoning_profile"):
         prepare_local_workflow_module(root, "summarize_note", release_store=Store(), **selection)
@@ -176,7 +200,8 @@ def test_public_codex_log_preserves_orphan_progress_without_inventing_execution(
     controls["tool_events"] = [event]
     record = invoke(environment)
     assert record["status"] == "completed", record["failure_detail"]
-    assert len(calls) == 1 and _files(root) == before
+    assert len(calls) == 1 and _outside_attempts(root) == before
+    _assert_retained(root, record)
     log = record["execution_log"]
     assert not log["complete"]
     attempt, = log["attempts"]
@@ -195,8 +220,8 @@ def test_public_codex_cli_resolves_relative_executable_before_actual_attempt_cwd
     from agent_runtime.invocation.invocation_process_execution import run_cli_process
     monkeypatch.setattr(codex, "run_cli_process", run_cli_process)
     root, _, resources, _, _, _ = environment
+    from test_agent_runtime_claude_native_tools import _scripted_cli
     executable = root / "bin" / "codex"
-    executable.parent.mkdir()
     launched = tmp_path / "launched.jsonl"
     events = [
         {"type": "thread.started", "thread_id": "synthetic"}, {"type": "turn.started"},
@@ -204,18 +229,20 @@ def test_public_codex_cli_resolves_relative_executable_before_actual_attempt_cwd
             "text": json.dumps({"summary": "relative executable ran"})}},
         {"type": "turn.completed", "usage": {"input_tokens": 8, "output_tokens": 3}},
     ]
-    executable.write_text(f"#!{sys.executable}\n" + f'''
+    # Named substitute for the Codex executable, launched natively on POSIX and through the interpreter on Windows.
+    _scripted_cli(executable, f'''
 import json, os, sys
 with open({str(launched)!r}, "a") as output:
     output.write(json.dumps({{"argv": sys.argv, "cwd": os.getcwd()}}) + "\\n")
 if "--version" in sys.argv:
     print("codex-cli synthetic-local-process")
+elif sys.argv[-3:] == ["mcp", "list", "--json"]:
+    print("[]")
 else:
     assert "exec" in sys.argv and sys.stdin.read()
     for event in {events!r}:
         print(json.dumps(event))
-''')
-    executable.chmod(0o700)
+''', monkeypatch)
     payload = tmp_path / "input.json"
     payload.write_text("{}")
     monkeypatch.chdir(root)
@@ -230,11 +257,11 @@ else:
     record = json.loads(captured.out)
     assert record["output"] == {"summary": "relative executable ran"}
     processes = [json.loads(line) for line in launched.read_text().splitlines()]
-    assert len(processes) == 2 and "--version" in processes[0]["argv"]
+    assert len(processes) == 3 and "--version" in processes[0]["argv"] and processes[1]["argv"][-3:] == ["mcp", "list", "--json"]
     assert all(Path(process["argv"][0]) == executable.resolve() for process in processes)
     assert all(Path(process["cwd"]) != root for process in processes)
-    assert record["execution_log"]["complete"] and _files(root) == before
-    assert not resources[0]._workspace.exists()
+    assert record["execution_log"]["complete"] and _outside_attempts(root) == before
+    _assert_retained(root, record)
 
 
 @pytest.mark.fake_run
@@ -345,7 +372,7 @@ def test_codex_live_resources_cannot_be_reused_with_different_ports(environment,
 
 
 @pytest.mark.deterministic
-def test_codex_binds_reviewer_default_tools_to_workspace_v3_without_shrinking(tmp_path):
+def test_codex_binds_reviewer_default_tools_to_workspace_v4_without_shrinking(tmp_path):
     from test_agent_runtime_reviewer_registration_cli import _source, _register, MODULE_ID
     root = tmp_path / "host"
     source, _ = _source(tmp_path / "source")
@@ -357,7 +384,8 @@ def test_codex_binds_reviewer_default_tools_to_workspace_v3_without_shrinking(tm
                                                    binding["execution_profile_release_sha256"])
     module = saved.registry.get_module(saved.release.nodes[0].module_release_ref,
                                        saved.release.nodes[0].module_release_sha256)
-    assert (profile.executor_adapter_id, profile.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v3")
+    assert (profile.executor_adapter_id, profile.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v4")
     assert (profile.model_id, profile.reasoning_profile) == ("gpt-6-astra", "xhigh")
     assert set(profile.tool_policy) == set(module.execution_requirements.tool_policy) >= {"shell"}
-    assert (profile.attempt_workspace_policy, profile.network_policy) == ("own_draft_read_write", "denied")
+    assert profile.attempt_workspace_policy == "own_draft_read_write"
+    assert profile.network_policy == module.execution_requirements.network_policy

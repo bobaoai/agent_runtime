@@ -13,7 +13,9 @@ from agent_runtime import Module, ModuleReviewer, ReviewerDefaults, RuntimeModul
 from agent_runtime.registry import (RuntimeReleaseRegistry, RuntimeReleaseBundle, compile_execution_variant_policy_release,
     load_module_registration, AgentModuleReleaseCandidate, compile_agent_module_release, runtime_owned_policy_schema_assets)
 from agent_runtime.contracts.registry_release_definition import ExecutionProfileRelease
-from test_agent_runtime_module_authoring import _project, _task_project, _requirements, _policies, _profile, SKILL_ID, MODULE_ID
+from test_agent_runtime_module_authoring import (
+    _project, _task_project, _requirements, _reviewer_requirements, _policies, _profile, SKILL_ID, MODULE_ID,
+)
 from test_agent_runtime_postgres_release_store import postgres_release_test_schema
 
 
@@ -70,7 +72,8 @@ def _prepared_bundle(root, **kwargs):
                                   for f in fields(RuntimeReleaseBundle)})
 
 def _files(root):
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    """Every file under root by its POSIX relative path (the same keys on every host)."""
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
 def _cli(root, source, version="v1", *extra):
@@ -88,7 +91,7 @@ def test_source_registration_defaults_and_exact_workflow_closure(tmp_path):
     bundle = result.submitted_bundle
     module, workflow = bundle.modules[0], bundle.workflows[0]
     assert module.reviewer_defaults is None
-    assert module.execution_requirements == _requirements()
+    assert module.execution_requirements == _reviewer_requirements()
     assert bundle.execution_profiles == bundle.execution_variant_policies == ()
     assert bundle.evaluation_policies[0].policy_document()["evaluation_mode"] == "none"
     assert workflow.workflow_id == MODULE_ID
@@ -336,18 +339,16 @@ def test_cli_exit_codes_and_output_channels(tmp_path):
 
 def test_two_reviewers_share_one_default_base_without_model_profiles(tmp_path):
     first_source, _ = _source(tmp_path / "first")
-    second_source, registration = _source(tmp_path / "second")
     other_id = "another_test_reviewer"
-    for path in second_source.rglob("*"):
-        if path.is_file():
-            path.write_text(path.read_text().replace(MODULE_ID, other_id))
-    (registration.parent / "prompt.md").write_text("Review a different frozen subject and return the required typed JSON.\n")
-    registration.parent.rename(registration.parent.with_name(other_id))
+    # A second task source built directly with its own Module ID (no rename of a populated tree).
+    second_source = _task_project(tmp_path / "second", module_id=other_id)
+    module_root = second_source / ".claude/skills" / SKILL_ID / "runtime_modules" / other_id
+    (module_root / "prompt.md").write_text("Review a different frozen subject and return the required typed JSON.\n")
     root = tmp_path / "host"
     first = _register(root, first_source).submitted_bundle
     second = register_reviewer(root, source_root=second_source, skill_id=SKILL_ID,
                                module_id=other_id, module_version="v1").submitted_bundle
-    assert first.modules[0].execution_requirements == second.modules[0].execution_requirements == _requirements()
+    assert first.modules[0].execution_requirements == second.modules[0].execution_requirements == _reviewer_requirements()
     assert first.execution_profiles == second.execution_profiles == ()
     assert first.modules[0].release_ref != second.modules[0].release_ref
     assert first.workflows[0].workflow_id != second.workflows[0].workflow_id

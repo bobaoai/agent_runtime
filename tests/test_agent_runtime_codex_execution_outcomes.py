@@ -45,7 +45,7 @@ def process(events=None, *, raw=None, stderr=b"", returncode=0, exact=True):
 
 
 def environment(tmp_path, invocation, *, host=None, **compile_options):
-    compile_options.setdefault("executor_adapter_revision", "v4")
+    compile_options.setdefault("executor_adapter_revision", "v5")
     compiled = native._compile_native_module(tmp_path, **compile_options)
     registry = native._register_compiled_for_evaluation(compiled)
     artifacts = native.InMemoryCellArtifactStore()
@@ -56,11 +56,8 @@ def environment(tmp_path, invocation, *, host=None, **compile_options):
         calls.append(fields)
         return invocation(fields)
 
-    auth = tmp_path / "fixture_auth.json"
-    auth.write_text("SYNTHETIC_CREDENTIAL_NOT_PARSED")
     executor = codex.CodexCliModuleExecutor(release_registry=registry, artifact_host=artifacts,
-        workspace_root=tmp_path / "workspaces", invoker=invoker, codex_bin="never-executed-codex",
-        auth_file=auth)
+        workspace_root=tmp_path / "workspaces", invoker=invoker, codex_bin="never-executed-codex")
     request = native._direct_adapter_request(compiled, prompt, suffix="codex_outcome")
     return SimpleNamespace(compiled=compiled, registry=registry, artifacts=artifacts, prompt=prompt,
         calls=calls, executor=executor, request=request, host=host or native._RecordingHost())
@@ -172,6 +169,8 @@ def test_business_values_and_nonfatal_item_error_do_not_change_technical_success
     assert result.terminal_status == "completed" and len(env.calls) == 1
     assert json.loads(env.host.staged["result"]) == {"value": value}
     assert result.input_tokens == 12 and result.cache_read_tokens == 4 and result.cache_creation_tokens == 2
+    # Codex reports no ordinary input; it is never derived as total minus cache (12 - 4 - 2).
+    assert result.ordinary_input_tokens is None
     assert trace["provider_terminal"]["type"] == "turn.completed"
 
 
@@ -211,7 +210,8 @@ def test_missing_usage_stays_unknown_and_alias_conflict_is_reported(tmp_path):
     env = environment(tmp_path, lambda _: process([message(), {"type": "turn.completed"}]))
     result, _ = execute(env)
     assert result.terminal_status == "completed"
-    assert (result.input_tokens, result.output_tokens, result.cache_read_tokens, result.cache_creation_tokens) == (None,) * 4
+    assert (result.input_tokens, result.output_tokens, result.cache_read_tokens, result.cache_creation_tokens,
+            result.ordinary_input_tokens) == (None,) * 5
     parsed = codex._parse_codex_stream(raw_events([message(), terminal(cache_read_tokens=99)]))
     assert parsed["usage"]["cache_read_tokens"] is None
     assert parsed["usage_issues"] == ["invalid_usage:cache_read_tokens"]
@@ -264,7 +264,9 @@ def test_standard_timeout_partial_bytes_are_retained_without_inferred_exit(tmp_p
 
     env = environment(tmp_path, invoke)
     result, trace = execute(env)
+    # An injected invoker error carries no process facts: no stop uncertainty is inferred.
     assert result.failure.failure_class == "timeout"
+    assert trace["adapter_failure"]["failure_class"] == "timeout"
     assert cli_stream_bytes(trace, "stdout") == raw
     assert trace["returncode"] is None and result.input_tokens is None
 
@@ -360,23 +362,27 @@ def test_run_module_reads_failed_tool_and_replays_without_another_provider_call(
 
 
 def test_default_invoker_preserves_effective_arguments_and_environment(tmp_path, monkeypatch):
-    captured = {}
+    calls = []
 
     def runner(**fields):
-        captured.clear()
-        captured.update(fields)
-        result = subprocess.CompletedProcess(fields["argv"], 0, "out", "err")
-        result.stdout_bytes, result.stderr_bytes = b"out", b"err"
+        calls.append(dict(fields))
+        out = "[]" if fields["argv"][-3:] == ["mcp", "list", "--json"] else "out"
+        result = subprocess.CompletedProcess(fields["argv"], 0, out, "err")
+        result.stdout_bytes, result.stderr_bytes = out.encode(), b"err"
         return result
 
     monkeypatch.setattr(codex, "run_cli_process", runner)
     monkeypatch.setenv("RUNTIME_CODEX_TEST_SENTINEL", "unchanged")
-    argv = ["codex-fixed", "exec", "--json", "-"]
+    argv = ["codex-fixed", "exec", "-c", "mcp_servers={}", "--json", "-"]
     result = codex._default_invoke(argv=argv, prompt="same prompt", cwd=tmp_path, timeout_seconds=17,
                                    environment=dict(os.environ))
-    assert captured == {"argv": argv, "prompt": "same prompt", "cwd": tmp_path,
-                        "timeout_seconds": 17, "environment": dict(os.environ), "launch_guard": None}
-    assert result.stdout_bytes == b"out" and result.stderr_bytes == b"err"
+    # Version, then the host MCP listing with the same cwd, environment and overrides, then exec.
+    assert [call["argv"] for call in calls[:2]] == [["codex-fixed", "--version"],
+                                                    ["codex-fixed", "-c", "mcp_servers={}", "mcp", "list", "--json"]]
+    assert all(call["cwd"] == tmp_path and call["environment"] == dict(os.environ) for call in calls)
+    assert calls[-1] == {"argv": argv, "prompt": "same prompt", "cwd": tmp_path,
+                         "timeout_seconds": 17, "environment": dict(os.environ), "launch_guard": None}
+    assert result.stdout_bytes == b"out" and result.stderr_bytes == b"err" and result.host_mcp_disabled == ()
 
 
 def test_default_invoker_real_local_process_preserves_large_non_utf8_streams(tmp_path):
@@ -401,7 +407,9 @@ def test_exception_with_captured_streams_keeps_original_evidence(tmp_path, kind)
 
     env = environment(tmp_path, invoke)
     result, trace = execute(env)
-    assert result.failure.failure_class == ("provider" if kind == "checked_exit" else "unknown")
+    original_class = "provider" if kind == "checked_exit" else "unknown"
+    assert result.failure.failure_class == original_class
+    assert trace["adapter_failure"]["failure_class"] == original_class
     assert cli_stream_bytes(trace, "stdout") == raw
     assert cli_stream_bytes(trace, "stderr") == b"actual stderr"
     assert result.input_tokens == 12 and not result.outputs
@@ -457,19 +465,21 @@ def test_late_cancellation_preserves_committed_provider_trace(tmp_path, monkeypa
 def test_real_process_failure_delivers_captured_adapter_result(tmp_path, outcome):
     root = Path(__file__).resolve().parents[1]
     script = f"""
-import json, sys
+import json, sys, os, time
 from pathlib import Path
 sys.path[:0] = [{str(root / 'src')!r}, {str(root / 'tests')!r}]
 import test_agent_runtime_codex_execution_outcomes as case
 raw = case.raw_events([case.message(), case.terminal()])
 child = 'import os,signal,time;os.write(1,' + repr(raw) + ');os.write(2,b"before stop\\\\xff");'
-if {outcome!r} == 'cancelled':
+if {outcome!r} == 'cancelled' and os.name != 'nt':
     child += 'time.sleep(.1);os.kill(os.getppid(),signal.SIGINT);'
 child += 'time.sleep(30)'
 def invocation(fields):
-    return case.codex._default_invoke(argv=[sys.executable,'-I','-B','-c',child],
+    started = time.monotonic()
+    controls = {{'user_cancel_requested':lambda:time.monotonic()-started>.4}} if {outcome!r} == 'cancelled' and os.name == 'nt' else {{}}
+    return case.codex._default_invoke(argv=[sys._base_executable,'-I','-B','-c',child],
         prompt=fields['prompt'],cwd=fields['cwd'],timeout_seconds=1,
-        environment=fields['environment'],launch_guard=fields['launch_guard'])
+        environment=fields['environment'],launch_guard=fields['launch_guard'],**controls)
 env = case.environment(Path.cwd(), invocation)
 result, trace = case.execute(env)
 assert case.cli_stream_bytes(trace,'stdout') == raw
@@ -581,10 +591,10 @@ def test_non_result_stdout_bytes_are_archived_without_rejecting_the_final_result
     "automatic", "model_custom", "future:v2",
 ])
 def test_codex_named_and_custom_effort_preserve_exact_profile_and_command(tmp_path, effort):
-    compiled = native._compile_native_module(tmp_path, executor_adapter_revision="v4", reasoning_profile=effort)
+    compiled = native._compile_native_module(tmp_path, executor_adapter_revision="v5", reasoning_profile=effort)
     profile = compiled.execution_profile
     before = profile.as_dict()
-    assert codex._execution_expectation(profile).executor_adapter_revision == "v4"
+    assert codex._execution_expectation(profile).executor_adapter_revision == "v5"
     command = codex.build_command(profile=profile, workspace=tmp_path, codex_bin="not-invoked")
     settings = [command[index + 1] for index, value in enumerate(command) if value == "-c"]
     assert "model_reasoning_effort=" + json.dumps(effort) in settings

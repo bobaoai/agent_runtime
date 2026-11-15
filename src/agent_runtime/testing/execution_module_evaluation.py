@@ -121,8 +121,8 @@ def run_registered_inline_module_evaluation(
     )
     if profile.semantic_input_delivery_mode != "inline":
         raise ValueError("registered evaluation runner accepts inline delivery only")
-    if profile.network_policy != "denied":
-        raise ValueError("registered inline evaluation must remain network denied")
+    if profile.network_policy not in {"denied", "provider_managed"}:
+        raise ValueError("registered inline evaluation requires denied or provider_managed network")
     binding, input_content = projected_input
     binding.validate()
     if _sha256(input_content) != binding.input_sha256:

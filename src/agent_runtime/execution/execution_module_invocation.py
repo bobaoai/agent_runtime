@@ -1581,6 +1581,7 @@ def _execute_attempt(
         output_tokens=result.output_tokens,
         cache_read_tokens=result.cache_read_tokens,
         cache_creation_tokens=result.cache_creation_tokens,
+        ordinary_input_tokens=result.ordinary_input_tokens,
     )
     ended_at_utc = clock()
 
@@ -2000,6 +2001,7 @@ def _empty_usage() -> ModuleUsageObservation:
         output_tokens=None,
         cache_read_tokens=None,
         cache_creation_tokens=None,
+        ordinary_input_tokens=None,
     )
 
 
@@ -2219,7 +2221,7 @@ def _assert_admitted_test_evaluation_profile(
     if (
         profile.execution_mode in {"tool_free", "agent"}
         and profile.semantic_input_delivery_mode == "inline"
-        and profile.network_policy == "denied"
+        and profile.network_policy in {"denied", "provider_managed"}
         and not profile.gateway_access_reasons
         and not non_model_operations
     ):

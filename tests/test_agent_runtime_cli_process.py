@@ -32,12 +32,12 @@ def test_resource_cancellation_is_not_user_interruption(tmp_path):
 @pytest.mark.real_run
 def test_launch_guard_orders_actual_popen_not_the_whole_invocation(tmp_path, monkeypatch):
     observed = []
-    popen = cli_process.subprocess.Popen
-    def launch(*args, **kwargs):
-        if args[0][0] == sys.executable:
-            observed.append("popen")
-        return popen(*args, **kwargs)
-    monkeypatch.setattr(cli_process.subprocess, "Popen", launch)
+    create = cli_process.HOST_PLATFORM.create_cli_process
+    def launch(argv, **kwargs):
+        if argv[0] == sys.executable:
+            observed.append("create")
+        return create(argv, **kwargs)
+    monkeypatch.setattr(cli_process.HOST_PLATFORM, "create_cli_process", launch)
     def guard(create):
         observed.append("admitted")
         process = create()
@@ -45,18 +45,21 @@ def test_launch_guard_orders_actual_popen_not_the_whole_invocation(tmp_path, mon
         return process
     result = run_cli_process(argv=[sys.executable, "-c", "print('done')"], prompt="", cwd=tmp_path,
         timeout_seconds=5, environment=dict(os.environ), launch_guard=guard)
-    assert result.returncode == 0 and observed == ["admitted", "popen", "guard_released"]
+    assert result.returncode == 0 and observed == ["admitted", "create", "guard_released"]
     def refuse(create):
         raise PermissionError("resources closed")
     with pytest.raises(PermissionError):
         run_cli_process(argv=[sys.executable, "-c", "print('must not run')"], prompt="", cwd=tmp_path,
             timeout_seconds=5, environment=dict(os.environ), launch_guard=refuse)
-    assert observed.count("popen") == 1
+    assert observed.count("create") == 1
 
 
+# Child fixtures write explicit bytes: Python's text-mode print writes CRLF on
+# Windows, and Runtime captures the child's actual bytes without normalizing them.
 def test_process_captures_both_streams_past_diagnostic_size(tmp_path):
     result = run_cli_process(
-        argv=[sys.executable, "-c", "import sys; print('x'*100000); print('y'*100000,file=sys.stderr)"],
+        argv=[sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'x'*100000+b'\\n');"
+              "sys.stderr.buffer.write(b'y'*100000+b'\\n')"],
         prompt="", cwd=tmp_path, timeout_seconds=5, environment=dict(os.environ),
     )
     assert result.returncode == 0
@@ -89,7 +92,8 @@ def test_process_stdout_callback_stops_before_timeout(tmp_path):
         observed.append(line)
         return False
     with pytest.raises(subprocess.CalledProcessError) as error:
-        run_cli_process(argv=[sys.executable, "-u", "-c", "import time; print('stop'); time.sleep(30)"],
+        run_cli_process(argv=[sys.executable, "-u", "-c",
+                "import sys,time; sys.stdout.buffer.write(b'stop\\n'); sys.stdout.flush(); time.sleep(30)"],
             prompt="", cwd=tmp_path, timeout_seconds=3, environment=dict(os.environ), on_stdout_line=stop)
     assert observed == ["stop"]
     assert error.value.stop_reason == "observer_stopped" and "stop" in error.value.stdout
@@ -102,12 +106,12 @@ def test_process_stdout_callback_stops_before_timeout(tmp_path):
 @pytest.mark.parametrize("observer_error", [False, True])
 def test_observer_stop_retains_already_completed_process_exit(tmp_path, monkeypatch, observer_error):
     processes = []
-    original_popen = subprocess.Popen
+    original_create = cli_process.HOST_PLATFORM.create_cli_process
     def launch(*args, **kwargs):
-        process = original_popen(*args, **kwargs)
+        process = original_create(*args, **kwargs)
         processes.append(process)
         return process
-    monkeypatch.setattr(cli_process.subprocess, "Popen", launch)
+    monkeypatch.setattr(cli_process.HOST_PLATFORM, "create_cli_process", launch)
     def stop(line):
         assert processes[0].wait(timeout=3) == 0
         if observer_error:
@@ -115,7 +119,8 @@ def test_observer_stop_retains_already_completed_process_exit(tmp_path, monkeypa
         return False
     with pytest.raises(subprocess.CalledProcessError) as error:
         run_cli_process(argv=[sys.executable, "-u", "-c",
-                "import sys; print('diagnostic',file=sys.stderr); print('finished')"],
+                "import sys; sys.stderr.buffer.write(b'diagnostic\\n'); sys.stderr.flush();"
+                "sys.stdout.buffer.write(b'finished\\n')"],
             prompt="", cwd=tmp_path, timeout_seconds=5, environment=dict(os.environ), on_stdout_line=stop)
     assert error.value.returncode == processes[0].returncode == 0
     assert error.value.stop_reason == ("stream_error" if observer_error else "observer_stopped")
@@ -125,11 +130,11 @@ def test_observer_stop_retains_already_completed_process_exit(tmp_path, monkeypa
 
 
 def test_output_limit_retains_real_exit_and_separate_diagnostic(tmp_path, monkeypatch):
-    original_stop = cli_process._stop_process_group
+    original_stop = cli_process.HOST_PLATFORM.stop_cli_process
     def stop_after_exit(process):
         assert process.wait(timeout=3) == 0
         original_stop(process)
-    monkeypatch.setattr(cli_process, "_stop_process_group", stop_after_exit)
+    monkeypatch.setattr(cli_process.HOST_PLATFORM, "stop_cli_process", stop_after_exit)
     with pytest.raises(subprocess.CalledProcessError) as error:
         run_cli_process(argv=[sys.executable, "-u", "-c", "print('x'*100000)"], prompt="", cwd=tmp_path,
             timeout_seconds=5, max_output_bytes=1024, environment=dict(os.environ))
@@ -141,13 +146,13 @@ def test_output_limit_retains_real_exit_and_separate_diagnostic(tmp_path, monkey
 
 @pytest.mark.parametrize("timed_out", [False, True])
 def test_cleanup_failure_preserves_output_and_primary_failure(tmp_path, monkeypatch, timed_out):
-    original_stop = cli_process._stop_process_group
+    original_stop = cli_process.HOST_PLATFORM.stop_cli_process
     actual = []
     def failing_cleanup(process):
         original_stop(process)
         actual.append(process.returncode)
         raise RuntimeError("cleanup fixture failure")
-    monkeypatch.setattr(cli_process, "_stop_process_group", failing_cleanup)
+    monkeypatch.setattr(cli_process.HOST_PLATFORM, "stop_cli_process", failing_cleanup)
     script = "import sys,time; print('before cleanup'); print('stderr evidence',file=sys.stderr)"
     if timed_out:
         script += "; time.sleep(30)"
@@ -160,27 +165,71 @@ def test_cleanup_failure_preserves_output_and_primary_failure(tmp_path, monkeypa
     assert "before cleanup" in error.value.stdout and "stderr evidence" in error.value.stderr
 
 
-def test_unclosed_pipe_preserves_captured_diagnostic(tmp_path, monkeypatch):
+@pytest.mark.deterministic
+def test_unclosed_pipe_is_a_log_gap_not_a_stop_failure(tmp_path, monkeypatch):
     class ReportedAlive(cli_process.Thread):
         def is_alive(self):
             return True
     monkeypatch.setattr(cli_process, "Thread", ReportedAlive)
-    with pytest.raises(subprocess.CalledProcessError) as error:
-        run_cli_process(argv=[sys.executable, "-u", "-c", "print('pipe evidence')"], prompt="", cwd=tmp_path,
-            timeout_seconds=5, environment=dict(os.environ))
-    assert error.value.returncode == 0 and error.value.stop_reason == "cleanup_error"
-    assert "pipe evidence" in error.value.stdout
-    assert "pipe did not close" in error.value.cleanup_error
+    result = run_cli_process(argv=[sys.executable, "-u", "-c", "print('pipe evidence')"], prompt="", cwd=tmp_path,
+        timeout_seconds=5, environment=dict(os.environ))
+    # Stop of the started process is confirmed; only log completeness is unknown.
+    assert result.returncode == 0 and "pipe evidence" in result.stdout
+    assert result.output_streams_closed is False
+
+
+def test_no_observer_call_or_capture_after_the_result_handoff(tmp_path):
+    """A process the CLI started keeps the pipe and writes later: nothing reaches the caller after return."""
+    import time
+    child = tmp_path / "late_child.py"
+    child.write_text("import sys, time\ntime.sleep(2.5)\nsys.stdout.write('late\\n')\nsys.stdout.flush()\n")
+    root = tmp_path / "root.py"
+    root.write_text("import subprocess, sys\nsys.stdout.write('early\\n')\nsys.stdout.flush()\n"
+                    f"subprocess.Popen([sys.executable, {str(child)!r}], stdin=subprocess.DEVNULL,\n"
+                    "                 stdout=sys.stdout.fileno(), stderr=subprocess.DEVNULL)\n")
+    lines = []
+
+    def observe(line):
+        lines.append(line)
+        return True
+
+    result = run_cli_process(argv=[sys.executable, str(root)], prompt="", cwd=tmp_path, timeout_seconds=30,
+                             environment=dict(os.environ), on_stdout_line=observe)
+    delivered_at_return, captured_at_return = list(lines), result.stdout_bytes
+    time.sleep(4)  # The held pipe delivers 'late' well after the bounded join and handoff.
+    assert result.returncode == 0 and b"early" in captured_at_return and b"late" not in captured_at_return
+    assert lines == delivered_at_return and not any("late" in line for line in lines)
+    if os.name == "nt":  # POSIX stops the whole session group, so the child never writes there.
+        assert result.output_streams_closed is False
+
+
+def test_an_observer_still_running_at_handoff_is_a_stream_failure_not_a_result(tmp_path, monkeypatch):
+    from threading import Event
+    monkeypatch.setattr(cli_process, "_DELIVERY_FENCE_SECONDS", 0.5)
+    release = Event()
+
+    def observer(line):
+        release.wait(timeout=10)
+        return True
+
+    try:
+        with pytest.raises(cli_process.CliProcessError) as error:
+            run_cli_process(argv=[sys.executable, "-u", "-c", "print('event')"], prompt="", cwd=tmp_path,
+                            timeout_seconds=10, environment=dict(os.environ), on_stdout_line=observer)
+    finally:
+        release.set()
+    assert error.value.stop_reason == "stream_error"
+    assert "did not return before the result handoff" in str(error.value)
 
 
 def test_timeout_is_not_replaced_by_late_observer_failure(tmp_path, monkeypatch):
     from threading import Event
     release_observer = Event()
-    original_stop = cli_process._stop_process_group
+    original_stop = cli_process.HOST_PLATFORM.stop_cli_process
     def cleanup(process):
         original_stop(process)
         release_observer.set()
-    monkeypatch.setattr(cli_process, "_stop_process_group", cleanup)
+    monkeypatch.setattr(cli_process.HOST_PLATFORM, "stop_cli_process", cleanup)
     def observer(line):
         assert release_observer.wait(timeout=4)
         raise ValueError("late observer failure")
@@ -201,7 +250,7 @@ def test_output_limit_preserves_late_stream_diagnostic(tmp_path, monkeypatch):
         return event
     monkeypatch.setattr(cli_process, "Event", capture_event)
     signal_file = tmp_path / "observer_entered"
-    script = ("import sys,time\nfrom pathlib import Path\nprint('ready',flush=True)\n"
+    script = ("import sys,time\nfrom pathlib import Path\nsys.stdout.buffer.write(b'ready\\n'); sys.stdout.flush()\n"
               f"while not Path({str(signal_file)!r}).exists(): time.sleep(.001)\n"
               "sys.stderr.write('x'*100000); sys.stderr.flush()\n")
     def observer(line):

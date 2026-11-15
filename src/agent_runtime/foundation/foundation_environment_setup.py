@@ -7,6 +7,7 @@ from importlib.resources import files
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 
@@ -68,19 +69,58 @@ def _write(path: Path, content: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
+_MCP_NAME = re.compile(r"^[a-z0-9_-]{1,64}$")
+_ENVIRONMENT_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_RESERVED_MCP_NAMES = frozenset({"runtime_commands", "runtime_tools"})
+
+
+def validate_mcp_connection_entries(entries) -> dict[str, dict]:
+    """Validate the shape of host-selected MCP connections for one transport.
+
+    ``entries`` maps a connection name (``[a-z0-9_-]{1,64}``, not a Runtime
+    extension name) to ``{"config": {...}, "environment_keys": [...]}``. The
+    config is a JSON object in the CLI's native form and is not interpreted
+    here; environment_keys name host variables whose values stay in the host
+    environment. Returns a private deep copy. Transport-specific field rules
+    belong to the selected Adapter.
+    """
+    if type(entries) is not dict:
+        raise ValueError("mcp_servers entries must map connection names to objects")
+    result = {}
+    for name, entry in entries.items():
+        if type(name) is not str or not _MCP_NAME.fullmatch(name) or name in _RESERVED_MCP_NAMES:
+            raise ValueError(f"MCP connection name {name!r} is not accepted")
+        if type(entry) is not dict or set(entry) - {"config", "environment_keys"} or "config" not in entry:
+            raise ValueError(f"MCP connection {name} needs config and optional environment_keys")
+        config, keys = entry["config"], entry.get("environment_keys", [])
+        if type(config) is not dict:
+            raise ValueError(f"MCP connection {name}: config must be a JSON object")
+        if type(keys) is not list or any(type(key) is not str or not _ENVIRONMENT_KEY.fullmatch(key) for key in keys):
+            raise ValueError(f"MCP connection {name}: environment_keys must be environment variable names")
+        result[name] = {"config": json.loads(json.dumps(config)), "environment_keys": list(dict.fromkeys(keys))}
+    return result
+
+
 def load_runtime_config(root: Path) -> dict[str, object]:
     """Read optional host resource defaults from root/.runtime/config.json.
 
     Args:
         root: Host configuration root, never a model read grant. The optional
-            JSON object accepts only provider_cli_paths and read_only_dependencies.
-            provider_cli_paths maps claude_cli or codex_cli to executable paths;
-            read_only_dependencies is a list of trusted dependency directory paths.
-            Relative locators are resolved against root. Tilde is not expanded.
+            JSON object accepts provider_cli_paths, read_only_dependencies,
+            attempt_workspace_root and mcp_servers. provider_cli_paths maps
+            claude_cli or codex_cli to executable paths; read_only_dependencies is
+            a list of trusted dependency directory paths; attempt_workspace_root
+            is where this root's Attempt folders are retained (default
+            root/.runtime/attempt_workspaces); mcp_servers maps claude_cli or
+            codex_cli to the host's selectable MCP connections (see
+            validate_mcp_connection_entries). A Module receives only the
+            connections it declares. Relative locators are resolved against
+            root. Tilde is not expanded.
     Returns:
-        A new dictionary with provider_cli_paths (a mapping to Path values) and
-        read_only_dependencies (a tuple of Path values). A missing config file
-        supplies empty defaults. Locators are normalized here; the execution
+        A new dictionary with provider_cli_paths (a mapping to Path values),
+        read_only_dependencies (a tuple of Path values), attempt_workspace_root
+        (a Path) and mcp_servers (transport to validated entries). A missing
+        config file supplies these defaults. Locators are normalized here; the execution
         consumer checks the existence and type of resources it actually selects.
         Unused provider/dependency defaults never open resources or add tools.
     Raises:
@@ -97,9 +137,11 @@ def load_runtime_config(root: Path) -> dict[str, object]:
         objects, not implicit connections from this configuration.
     """
     root = Path(root).resolve()
+    default_workspaces = root / ".runtime" / "attempt_workspaces"
     body = _read(_target(root, ".runtime", "config.json"))
     if body is None:
-        return {"provider_cli_paths": {}, "read_only_dependencies": ()}
+        return {"provider_cli_paths": {}, "read_only_dependencies": (),
+                "attempt_workspace_root": default_workspaces, "mcp_servers": {}}
 
     def unique_object(pairs):
         result = {}
@@ -110,8 +152,13 @@ def load_runtime_config(root: Path) -> dict[str, object]:
         return result
 
     document = json.loads(body, object_pairs_hook=unique_object)
-    if type(document) is not dict or set(document) - {"provider_cli_paths", "read_only_dependencies"}:
-        raise ValueError("Runtime config accepts only provider_cli_paths and read_only_dependencies")
+    allowed = {"provider_cli_paths", "read_only_dependencies", "attempt_workspace_root", "mcp_servers"}
+    if type(document) is not dict or set(document) - allowed:
+        raise ValueError("Runtime config accepts only provider_cli_paths, read_only_dependencies, "
+                         "attempt_workspace_root and mcp_servers")
+    mcp_servers = document.get("mcp_servers", {})
+    if type(mcp_servers) is not dict or set(mcp_servers) - {"claude_cli", "codex_cli"}:
+        raise ValueError("mcp_servers must map claude_cli/codex_cli to connection entries")
     providers = document.get("provider_cli_paths", {})
     dependencies = document.get("read_only_dependencies", [])
     if type(providers) is not dict or set(providers) - {"claude_cli", "codex_cli"}:
@@ -125,8 +172,12 @@ def load_runtime_config(root: Path) -> dict[str, object]:
         path = Path(value)
         return Path(os.path.abspath(path if path.is_absolute() else root / path))
 
+    workspaces = document.get("attempt_workspace_root")
     return {"provider_cli_paths": {key: locator(value) for key, value in providers.items()},
-            "read_only_dependencies": tuple(locator(value) for value in dependencies)}
+            "read_only_dependencies": tuple(locator(value) for value in dependencies),
+            "attempt_workspace_root": default_workspaces if workspaces is None else locator(workspaces),
+            "mcp_servers": {transport: validate_mcp_connection_entries(entries)
+                            for transport, entries in mcp_servers.items()}}
 
 
 def _remove(path: Path) -> None:

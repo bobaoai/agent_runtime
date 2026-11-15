@@ -4,6 +4,11 @@ import socketserver
 import threading
 
 
+def unix_socket_transport_available() -> bool:
+    """True where the standard library offers the threading Unix-domain socket server."""
+    return hasattr(socketserver, "ThreadingUnixStreamServer")
+
+
 def start_tool_server(path, dispatch, *, max_request_bytes=65536):
     """Start one owned endpoint; the caller closes resources before joining it."""
     class Handler(socketserver.StreamRequestHandler):

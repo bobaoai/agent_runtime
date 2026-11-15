@@ -204,7 +204,8 @@ def test_cli_passes_pg_locator_and_constraints_to_the_api_unchanged(tmp_path, mo
                     "release_database_url_env": "RUNTIME_RELEASE_DSN", "release_schema": "agent_runtime",
                     "workflow_release_ref": "runtime-workflow:x@v1", "workflow_release_sha256": "a" * 64,
                     "transport_kind": "claude_cli", "model_id": None, "reasoning_profile": None, "run_timeout_seconds": None,
-                    "cli_path": None, "resources_path": Path("resources.json")}
+                    "cli_path": None, "resources_path": Path("resources.json"),
+                    "project_directory": None, "command_permits": ()}
 
 
 @pytest.mark.real_run
@@ -281,16 +282,17 @@ def test_real_dsn_never_reaches_provider_processes_or_record(tmp_path, pg_schema
     Process launches are observed, not replaced: each call still starts the real
     process with the environment Runtime built.
     """
+    from agent_runtime.invocation import invocation_claude_cli_execution as claude
     from agent_runtime.invocation import invocation_codex_module_invocation as codex
     store, schema = pg_schema
     workflow = _publish(store, tmp_path)
     dsn, reader_dsn = os.environ[DSN_VARIABLE], os.environ[READER_DSN_VARIABLE]
     launched = []
-    real_run = subprocess.run
-    def observed_run(argv, *args, **kwargs):
-        launched.append(("subprocess", [str(item) for item in argv], kwargs.get("env")))
-        return real_run(argv, *args, **kwargs)
-    monkeypatch.setattr(subprocess, "run", observed_run)
+    real_preflight = claude.run_cli_process  # Claude's owned --version/--help preflight runner.
+    def observed_preflight(**fields):
+        launched.append(("preflight", [str(item) for item in fields["argv"]], dict(fields["environment"])))
+        return real_preflight(**fields)
+    monkeypatch.setattr(claude, "run_cli_process", observed_preflight)
     real_process = codex.run_cli_process
     def observed_process(**fields):
         launched.append(("codex", [str(item) for item in fields["argv"]], dict(fields["environment"])))
@@ -301,7 +303,7 @@ def test_real_dsn_never_reaches_provider_processes_or_record(tmp_path, pg_schema
         transport_kind=transport, model_id=model, reasoning_profile=REAL_EFFORT)
     assert record["status"] == "completed", record["failure_detail"]
     if transport == "claude_cli":
-        checks = [env for kind, argv, env in launched if kind == "subprocess" and argv[-1] in ("--version", "--help")]
+        checks = [env for kind, argv, env in launched if kind == "preflight" and argv[-1] in ("--version", "--help")]
         assert len(checks) == 2, "both Claude CLI preflight checks ran"
         checks.append(record["provider_trace"]["environment"])
     else:

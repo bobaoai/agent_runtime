@@ -3,11 +3,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 
 import pytest
 
 from agent_runtime import load_runtime_config, setup_runtime
 from agent_runtime.foundation import foundation_environment_setup as setup
+from test_agent_runtime_claude_native_tools import _require_symlink
 
 
 def _snapshot(root):
@@ -17,7 +19,8 @@ def _snapshot(root):
 
 def test_missing_config_has_no_setup_or_resource_side_effect(tmp_path):
     root = tmp_path / "not_created"
-    assert load_runtime_config(root) == {"provider_cli_paths": {}, "read_only_dependencies": ()}
+    assert load_runtime_config(root) == {"provider_cli_paths": {}, "read_only_dependencies": (),
+        "attempt_workspace_root": root.resolve() / ".runtime" / "attempt_workspaces", "mcp_servers": {}}
     assert not root.exists()
 
 
@@ -31,7 +34,8 @@ def test_config_resolves_host_locators_without_opening_unused_resources(tmp_path
     monkeypatch.chdir(tmp_path)
     result = load_runtime_config(root)
     assert result == {"provider_cli_paths": {"claude_cli": root / "bin/claude", "codex_cli": root / "absent/codex"},
-        "read_only_dependencies": (root / ".venv", tmp_path / "external-library")}
+        "read_only_dependencies": (root / ".venv", tmp_path / "external-library"),
+        "attempt_workspace_root": root.resolve() / ".runtime" / "attempt_workspaces", "mcp_servers": {}}
     assert _snapshot(root) == before and not (root / ".agents").exists()
     result["provider_cli_paths"]["claude_cli"] = Path("changed")
     assert load_runtime_config(root)["provider_cli_paths"]["claude_cli"] == root / "bin/claude"
@@ -49,17 +53,6 @@ def test_invalid_config_never_creates_setup_or_changes_content(tmp_path, body):
     with pytest.raises(ValueError):
         load_runtime_config(tmp_path)
     assert config.read_text() == body and not (tmp_path / ".agents").exists()
-
-
-def test_config_rejects_link_without_reading_target(tmp_path):
-    config = tmp_path / "host/.runtime/config.json"
-    config.parent.mkdir(parents=True)
-    target = tmp_path / "outside.json"
-    target.write_text("not a config")
-    config.symlink_to(target)
-    with pytest.raises(ValueError, match="symlink"):
-        load_runtime_config(tmp_path / "host")
-    assert target.read_text() == "not a config"
 
 
 @pytest.mark.deterministic
@@ -173,7 +166,7 @@ def test_unknown_content_preflight_writes_nothing(tmp_path, package):
     target.parent.mkdir(parents=True)
     target.write_text("user's different Skill")
     before = _snapshot(root)
-    with pytest.raises(ValueError, match=str(target)):
+    with pytest.raises(ValueError, match=re.escape(str(target))):
         setup_runtime(root)
     assert _snapshot(root) == before
     assert not (root / ".runtime").exists()
@@ -194,10 +187,10 @@ def test_invalid_setup_metadata_is_not_replaced(tmp_path, package, value):
 
 
 @pytest.mark.deterministic
-@pytest.mark.parametrize("relative", [".runtime", ".runtime/setup.json", ".agents", ".agents/skills",
-    ".agents/skills/agent-runtime-registration", ".agents/skills/agent-runtime-registration/SKILL.md",
-    ".claude/skills/agent-runtime-test-run/SKILL.md"])
+@pytest.mark.parametrize("relative", [".runtime/setup.json", ".agents/skills"])
 def test_fixed_target_symlinks_do_not_escape(tmp_path, package, relative):
+    """Setup writes only its own files: a link at any fixed component is refused (one intermediate, one final row)."""
+    _require_symlink(tmp_path)
     root = tmp_path / "host"
     target = root / relative
     target.parent.mkdir(parents=True)

@@ -298,7 +298,6 @@ RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
         technology_id="codex_cli",
         implementation_source_paths=(
             "src/agent_runtime/invocation/invocation_codex_module_invocation.py",
-            "src/agent_runtime/invocation/invocation_codex_environment.py",
         ),
     ),
     RuntimeImplementationBindingRegistration(
@@ -646,11 +645,6 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         implementation_binding_id="invocation_claude_cli",
     ),
     _source(
-        "invocation", "codex", "environment",
-        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
-        implementation_binding_id="invocation_codex_cli",
-    ),
-    _source(
         "invocation", "process", "execution",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
@@ -666,6 +660,14 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "preparation",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
+    _source("invocation", "host_platform", "selection",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "posix_host", "operation",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "windows_host", "operation",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
+    _source("invocation", "windows_directory", "preparation",
+            "designDoc/agent_runtime_08_agent_execution_adapter_contract.md"),
     _source(
         "durability",
         "backend",

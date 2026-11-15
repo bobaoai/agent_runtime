@@ -39,7 +39,7 @@ EXECUTION_MODES = frozenset({"tool_free", "agent"})
 SEMANTIC_INPUT_DELIVERY_MODES = frozenset(
     {"inline", "gateway_read", "managed_attachment", "hybrid"}
 )
-NETWORK_POLICIES = frozenset({"denied", "gateway_only", "direct_sandboxed"})
+NETWORK_POLICIES = frozenset({"denied", "gateway_only", "direct_sandboxed", "provider_managed"})
 OUTPUT_CONSTRAINT_MODES = frozenset(
     {"prompt_only_json", "native_structured_output"}
 )
@@ -780,6 +780,7 @@ def _validate_execution_capabilities(
     if attempt_workspace_policy not in {
         "none",
         "own_draft_read_write",
+        "explicit_project_read_write",
     }:
         raise ValueError(
             "invalid Execution Profile attempt_workspace_policy"
@@ -858,22 +859,22 @@ def _validate_execution_capabilities(
     native_tools_allowed = (
         execution_mode == "agent"
         and semantic_input_delivery_mode == "inline"
-        and network_policy == "denied"
+        and network_policy in {"denied", "provider_managed"}
     )
     if not gateway_delivery and tool_policy and not native_tools_allowed:
         raise ValueError(
-            "native tools require an inline agent profile with denied network"
+            "native tools require an inline agent profile with denied or provider_managed network"
         )
     if not gateway_delivery and gateway_access_reasons:
         raise ValueError(
             "non-Gateway semantic input cannot declare Gateway access reasons"
         )
     if (
-        attempt_workspace_policy == "own_draft_read_write"
+        attempt_workspace_policy in {"own_draft_read_write", "explicit_project_read_write"}
         and execution_mode != "agent"
     ):
         raise ValueError(
-            "draft workspace requires agent execution mode"
+            "writable workspace requires agent execution mode"
         )
 
 

@@ -226,6 +226,25 @@ def validate_provider_tool_set(
     return declared_names
 
 
+NATIVE_LOGICAL_TOOLS = frozenset({"read", "search", "edit", "shell"})
+MCP_TOOL_PREFIX = "mcp__"
+
+
+def declared_mcp_connections(tool_policy) -> tuple[str, ...]:
+    """Host MCP connection names a Profile declares as ``mcp__<name>``, in recorded order.
+
+    The name is the declared connection only; it never grants a tool from any
+    other configured server and is never a callback.
+    """
+    return tuple(name[len(MCP_TOOL_PREFIX):] for name in tool_policy if name.startswith(MCP_TOOL_PREFIX))
+
+
+def callback_tool_names(tool_policy) -> set[str]:
+    """Profile tool names served by a trusted callback factory: neither native nor MCP."""
+    return {name for name in tool_policy
+            if name not in NATIVE_LOGICAL_TOOLS and not name.startswith(MCP_TOOL_PREFIX)}
+
+
 __all__ = [
     "ModuleArtifactHost",
     "ModuleProviderToolSession",

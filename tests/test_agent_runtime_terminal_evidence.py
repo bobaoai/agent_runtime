@@ -261,12 +261,42 @@ def test_postgres_rejected_gateway_closes_and_round_trips(tmp_path, monkeypatch,
         assert body.body == cell.read_bytes(ref, digest)
 
 
-@pytest.mark.parametrize("component", ["input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"])
+@pytest.mark.parametrize("component", ["input_tokens", "ordinary_input_tokens", "output_tokens",
+                                       "cache_read_tokens", "cache_creation_tokens"])
 @pytest.mark.parametrize("invalid", [True, -1, 1.5, "2"])
 def test_rejected_result_preserves_each_other_valid_usage_component(tmp_path, monkeypatch, component, invalid):
-    usage = {"input_tokens": 3, "output_tokens": 2, "cache_read_tokens": 0, "cache_creation_tokens": 1}
+    usage = {"input_tokens": 3, "ordinary_input_tokens": 2, "output_tokens": 2, "cache_read_tokens": 0,
+             "cache_creation_tokens": 1}
     usage[component] = invalid
     _run_rejected_gateway(tmp_path, monkeypatch, "invalid_usage", usage_patch=usage)
+
+
+@pytest.mark.fake_run
+def test_completed_attempt_carries_ordinary_input_into_its_usage_event_and_replay(tmp_path, monkeypatch):
+    """Named substitute: the registered gateway stub Adapter reports a Claude-shaped input breakdown."""
+    import test_agent_runtime_native_structured_output as native
+    from agent_runtime.contracts.ledger_record_definition import UsageEvent, runtime_record_as_dict
+    options, binding, adapter = native._workflow_gateway_setup(tmp_path)
+    execute = adapter.execute
+    monkeypatch.setattr(adapter, "execute", lambda request, host: replace(
+        execute(request, host), input_tokens=26, ordinary_input_tokens=2, cache_read_tokens=11,
+        cache_creation_tokens=13))
+    def run():
+        return native.run_workflow_module(**options, ledger=native.InMemoryModuleExecutionLedger(),
+            workflow_ledger=native.WorkflowModuleLedgerRecorder(binding), clock=lambda: _TEST_TIME)
+    first = run()
+    attempt = first.attempts[0]
+    assert attempt.status == "completed"
+    assert attempt.usage.as_dict() == {"input_tokens": 26, "ordinary_input_tokens": 2, "output_tokens": 2,
+                                       "cache_read_tokens": 11, "cache_creation_tokens": 13}
+    events = binding.record_store.load_trace(first.module_run.workflow_execution_id).records_of_type(UsageEvent)
+    model = [row for row in events if row.input_tokens is not None]
+    tools = [row for row in events if row.input_tokens is None]
+    assert len(model) == 1 and tools
+    assert runtime_record_as_dict(model[0])["record"]["ordinary_input_tokens"] == 2
+    assert all("ordinary_input_tokens" not in runtime_record_as_dict(row)["record"] for row in tools)
+    replay = run()  # Rebuilt from the committed records; the Adapter is not called again.
+    assert replay == first and replay.attempts[0].usage.ordinary_input_tokens == 2 and adapter.calls == 1
 
 
 @pytest.mark.parametrize("provider_error", [False, True])

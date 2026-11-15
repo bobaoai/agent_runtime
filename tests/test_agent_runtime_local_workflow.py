@@ -3,10 +3,8 @@ import asyncio
 from dataclasses import replace, fields
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
-import sys
 import time
 from threading import Barrier, Event, Lock, Thread
 from types import SimpleNamespace
@@ -26,7 +24,7 @@ from agent_runtime.durability.durability_local_coordination import LocalWorkflow
 from agent_runtime.durability.durability_workflow_coordination import DurableExecutionCoordinator
 from agent_runtime.registry import RuntimeReleaseBundle, compile_execution_variant_policy_release
 from agent_runtime.registry.registry_release_compilation import ExecutionVariantPolicyReleaseCandidate, ExecutionVariantProfileBindingCandidate
-from test_agent_runtime_provider_tools import nodes
+from test_agent_runtime_provider_tools import nodes, UNIX_BRIDGE
 from test_agent_runtime_native_structured_output import _StubInlineAdapter
 from agent_runtime.execution.execution_workflow_evaluation import (
     WorkflowSelfTestResources, LocalWorkflowModuleBridge, _local_start_arguments, _validate_node_outcome,
@@ -657,7 +655,9 @@ def agent_graph_resources(tmp_path, *, callback=False):
         input_bindings=(binding,), artifact_host=artifacts, ledger=ledger, workspace_root=tmp_path)
 
 
-def test_graph_factory_callback_uses_real_ipc_and_is_not_inherited_by_next_node(tmp_path):
+@pytest.mark.fake_run
+@UNIX_BRIDGE
+def test_graph_factory_callback_uses_real_ipc_and_is_not_inherited_by_next_node(tmp_path, monkeypatch):
     from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter
     from agent_runtime.invocation.invocation_local_command_mcp import exchange
     from test_agent_runtime_provider_tools import CallbackFactory
@@ -693,7 +693,7 @@ def test_graph_factory_callback_uses_real_ipc_and_is_not_inherited_by_next_node(
             outcome_for_node=lambda d, r, _: actual_outcome(d, r, 'second' if d.current_state_id == 'produce' else 'completed'),
             adapter_for_node=lambda node, profile, artifacts, workspace: ClaudeAdapter(
                 release_registry=resources.registry, artifact_host=artifacts, workspace_root=workspace,
-                cli_path=_fake_cli(tmp_path), process_runner=process), tool_session_factory_for_node=tool_factory)
+                cli_path=_fake_cli(tmp_path, monkeypatch), process_runner=process), tool_session_factory_for_node=tool_factory)
         assert asyncio.run(resources.drive(bridge)).stop_reason.value == 'terminal'
         records = resources.node_records()
         assert requested == ['produce', 'second'] and factory.closed
@@ -714,17 +714,15 @@ def test_graph_factory_callback_uses_real_ipc_and_is_not_inherited_by_next_node(
 
 
 @pytest.mark.parametrize('user_cancel', [True, False])
-def test_graph_callbacks_stop_actual_process_and_keep_cancel_reason(tmp_path, user_cancel):
+def test_graph_callbacks_stop_actual_process_and_keep_cancel_reason(tmp_path, monkeypatch, user_cancel):
     from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter
-    from test_agent_runtime_claude_native_tools import _init
+    from test_agent_runtime_claude_native_tools import _init, _process_alive, _scripted_cli, SYNTHETIC_CLAUDE_HELP
     marker = tmp_path / 'node_started'
-    executable = tmp_path / 'local_cli'
-    executable.write_text(f'#!{sys.executable}\nimport os,sys,time\n'
+    executable = _scripted_cli(tmp_path / 'local_cli', 'import os,sys,time\n'
         "if '--help' in sys.argv or '--version' in sys.argv:\n"
-        " print('fixture --safe-mode --restricted --tools --settings --effort --json-schema --strict-mcp-config --add-dir')\n"
+        f" print({SYNTHETIC_CLAUDE_HELP!r})\n"
         'else:\n' + f' open({str(marker)!r},"w").write(str(os.getpid()))\n'
-        + f' print({json.dumps(_init(()))!r},flush=True)\n time.sleep(30)\n')
-    executable.chmod(0o700)
+        + f' print({json.dumps(_init(()))!r},flush=True)\n time.sleep(30)\n', monkeypatch)
     resources = agent_graph_resources(tmp_path)
     try:
         bridge = LocalWorkflowModuleBridge(resources=resources, input_for_node=lambda *_: {},
@@ -752,8 +750,7 @@ def test_graph_callbacks_stop_actual_process_and_keep_cancel_reason(tmp_path, us
         assert resources.user_cancel_requested() is user_cancel
         if user_cancel:
             assert progress.stop_reason.value == 'cancelled'
-        with pytest.raises(ProcessLookupError):
-            os.kill(int(marker.read_text()), 0)
+        assert not _process_alive(int(marker.read_text()))  # The Runtime-started process is gone.
     finally:
         resources.close()
 

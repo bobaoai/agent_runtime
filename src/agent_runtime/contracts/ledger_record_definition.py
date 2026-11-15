@@ -18,7 +18,10 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, TypeAlias, TypeVar
 
-from .ledger_lineage_definition import ModuleOutputResolutionRecord
+from .ledger_lineage_definition import (
+    ModuleOutputResolutionRecord,
+    validate_ordinary_input_tokens,
+)
 from ..foundation.foundation_contract_validation import (
     validate_model_id,
     validate_usd_amount,
@@ -1637,7 +1640,11 @@ def _validate_optional_authorization_refs(record: Any) -> None:
 
 @dataclass(frozen=True)
 class UsageEvent:
-    """Provider-reported usage for exactly one committed model or tool call."""
+    """Provider-reported usage for exactly one committed model or tool call.
+
+    input_tokens is the total input including cache; ordinary_input_tokens,
+    cache_read_tokens and cache_creation_tokens are its reported parts.
+    """
 
     usage_event_id: str
     operation_id: str
@@ -1655,6 +1662,7 @@ class UsageEvent:
     estimated_cost_usd: str | None
     provider_charge_usd: str | None
     recorded_at_utc: str
+    ordinary_input_tokens: int | None = None
 
     def validate(self) -> None:
         """Validate usage lineage while preserving unavailable values as null."""
@@ -1679,13 +1687,27 @@ class UsageEvent:
             self.estimated_cost_usd,
             self.provider_charge_usd,
         ).validate()
+        validate_ordinary_input_tokens(
+            self.ordinary_input_tokens,
+            input_tokens=self.input_tokens,
+            cache_read_tokens=self.cache_read_tokens,
+            cache_creation_tokens=self.cache_creation_tokens,
+        )
         _validate_utc("recorded_at_utc", self.recorded_at_utc)
 
     def as_dict(self) -> dict[str, Any]:
-        """Return a validated JSON-ready usage record."""
+        """Return a validated JSON-ready usage record.
+
+        An unknown ordinary input count is omitted rather than written as null,
+        so events recorded before the field existed keep their exact canonical
+        bytes and hashes.
+        """
 
         self.validate()
-        return asdict(self)
+        payload = asdict(self)
+        if self.ordinary_input_tokens is None:
+            payload.pop("ordinary_input_tokens")
+        return payload
 
 
 @dataclass(frozen=True)

@@ -35,7 +35,7 @@ def source(tmp_path):
 
 
 def _files(root):
-    return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in root.rglob("*") if p.is_file()}
 
 
@@ -61,8 +61,8 @@ def test_checked_in_documents_equal_source():
 
 def test_run_profile_is_exported_from_entry_docstring(source):
     path = source / "src/agent_runtime/execution/execution_local_invocation.py"
-    text = path.read_text()
-    path.write_text(text.replace("Runtime run profile", "Runtime run profile — source probe", 1))
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("Runtime run profile", "Runtime run profile — source probe", 1), encoding="utf-8")
     assert "## Runtime run profile — source probe" in render_api_reference(source).decode()
 
 
@@ -149,7 +149,7 @@ def test_source_changes_are_exported_and_invalidate_old_docs(source, before, aft
 ])
 def test_incomplete_source_fails_before_any_write(source, change, expected):
     path = source / AUTHORING
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     reviewer = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ModuleReviewer")
     if change == "symbol":
         reviewer.name = "UndocumentedReviewer"
@@ -178,13 +178,18 @@ def test_source_is_parsed_without_importing_or_executing(source):
 
 def test_symlink_output_is_rejected_without_writing_other_target(source, tmp_path):
     outside = tmp_path / "outside.md"
-    outside.write_text("protected")
+    outside.write_text("protected", encoding="utf-8")
     target = source / OUTPUT_PATHS[1]
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.symlink_to(outside)
+    try:
+        target.symlink_to(outside)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege unavailable")
+        raise
     with pytest.raises(ValueError, match="symlink"):
         build_api_reference(project_root=source)
-    assert outside.read_text() == "protected"
+    assert outside.read_text(encoding="utf-8") == "protected"
     assert not (source / OUTPUT_PATHS[0]).exists()
 
 
@@ -239,21 +244,21 @@ def test_wheel_contains_source_generated_reference_and_valid_document_links(tmp_
 
 
 def _example(name):
-    document = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text()
+    document = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text(encoding="utf-8")
     match = re.search(r"<!-- example:" + name + r":start -->\s*```python\n(.*?)\n```\s*<!-- example:" + name + r":end -->", document, re.S)
     assert match is not None, name
     return compile(match[1], "registration_runbook:" + name, "exec")
 
 
 def test_task_navigation_and_local_links_are_closed():
-    readme = (ROOT / "README.md").read_text()
-    runbook = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    runbook = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text(encoding="utf-8")
     for query in ("注册新的 Reviewer", "register a new reviewer", "test a reviewer", "inspect a review"):
         assert query in readme
     for target in ("new-reviewer", "prepare-reviewer", "register-reviewer", "test-reviewer", "inspect-reviewer"):
         assert f'<a id="{target}"></a>' in runbook
     for path in (ROOT / "README.md", ROOT / "docs/agent_runtime_registration_runbook.md"):
-        body = path.read_text()
+        body = path.read_text(encoding="utf-8")
         # Only this task's local document links, not unrelated framework URLs.
         for link in re.findall(r"\]\(([^)]+)\)", body):
             if "://" in link or not ("agent_runtime_" in link or link.startswith("#")):
@@ -261,7 +266,7 @@ def test_task_navigation_and_local_links_are_closed():
             filename, _, anchor = link.partition("#")
             destination = path.parent / filename if filename else path
             assert destination.is_file(), link
-            target_text = destination.read_text()
+            target_text = destination.read_text(encoding="utf-8")
             if anchor:
                 headings = re.findall(r"^#+ (.+)$", target_text, re.M)
                 slugs = {re.sub(r"[^\w\- ]", "", item.lower()).replace(" ", "-") for item in headings}
@@ -272,7 +277,7 @@ def test_task_navigation_and_local_links_are_closed():
 
 @pytest.mark.deterministic
 def test_task_runbook_preserves_environment_and_execution_boundaries():
-    body = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text()
+    body = (ROOT / "docs/agent_runtime_registration_runbook.md").read_text(encoding="utf-8")
     for phrase in ("不重新编译或注册", "Source owner", "runtime_module_registration_v4", "execution_schema",
                    "要求持久执行却找不到实际授权/存储接入时", "不生成 Workflow", "不会自动建表或迁移",
                    "origin_bundle", "相同 key", "授权替身", "输出校验", "持久回读"):

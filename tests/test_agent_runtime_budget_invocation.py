@@ -20,42 +20,6 @@ _REAL = pytest.mark.skipif(os.environ.get("AGENT_RUNTIME_REAL_RUN") != "1",
 
 @pytest.mark.real_run
 @_REAL
-@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group contract")
-def test_exited_parent_group_is_cleaned_before_descendant_observation(tmp_path):
-    marker = tmp_path / "child.json"
-    # Actual child inherits the newly created group but not any captured pipe.
-    program = ("import json,subprocess,sys;from pathlib import Path;import psutil;"
-        "child=subprocess.Popen([sys.executable,'-I','-c','import time;time.sleep(60)'],"
-        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);"
-        f"Path({str(marker)!r}).write_text(json.dumps([child.pid,psutil.Process(child.pid).create_time()]))")
-    def after_parent_exit(launch):
-        process = launch()
-        assert process.wait(timeout=10) == 0
-        return process
-    survivor = None
-    try:
-        result = run_cli_process(argv=[sys.executable,"-c",program], prompt="", cwd=tmp_path,
-            timeout_seconds=20, environment=dict(os.environ), launch_guard=after_parent_exit)
-        assert result.returncode == 0
-        pid, created = json.loads(marker.read_text())
-        try:
-            child = psutil.Process(pid)
-            if child.create_time() != created:
-                return  # Original child no longer exists; never signal a reused PID.
-            _, alive = psutil.wait_procs([child], timeout=3)
-            survivor = next((p for p in alive if p.status() != psutil.STATUS_ZOMBIE), None)
-        except psutil.NoSuchProcess:
-            pass
-        assert survivor is None, "same-group child survived Runtime cleanup"
-    finally:
-        # Test hygiene after a failed regression; never counted as Runtime cleanup.
-        if survivor is not None and survivor.is_running():
-            survivor.kill()
-            psutil.wait_procs([survivor], timeout=3)
-
-
-@pytest.mark.real_run
-@_REAL
 @pytest.mark.skipif(not os.environ.get("AGENT_RUNTIME_CODEX_BIN"),
                     reason="unverified: AGENT_RUNTIME_CODEX_BIN must identify an authenticated Codex CLI")
 def test_exact_profile_invoker_without_budget_remains_compatible(tmp_path):

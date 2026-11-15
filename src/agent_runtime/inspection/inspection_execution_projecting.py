@@ -74,6 +74,9 @@ def _sum_optional_usd(rows: Iterable[UsageEvent], field: str) -> str | None:
 def _usage_view(rows: tuple[UsageEvent, ...]) -> dict[str, int | str | None]:
     return {
         "input_tokens": _sum_optional_int(rows, "input_tokens"),
+        "ordinary_input_tokens": _sum_optional_int(
+            rows, "ordinary_input_tokens"
+        ),
         "output_tokens": _sum_optional_int(rows, "output_tokens"),
         "cache_read_tokens": _sum_optional_int(rows, "cache_read_tokens"),
         "cache_creation_tokens": _sum_optional_int(

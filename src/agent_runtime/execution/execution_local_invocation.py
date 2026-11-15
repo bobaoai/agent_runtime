@@ -340,7 +340,8 @@ def _run_prepared_workflow_node(
     definitions = tool_definition_records(tool_session_factory.definitions) if tool_session_factory is not None else []
     binding = next(item for item in selection.policy_document()["bindings"] if item["position_id"] == target)
     selected_profile = registry.get_execution_profile(binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
-    callbacks = set(selected_profile.tool_policy) - {"read", "search", "shell"}
+    from ..invocation.invocation_tool_definition import callback_tool_names
+    callbacks = callback_tool_names(selected_profile.tool_policy)
     if {item["name"] for item in definitions} != callbacks:
         raise ValueError("callback definitions must match the exact non-native Profile tools")
     if tool_session_factory is not None and not callbacks:

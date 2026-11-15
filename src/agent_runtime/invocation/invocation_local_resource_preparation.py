@@ -2,17 +2,15 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
 import hashlib
 import json
-import os
 from pathlib import Path, PurePosixPath
 import re
-import stat
 import sys
 
 from ..contracts.registry_release_definition import ExecutionProfileRelease
 from ..foundation.foundation_contract_validation import validate_sha256
+from .invocation_host_platform_selection import HOST_PLATFORM
 
 
 LOCAL_RESOURCES_SCHEMA_REF = "schema:runtime_local_resources@v1"
@@ -141,8 +139,8 @@ def _dependencies(values):
 
 
 # Current bindings that accept frozen materials, dependencies and commands.
-_RESOURCE_BINDINGS = {("claude_cli_adapter", "v3", "claude_cli"),
-                      ("codex_cli_agent_workspace_executor", "v3", "codex_cli")}
+_RESOURCE_BINDINGS = {("claude_cli_adapter", "v4", "claude_cli"),
+                      ("codex_cli_agent_workspace_executor", "v4", "codex_cli")}
 
 
 def _profile_resources(profile, *, used, commands):
@@ -151,54 +149,30 @@ def _profile_resources(profile, *, used, commands):
     profile.validate()
     if not used:
         return
-    if (sys.platform != "darwin" or (profile.executor_adapter_id, profile.executor_adapter_revision,
+    if ((profile.executor_adapter_id, profile.executor_adapter_revision,
             profile.transport_kind) not in _RESOURCE_BINDINGS
             or profile.execution_mode != "agent" or profile.semantic_input_delivery_mode != "inline"
-            or profile.network_policy != "denied" or profile.gateway_access_reasons
-            or not set(profile.tool_policy) & {"read", "search", "shell"}):
-        raise LocalResourceError("local files/dependencies/commands require a supported macOS agent binding "
-                                 "(Claude v3 or Codex workspace v3)", error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
+            or profile.network_policy not in {"denied", "provider_managed"} or profile.gateway_access_reasons
+            or not set(profile.tool_policy) & {"read", "search", "edit", "shell"}):
+        raise LocalResourceError("local files/dependencies/commands require a supported agent binding "
+                                 "(Claude v4 or Codex workspace v4) with a native file tool",
+                                 error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
+    if commands and sys.platform != "darwin":
+        raise LocalResourceError("declared local commands require macOS sandbox-exec",
+                                 error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
     if commands and ("shell" not in profile.tool_policy or profile.attempt_workspace_policy != "own_draft_read_write"):
         raise LocalResourceError("local commands require shell and private draft workspace",
                                  error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
 
 
-@contextmanager
-def _directory(path: Path):
-    """Open each path component without following a symlink."""
-    path = Path(path).absolute()
-    if ".." in path.parts:
-        raise LocalResourceError("directory locator cannot contain parent traversal")
-    descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+def _host_material(operation, *args):
+    """Run a HostPlatform material operation; its own refusals become LocalResourceError."""
     try:
-        for name in path.parts[1:]:
-            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-        yield descriptor
-    finally:
-        os.close(descriptor)
-
-
-def _read_file(directory, parts):
-    descriptor = os.dup(directory)
-    try:
-        for name in parts[:-1]:
-            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-        file_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
-        with os.fdopen(file_fd, "rb") as stream:
-            before = os.fstat(stream.fileno())
-            if not stat.S_ISREG(before.st_mode):
-                raise LocalResourceError("materials must be regular files")
-            body = stream.read()
-            after = os.fstat(stream.fileno())
-            if (before.st_size, before.st_mtime_ns, before.st_mode) != (after.st_size, after.st_mtime_ns, after.st_mode):
-                raise LocalResourceError("material changed while being captured")
-            return body, stat.S_IMODE(after.st_mode)
-    finally:
-        os.close(descriptor)
+        return operation(*args)
+    except LocalResourceError:
+        raise
+    except ValueError as exc:
+        raise LocalResourceError(str(exc)) from exc
 
 
 def capture_local_resources(*, profile, material_root=None, material_files=(), read_only_dependencies=(), commands=()) -> bytes | None:
@@ -248,12 +222,15 @@ def capture_local_resources(*, profile, material_root=None, material_files=(), r
     origin = None
     if material_root is not None:
         path = Path(material_root).resolve(strict=True)
-        with _directory(path) as root_fd:
-            for item in material_files:
-                content, mode = _read_file(root_fd, _relative(item["relative_path"]))
-                if hashlib.sha256(content).hexdigest() != item["sha256"] or bool(mode & 0o111) != item["executable"]:
-                    raise LocalResourceError("source bytes or executable mode differ from the material manifest")
-                captured.append({**item, "content_base64": base64.b64encode(content).decode("ascii")})
+        if ".." in path.parts:
+            raise LocalResourceError("directory locator cannot contain parent traversal")
+        for item in material_files:
+            content, executable = _host_material(HOST_PLATFORM.read_material_file, path, _relative(item["relative_path"]))
+            # A host without execute bits (Windows) reports None: the manifest value is kept.
+            if hashlib.sha256(content).hexdigest() != item["sha256"] or (
+                    executable is not None and executable != item["executable"]):
+                raise LocalResourceError("source bytes or executable mode differ from the material manifest")
+            captured.append({**item, "content_base64": base64.b64encode(content).decode("ascii")})
         origin = str(path)
     document = {"schema_version": _VERSION, "material_root": origin, "material_files": captured,
                 "read_only_dependencies": roots, "commands": list(commands)}
@@ -318,51 +295,29 @@ def validate_local_resources(*, profile, body: bytes | None) -> dict | None:
     return document
 
 
-def _tree(directory, prefix=""):
-    files, directories = {}, set()
-    for name in os.listdir(directory):
-        relative = prefix + name
-        mode = os.stat(name, dir_fd=directory, follow_symlinks=False).st_mode
-        if stat.S_ISDIR(mode):
-            descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
-            try:
-                if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o555:
-                    raise LocalResourceError("material directory permissions changed")
-                children, subdirs = _tree(descriptor, relative + "/")
-                files.update(children)
-                directories.update(subdirs)
-                directories.add(relative)
-            finally:
-                os.close(descriptor)
-        elif stat.S_ISREG(mode):
-            content, file_mode = _read_file(directory, (name,))
-            files[relative] = (hashlib.sha256(content).hexdigest(), file_mode)
-        else:
-            raise LocalResourceError("material tree contains a symlink or special file")
-    return files, directories
-
-
 def assert_local_materials_unchanged(body: bytes, *, materials_root: Path) -> None:
-    """Check the exact source-copy file/directory set, bytes and normalized modes.
+    """Check the exact source-copy file/directory set, bytes and read-only state.
 
     Does not read original material_root or dependency installations. Other files
     in materials_root, such as task_input, remain owned by the existing Adapter.
-    Drift rejects output; chmod by itself is not a sandbox enforcement guarantee.
-    Missing, added, linked or changed tree members raise LocalResourceError with
-    ADAPTER_POLICY_VIOLATION. Invalid control bytes retain ADAPTER_REQUEST_INVALID.
+    The host operation walks the copy without following links and requires the
+    read-only state it set (POSIX modes 0444/0555 and 0555 directories; Windows
+    read-only file attribute); execute bits are compared where the host has them.
+    Drift rejects output; read-only state by itself is not an OS isolation
+    guarantee. Missing, added, linked or changed tree members raise
+    LocalResourceError with ADAPTER_POLICY_VIOLATION. Invalid control bytes
+    retain ADAPTER_REQUEST_INVALID.
     """
     document = parse_local_resources(body)
-    expected = {row["relative_path"]: (row["sha256"], 0o555 if row["executable"] else 0o444)
-                for row in document["material_files"]}
+    expected = {row["relative_path"]: (row["sha256"], row["executable"]) for row in document["material_files"]}
     expected_dirs = {str(parent) for name in expected for parent in PurePosixPath(name).parents if str(parent) != "."}
     try:
-        with _directory(Path(materials_root) / "source") as directory:
-            if stat.S_IMODE(os.fstat(directory).st_mode) != 0o555:
-                raise LocalResourceError("material source directory permissions changed")
-            actual, directories = _tree(directory)
-        if actual != expected or directories != expected_dirs:
+        actual, directories = HOST_PLATFORM.material_tree_state(Path(materials_root) / "source")
+        observed = {name: (digest, expected[name][1] if executable is None and name in expected else executable)
+                    for name, (digest, executable) in actual.items()}
+        if observed != expected or directories != expected_dirs:
             raise LocalResourceError("material tree differs from the frozen files or modes")
-    except (OSError, LocalResourceError) as exc:
+    except (OSError, ValueError) as exc:
         raise LocalResourceError("frozen material tree changed or became unavailable",
                                  error_code="ADAPTER_POLICY_VIOLATION") from exc
 
@@ -372,39 +327,24 @@ def materialize_local_resources(body: bytes, *, materials_root: Path) -> None:
 
     materials_root must already exist. An existing nonempty source must match
     exactly; different content is not overwritten or cleaned up. Binary bytes
-    are retained and executable files use 0555, other files 0444, directories 0555.
+    are retained; the host operation makes the copy read-only (POSIX executable
+    files 0555, others 0444, directories 0555; Windows read-only attribute).
     Writes only this source-copy tree. Invalid control bytes or existing drift
     raises LocalResourceError; native write errors remain OSError and may leave
     a partial owned tree. No source/dependency files are modified or commands run.
     """
     document = parse_local_resources(body)
     source = Path(materials_root) / "source"
-    with _directory(Path(materials_root)) as parent:
-        try:
-            os.mkdir("source", mode=0o700, dir_fd=parent)
-        except FileExistsError:
-            with _directory(source) as existing:
-                if os.listdir(existing):
-                    assert_local_materials_unchanged(body, materials_root=materials_root)
-                    return
-        # All child directories are constructed before read-only modes are set.
-        with _directory(source) as directory:
-            paths = sorted({str(parent) for row in document["material_files"]
-                for parent in PurePosixPath(row["relative_path"]).parents if str(parent) != "."}, key=lambda p: (p.count("/"), p))
-            for relative in paths:
-                with _directory(source / PurePosixPath(relative).parent) as folder:
-                    os.mkdir(PurePosixPath(relative).name, mode=0o700, dir_fd=folder)
-            for row in document["material_files"]:
-                path = PurePosixPath(row["relative_path"])
-                with _directory(source / path.parent) as folder:
-                    fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(base64.b64decode(row["content_base64"], validate=True))
-                        os.fchmod(stream.fileno(), 0o555 if row["executable"] else 0o444)
-            for relative in reversed(paths):
-                with _directory(source / relative) as folder:
-                    os.fchmod(folder, 0o555)
-            os.fchmod(directory, 0o555)
+    if source.is_symlink():
+        raise LocalResourceError("material source copy path is a link")
+    if source.exists():
+        if any(source.iterdir()):
+            assert_local_materials_unchanged(body, materials_root=materials_root)
+            return
+        source.rmdir()
+    files = [(PurePosixPath(row["relative_path"]).parts, base64.b64decode(row["content_base64"], validate=True),
+              row["executable"]) for row in document["material_files"]]
+    _host_material(HOST_PLATFORM.write_material_tree, source, files)
     assert_local_materials_unchanged(body, materials_root=materials_root)
 
 
@@ -458,9 +398,11 @@ def stage_attempt_materials(*, request, host, profile, materials: Path, dependen
 def describe_local_resources(*, profile, body: bytes | None) -> str:
     """Render the Claude or Codex workspace layout for exact request rebuilding.
 
-    Claude v2's original description remains required for committed replay; it
-    grants no execution capability. Codex workspace v3 states its one main
-    folder. Earlier bindings and Codex v4 retain empty descriptions. Only
+    Claude v2/v3 and Codex workspace v3 keep their exact original texts for
+    committed replay; they grant no execution capability. The v4 texts describe
+    the actual layout of each workspace policy (private draft, explicit project,
+    none); explicit command/callback extension calls keep the earlier scratch
+    layout. Earlier bindings and Codex tool-free keep empty descriptions. Only
     relative paths appear, so the prompt hash does not vary per Attempt.
     Resource capture/admission and the Adapter still require the current revision.
     The private material_root/read_only_dependencies
@@ -468,6 +410,9 @@ def describe_local_resources(*, profile, body: bytes | None) -> str:
     logical cwd remain explicit task data, including any supplied program locator.
     """
     document = validate_local_resources(profile=profile, body=body)
+    binding = (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind)
+    if binding in {("claude_cli_adapter", "v4", "claude_cli"), ("codex_cli_agent_workspace_executor", "v4", "codex_cli")}:
+        return _describe_v4(profile, document, codex=binding[0] == "codex_cli_agent_workspace_executor")
     if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind) == (
             "codex_cli_agent_workspace_executor", "v3", "codex_cli"):
         sections = ["## Runtime Input Resources", "The task input is available at ../materials/task_input.",
@@ -498,6 +443,47 @@ def describe_local_resources(*, profile, body: bytes | None) -> str:
                                    for row in document["material_files"]], ensure_ascii=False, sort_keys=True))
         if document["commands"]:
             sections.append("Use the Runtime MCP tool mcp__runtime_commands__sandbox_command_execute with only command_id to execute a listed command. The logical cwd selects source or scratch; command results are execution facts, not a business verdict.")
+            sections.append(json.dumps(document["commands"], ensure_ascii=False, sort_keys=True))
+    return "\n\n".join(sections)
+
+
+def _describe_v4(profile, document, *, codex: bool) -> str:
+    from .invocation_tool_definition import callback_tool_names
+    policy = profile.attempt_workspace_policy
+    commands = document is not None and bool(document["commands"])
+    extension = commands or bool(callback_tool_names(profile.tool_policy))
+    listing = None if document is None else json.dumps(
+        [{key: row[key] for key in ("relative_path", "sha256", "executable")} for row in document["material_files"]],
+        ensure_ascii=False, sort_keys=True)
+    sections = ["## Runtime Input Resources"]
+    if policy == "explicit_project_read_write":
+        sections.append("Your working directory is the project directory provided for this task; your changes there "
+                        "are the delivery. The task input is included in this prompt and also in the read-only "
+                        "materials directory provided for this call.")
+        source = "the source folder of that materials directory"
+    elif policy == "own_draft_read_write" and (codex or extension):
+        sections += ["The task input is available at ../materials/task_input.",
+                     "Your current working directory is your writable scratch area; use TMPDIR for temporary files. "
+                     "Other locations follow the CLI's own permissions."]
+        source = "../materials/source"
+    elif policy == "own_draft_read_write":
+        sections += ["The task input is available at materials/task_input.",
+                     "Your working directory contains materials (read-only) and scratch, the only place you may "
+                     "write; use TMPDIR for temporary files."]
+        source = "materials/source"
+    else:
+        sections += ["The task input is available at materials/task_input.",
+                     "No model-writable task workspace is authorized."]
+        source = "materials/source"
+    if listing is not None:
+        sections.append(f"Frozen source files are under {source}. Only the listed copies are task materials; "
+                        "their contents are not inlined here.")
+        sections.append(listing)
+        if commands:
+            tool = ("the MCP tool sandbox_command_execute of the runtime_commands server" if codex
+                    else "the Runtime MCP tool mcp__runtime_commands__sandbox_command_execute")
+            sections.append(f"Use {tool} with only command_id to execute a listed command. The logical cwd selects "
+                            "source or scratch; command results are execution facts, not a business verdict.")
             sections.append(json.dumps(document["commands"], ensure_ascii=False, sort_keys=True))
     return "\n\n".join(sections)
 

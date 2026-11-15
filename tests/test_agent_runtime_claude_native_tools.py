@@ -5,9 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import fields
-from itertools import combinations
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -27,8 +25,9 @@ from test_agent_runtime_native_structured_output import (
 )
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("closed", [False, True])
-def test_legacy_self_test_host_without_optional_cancel_port_keeps_guard(tmp_path, closed):
+def test_legacy_self_test_host_without_optional_cancel_port_keeps_guard(tmp_path, monkeypatch, closed):
     import test_agent_runtime_native_structured_output as native
     from test_agent_runtime_codex_environment import self_test_request
     from agent_runtime.contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
@@ -54,7 +53,7 @@ def test_legacy_self_test_host_without_optional_cancel_port_keeps_guard(tmp_path
         result.stdout_bytes, result.stderr_bytes = result.stdout.encode(), b""
         return result
     adapter = claude.ClaudeAdapter(release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
-                                  cli_path=_fake_cli(tmp_path), process_runner=process)
+                                  cli_path=_fake_cli(tmp_path, monkeypatch), process_runner=process)
     result = adapter.execute(request, Host())
     assert result.terminal_status == ("failed" if closed else "completed")
     assert effects == ([] if closed else ["executed"])
@@ -62,8 +61,9 @@ def test_legacy_self_test_host_without_optional_cancel_port_keeps_guard(tmp_path
         assert result.input_tokens == 7 and result.cell_local_trace_ref
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("failure_on", [1, 2])
-def test_claude_handoff_checks_control_once_and_keeps_observed_result(tmp_path, failure_on):
+def test_claude_handoff_checks_control_once_and_keeps_observed_result(tmp_path, monkeypatch, failure_on):
     import test_agent_runtime_native_structured_output as native
     from test_agent_runtime_codex_environment import self_test_request
     from agent_runtime.foundation.foundation_json_encoding import cli_stream_bytes
@@ -90,7 +90,7 @@ def test_claude_handoff_checks_control_once_and_keeps_observed_result(tmp_path, 
         result.stdout_bytes, result.stderr_bytes = raw, b""
         return result
     adapter = claude.ClaudeAdapter(release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
-                                  cli_path=_fake_cli(tmp_path), process_runner=process)
+                                  cli_path=_fake_cli(tmp_path, monkeypatch), process_runner=process)
     result = adapter.execute(request, Host())
     if failure_on == 1:
         assert result.terminal_status == "failed" and not result.outputs
@@ -156,12 +156,18 @@ def test_failed_result_handoff_saves_one_diagnostic_and_keeps_trace(tmp_path, mo
 
 def _environment(tmp_path, *, tools=("read", "search", "shell"), model="claude-opus-5[1m]", effort="xhigh", material=None, instructions="",
                  mode="agent", workspace="own_draft_read_write", output_mode="native_structured_output",
-                 binding=("claude_cli_adapter", "v3"), output_schema_document=None):
+                 binding=("claude_cli_adapter", "v4"), output_schema_document=None, network=None):
+    """Compile one Claude Module and request.
+
+    network defaults to the ordinary agent policy, provider_managed; a tool_free Profile
+    must deny network. Pass network="denied" for an explicitly saved strict agent Profile.
+    """
+    network = network or ("denied" if mode == "tool_free" else "provider_managed")
     compiled = _compile_native_module(
         tmp_path, output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
         execution_profile_id="claude_fields", executor_adapter_id=binding[0],
         executor_adapter_revision=binding[1], transport_kind="claude_cli", provider_id="anthropic",
-        model_id=model, reasoning_profile=effort, execution_mode=mode,
+        model_id=model, reasoning_profile=effort, execution_mode=mode, network_policy=network,
         attempt_workspace_policy=workspace, tool_policy=tools, output_constraint_mode=output_mode,
         **({"output_schema_document": output_schema_document} if output_schema_document is not None else {}),
     )
@@ -182,11 +188,115 @@ def _environment(tmp_path, *, tools=("read", "search", "shell"), model="claude-o
     return compiled, registry, cell, request, authority
 
 
-def _fake_cli(tmp_path):
-    executable = tmp_path / "claude"
-    executable.write_text("#!/bin/sh\nprintf '%s\\n' '2.1.999 --safe-mode --restricted --tools --settings --effort --json-schema --setting-sources --strict-mcp-config --add-dir'\n")
-    executable.chmod(0o700)
-    return executable
+# The options the Claude Adapter's preflight requires from `claude --help` today.
+SYNTHETIC_CLAUDE_HELP = ("--safe-mode --tools --allowedTools --permission-mode --settings --effort --json-schema "
+                         "--strict-mcp-config --add-dir")
+SYNTHETIC_CLAUDE_VERSION = "2.1.999 (synthetic Claude CLI)"
+
+
+def _launch_through_interpreter(script, monkeypatch):
+    """Start the named synthetic script with the base interpreter on Windows; leave every other argv alone.
+
+    Windows starts only native .exe programs (a script's shebang is not honored), so the
+    single process-creation entry point is wrapped for this test: an argv whose program is
+    exactly this script becomes [sys._base_executable, script, *arguments]. Everything else
+    still reaches the product's native-program check unchanged.
+    """
+    from agent_runtime.invocation import invocation_process_execution as processes
+    registered = os.path.normcase(os.path.abspath(script))
+    current = processes.HOST_PLATFORM.create_cli_process
+
+    def create(argv, **kwargs):
+        program = Path(str(argv[0])) if argv else None
+        if program is not None and not program.is_absolute():
+            program = Path(kwargs.get("cwd") or ".") / program
+        if program is not None and os.path.normcase(os.path.abspath(program)) == registered:
+            argv = [sys._base_executable, str(script), *list(argv)[1:]]
+        return current(argv, **kwargs)
+    monkeypatch.setattr(processes.HOST_PLATFORM, "create_cli_process", create)
+
+
+def _scripted_cli(path, body, monkeypatch):
+    """Named substitute: a stdlib-only Python script standing in for a CLI program.
+
+    POSIX runs its shebang natively; on Windows it is started through the base
+    interpreter by the scoped process-creation wrapper above. Returns the script path.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
+    path.chmod(0o700)
+    if os.name == "nt":
+        _launch_through_interpreter(path, monkeypatch)
+    return path
+
+
+def _fake_cli(tmp_path, monkeypatch):
+    """Named substitute for the Claude executable's real preflight: --version and --help only.
+
+    The Provider call itself is served by each test's process-runner double; any other
+    argv exits 3, so an accidental real Provider launch fails loudly.
+    """
+    return _scripted_cli(Path(tmp_path) / "claude", (
+        "import sys\n"
+        f"if sys.argv[1:] == ['--version']:\n    print({SYNTHETIC_CLAUDE_VERSION!r})\n"
+        f"elif sys.argv[1:] == ['--help']:\n    print({SYNTHETIC_CLAUDE_HELP!r})\n"
+        "else:\n"
+        "    sys.stderr.write('synthetic Claude CLI answers only --version and --help\\n')\n"
+        "    sys.exit(3)\n"), monkeypatch)
+
+
+def _process_alive(pid):
+    """Whether a process with this ID is still running.
+
+    POSIX probes with signal 0. On Windows os.kill(pid, 0) would send CTRL_C_EVENT instead,
+    so the process is opened for a limited query and its exit code compared with STILL_ACTIVE.
+    """
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _require_symlink(tmp_path):
+    """Skip with the real prerequisite when this host cannot create a test-owned symbolic link.
+
+    Shared by the link checks of Runtime-owned material, write, archive and cleanup paths. It never
+    enables a privilege, and a directory junction is not offered as a substitute.
+    """
+    probe = Path(tmp_path) / ".symlink_probe"
+    try:
+        probe.symlink_to(Path(tmp_path), target_is_directory=True)
+    except OSError as exc:
+        code = getattr(exc, "winerror", None) or exc.errno
+        pytest.skip(f"unverified on this host: symbolic-link creation privilege unavailable (error {code})")
+    probe.unlink()
+
+
+def _allowed(argv):
+    return argv[argv.index("--allowedTools") + 1:argv.index("--settings")]
+
+
+def _native(profile):
+    """Claude tools for the recorded logical tools, in Profile order (read: Read; search: Grep, Glob; ...)."""
+    return [tool for name in profile.tool_policy for tool in claude.NATIVE_TOOLS.get(name, ())]
 
 
 def _result(**extra):
@@ -198,7 +308,7 @@ def _result(**extra):
 
 def _init(tools=("Read", "Grep", "Bash")):
     return {"type": "system", "subtype": "init", "model": "claude-opus-5[1m]",
-            "permissionMode": "auto",
+            "permissionMode": "dontAsk",
             "tools": [*tools, "StructuredOutput"], "skills": [], "plugins": [], "slash_commands": [], "mcp_servers": []}
 
 
@@ -215,11 +325,19 @@ def _tool_result(identity, *, failed=False, content="actual tool output"):
 def _denial(identity, name="Read"):
     return {"type": "system", "subtype": "permission_denied", "tool_name": name,
             "tool_use_id": identity, "decision_reason_type": "other",
-            "decision_reason": "--restricted: path outside the working directory",
+            "decision_reason": "path outside the allowed working directories",
             "message": "The requested path is outside the allowed workspace."}
 
 
-def _run(env, tmp_path, event_factory):
+def _run(env, tmp_path, event_factory, monkeypatch=None):
+    """Run the real kernel and ClaudeAdapter with a process-runner double for the Provider call.
+
+    The synthetic CLI's preflight runs as a real process. Pass the test's monkeypatch when
+    the adapter is used again after this run; otherwise the launch seam lasts for this run.
+    """
+    if monkeypatch is None:
+        with pytest.MonkeyPatch.context() as scoped:
+            return _run(env, tmp_path, event_factory, scoped)
     _, registry, cell, request, authority = env
     def process(**kwargs):
         lines = []
@@ -246,21 +364,17 @@ def _run(env, tmp_path, event_factory):
         return result
     adapter = claude.ClaudeAdapter(
         release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
-        cli_path=_fake_cli(tmp_path), process_runner=process,
+        cli_path=_fake_cli(tmp_path, monkeypatch), process_runner=process,
         adapter_binding=(env[0].execution_profile.executor_adapter_id, env[0].execution_profile.executor_adapter_revision),
     )
     adapters = AgentExecutionAdapterRegistry()
     adapters.register(adapter)
-    # The fake transport needs no system temporary directory. Keep its owned
-    # artifacts inside pytest's writable fixture under independent review.
-    temporary_directory = claude.tempfile.TemporaryDirectory
-    with patch.object(claude.tempfile, "TemporaryDirectory", lambda *args, **kw:
-                      temporary_directory(*args, **{**kw, "dir": tmp_path})):
-        run = run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
-                         ledger=InMemoryModuleExecutionLedger(), authority=authority, clock=lambda: _TEST_TIME)
+    run = run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
+                     ledger=InMemoryModuleExecutionLedger(), authority=authority, clock=lambda: _TEST_TIME)
     return run, cell
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("change", [None, "binding", "legacy_marker"])
 def test_attempt_workspace_binds_exact_authorization_boundary(tmp_path, monkeypatch, change):
     captured = []
@@ -274,7 +388,7 @@ def test_attempt_workspace_binds_exact_authorization_boundary(tmp_path, monkeypa
         yield _init()
         yield _result()
     monkeypatch.setattr(claude.ClaudeAdapter, "_execute", capture)
-    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    run, cell = _run(_environment(tmp_path), tmp_path, events, monkeypatch)  # The adapter runs again below.
     assert run.attempts[0].status == "completed"
     adapter, request, host = captured[0]
     marker = tmp_path / "attempts" / request.attempt_id / ".agent_runtime_attempt.json"
@@ -304,8 +418,15 @@ def test_attempt_workspace_binds_exact_authorization_boundary(tmp_path, monkeypa
     assert scratch.read_text() == "existing private draft"
 
 
-@pytest.mark.parametrize("target", ["work", "work/materials", "work/scratch", "material_file", "changed_material"])
+@pytest.mark.fake_run
+@pytest.mark.parametrize("target", ["work/scratch", "material_file", "changed_material"])
 def test_preinvocation_workspace_policy_refusal_is_recorded(tmp_path, monkeypatch, target):
+    """A replaced Runtime-owned work folder or material is refused before the Provider starts.
+
+    One per-directory check covers work, materials and scratch; work/scratch represents it.
+    """
+    if target != "changed_material":
+        _require_symlink(tmp_path)
     entered = []
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -343,6 +464,7 @@ def test_preinvocation_workspace_policy_refusal_is_recorded(tmp_path, monkeypatc
     assert entered == [] and protected.read_text() == "untouched"
 
 
+@pytest.mark.fake_run
 def test_workspace_dependency_failure_is_not_policy_violation(tmp_path, monkeypatch):
     def unavailable(**kwargs):
         raise OSError("workspace storage unavailable")
@@ -362,18 +484,20 @@ def test_workspace_dependency_failure_is_not_policy_violation(tmp_path, monkeypa
     ("claude-sonnet-4-6", "high", ("read",)),
     ("claude-opus-5", "low", ("search", "shell")),
 ])
+@pytest.mark.fake_run
 def test_profile_drives_one_cli_command_builder(tmp_path, model, effort, tools):
     env = _environment(tmp_path, model=model, effort=effort, tools=tools)
-    expected = [claude.NATIVE_TOOLS[name] for name in tools]
+    expected = _native(env[0].execution_profile)
     def events(call):
         argv = call["argv"]
         assert argv[argv.index("--model")+1] == model
         assert argv[argv.index("--effort")+1] == effort
         assert argv[argv.index("--tools")+1].split(",") == expected
-        assert argv[argv.index("--allowedTools")+1].split(",") == expected
-        assert "--safe-mode" in argv and "--restricted" in argv
-        assert argv[argv.index("--permission-mode")+1] == "auto"
-        assert call["environment"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        # Only read/search tools are preapproved; Bash needs an explicit host permit.
+        assert _allowed(argv) == [tool for tool in expected if tool in {"Read", "Grep", "Glob"}]
+        assert "--safe-mode" in argv and "--restricted" not in argv
+        assert argv[argv.index("--permission-mode")+1] == "dontAsk"
+        assert call["environment"]["GIT_CONFIG_GLOBAL"] == os.devnull
         assert call["environment"]["GIT_CONFIG_NOSYSTEM"] == "1"
         assert "--system-prompt" not in argv and call["prompt"] not in argv
         assert json.loads(argv[argv.index("--mcp-config")+1]) == {"mcpServers": {}}
@@ -385,6 +509,7 @@ def test_profile_drives_one_cli_command_builder(tmp_path, model, effort, tools):
     assert ExecutionProfileRelease.from_dict(profile.as_dict()).as_dict() == profile.as_dict()
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("fault", ["initialization", "response", "missing"])
 def test_actual_model_must_match_the_profile(tmp_path, fault):
     def events(call):
@@ -402,40 +527,12 @@ def test_actual_model_must_match_the_profile(tmp_path, fault):
     assert trace["result"]["structured_output"] == {"value":"checked"}
 
 
-@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v3")])
-def test_actual_cli_settings_keep_resource_boundaries(tmp_path, binding):
-    def events(call):
-        argv = call["argv"]
-        settings = json.loads(argv[argv.index("--settings") + 1])
-        assert settings["permissions"]["blockReadsOutsideWorkingDirectories"] is True
-        sandbox = settings["sandbox"]
-        assert sandbox["enabled"] and sandbox["failIfUnavailable"]
-        assert sandbox["allowUnsandboxedCommands"] is False
-        fs = sandbox["filesystem"]
-        assert fs["denyRead"] == ["/"]
-        assert str(call["cwd"]) in fs["allowRead"]
-        assert str(tmp_path) not in fs["allowRead"]
-        material_root = call["cwd"].parent
-        assert str(material_root / "materials") in fs["denyWrite"]
-        assert fs["allowWrite"] == [str(call["cwd"]), call["environment"]["TMPDIR"]]
-        python_roots = {str(Path(sys.prefix).resolve()), str(Path(sys.base_prefix).resolve())}
-        assert python_roots <= set(fs["allowRead"])
-        assert python_roots <= set(fs["denyWrite"])
-        assert python_roots <= set(settings["permissions"]["additionalDirectories"])
-        assert call["environment"]["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).absolute().parent)
-        assert sandbox["network"] == {"allowedDomains": [], "strictAllowlist": True,
-            "allowAllUnixSockets": False, "allowLocalBinding": False}
-        yield _init()
-        yield _result()
-    run, cell = _run(_environment(tmp_path, material=b"protected", binding=binding), tmp_path, events)
-    assert _assert_completed_provider_run(run, cell) == {"value": "checked"}
-
-
+@pytest.mark.fake_run
 def test_preflight_timeout_keeps_byte_diagnostics(tmp_path, monkeypatch):
     env = _environment(tmp_path)
-    def preflight(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], 30, output=b"partial version", stderr=b"fixture diagnostic")
-    monkeypatch.setattr(claude.subprocess, "run", preflight)
+    def preflight(**fields):
+        raise subprocess.TimeoutExpired(fields["argv"], 30, output=b"partial version", stderr=b"fixture diagnostic")
+    monkeypatch.setattr(claude, "run_cli_process", preflight)  # The owned preflight runner.
     def unused_provider(call):
         raise AssertionError("Provider must not start after failed preflight")
         yield
@@ -448,14 +545,18 @@ def test_preflight_timeout_keeps_byte_diagnostics(tmp_path, monkeypatch):
     assert trace["stage"] == "cli_preflight"
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("damage", [None, "change", "remove", "symlink"])
-@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v3")])
+@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v4")])
 @pytest.mark.parametrize("process_error", [False, True])
 def test_materials_checked_on_process_completion_and_exception(tmp_path, damage, binding, process_error):
+    if damage == "symlink":
+        _require_symlink(tmp_path)
     env = _environment(tmp_path, material=b"original", binding=binding)
     def events(call):
         yield _init()
-        source = call["cwd"].parent / "materials/source"
+        source = call["cwd"] / "materials/source"  # The ordinary Attempt runs in work/, beside materials/.
+        assert source.read_bytes() == b"original"
         if damage == "change":
             source.write_bytes(b"changed")
         elif damage in {"remove", "symlink"}:
@@ -476,6 +577,7 @@ def test_materials_checked_on_process_completion_and_exception(tmp_path, damage,
     assert not run.outputs
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("surface", ["tools", "skills", "plugins", "slash_commands", "mcp_servers", "permissionMode"])
 def test_init_capability_descriptions_do_not_stop_the_run(tmp_path, surface):
     reached = []
@@ -500,6 +602,7 @@ def test_init_capability_descriptions_do_not_stop_the_run(tmp_path, surface):
 @pytest.mark.parametrize("event", ["not-json", {"type": "future_event", "value": [1, 2]},
     {"type": "assistant", "message": {"content": None}},
     {"type": "user", "message": {"content": {"type": "tool_result", "unknown": True}}}])
+@pytest.mark.fake_run
 def test_non_result_events_are_archived_without_a_tool_parser(tmp_path, monkeypatch, event):
     from agent_runtime.inspection import inspection_execution_logging as inspection
     calls = []
@@ -519,8 +622,9 @@ def test_non_result_events_are_archived_without_a_tool_parser(tmp_path, monkeypa
     assert (event if isinstance(event, str) else json.dumps(event)) in trace["stdout"]
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("source", ["event", "result", "combined"])
-@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v3")])
+@pytest.mark.parametrize("binding", [("claude_cli_adapter", "v4")])
 def test_cli_permission_denial_allows_later_tools_and_output(tmp_path, source, binding):
     continued = []
     def events(call):
@@ -551,6 +655,7 @@ def test_cli_permission_denial_allows_later_tools_and_output(tmp_path, source, b
     assert any(row["event"].get("subtype") == "permission_denied" for row in inspected["events"]) is (source != "result")
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("source", ["event", "result", "tool_result"])
 def test_unidentified_tool_denial_retains_events_without_inventing_a_call(tmp_path, source):
     observation = _denial(None) if source == "event" else _tool_result(None, failed=True)
@@ -577,6 +682,7 @@ def test_unidentified_tool_denial_retains_events_without_inventing_a_call(tmp_pa
     ("cancelled", "cancelled"), ("missing", "provider"), ("schema", "schema"),
     ("invalid_event", "provider"), ("material", "policy_violation"),
 ])
+@pytest.mark.fake_run
 def test_normal_denial_does_not_mask_later_execution_failure(tmp_path, ending, expected):
     prefix = [_init(), _tool_use("denied", file_path="outside"), _denial("denied"),
               _tool_result("denied", failed=True)]
@@ -594,7 +700,7 @@ def test_normal_denial_does_not_mask_later_execution_failure(tmp_path, ending, e
             yield "invalid-json-line"
             return
         if ending == "material":
-            (call["cwd"].parent / "materials/source").write_bytes(b"changed")
+            (call["cwd"] / "materials/source").write_bytes(b"changed")
         yield _result(**({"subtype": "error_during_execution", "is_error": True} if ending == "provider" else
                          {"structured_output": {"wrong": 1}} if ending == "schema" else {}))
         if ending == "nonzero":
@@ -611,6 +717,7 @@ def test_normal_denial_does_not_mask_later_execution_failure(tmp_path, ending, e
 
 @pytest.mark.parametrize("outcome", ["denied", "error", "completed", "missing", "missing_id",
                                      "wrong_id", "duplicate_request", "conflicting_results"])
+@pytest.mark.fake_run
 def test_tool_event_outcomes_do_not_override_a_valid_final_result(tmp_path, outcome):
     continued = []
     def events(call):
@@ -642,6 +749,7 @@ def test_tool_event_outcomes_do_not_override_a_valid_final_result(tmp_path, outc
         assert inspected["complete"] is False
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("verdict", ["non_pass", "blocked"])
 def test_valid_business_verdict_after_denial_is_not_a_technical_retry(tmp_path, verdict):
     invocations = []
@@ -657,6 +765,7 @@ def test_valid_business_verdict_after_denial_is_not_a_technical_retry(tmp_path, 
     assert invocations == [True] and len(run.attempts) == 1
 
 
+@pytest.mark.fake_run
 def test_command_permission_words_are_not_permission_evidence(tmp_path):
     def events(call):
         yield _init()
@@ -667,48 +776,84 @@ def test_command_permission_words_are_not_permission_evidence(tmp_path):
     assert _assert_completed_provider_run(run, cell) == {"value": "checked"}
 
 
-@pytest.mark.parametrize("failure", ["host_denied", "hash_mismatch", "missing_cli_option", "cli_unavailable"])
-def test_preparation_failures_never_enter_cli(tmp_path, monkeypatch, failure):
+@pytest.mark.fake_run
+@pytest.mark.parametrize("failure,failure_class,code,stage,message", [
+    ("host_denied", "authorization", None, None, "host denied read"),
+    ("hash_mismatch", "schema", "ADAPTER_REQUEST_INVALID", "material_preparation", "authorized input hash mismatch"),
+    ("missing_cli_option", "dependency_unavailable", "ADAPTER_BINDING_UNAVAILABLE", "cli_preflight",
+     "configured Claude CLI lacks a required option"),
+    ("cli_unavailable", "dependency_unavailable", "ADAPTER_BINDING_UNAVAILABLE", "cli_preflight", "CLI unavailable"),
+], ids=["host_denied", "hash_mismatch", "missing_cli_option", "cli_unavailable"])
+def test_preparation_failures_never_enter_cli(tmp_path, monkeypatch, failure, failure_class, code, stage, message):
+    """Each injected preparation fault is reached, attributed to its own stage, and stops before the Provider."""
     from agent_runtime.execution.execution_module_invocation import _AttemptExecutionHost
     env = _environment(tmp_path, material=b"original")
-    entered = []
+    entered, reached = [], []
     if failure == "host_denied":
         def denied(*_):
+            reached.append(failure)
             raise PermissionError("host denied read")
         monkeypatch.setattr(_AttemptExecutionHost, "read_authorized_input", denied)
     elif failure == "hash_mismatch":
-        monkeypatch.setattr(_AttemptExecutionHost, "read_authorized_input", lambda *_: b"wrong")
+        def wrong(*_):
+            reached.append(failure)
+            return b"wrong"
+        monkeypatch.setattr(_AttemptExecutionHost, "read_authorized_input", wrong)
     else:
-        real_run = claude.subprocess.run
-        def unavailable(args, **kwargs):
-            if args[-1] == "--help":
+        real_run = claude.run_cli_process
+        def unavailable(**fields):
+            if fields["argv"][-1] == "--help":
+                reached.append(failure)
                 if failure == "cli_unavailable":
                     raise OSError("CLI unavailable")
-                return subprocess.CompletedProcess(args, 0, stdout="--model", stderr="")
-            return real_run(args, **kwargs)
-        monkeypatch.setattr(claude.subprocess, "run", unavailable)
+                result = subprocess.CompletedProcess(fields["argv"], 0, stdout="--model", stderr="")
+                result.stdout_bytes, result.stderr_bytes = b"--model", b""
+                return result
+            return real_run(**fields)
+        monkeypatch.setattr(claude, "run_cli_process", unavailable)  # The owned preflight runner.
     def events(call):
         entered.append(True)
         yield _result()
-    run, _ = _run(env, tmp_path, events)
-    assert not entered and not run.outputs
-    assert run.attempts[0].failure_class == {"host_denied": "authorization", "hash_mismatch": "schema"}.get(failure, "dependency_unavailable")
+    run, cell = _run(env, tmp_path, events)
+    attempt = run.attempts[0]
+    assert reached == [failure] and not entered and not run.outputs
+    assert attempt.status == "failed" and attempt.failure_class == failure_class
+    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+    assert detail.get("failure_code") == code and message in detail["message"]
+    if stage is not None:
+        trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+        assert trace["stage"] == stage
 
 
-@pytest.mark.parametrize("final", [None, {"type":"result","subtype":"error","is_error":True}, _result(structured_output={"wrong":1})])
-def test_missing_error_or_invalid_result_cannot_succeed(tmp_path, final):
+@pytest.mark.fake_run
+@pytest.mark.parametrize("final,failure_class,code", [
+    (None, "provider", "claude_cli_result_missing_or_invalid"),
+    ({"type": "result", "subtype": "error", "is_error": True}, "provider", "claude_cli_error_result"),
+    (_result(structured_output={"wrong": 1}), "schema", "ADAPTER_OUTPUT_INVALID"),
+], ids=["None", "final1", "final2"])
+def test_missing_error_or_invalid_result_cannot_succeed(tmp_path, final, failure_class, code):
+    """The Provider call is reached and its exit recorded; the final result decides the specific failure."""
+    entered = []
     def events(call):
+        entered.append(True)
         yield _init()
         if final is not None:
             yield final
-    run, _ = _run(_environment(tmp_path), tmp_path, events)
-    assert run.attempts[0].status == "failed" and not run.outputs
+    run, cell = _run(_environment(tmp_path), tmp_path, events)
+    attempt = run.attempts[0]
+    assert entered == [True] and attempt.status == "failed" and not run.outputs
+    assert attempt.failure_class == failure_class
+    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+    assert detail["failure_code"] == code
+    trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert trace["exit_code"] == 0 and trace["cli_version"] == SYNTHETIC_CLAUDE_VERSION
 
 
 @pytest.mark.parametrize("with_init", [True, False])
 @pytest.mark.parametrize("fields,expected", [({"result":"usage limit reached"}, "quota"),
     ({"api_error_status":401}, "authentication"), ({"api_error_status":403}, "authorization"),
     ({"api_error_status":429}, "rate_limit")])
+@pytest.mark.fake_run
 def test_provider_error_retains_its_category(tmp_path, fields, expected, with_init):
     def events(call):
         if with_init:
@@ -718,6 +863,7 @@ def test_provider_error_retains_its_category(tmp_path, fields, expected, with_in
     assert run.attempts[0].failure_class == expected
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("failure", ["timeout", "invalid_event", "output_limit"])
 def test_failure_preserves_captured_public_output_and_source_usage(tmp_path, failure):
     source = {"type": "assistant", "message": {"id": "message_partial", "model": "claude-opus-5",
@@ -741,6 +887,7 @@ def test_failure_preserves_captured_public_output_and_source_usage(tmp_path, fai
         assert "invalid-json-line" in trace["stdout"]
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("bad_event", ["invalid-json", _result()])
 def test_terminal_validation_is_separate_from_unrelated_log_errors(tmp_path, bad_event):
     def events(call):
@@ -759,35 +906,52 @@ def test_terminal_validation_is_separate_from_unrelated_log_errors(tmp_path, bad
     assert attempt.usage.input_tokens == 7 and attempt.usage.output_tokens == 3
 
 
-@pytest.mark.parametrize("reason,exit_code", [
-    ("observer_stopped", 0), ("stream_error", 0), ("output_limit", 0),
-    ("cleanup_error", 0), ("cleanup_error", None), ("timeout", 0),
-])
-def test_runtime_capture_failure_preserves_real_exit_and_reason(tmp_path, reason, exit_code):
+@pytest.mark.fake_run
+@pytest.mark.parametrize("reason,exit_code,cleanup", [
+    ("observer_stopped", 0, False), ("stream_error", 0, False), ("output_limit", 0, False), ("timeout", 0, False),
+    ("cleanup_error", 0, True), ("cleanup_error", None, True), ("timeout", 0, True),
+], ids=["observer_stopped-0", "stream_error-0", "output_limit-0", "timeout-0",
+        "cleanup_error-0", "cleanup_error-None", "timeout-0-cleanup_failed"])
+def test_runtime_capture_failure_preserves_real_exit_and_reason(tmp_path, reason, exit_code, cleanup):
+    """The immutable provider trace keeps the real exit, stop reason and streams in every case.
+
+    An ordinary capture failure is the final diagnostic. When process cleanup itself failed,
+    the later handoff diagnostic reports claude_cli_cleanup_failed with no transport exit code
+    of its own, while the earlier trace still holds the process facts.
+    """
+    extra = {"cleanup_error": "cleanup diagnostic"} if cleanup else {}
     def events(call):
         yield _init()
         yield _result()
         if reason == "timeout":
-            raise CliProcessTimeout(call["argv"], 1, returncode=exit_code,
-                output="captured provider output", stderr="actual stderr", cleanup_error="cleanup diagnostic",
-                stream_error="additional stream diagnostic")
+            raise CliProcessTimeout(call["argv"], 1, returncode=exit_code, output="captured provider output",
+                stderr="actual stderr", stream_error="additional stream diagnostic", **extra)
         raise CliProcessError(exit_code, call["argv"], stop_reason=reason, message="Runtime capture stopped",
-            output="captured provider output", stderr="actual stderr", cleanup_error="cleanup diagnostic",
-            stream_error="additional stream diagnostic")
+            output="captured provider output", stderr="actual stderr", stream_error="additional stream diagnostic",
+            **extra)
     run, cell = _run(_environment(tmp_path), tmp_path, events)
     attempt = run.attempts[0]
     assert attempt.status == "failed" and not run.outputs
-    assert attempt.failure_class == ("timeout" if reason == "timeout" else "transport")
     assert attempt.usage.input_tokens == 7 and attempt.usage.output_tokens == 3
     trace = json.loads(cell.read_bytes(attempt.provider_trace_ref, attempt.provider_trace_sha256))
+    assert trace["stage"] == "provider_invocation"
     assert trace["exit_code"] == exit_code and trace["stop_reason"] == reason
-    assert trace["process_output_complete"] is False and trace["cleanup_error"] == "cleanup diagnostic"
+    assert trace["process_output_complete"] is False and trace.get("cleanup_error") == extra.get("cleanup_error")
     assert trace["stream_error"] == "additional stream diagnostic"
     assert trace["stdout"] == "captured provider output" and trace["stderr"] == "actual stderr"
     detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
-    assert detail["transport_exit_code"] == exit_code
+    if cleanup:
+        assert attempt.failure_class == "transport" and detail["failure_code"] == "claude_cli_cleanup_failed"
+        assert detail["transport_exit_code"] is None
+    elif reason == "timeout":
+        assert attempt.failure_class == "timeout" and detail["failure_code"] == "claude_cli_timeout"
+        assert detail["transport_exit_code"] == exit_code
+    else:
+        assert attempt.failure_class == "transport" and detail["failure_code"] == "claude_cli_process_failed"
+        assert detail["transport_exit_code"] == exit_code
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("primary_reason", ["output_limit", "stream_error", "cleanup_error"])
 def test_capture_primary_reason_is_not_replaced_by_late_invalid_event(tmp_path, primary_reason):
     def events(call):
@@ -808,6 +972,7 @@ def test_capture_primary_reason_is_not_replaced_by_late_invalid_event(tmp_path, 
 
 @pytest.mark.parametrize("usage", ["bad", [], {"input_tokens":"7"}, {"output_tokens":-1},
     {"input_tokens":True}, {"cache_read_input_tokens":1.5}])
+@pytest.mark.fake_run
 @pytest.mark.parametrize("status", [None, 401, 403, 429])
 def test_malformed_usage_never_overwrites_result_or_loses_evidence(tmp_path, usage, status):
     def events(call):
@@ -822,6 +987,7 @@ def test_malformed_usage_never_overwrites_result_or_loses_evidence(tmp_path, usa
     assert trace["result"]["usage"] == usage
 
 
+@pytest.mark.fake_run
 def test_unknown_usage_remains_unknown(tmp_path):
     def events(call):
         yield _init()
@@ -831,15 +997,54 @@ def test_unknown_usage_remains_unknown(tmp_path):
     assert run.attempts[0].usage.input_tokens is None and run.attempts[0].usage.output_tokens is None
 
 
-def test_valid_usage_includes_reported_cache_counts(tmp_path):
+@pytest.mark.fake_run
+@pytest.mark.parametrize("reported, expected", [
+    # Claude's input_tokens is ordinary input; Runtime input_tokens is the cache-inclusive total.
+    ({"input_tokens": 2, "output_tokens": 5, "cache_read_input_tokens": 11, "cache_creation_input_tokens": 13},
+     (26, 2, 11, 13, 5)),
+    ({"input_tokens": 2, "output_tokens": 5, "cache_read_input_tokens": 11}, (None, 2, 11, None, 5)),
+    ({"input_tokens": 2, "output_tokens": 5}, (None, 2, None, None, 5)),
+    ({"output_tokens": 5, "cache_read_input_tokens": 11, "cache_creation_input_tokens": 13}, (None, None, 11, 13, 5)),
+    ({"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+     (0, 0, 0, 0, 0)),
+], ids=["all_known", "cache_creation_missing", "caches_missing", "ordinary_missing", "zeros"])
+def test_valid_usage_keeps_ordinary_input_beside_the_cache_inclusive_total(tmp_path, reported, expected):
     def events(call):
         yield _init()
-        yield _result(usage={"input_tokens":2, "output_tokens":5,
-                             "cache_read_input_tokens":11, "cache_creation_input_tokens":13})
+        yield _result(usage=reported)
     run, cell = _run(_environment(tmp_path), tmp_path, events)
     _assert_completed_provider_run(run, cell)
     usage = run.attempts[0].usage
-    assert (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_creation_tokens) == (26, 5, 11, 13)
+    assert (usage.input_tokens, usage.ordinary_input_tokens, usage.cache_read_tokens,
+            usage.cache_creation_tokens, usage.output_tokens) == expected
+
+
+@pytest.mark.fake_run
+@pytest.mark.parametrize("ordinary", [True, -1, "2", 1.5])
+def test_invalid_ordinary_input_is_unknown_and_fails_the_usage_check(tmp_path, ordinary):
+    def events(call):
+        yield _init()
+        yield _result(usage={"input_tokens": ordinary, "output_tokens": 5,
+                             "cache_read_input_tokens": 11, "cache_creation_input_tokens": 13})
+    run, _ = _run(_environment(tmp_path), tmp_path, events)
+    attempt = run.attempts[0]
+    assert attempt.failure_class == "schema" and not run.outputs
+    assert (attempt.usage.input_tokens, attempt.usage.ordinary_input_tokens) == (None, None)
+    assert (attempt.usage.cache_read_tokens, attempt.usage.cache_creation_tokens) == (11, 13)
+
+
+@pytest.mark.fake_run
+def test_failed_attempt_keeps_the_reported_input_breakdown(tmp_path):
+    def events(call):
+        yield _init()
+        yield _result(usage={"input_tokens": 2, "output_tokens": 5, "cache_read_input_tokens": 11,
+                             "cache_creation_input_tokens": 13},
+                      api_error_status=429, is_error=True, subtype="error_during_execution")
+    run, _ = _run(_environment(tmp_path), tmp_path, events)
+    attempt = run.attempts[0]
+    assert attempt.status == "failed" and attempt.failure_class == "rate_limit"
+    assert (attempt.usage.input_tokens, attempt.usage.ordinary_input_tokens, attempt.usage.cache_read_tokens,
+            attempt.usage.cache_creation_tokens) == (26, 2, 11, 13)
 
 
 @pytest.mark.parametrize("value", ["--other-option", "model with spaces", "x\nsecret", "", None, 1])
@@ -856,39 +1061,60 @@ def test_native_module_profile_tools_are_not_gateway_operations(tmp_path):
     assert _assert_admitted_test_evaluation_profile(module, profile) is None
 
 
-_TOOL_SUBSETS = tuple(combination for size in range(4)
-                      for combination in combinations(("read", "search", "shell"), size))
+# One row per distinct current branch of the ordinary (non-extension) Claude call:
+# tools, workspace, network and output mode. Empty tools are covered by the tool_free test below.
+_FIELD_ROWS = {
+    "read_only": (("read",), "none", "provider_managed", "prompt_only_json"),
+    "search_only": (("search",), "none", "provider_managed", "native_structured_output"),
+    "draft_without_edit": (("read", "search"), "own_draft_read_write", "provider_managed", "prompt_only_json"),
+    "draft_with_edit": (("edit", "read", "search"), "own_draft_read_write", "provider_managed", "native_structured_output"),
+    "shell_provider_managed": (("read", "search", "shell"), "none", "provider_managed", "native_structured_output"),
+    "shell_saved_strict": (("read", "shell"), "own_draft_read_write", "denied", "prompt_only_json"),
+}
 
 
-@pytest.mark.parametrize("tools", _TOOL_SUBSETS)
-@pytest.mark.parametrize("workspace", ["none", "own_draft_read_write"])
-@pytest.mark.parametrize("output_mode", ["prompt_only_json", "native_structured_output"])
-def test_claude_adapter_executes_each_agent_field_combination(tmp_path, tools, workspace, output_mode):
-    """Actual kernel -> Adapter -> runner; no command-builder-only success claim."""
+@pytest.mark.fake_run
+@pytest.mark.parametrize("row", sorted(_FIELD_ROWS))
+def test_claude_adapter_executes_each_agent_field_combination(tmp_path, row):
+    """Actual kernel -> Adapter -> runner for each current field branch; not a command-builder-only claim."""
+    tools, workspace, network, output_mode = _FIELD_ROWS[row]
     calls = []
     native = output_mode == "native_structured_output"
+    env = _environment(tmp_path, tools=tools, workspace=workspace, network=network, output_mode=output_mode,
+                       material=b"authorized evidence")
+    expected = _native(env[0].execution_profile)
+    shell = "shell" in tools
+    python_roots = [str(Path(value).resolve()) for value in dict.fromkeys((sys.prefix, sys.base_prefix))]
     def events(call):
         calls.append(call)
         argv = call["argv"]
-        expected = ",".join(claude.NATIVE_TOOLS[tool] for tool in tools)
-        assert argv[argv.index("--tools")+1] == expected
-        assert argv[argv.index("--allowedTools")+1] == expected
+        assert argv[argv.index("--tools")+1] == ",".join(expected)
+        allowed = [tool for tool in expected if tool in {"Read", "Grep", "Glob"}]
+        if "edit" in tools:
+            allowed.append("Edit(./scratch/**)")
+        assert _allowed(argv) == allowed  # Bash is offered as a tool but never preapproved without a permit.
+        assert argv[argv.index("--permission-mode")+1] == "dontAsk" and "--restricted" not in argv
         assert ("--json-schema" in argv) is native
         assert json.loads(argv[argv.index("--mcp-config")+1]) == {"mcpServers": {}}
         assert "--max-turns" not in argv and "--max-budget-usd" not in argv
+        assert call["cwd"].name == "work"  # The ordinary Attempt runs in work/, beside materials/.
+        assert (call["cwd"] / "scratch").is_dir() is (workspace == "own_draft_read_write")
+        assert (call["cwd"] / "materials/source").read_bytes() == b"authorized evidence"
         settings = json.loads(argv[argv.index("--settings")+1])
-        fs = settings["sandbox"]["filesystem"]
-        if workspace == "none":
-            assert fs["denyWrite"] == ["/"] and fs["allowWrite"] == []
-            assert not (call["cwd"] / "scratch").exists()
-            material = call["cwd"] / "materials/source"
+        permissions = settings["permissions"]
+        assert permissions["blockReadsOutsideWorkingDirectories"] and permissions["blockWritesOutsideWorkingDirectories"]
+        assert permissions["additionalDirectories"] == (python_roots if shell else [])
+        assert permissions.get("deny") == (["Edit(./materials/**)"] if "edit" in tools else None)
+        if shell:  # Shell-capable calls use the Python running Runtime first on PATH.
+            assert call["environment"]["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).absolute().parent)
+        if network == "denied":  # An explicitly saved strict Profile is passed to Claude unchanged.
+            sandbox = settings["sandbox"]
+            assert sandbox["enabled"] is True and sandbox["failIfUnavailable"] is True
+            assert sandbox["filesystem"] == {"allowWrite": [call["environment"]["TMPDIR"]]}
+            assert sandbox["network"]["allowedDomains"] == []
         else:
-            assert call["cwd"].name == "scratch"
-            assert fs["allowWrite"] == [str(call["cwd"]), call["environment"]["TMPDIR"]]
-            material = call["cwd"].parent / "materials/source"
-        assert material.read_bytes() == b"authorized evidence"
-        # This double proves staging/translation; OS denial is separately live-tested.
-        initialization = _init(tuple(claude.NATIVE_TOOLS[tool] for tool in tools))
+            assert "sandbox" not in settings
+        initialization = _init(tuple(expected))
         if not native:
             initialization["tools"].remove("StructuredOutput")
         yield initialization
@@ -897,25 +1123,31 @@ def test_claude_adapter_executes_each_agent_field_combination(tmp_path, tools, w
             terminal.pop("structured_output")
             terminal["result"] = '{"value":"checked"}'
         yield terminal
-    run, cell = _run(_environment(tmp_path, tools=tools, workspace=workspace, output_mode=output_mode,
-                                  material=b"authorized evidence"), tmp_path, events)
+    run, cell = _run(env, tmp_path, events)
     assert _assert_completed_provider_run(run, cell) == {"value": "checked"}
     assert len(calls) == 1
     trace = json.loads(cell.read_bytes(run.attempts[0].provider_trace_ref, run.attempts[0].provider_trace_sha256))
-    assert (trace["executor_adapter_id"], trace["executor_adapter_revision"]) == ("claude_cli_adapter", "v3")
+    assert (trace["executor_adapter_id"], trace["executor_adapter_revision"]) == ("claude_cli_adapter", "v4")
     assert hashlib.sha256(trace["actual_prompt"].encode()).hexdigest() == trace["prompt_envelope_sha256"]
     assert trace["execution_profile_ref"] == run.variants[0].execution_profile_ref
+    effective = trace["effective_configuration"]
+    assert effective["tools"] == expected and effective["permission_mode"] == "dontAsk"
+    assert effective["write_directories"] == ([str(calls[0]["cwd"] / "scratch")] if "edit" in tools else [])
+    assert effective["command_scope"] == ("native_read_only_plus_permits" if shell else "none")
     assert "tool_log" not in trace
     assert parse_cli_log(trace)["complete"]
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("output_mode", ["prompt_only_json", "native_structured_output"])
 def test_tool_free_uses_same_adapter_with_explicit_empty_tools(tmp_path, output_mode):
     native = output_mode == "native_structured_output"
     def events(call):
         assert call["argv"][call["argv"].index("--tools") + 1] == ""
-        settings = json.loads(call["argv"][call["argv"].index("--settings") + 1])
-        assert settings["permissions"]["additionalDirectories"] == [str(call["cwd"] / "materials")]
+        assert _allowed(call["argv"]) == [""]
+        # A tool-free call gets no file permissions block and no task directories.
+        assert json.loads(call["argv"][call["argv"].index("--settings") + 1]) == {}
+        assert "--add-dir" not in call["argv"] and ("--json-schema" in call["argv"]) is native
         init = _init(())
         if not native:
             init["tools"] = []
@@ -926,33 +1158,54 @@ def test_tool_free_uses_same_adapter_with_explicit_empty_tools(tmp_path, output_
     assert _assert_completed_provider_run(run, cell) == {"value": "checked"}
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
 def test_model_and_effort_preserve_permissions_and_actual_selection(tmp_path, effort):
     def events(call):
         argv = call["argv"]
         assert argv[argv.index("--model")+1] == "concrete-other-model"
         assert argv[argv.index("--effort")+1] == effort
-        assert argv[argv.index("--tools")+1] == "Grep,Read"
+        # The model and effort never widen the recorded tools or their preapproval.
+        assert argv[argv.index("--tools")+1] == "Grep,Glob,Read"
+        assert _allowed(argv) == ["Grep", "Glob", "Read"]
         assert call["timeout_seconds"] == 60
-        yield {**_init(("Grep", "Read")), "model": "concrete-other-model"}
+        yield {**_init(("Grep", "Glob", "Read")), "model": "concrete-other-model"}
         yield {"type": "assistant", "message": {"model": "concrete-other-model", "content": []}}
         yield _result()
     run, cell = _run(_environment(tmp_path, tools=("search", "read"), model="concrete-other-model", effort=effort), tmp_path, events)
     _assert_completed_provider_run(run, cell)
 
 
+def _count_processes(monkeypatch):
+    """Record every process the Runtime creates (preflight or Provider) during this test."""
+    from agent_runtime.invocation import invocation_process_execution as processes
+    created = []
+    create = processes.HOST_PLATFORM.create_cli_process
+    def counting(argv, **kwargs):
+        created.append(list(argv))
+        return create(argv, **kwargs)
+    monkeypatch.setattr(processes.HOST_PLATFORM, "create_cli_process", counting)
+    return created
+
+
+@pytest.mark.fake_run
 @pytest.mark.parametrize("effort", ["none", "ultra", "--tools", "", "high;echo injected"])
-def test_invalid_effort_never_launches_provider(tmp_path, effort):
+def test_invalid_effort_never_launches_provider(tmp_path, monkeypatch, effort):
     def unused(call):
         pytest.fail("invalid effort reached Provider")
         yield
     try:
         env = _environment(tmp_path, effort=effort)
     except ValueError:
-        assert effort in {"", "--tools", "high;echo injected"}
+        assert effort in {"", "--tools", "high;echo injected"}  # Rejected when the Profile is compiled.
         return
-    run, cell = _run(env, tmp_path, unused)
-    assert run.attempts[0].status == "failed"
+    created = _count_processes(monkeypatch)
+    run, cell = _run(env, tmp_path, unused, monkeypatch)
+    attempt = run.attempts[0]
+    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+    assert attempt.status == "failed" and not run.outputs
+    assert "unsupported CLI effort" in detail["message"]
+    assert created == [] and not (tmp_path / "attempts").exists()  # No preflight, Provider or workspace.
 
 
 @pytest.mark.parametrize("binding", [("claude_cli_adapter", "v1"), ("claude_cli_adapter", "v2"), ("claude_cli_native_tools_executor", "v2"),
@@ -963,36 +1216,30 @@ def test_unknown_adapter_identity_rejected_before_resource_resolution(tmp_path, 
             workspace_root=tmp_path, cli_path=tmp_path / "missing", adapter_binding=binding)
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("tools", [("unknown_tool",), ("Read",), ("read", "read"), ("Bash(*)",)])
-def test_unsupported_or_malformed_tools_never_reach_provider(tmp_path, tools):
+def test_unsupported_or_malformed_tools_never_reach_provider(tmp_path, monkeypatch, tools):
     def unused(call):
         pytest.fail("unrecognized tools reached Provider")
         yield
     if tools in {("Read",), ("read", "read"), ("Bash(*)",)}:
         with pytest.raises(ValueError):
             _environment(tmp_path, tools=tools)
-    else:
-        run, _ = _run(_environment(tmp_path, tools=tools), tmp_path, unused)
-        assert run.attempts[0].status == "failed"
-
-
-def test_command_renderer_and_execute_share_the_field_validator(tmp_path, monkeypatch):
-    seen = []
-    validate = claude._execution_expectation
-    def observe(profile, binding):
-        seen.append((profile.release_ref, binding))
-        return validate(profile, binding)
-    monkeypatch.setattr(claude, "_execution_expectation", observe)
-    def events(call):
-        yield _init()
-        yield _result()
-    run, cell = _run(_environment(tmp_path), tmp_path, events)
-    _assert_completed_provider_run(run, cell)
-    assert len(seen) == 2 and seen[0] == seen[1]
+        return
+    # An unknown logical name is a callback tool, never a native one; without a trusted
+    # self-test factory it is refused before any process or workspace.
+    created = _count_processes(monkeypatch)
+    run, cell = _run(_environment(tmp_path, tools=tools), tmp_path, unused, monkeypatch)
+    attempt = run.attempts[0]
+    detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+    assert attempt.status == "failed" and attempt.failure_class == "authorization"
+    assert "callbacks require a trusted self-test Factory" in detail["message"]
+    assert created == [] and not (tmp_path / "attempts").exists()
 
 
 @pytest.mark.parametrize("detail", ["Exit code 2\ncommand usage error",
                                        "Exit code 1\napplication text: operation not permitted"])
+@pytest.mark.fake_run
 def test_shell_error_text_does_not_invent_a_policy_denial(tmp_path, detail):
     def events(call):
         yield _init()
@@ -1016,14 +1263,15 @@ def test_shell_error_text_does_not_invent_a_policy_denial(tmp_path, detail):
     assert trace["result"]["permission_denials"] == []
 
 
-def test_schema_mode_mismatch_cannot_create_cli_argv(tmp_path):
+def test_schema_mode_mismatch_cannot_create_cli_argv(tmp_path, monkeypatch):
     env = _environment(tmp_path)
     adapter = claude.ClaudeAdapter(release_registry=env[1], artifact_host=env[2],
-        workspace_root=tmp_path / "attempts", cli_path=_fake_cli(tmp_path))
+        workspace_root=tmp_path / "attempts", cli_path=_fake_cli(tmp_path, monkeypatch))
     with pytest.raises(ValueError, match="schema presence"):
         adapter.build_command(profile=env[0].execution_profile, settings={}, output_schema=None)
 
 
+@pytest.mark.fake_run
 def test_claude_projection_failure_prevents_provider_invocation(tmp_path, monkeypatch):
     """Canonical projection refusal precedes CLI preflight and Provider calls."""
     env = _environment(tmp_path, tools=(), mode="tool_free", workspace="none",
@@ -1032,6 +1280,7 @@ def test_claude_projection_failure_prevents_provider_invocation(tmp_path, monkey
     def no_process(*args, **kwargs):
         pytest.fail("schema projection failure must precede any CLI process")
     monkeypatch.setattr(claude.subprocess, "run", no_process)
+    monkeypatch.setattr(claude, "run_cli_process", no_process)  # The owned preflight runner.
     def unused_provider(call):
         calls.append(call)
         pytest.fail("unsupported schema reached Provider")
@@ -1047,19 +1296,20 @@ def test_claude_projection_failure_prevents_provider_invocation(tmp_path, monkey
 
 
 @pytest.mark.parametrize("binding", [("claude_cli_adapter", "v1"), ("claude_cli_adapter", "v2"), ("claude_cli_native_tools_executor", "v2")])
-def test_historical_claude_profile_is_readable_but_not_silently_reexecuted(tmp_path, binding):
+def test_historical_claude_profile_is_readable_but_not_silently_reexecuted(tmp_path, monkeypatch, binding):
     env = _environment(tmp_path, material=b"historical material", binding=binding)
     original = env[0].execution_profile.as_dict()
     def unused(**_):
         pytest.fail("historical Profile reached a new Provider invocation")
     with pytest.raises(ValueError, match="historical records"):
         claude.ClaudeAdapter(release_registry=env[1], artifact_host=env[2], workspace_root=tmp_path,
-                            cli_path=_fake_cli(tmp_path), process_runner=unused, adapter_binding=binding)
+                            cli_path=_fake_cli(tmp_path, monkeypatch), process_runner=unused, adapter_binding=binding)
     restored = env[1].get_execution_profile(env[0].execution_profile.release_ref, env[0].execution_profile.release_sha256)
     assert restored.as_dict() == original
     assert env[0].execution_profile.as_dict() == original
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("change", [{"tools": ()}, {"workspace": "none"}])
 def test_old_v2_identity_cannot_claim_new_capabilities(tmp_path, change):
     def unused(call):
@@ -1083,7 +1333,20 @@ def test_cli_adapter_import_does_not_require_sdk():
     subprocess.run([sys.executable, "-I", "-B", "-c", code], check=True, capture_output=True)
 
 
-@pytest.mark.skipif(os.environ.get("RUN_PROVIDER_INTEGRATION") != "1", reason="explicit live Claude test")
+# Live Claude runs on the macOS AB host. The strict cases are explicitly saved denied+Shell
+# Profiles: Runtime passes that saved choice to Claude, and Claude enforces or reports it.
+_AB_LIVE = pytest.mark.skipif(
+    os.environ.get("RUN_PROVIDER_INTEGRATION") != "1" or sys.platform != "darwin",
+    reason="unverified: explicit live Claude run on the macOS AB host (its commands use macOS paths); set "
+           "RUN_PROVIDER_INTEGRATION=1, AGENT_RUNTIME_TEST_AB_WORKSPACE and AGENT_RUNTIME_TEST_CLAUDE_BIN")
+_LIVE = pytest.mark.skipif(
+    os.environ.get("RUN_PROVIDER_INTEGRATION") != "1",
+    reason="unverified: explicit live Claude run; set RUN_PROVIDER_INTEGRATION=1, "
+           "AGENT_RUNTIME_TEST_AB_WORKSPACE and AGENT_RUNTIME_TEST_CLAUDE_BIN")
+
+
+@pytest.mark.real_run
+@_AB_LIVE
 def test_live_claude_native_tools_in_ab(tmp_path):
     root = Path(os.environ["AGENT_RUNTIME_TEST_AB_WORKSPACE"]).resolve(strict=True)
     cli_path = Path(os.environ["AGENT_RUNTIME_TEST_CLAUDE_BIN"]).resolve(strict=True)
@@ -1134,13 +1397,15 @@ def test_live_claude_native_tools_in_ab(tmp_path):
     print(json.dumps({"attempt": attempt.attempt_id, "tools": sorted(used), "cli_version": trace["cli_version"]}))
 
 
-@pytest.mark.skipif(os.environ.get("RUN_PROVIDER_INTEGRATION") != "1", reason="explicit live Claude test")
+@pytest.mark.real_run
+@_AB_LIVE
 @pytest.mark.parametrize("capture_exit", [False, True])
 def test_live_claude_rejects_ab_sibling_read(tmp_path, capture_exit):
+    """Explicit saved strict case (network denied with Shell) on the macOS AB host, not an ordinary-call default."""
     root = Path(os.environ["AGENT_RUNTIME_TEST_AB_WORKSPACE"]).resolve(strict=True)
     sibling = root / "outside_attempt.txt"
     sibling.write_text("outside_attempt_sentinel")
-    compiled, registry, cell, _, _ = _environment(tmp_path)
+    compiled, registry, cell, _, _ = _environment(tmp_path, network="denied")  # Explicitly saved strict Profile.
     command = f"/bin/cat {sibling}" + (" || true" if capture_exit else "")
     prompt = _evaluation_prompt(cell, compiled, suffix="ab_denied_live", execution_specific_instructions=(
         f"Use Bash once to run this exact command: {command}\nReport the actual result. "
@@ -1167,10 +1432,15 @@ def test_live_claude_rejects_ab_sibling_read(tmp_path, capture_exit):
     assert all("outside_attempt_sentinel" not in str(e["content"]) for e in results)
 
 
-@pytest.mark.skipif(os.environ.get("RUN_PROVIDER_INTEGRATION") != "1", reason="explicit live Claude test")
+@pytest.mark.real_run
+@_AB_LIVE
 @pytest.mark.parametrize("boundary", ["symlink_read", "material_write", "dependency_write", "network"])
 def test_live_claude_resource_boundaries_in_ab(tmp_path, boundary):
-    """Verify actual resource effects, independently of how a shell reports failure."""
+    """Explicit saved strict case (network denied with Shell) on the macOS AB host.
+
+    Verifies actual resource effects, independently of how a shell reports failure. This is
+    not an ordinary-call default: ordinary calls use provider_managed without a sandbox.
+    """
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from tempfile import TemporaryDirectory
     from threading import Thread
@@ -1205,7 +1475,7 @@ def test_live_claude_resource_boundaries_in_ab(tmp_path, boundary):
                 "network": f"printf 'GET /probe HTTP/1.0\\r\\n\\r\\n' | /usr/bin/nc -v -w 2 127.0.0.1 {server.server_port}",
             }
             command = commands[boundary]
-            env = _environment(tmp_path, material=b"original_material", instructions=(
+            env = _environment(tmp_path, material=b"original_material", network="denied", instructions=(
                 "This is an authorized isolation test using disposable fixtures. Use Bash once to execute "
                 f"this exact command, even if the sandbox will deny it: {command}\n"
                 "Do not retry or request unsandboxed access. Return value='blocked' if denied, otherwise 'executed'."
@@ -1243,7 +1513,8 @@ def test_live_claude_resource_boundaries_in_ab(tmp_path, boundary):
         worker.join(timeout=2)
 
 
-@pytest.mark.skipif(os.environ.get("RUN_PROVIDER_INTEGRATION") != "1", reason="explicit live Claude test")
+@pytest.mark.real_run
+@_LIVE
 @pytest.mark.parametrize("tool", ["read", "search"])
 def test_live_runtime_continues_after_file_tool_denial(tmp_path, tool):
     root = Path(os.environ["AGENT_RUNTIME_TEST_AB_WORKSPACE"]).resolve(strict=True)
@@ -1252,7 +1523,7 @@ def test_live_runtime_continues_after_file_tool_denial(tmp_path, tool):
     _, registry, cell, request, authority = _environment(tmp_path, tools=(tool,), material=b"authorized material", instructions=(
         f"This is an authorized boundary test with a disposable fixture. Use {claude.NATIVE_TOOLS[tool]} once "
         f"on the exact file {outside}" + (" with pattern '.'" if tool == "search" else "") +
-        ". After that refusal, use the same tool on ../materials/source" + (" with pattern '.'" if tool == "search" else "") +
+        ". After that refusal, use the same tool on materials/source" + (" with pattern '.'" if tool == "search" else "") +
         ". Do not retry the forbidden path or ask for escalation. Return value='blocked' after the allowed read."
     ))
     adapters = AgentExecutionAdapterRegistry()
@@ -1277,9 +1548,10 @@ def test_live_runtime_continues_after_file_tool_denial(tmp_path, tool):
                    .endswith("materials/source") for item in calls)
 
 
+@pytest.mark.real_run
 @pytest.mark.skipif(
     os.environ.get("RUN_PROVIDER_INTEGRATION") != "1" or os.environ.get("RUN_AB_REVIEWER_PG") != "1",
-    reason="explicit real AB Reviewer and PostgreSQL validation",
+    reason="unverified: explicit real AB Reviewer and PostgreSQL run; set RUN_PROVIDER_INTEGRATION=1 and RUN_AB_REVIEWER_PG=1",
 )
 def test_live_ab_registered_design_reviewer_and_postgres(tmp_path):
     """Use a real registered Reviewer and request; permission ports are test-owned."""

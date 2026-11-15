@@ -58,33 +58,44 @@ adapters.register(adapter)
 
 project_root、workflow_id 指向准确注册；requested_model/requested_effort 为本次选择，None 依次取执行参数文件与 Runtime 默认。cell_artifacts、adapters 和 host_* 是已有执行入口的真实资源。通过 run_registered_workflow_module 或 run_workflow_module 消费同一次准备结果，完整参数沿用公共 API。普通自测直接使用 agent-runtime-test-run，无需手工实例化 Adapter 或提供 PG。
 
-新准备使用 claude_cli_adapter@v3，完整实际输入在 Prompt Envelope 保存前固定。旧
-claude_cli_adapter@v1/v2 和 claude_cli_native_tools_executor@v2 的记录仍按原 bytes/hash 读取，
+新准备使用 claude_cli_adapter@v4，完整实际输入在 Prompt Envelope 保存前固定。旧
+claude_cli_adapter@v1/v2/v3 和 claude_cli_native_tools_executor@v2 的记录仍按原 bytes/hash 读取，
 已提交请求通过原记录重放；新包不执行这些旧 pair，也不将其改写成新绑定。当前宿主入口先迁移
-到公共准备接口，再采用新包；需要再次执行时明确准备新的 Profile。新调用的草稿 cwd 和写区均为 scratch。
+到公共准备接口，再采用新包；需要再次执行时明确准备新的 Profile。普通调用的私有草稿以 Attempt 的
+work 为 cwd（materials 与 scratch 并列），只有 `./scratch/**` 可写；显式项目以调用者的
+`project_directory` 为 cwd 和写区；本地命令/callback 扩展调用保持原有 scratch cwd。
 
 ## 2. 参数与材料
 
 | Profile 工具 ID | Claude 原生工具 |
 | --- | --- |
 | read | Read |
-| search | Grep |
+| search | Grep、Glob |
+| edit | Edit、Write（`Edit(path)` 规则同时约束 Write） |
 | shell | Bash |
+| mcp__&lt;name&gt; | 宿主 `.runtime/config.json` 的 `mcp_servers.claude_cli.<name>` 连接 |
 
-可以选择全部子集，空集合明确产生 --tools 空字符串并关闭 MCP。tool_free 与 agent+空工具都不会隐含授予工具。attempt_workspace_policy=none 不提供模型可写草稿；own_draft_read_write 仅授予明确私有写区，工具和文件权限共同生效。
+工具按记录的 `tool_policy` 精确映射，不另加工具；没有 `edit` 的已保存快照不获得 Write/Edit。空集合明确产生 --tools 空字符串。tool_free 与 agent+空工具都不会隐含授予工具。attempt_workspace_policy=none 不提供模型可写草稿；own_draft_read_write 仅授予私有 scratch；explicit_project_read_write 授予调用者提供的已存在目录（Runtime 从不删除、封存或清理它）。`edit` 需要可写 workspace。
 
 model_id 原样传入 CLI，包含 Claude 支持的 `[1m]` 选择形式；不依赖
 API-key-only beta。CLI 不锁定某一个版本，代码检查所需选项，并在 trace 中记录实际版本。
 新 CLI 的实际行为仍需要相应测试，不能仅凭 `--help` 断言隔离或输出能力。
 
-当前 v3 在 Attempt 的私有目录运行模型；有草稿时 cwd 是 scratch，无草稿时不提供可写 scratch。授权输入按安全的 logical_name 放入只读 materials，
-提供路径索引。只有要求允许草稿时才提供可写 scratch；local_handle 只经过 host 查表。CLI 的 restricted 模式约束 Read/Grep 的
-实际路径，Bash 使用原生 sandbox；运行依赖显式只读提供，网络默认关闭。旧 draft 的隐含工具权限
+当前 v4 在 Attempt 的私有目录（或显式项目目录）运行模型。授权输入按安全的 logical_name 放入只读 materials，
+提供路径索引；local_handle 只经过 host 查表。文件工具由 Claude 自身的 `blockReadsOutsideWorkingDirectories`
+与 `blockWritesOutsideWorkingDirectories` 限定在工作目录（cwd 加 `--add-dir` 的只读目录）内；草稿布局另以
+`Edit(./materials/**)` 拒绝修改材料。OS sandbox 只在 Profile 明确记录 network `denied` 且含 Shell 时配置，
+由 Claude 自己报告能否执行；`provider_managed` 不加 sandbox。运行依赖显式只读提供。旧 draft 的隐含工具权限
 不会继续执行，需使用显式工具配置。
 
-所有 argv 由同一 Adapter 转换逻辑组装，实际调用使用它；输入经 stdin，settings 仅来自已验证资源，调用方不透传任意参数/JSON。命令与生效配置记录在 trace 中。
-原生 Bash 中可使用 head、git diff、ls、grep 等普通命令，不设命令白名单。未提供记录型命令或任务 callback 时，safe-mode 关闭自动加载的
-CLAUDE.md、Skills、Plugins 和 hooks，MCP 与会话持久化也关闭；提供 commands 或 callback 时使用显式 MCP 配置。原生工具会话的临时目录由 Runtime 独立创建，退出后清理。原始任务、工具记录、实际配置与
+所有 argv 由同一 Adapter 转换逻辑组装，实际调用使用它；输入经 stdin，settings 仅来自已验证资源，调用方不透传任意参数/JSON。命令与生效配置记录在 trace 中，`effective_configuration` 汇总实际工具、允许规则、读写目录、MCP 连接（名称与配置哈希）、命令范围和 CLI 版本。
+Bash 不默认开放：Runtime 只为宿主提供的 `command_permits` 渲染 `Bash(<permit>)` 允许规则，从不渲染裸 `Bash`；
+Claude 文档中的内置只读命令（含只读 git 形式）始终可运行，因此许可是预批准而非封闭白名单
+（`command_scope=native_read_only_plus_permits`）。封闭命令集需要 §2.1 的显式 commands 扩展。
+用户与项目的 Claude 设置正常加载，其允许/拒绝规则照常生效。未声明 MCP 连接、记录型命令或任务 callback 时
+使用 safe-mode；声明 MCP 时以 strict MCP 只加载私有 `mcp.json` 中声明的连接，并以 settings 排除 CLAUDE.md、
+自动记忆、hooks 与 plugins。原生工具会话的临时目录由 Runtime 独立创建；进程停止已确认时退出后清理，
+未确认时保留并报告其位置。原始任务、工具记录、实际配置与
 结果通过现有私有 trace 和 Ledger 返回；已授权存储才持久保存，无 PG 自测不承诺跨进程恢复。执行失败与 Reviewer 的 non_pass 分开解释。
 
 当前 CLI 支持 Runtime 本地命令与明确自测 callback 的进程桥；callback 的定义和资源由可信
@@ -103,7 +114,7 @@ stdout/stderr 保留有界原始输出，process_output_complete=false 表示它
 自定义 process_runner 仍可使用标准 subprocess 异常；Runtime runner 的停止和超时异常分别
 兼容 CalledProcessError 和 TimeoutExpired，不能将 Runtime 停止原因解释为进程退出码。
 
-CLI 使用 auto 模式处理其内置的确认判断，不使用 bypassPermissions；文件与网络窗口继续强制执行。
+CLI 使用 `--permission-mode dontAsk`：未被允许规则覆盖的操作被拒绝而不是询问；不使用 bypassPermissions，文件与网络窗口继续强制执行。
 CLI 返回的 permission_denied、permission_denials 和普通工具错误逐次保留。Agent 可以在原有
 权限范围内处理错误并继续形成有效结果；它们本身不使 Attempt 失败。启动前按 Profile 配置工具、
 网络和工作区，普通运行不比较初始化工具清单或扫描工具日志来拒收输出。材料完整性、实际
@@ -118,22 +129,34 @@ Inspection 在明确请求详细日志时标明缺少或矛盾的事件，不从
 普通自测通过 `agent-runtime-test-run --resources FILE` 提供冻结材料树、只读依赖和任务命令，
 不需要调用者实例化 Adapter。资源控制包进入原 inputs hash 闭包，控制包本身保持私有；模型只看到
 任务全文、确定的相对材料位置和命令说明。实际 stdin 与保存的 Prompt Envelope 使用相同字节。
-可选 `.runtime/config.json` 只提供程序/依赖 locator 默认，完整参数见自动 API 中的 load_runtime_config。
+可选 `.runtime/config.json` 提供程序/依赖 locator 默认、Attempt 文件夹根（`attempt_workspace_root`）和可选
+MCP 连接（`mcp_servers`），完整参数见自动 API 中的 load_runtime_config。材料与依赖在所有宿主可用；
+commands 需要 macOS。
 
 有 commands 时，Runtime 增加一个 `sandbox_command_execute` 本地 MCP 工具，让 Agent 按
 command_id 选择本次已经提供的命令；原生 Read/Grep/Bash 保留。父进程使用当前真实资源 guard，
 在 macOS sandbox-exec 内执行该命令，保存实际 argv/cwd/returncode、stdout/stderr 与原始 bytes。
-同步调用的工作期限还约束这些命令和受管理子调用。进程清理复用 psutil 的后代关系、创建身份和发信号前的 PID 重用检查，
-结束时终止已确认的后台后代并检查其不再运行；不会按命令名全局清理。身份检查不能消除所有平台的
-检查与发信号间竞态。查询失败也须尝试停止已知 Provider 进程组，并报告不完整清理。此机制不提供操作系统
-级 daemon 容器，不能保证发现瞬间脱离且从未被观察到的后代。需要长期后台工作的任务应使用
+同步调用的工作期限还约束这些命令和受管理子调用。进程控制只作用于 Runtime 启动的进程：POSIX 以
+killpg 停止其会话进程组，Windows 以 TerminateProcess 停止该进程，随后在限定时间内确认退出；未确认
+时报告 cleanup_error 并保留私有目录。CLI 自己启动的进程归 CLI 管理，不被枚举；停止后仍被它们占用的
+输出管道记为 `output_streams_closed=false`（日志不完整），不是停止失败。需要长期后台工作的任务应使用
 明确的宿主作业入口，不把一次同步 Test Run 当作 daemon 管理器。
 IPC 代理和控制目录不进入模型或命令可读范围。这是本地资源工具，不是领域 Gateway 或生产 grant。
 
-命令与 callback 进程桥需要 `cli_tools` 可选依赖，使用 restricted、空 setting-sources、strict MCP，
+命令与 callback 进程桥需要 `cli_tools` 可选依赖，保持原有 settings 与允许列表，使用 strict MCP
 仅加载本次对应服务，以及明确的 memory/hooks/plugins 限制。safe-mode 会关闭 MCP，因此不用于
-这些桥接分支；只有原生工具或无工具时继续 safe-mode。首次接入或 CLI/配置变化时，在明确的
+这些桥接分支或声明 MCP 连接的调用；只有原生工具或无工具时继续 safe-mode。callback 进程桥需要
+Unix-domain socket，缺少该传输的宿主（Windows）在打开会话前报告不支持。首次接入或 CLI/配置变化时，在明确的
 能力测试中核对初始化与允许/拒绝效果；不能仅凭 help 声称隔离成立，也不增加绕过开关。
+
+| 能力 | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| 冻结材料与只读依赖 | 支持（只读权限位与可执行位） | 支持 | 支持（只读属性；不表示可执行位，链接与 reparse point 被拒绝） |
+| 原生 Read/Grep/Glob/Edit/Write、按许可的 Bash | 支持 | 支持 | 支持；Bash 需要 Claude 能找到 Git Bash：PATH 中第一个 `git` 不属于 Git for Windows 时，由宿主设置 Claude 文档中的 `CLAUDE_CODE_GIT_BASH_PATH`（Runtime 原样传递）。找不到时 Claude 不提供 Bash 工具（2.1.325 实测），Runtime 不把 `shell` 换成 PowerShell |
+| 声明的 MCP 连接 | 支持 | 支持 | 支持 |
+| 记录型 commands | 支持（sandbox-exec） | 不支持 | 不支持 |
+| 任务 callback | 支持 | 支持 | 不支持（无 Unix-domain socket） |
+| CLI 程序 | 原生程序或脚本（shebang） | 同左 | 只启动原生 `.exe`；`.cmd`/`.bat`/`.ps1` 启动器会让另一个解释器重新解析 argv，因此不启动，请在 `provider_cli_paths` 或 `cli_path` 配置它启动的原生程序 |
 
 Adapter 在原始 trace 的 local_command_calls/local_callback_calls 保留实际资源请求与结果。
 Inspection 按需生成统一日志，仅在实际返回的 local_call_id 与父进程事实唯一一致时合并为一次调用，同时保留 Provider
@@ -217,31 +240,29 @@ Reviewer/文稿负责人，不通过改启动参数或替换 schema 让它通过
 
 ## 4. Codex workspace 执行（Reviewer 默认环境）
 
-按 Reviewer 默认环境注册的 Module 可以选择 `codex_cli` 执行：本次调用、Workflow 或 workspace
-参数文件给出 `transport_kind=codex_cli`、模型与 effort，Runtime 绑定
-`codex_cli_agent_workspace_executor@v3`。无工具 Module 继续使用 `codex_cli_agent_executor@v4`。
+agent Module 可以选择 `codex_cli` 执行：本次调用、Workflow 或 workspace 参数文件给出
+`transport_kind=codex_cli`、模型与 effort，Runtime 绑定 `codex_cli_agent_workspace_executor@v4`。
+无工具 Module 使用 `codex_cli_agent_executor@v5`。
 执行器参数与错误见 [CodexCliAgentWorkspaceModuleExecutor API](agent_runtime_reviewer_api.md#codexcliagentworkspacemoduleexecutor)。
 
-| 项目 | Codex workspace v3 的做法 |
+| 项目 | Codex workspace v4 的做法 |
 | --- | --- |
-| 支持的组合 | agent、inline、私有草稿、工具网络关闭，工具须含 `shell`。Codex 没有独立的 Read、Grep 工具，read、search 由 shell 承担；只有 read 或 search 的组合在准备时报告 `ADAPTER_CAPABILITY_UNSUPPORTED` |
-| 主文件夹 | 每个 Attempt 一个：私有 scratch，是 Codex 的工作目录，`TMPDIR` 为其中的 `.tmp`。给 Agent 的说明写明它是唯一可以修改的位置；trace 的 `main_folder` 记录绝对路径 |
-| 可读 | 冻结材料（`../materials`）、只读依赖、当前 Runtime Python、Codex 程序的入口与实际文件（不含所在目录） |
-| 不可读 | `/Users`、`/Volumes`、`/tmp`、`/private/tmp`、宿主临时根、本次 Provider 私有状态、认证文件所在目录、工作区根下的其他内容 |
-| 网络 | 工具网络关闭 |
-| 在册缺口 | 权限以 Codex 内置只读基线为起点，未列入上面的系统目录（如 `/Library`、`/opt`、`/Applications`、`/etc`）可读、不可写；trace 的 `isolation_gaps` 记录 `system_directories_readable` |
-| 本地命令 | 资源声明 commands 时挂载唯一的 MCP 服务 `runtime_commands`，只暴露 `sandbox_command_execute`；命令由 Runtime 在 §2.1 的命令 sandbox 中执行，记录进同一执行日志 |
-| 不加载 | Web 搜索、apps、plugins、hooks、项目指令、个人配置与登录 shell 配置 |
+| 支持的组合 | agent、inline、network `denied` 或 `provider_managed`。含 Shell 时需要私有草稿或显式 `project_directory`；Codex 没有独立的 Read、Grep、Edit 工具，read、search、edit 由 shell 承担，没有 shell 的 read/search/edit 组合在准备时报告 `ADAPTER_CAPABILITY_UNSUPPORTED`。只声明 `mcp__<name>` 时 shell 关闭，workspace 可为 `none`，`file_io` 记录为 `unavailable_without_shell` |
+| 主文件夹 | 私有草稿：每个 Attempt 的 scratch，`TMPDIR` 为其中的 `.tmp`；显式项目：调用者的 `project_directory`，`TMPDIR` 为 Attempt 的 `work/tmp`。给 Agent 的说明写明可写区域，其他位置按 CLI 自身权限 |
+| 权限配置 | 每次调用生成的权限 profile 以 Codex 的 `:read-only` 为基线，把本次 Attempt 的只读材料文件夹声明为 `read`（表明预期输入，不声称由此强制），只对声明的可写文件夹授予写入；仅当 Profile 记录 `denied` 时关闭工具网络。Windows 上（codex-cli 0.166.0 实测）Codex sandbox 以自身身份运行命令，Codex 只为可写文件夹加入其 sandbox 访问项，其余读取依赖宿主在上层目录树设置的访问；因此 Attempt 的 work/materials/scratch 以继承宿主访问的普通方式创建（POSIX 仍为 0o700）。根目录位于受保护的临时目录或被应用包重定向的 AppData 时，sandbox 的 shell 无法进入工作目录。trace 的 `codex_permission_profile` 保存实际配置 |
+| 登录与配置 | 使用宿主自身的 Codex 登录（CODEX_HOME 原样传递，Runtime 不读取认证文件），`config.toml` 与 execpolicy 规则正常加载；项目文档、Skills、agents、Web 搜索与 apps/plugins/hooks 等功能关闭，`approval_policy="never"` |
+| MCP | 只渲染声明的连接（`-c mcp_servers.<name>`，凭据仅以 `env_vars`、`bearer_token_env_var`、`env_http_headers` 引用环境变量名）。`-c mcp_servers={}` 不会清除宿主配置里的服务器，因此每次 exec 前由同一程序执行 `mcp list --json`，对未声明的已启用服务器追加 `-c mcp_servers.<name>.enabled=false` 并再次列出核对；启用集合与声明不一致时在 exec 前拒绝（`ADAPTER_BINDING_UNAVAILABLE`）；列出进程本身超时、超限或停止未确认时保留原有失败类别与停止事实。列出内容在任何情况下都不写入 trace 或原始日志，trace 以 `cli_probe` 标明失败发生在 exec 之前。trace 只记录名称（`host_mcp_disabled`）与配置哈希 |
+| 命令许可 | Codex 没有逐次的命令许可，`command_permits` 报告 `ADAPTER_CAPABILITY_UNSUPPORTED`；Shell 记为 `command_scope=provider_policy`（宿主的 execpolicy 规则生效） |
+| 本地命令 | 仅 macOS：资源声明 commands 时挂载唯一的 MCP 服务 `runtime_commands`，只暴露 `sandbox_command_execute`；命令由 Runtime 在 §2.1 的命令 sandbox 中执行，记录进同一执行日志 |
 
-读写与网络范围由每次调用生成的 Codex 权限配置落实，trace 的 `codex_permission_profile` 保存
-实际传给 Codex 的配置。更具体的授权会覆盖上层拒绝，因此只读依赖与用户主目录、凭据目录、
-Provider 私有状态或工作区根重叠，或是 `/`、被拒绝的根及宿主临时根的上层目录时，Runtime 在
-启动 Provider 前以 PermissionError 拒绝；声明的命令能经命令 sandbox 读到受保护位置时同样拒绝。
+只读依赖若是文件系统根或与 Runtime 的 Attempt 文件夹根重叠，Runtime 在启动 Provider 前以
+PermissionError 拒绝；声明的命令能经命令 sandbox 读到宿主临时根或 Codex 登录位置时同样拒绝。
 
-能力测试使用已安装的 Codex CLI：由 Codex 自身的 sandbox 逐项核对一次真实 Attempt 的读写与网络
-边界（含非默认的临时目录与认证位置），并经 Test Run 执行一个注册 Reviewer 及其声明命令。
-边界以所用 Codex 版本（0.153.4）的实测为准，Codex 升级后重跑：
+能力测试使用已安装的 Codex CLI。MCP 选择以真实合并结果为准（合成的 CODEX_HOME，只执行
+`mcp list`，不调用模型）；所用版本 npm `codex-cli 0.166.0`，Codex 升级后重跑：
 
 ```sh
+AGENT_RUNTIME_REAL_RUN=1 AGENT_RUNTIME_CODEX_BIN=/path/to/native/codex \
+  python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_cli_boundary.py -k real_codex
 AGENT_RUNTIME_REAL_RUN=1 python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_codex_workspace.py
 ```

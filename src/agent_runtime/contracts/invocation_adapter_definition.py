@@ -24,7 +24,10 @@ from ..foundation.foundation_contract_validation import (
     validate_token,
     validate_utc_timestamp,
 )
-from .ledger_lineage_definition import ModuleToolCallObservation
+from .ledger_lineage_definition import (
+    ModuleToolCallObservation,
+    validate_ordinary_input_tokens,
+)
 from .registry_release_definition import (
     EXECUTION_MODES,
     NETWORK_POLICIES,
@@ -469,7 +472,12 @@ class OutputSubmission:
 
 @dataclass(frozen=True)
 class AgentExecutionResult:
-    """Infrastructure result returned for Runtime-controlled finalization."""
+    """Infrastructure result returned for Runtime-controlled finalization.
+
+    Usage: input_tokens is the total input including cache; ordinary_input_tokens,
+    cache_read_tokens and cache_creation_tokens are its Provider-reported parts,
+    and output_tokens is separate. Unreported values stay None.
+    """
 
     terminal_status: str
     provider_id: str
@@ -489,6 +497,7 @@ class AgentExecutionResult:
     cell_local_trace_ref: str
     cell_local_trace_sha256: str
     tool_observations: tuple[ModuleToolCallObservation, ...] = ()
+    ordinary_input_tokens: int | None = None
 
     def validate(self) -> None:
         """Validate normalized output, usage, failure, and local trace lineage."""
@@ -550,6 +559,12 @@ class AgentExecutionResult:
         ):
             if value is not None:
                 validate_int(label, value, minimum=0)
+        validate_ordinary_input_tokens(
+            self.ordinary_input_tokens,
+            input_tokens=self.input_tokens,
+            cache_read_tokens=self.cache_read_tokens,
+            cache_creation_tokens=self.cache_creation_tokens,
+        )
         for label, value in (
             ("estimated_cost_usd", self.estimated_cost_usd),
             ("provider_charge_usd", self.provider_charge_usd),

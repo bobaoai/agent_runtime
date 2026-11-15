@@ -80,7 +80,7 @@ flowchart TD
     A["External authority adapter<br/>owner-qualified context status"] --> B
     B --> C["Committed boundary and open fence"]
     C --> R["revalidate_execution_boundary"]
-    R --> I["Invocation peer<br/>enforce registered capability and bound resources"]
+    R --> I["Invocation peer<br/>invoke the configured executor and collect results"]
     R --> P["commit_protected_operation_intent<br/>external protected effect only"]
     P --> G["Enforcing resource adapter<br/>owner-qualified decision and effect"]
     G --> O["record_gateway_observation"]
@@ -94,8 +94,8 @@ flowchart TD
     P --> Y["resolve_protected_operation_intent"]
 ```
 
-图中的 operation 属于本 capability，并在 §9 定义完整 interface。Invocation 负责实际 provider/tool
-调用和资源限制，resource adapter 负责受保护效果，Ledger 负责事实提交。本 capability 只绑定边界、
+图中的 operation 属于本 capability，并在 §9 定义完整 interface。Invocation 负责本次外部执行器
+调用与配置传递，resource adapter 负责受保护效果，Ledger 负责事实提交。本 capability 只绑定边界、
 检查引用和协调 fence，不执行 peer 的操作。任何失败都保留 §10 指定的真实 owner。
 
 ## 2. User Intent
@@ -116,10 +116,15 @@ Runtime 可以在自己的测试宿主中重复验证已注册 Module，无需�
 本 T2 拥有一个 Runtime execution boundary binding：把一次执行的精确身份与它实际适用的资源边界
 固定在一起。它不是用户 permission assignment、生产批准或新的产品身份。
 
+本 capability 管 Runtime 自身的执行绑定、失效处理，以及由 Runtime 明确发起的受保护操作交接。
+Claude／Codex 内部经已有 MCP 或网关发出的请求，仍由对应服务处理授权；Runtime 不拦截每次调用、
+查询后台权限或为它们逐项合成自己的 intent、grant 和授权 receipt。公开工具日志只按实际返回内容
+关联到本次 Runtime invocation。
+
 | Concern | Accountable owner | 本 capability 的交接 |
 | --- | --- | --- |
 | Caller authentication、host API access、workload authentication | 请求所属的 host 与 identity infrastructure | 消费已接受的请求及 opaque identity refs，不读取认证凭据 |
-| 普通自测可用的资源 | Runtime 测试宿主；Invocation 执行实际限制 | 验证宿主提供的绑定与本次执行一致，不签发生产权限 |
+| 普通自测可用的资源 | Runtime 测试宿主；Invocation 传入已选执行配置 | 验证宿主提供的绑定与本次执行一致，不签发生产权限 |
 | 外部 execution context、policy、Entitlement、revocation 与 grant | 明确提供该能力的外部 owner | 经宿主 public adapter 消费 exact context/status refs；不假定该 owner 是 Portable Product Authorization |
 | user_key 的 database_id 和 read/write permission | Product Authorization | 由 project data-access adapter 在每次数据库操作前取得决定；Runtime 不缓存或解释 permission |
 | Release 与 declared operation | Registry | 消费 exact registered Module release，不把 operation declaration 当成外部许可 |
@@ -216,7 +221,7 @@ Timestamp §8 的 online-protocol 例外，也不把现有 status 查询假定�
 
 ## 6. Protected Operations and External Grants
 
-外部 protected operation 使用 exact Module release 的 declared operation，并从可信 Runtime 状态
+由 Runtime 自身明确发起的外部 protected operation 使用 exact Module release 的 declared operation，并从可信 Runtime 状态
 构建 intent。它绑定 execution、Module Run、Module release、external context、operation、
 resource/action、enforcing adapter、idempotency identity 与观察时间。未声明 operation 或 closure
 不匹配时，在调用 enforcing adapter 前拒绝。Runtime 先提交 intent，再交给该 adapter。
@@ -251,8 +256,9 @@ validity 和 replay-policy 验证。缺少有效 grant 的受控效果在执行�
 
 ## 7. Provider and Data-Access Isolation
 
-Provider adapter 只获得 scoped callbacks 或 frozen input。模型进程不获得外部 authority client、
-policy table、Entitlement body、database credential 或 unfiltered resource client。更换 provider、
+Provider adapter 使用明确提供的任务输入、文件范围和现有工具连接。Runtime 的外部 authority client、
+policy table、Entitlement body 和 storage/database credential 不作为模型任务内容交付；正常 MCP 连接
+的登录与服务授权由其 owner 管理，不要求改造成 Runtime 内存 callback。更换 provider、
 model、SDK、CLI 或 durable backend 必须遵守原 execution 的 release、Profile、input 和资源边界；
 不能借 Variant 变化替换外部身份、context 或扩大范围。
 
@@ -355,7 +361,7 @@ domain 与 operation purpose，并实现 §5.4 的 exact profile/health-evidence
 - 无关、重复或乱序 invalidation 不重开 fence、不误关联 execution；迟到结果不能推进 graph；
 - registered high-risk effect 保留适用 grant 检查，普通自测的 model call 不要求生产 grant；
 - grant 适用性声明只来自可信外部 owner：缺失、来源错误、operation/resource 不匹配或模型伪造的声明均拒绝；required 缺少 grant ref 时拒绝；not_required 不生成 grant disposition；adapter 仍独立验证当前权限与 grant；
-- provider 只取得 scoped input/callback，telemetry 和 Runtime records 不含 policy、grant body 或 credential；
+- Provider 使用明确的输入与连接配置；Runtime 不读取或复制服务内部 policy、grant body 或 credential；Provider 原生工具日志不被提升为 Runtime 授权记录；
 - 无外部 Ledger binding 时不写外部存储；外部保存失败不冒充成功，已有 Registry records 不被测试清理；
 - idempotent intent、observation 与最终结果在 retry/recovery 后不重复 effect，所有 failure 保留真实 owner。
 

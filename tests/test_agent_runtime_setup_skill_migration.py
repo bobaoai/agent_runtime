@@ -38,7 +38,7 @@ def _dev7_root(root, *, evaluation=None, registration=None, metadata=True):
 
 
 def _files(root):
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
 def _packaged(name):
@@ -59,7 +59,7 @@ def test_exact_dev7_skills_are_migrated_and_the_next_setup_writes_nothing(tmp_pa
     root = _dev7_root(tmp_path)
     written = setup.setup_runtime(root)
     _assert_migrated(root)
-    assert {str(Path(p).relative_to(root)) for p in written} >= {f"{host}/skills/{OLD}/SKILL.md" for host in HOSTS}
+    assert {Path(p).relative_to(root).as_posix() for p in written} >= {f"{host}/skills/{OLD}/SKILL.md" for host in HOSTS}
     assert setup.setup_runtime(root) == ()
 
 
@@ -106,7 +106,7 @@ def _operations(monkeypatch, root, *, fail_at=None):
     def guard(kind, path):
         if fail_at is not None and len(order) == fail_at:
             raise OSError("interrupted")
-        order.append((kind, str(Path(path).relative_to(root))))
+        order.append((kind, Path(path).relative_to(root).as_posix()))
     monkeypatch.setattr(setup, "_write", lambda path, content: (guard("write", path), write(path, content)))
     monkeypatch.setattr(setup, "_remove", lambda path: (guard("remove", path), remove(path)))
     return order

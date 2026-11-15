@@ -21,8 +21,15 @@ from agent_runtime.registry import (
     RuntimeReleaseBundle, compile_workflow_release, compile_execution_variant_policy_release,
     ExecutionVariantPolicyReleaseCandidate, ExecutionVariantProfileBindingCandidate,
 )
+from agent_runtime.invocation.invocation_tool_transport import unix_socket_transport_available
 from test_agent_runtime_native_structured_output import _operation_free_release, _StubInlineAdapter
 from test_agent_runtime_workflow_release_compilation import _candidate
+
+
+# The callback bridge needs a Unix-domain socket transport; elsewhere it reports that gap before
+# any session opens (covered in test_agent_runtime_cli_boundary.py), so these cases are unverified.
+UNIX_BRIDGE = pytest.mark.skipif(not unix_socket_transport_available(),
+                                 reason="unverified on this host: callback bridge needs a Unix-domain socket transport")
 
 
 @pytest.fixture
@@ -193,10 +200,11 @@ def callback_run(tmp_path, monkeypatch, factory, *, payload=None, missing_observ
         return result
     monkeypatch.setattr(claude, "ClaudeAdapter", lambda **fields: adapter_type(**fields, process_runner=process))
     return run_local_workflow_test(root, "summarize_note", input_payload={},
-        cli_path=_fake_cli(tmp_path), tool_session_factory=factory)
+        cli_path=_fake_cli(tmp_path, monkeypatch), tool_session_factory=factory)
 
 
 @pytest.mark.fake_run
+@UNIX_BRIDGE
 def test_actual_callback_ipc_joins_provider_ids_and_frozen_prompt(tmp_path, monkeypatch):
     factory = CallbackFactory()
     record = callback_run(tmp_path, monkeypatch, factory)
@@ -212,6 +220,7 @@ def test_actual_callback_ipc_joins_provider_ids_and_frozen_prompt(tmp_path, monk
 
 
 @pytest.mark.fake_run
+@UNIX_BRIDGE
 def test_bad_callback_payload_is_denied_without_running_it(tmp_path, monkeypatch):
     factory = CallbackFactory()
     record = callback_run(tmp_path, monkeypatch, factory, payload={"value": 41, "target": "unapproved"})
@@ -221,6 +230,7 @@ def test_bad_callback_payload_is_denied_without_running_it(tmp_path, monkeypatch
 
 
 @pytest.mark.fake_run
+@UNIX_BRIDGE
 def test_callback_permission_denial_can_be_followed_by_success(tmp_path, monkeypatch):
     factory = CallbackFactory()
     old_open = factory.open_session
@@ -242,6 +252,7 @@ def test_callback_permission_denial_can_be_followed_by_success(tmp_path, monkeyp
 
 
 @pytest.mark.fake_run
+@UNIX_BRIDGE
 def test_callback_cannot_hide_actual_resource_definition_drift(tmp_path, monkeypatch):
     factory = CallbackFactory()
     old_open = factory.open_session
@@ -259,6 +270,7 @@ def test_callback_cannot_hide_actual_resource_definition_drift(tmp_path, monkeyp
 
 
 @pytest.mark.fake_run
+@UNIX_BRIDGE
 def test_unobserved_callback_result_cannot_be_a_complete_log(tmp_path, monkeypatch):
     record = callback_run(tmp_path, monkeypatch, CallbackFactory(), missing_observation=True)
     assert record["status"] == "completed"
@@ -266,6 +278,7 @@ def test_unobserved_callback_result_cannot_be_a_complete_log(tmp_path, monkeypat
 
 
 @pytest.mark.fake_run
+@UNIX_BRIDGE
 def test_changed_session_definitions_prevent_provider_entry(tmp_path, monkeypatch):
     factory = CallbackFactory()
     original = factory.open_session
@@ -279,6 +292,7 @@ def test_changed_session_definitions_prevent_provider_entry(tmp_path, monkeypatc
 
 
 @pytest.mark.fake_run
+@UNIX_BRIDGE
 def test_session_from_another_request_is_rejected(tmp_path, monkeypatch):
     factory = CallbackFactory()
     original = factory.open_session
@@ -307,6 +321,7 @@ def test_factory_binding_errors_prevent_session_and_provider(tmp_path, monkeypat
 
 
 @pytest.mark.fake_run
+@UNIX_BRIDGE
 def test_callback_executes_only_the_prepared_child_through_kernel(tmp_path, monkeypatch):
     from agent_runtime.execution import execution_local_invocation as local
     from agent_runtime.invocation import invocation_claude_cli_execution as claude
@@ -328,7 +343,7 @@ def test_callback_executes_only_the_prepared_child_through_kernel(tmp_path, monk
             workspace.mkdir()
             artifacts, ledger = InMemoryCellArtifactStore(), InMemoryModuleExecutionLedger()
             adapter = claude.ClaudeAdapter(release_registry=child.registry, artifact_host=artifacts,
-                workspace_root=workspace, cli_path=_fake_cli(tmp_path / "child_source"))
+                workspace_root=workspace, cli_path=_fake_cli(tmp_path / "child_source", monkeypatch))
             run, record = local._run_prepared_workflow_node(registry=child.registry, workflow=child.release,
                 selection=selection, input_payload=payload["input_payload"], idempotency_key="child_requested",
                 artifact_host=artifacts, ledger=ledger, workspace_root=workspace, adapter=adapter)
@@ -377,7 +392,7 @@ def test_multi_agent_preparation_reuses_same_model_converter_and_loads_once(tmp_
     assert saved.release == exported.workflow_release
     assert {item["position_id"] for item in variant.policy_document()["bindings"]} == {"first_review", "second_review"}
     profiles = saved.registry.snapshot().execution_profiles
-    assert len(profiles) == 1 and profiles[0].executor_adapter_revision == "v3"
+    assert len(profiles) == 1 and profiles[0].executor_adapter_revision == "v4"
     with pytest.raises(ValueError, match="one Workflow"):
         local.prepare_local_workflow_module(root, exported.workflow_release.workflow_id)
 
@@ -400,7 +415,8 @@ def test_process_cancellation_from_other_thread_stops_actual_process(tmp_path, u
     started = time.monotonic()
     try:
         with pytest.raises(CliProcessInterrupted if user else CliProcessError) as caught:
-            run_cli_process(argv=[sys.executable, "-I", "-B", "-c", "import time;print('started',flush=True);time.sleep(15)"],
+            # Fixed bytes: text-mode print would write CRLF on Windows; Runtime keeps the bytes it receives.
+            run_cli_process(argv=[sys.executable, "-I", "-B", "-c", "import os,time;os.write(1,b'started\\n');time.sleep(15)"],
                 prompt="", cwd=tmp_path, timeout_seconds=20, environment={},
                 **{("user_cancel_requested" if user else "cancel_requested"): event.is_set})
         assert time.monotonic() - started < 5
@@ -411,23 +427,21 @@ def test_process_cancellation_from_other_thread_stops_actual_process(tmp_path, u
 
 
 @pytest.mark.parametrize("user", [True, False])
-def test_node_helper_cancels_actual_child_process_with_distinct_reason(tmp_path, user):
+def test_node_helper_cancels_actual_child_process_with_distinct_reason(tmp_path, monkeypatch, user):
     from agent_runtime.execution import execution_local_invocation as local
     from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter
     from test_agent_runtime_local_model_preparation import _resource_test_module
-    from test_agent_runtime_claude_native_tools import _init
+    from test_agent_runtime_claude_native_tools import _init, _scripted_cli, SYNTHETIC_CLAUDE_HELP
     root = _resource_test_module(tmp_path / "definition", tools=())
     saved, selection = local.prepare_local_workflow_module(root, "summarize_note")
     marker = tmp_path / "child_started"
-    executable = tmp_path / "local_cli"
-    executable.write_text(f"#!{sys.executable}\n" + "import json,os,sys,time\n"
+    executable = _scripted_cli(tmp_path / "local_cli", "import json,os,sys,time\n"
         + "if '--help' in sys.argv or '--version' in sys.argv:\n"
-        + " print('fixture --safe-mode --restricted --tools --settings --effort --json-schema --strict-mcp-config --add-dir')\n"
+        + f" print({SYNTHETIC_CLAUDE_HELP!r})\n"
         + "else:\n"
         + f" open({str(marker)!r},'w').write(str(os.getpid()))\n"
         + f" print({json.dumps(_init(()))!r},flush=True)\n"
-        + " time.sleep(30)\n")
-    executable.chmod(0o700)
+        + " time.sleep(30)\n", monkeypatch)
     workspace = tmp_path / "child_workspace"
     workspace.mkdir()
     artifacts, ledger = InMemoryCellArtifactStore(), InMemoryModuleExecutionLedger()

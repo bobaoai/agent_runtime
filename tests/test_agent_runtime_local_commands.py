@@ -21,11 +21,25 @@ from agent_runtime import run_local_workflow_test
 from agent_runtime.contracts.invocation_adapter_definition import SelfTestResourceUnavailableError
 from agent_runtime.invocation.invocation_local_command_execution import LocalCommandSession, LOCAL_COMMAND_CLI_TOOL_NAME
 from agent_runtime.invocation.invocation_local_command_mcp import exchange
+from agent_runtime.invocation.invocation_host_platform_selection import HOST_PLATFORM
 from agent_runtime.invocation.invocation_local_resource_preparation import (
-    capture_local_resources, materialize_local_resources, LOCAL_RESOURCES_SCHEMA_REF,
+    capture_local_resources, materialize_local_resources, LocalResourceError, LOCAL_RESOURCES_SCHEMA_REF,
     LOCAL_RESOURCES_SCHEMA_SHA256, LOCAL_RESOURCES_MEDIA_TYPE, LOCAL_RESOURCES_LOGICAL_NAME,
 )
+from agent_runtime.invocation.invocation_tool_transport import start_tool_server, unix_socket_transport_available
 from test_agent_runtime_claude_native_tools import _environment
+
+
+# The explicitly selected declared-command extension runs each command under macOS
+# sandbox-exec. It is not an ordinary CLI prerequisite; on other hosts its native cases are
+# unverified (skipped), and test_declared_commands_are_refused_before_any_effect_off_macos
+# checks the truthful refusal.
+MACOS_COMMAND_EXTENSION = pytest.mark.skipif(
+    sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file(),
+    reason="unverified on this host: the explicit declared-command extension requires macOS sandbox-exec")
+UNIX_SOCKET = pytest.mark.skipif(
+    not unix_socket_transport_available(),
+    reason="unverified on this host: the private command transport needs a Unix-domain socket")
 
 
 class LiveHostDouble:
@@ -98,6 +112,8 @@ def command(identity, script, *, cwd="scratch", timeout=5):
     return {"command_id": identity, "argv": [sys.executable, "-I", "-B", "-c", script], "cwd": cwd, "timeout_seconds": timeout}
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_real_command_identity_exit_and_byte_output_are_kept(tmp_path):
     env = session_fixture(tmp_path, [command("ok", "import os;os.write(1,b'out\\xff');os.write(2,b'err\\xfe')"),
                                     command("nonzero", "import sys;print('failed check');sys.exit(7)")])
@@ -114,6 +130,8 @@ def test_real_command_identity_exit_and_byte_output_are_kept(tmp_path):
     assert not session.private_root.exists()
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_unknown_command_refusal_is_not_an_invocation_failure(tmp_path):
     env = session_fixture(tmp_path, [command("ok", "print('ok')")])
     with env.session as session:
@@ -125,6 +143,8 @@ def test_unknown_command_refusal_is_not_an_invocation_failure(tmp_path):
         assert env.host.launches == 1
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_actual_candidate_import_works_with_read_only_source(tmp_path):
     env = session_fixture(tmp_path, [command("import", "import sys;sys.path.insert(0,'.');from module import VALUE;print(VALUE)", cwd="source")])
     with env.session as session:
@@ -135,6 +155,8 @@ def test_actual_candidate_import_works_with_read_only_source(tmp_path):
         session.validate_completion()
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_runtime_prepares_declared_scratch_subdirectory(tmp_path):
     env = session_fixture(tmp_path, [command("nested", "from pathlib import Path;Path('proof').write_text('done');print('done')",
                                             cwd="scratch/nested/test_output")])
@@ -144,11 +166,13 @@ def test_runtime_prepares_declared_scratch_subdirectory(tmp_path):
         assert (env.scratch / "nested/test_output/proof").read_text() == "done"
 
 
+@pytest.mark.real_run
 @pytest.mark.parametrize(("cwd", "program", "script_path"), [
     ("source", "./run.sh", "run.sh"),
     ("source", "nested/run.sh", "nested/run.sh"),
     ("source/nested", "../run.sh", "run.sh"),
 ])
+@MACOS_COMMAND_EXTENSION
 def test_relative_executable_uses_the_declared_command_directory(tmp_path, cwd, program, script_path):
     files = {script_path: (b"#!/bin/sh\nprintf 'relative-script-ok\\n'\n", True),
              "nested/marker": (b"declared source directory", False)}
@@ -163,7 +187,9 @@ def test_relative_executable_uses_the_declared_command_directory(tmp_path, cwd, 
         assert response["cwd"] == str(env.materials / cwd)
 
 
+@pytest.mark.real_run
 @pytest.mark.parametrize("program", ["python", "python3", sys.executable])
+@MACOS_COMMAND_EXTENSION
 def test_python_default_is_the_running_runtime_environment(tmp_path, program):
     definition = command("python", "import sys;print(sys.prefix)")
     definition["argv"][0] = program
@@ -177,6 +203,8 @@ def test_python_default_is_the_running_runtime_environment(tmp_path, program):
         assert session._environment["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).absolute().parent)
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_current_python_venv_dependency_survives_direct_and_shell_launch(tmp_path):
     from agent_runtime.invocation import invocation_local_command_execution as implementation
     environment = tmp_path / "runtime_python"
@@ -214,6 +242,8 @@ with env.session as session:
     assert json.loads(process.stdout)["prefix"] == str(environment)
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_missing_current_python_does_not_fall_back(tmp_path, monkeypatch):
     from agent_runtime.invocation import invocation_process_execution as implementation
     monkeypatch.setattr(implementation.sys, "executable", str(tmp_path / "missing/python"))
@@ -221,6 +251,8 @@ def test_missing_current_python_does_not_fall_back(tmp_path, monkeypatch):
         session_fixture(tmp_path, [command("unreachable", "print('must not run')")])
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_relative_executable_still_cannot_escape_readable_resources(tmp_path):
     env = session_fixture(tmp_path, [command("ok", "print('not executed')")])
     outside = tmp_path / "outside.sh"
@@ -233,6 +265,8 @@ def test_relative_executable_still_cannot_escape_readable_resources(tmp_path):
         assert env.host.launches == 0
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_scratch_subdirectory_symlink_cannot_escape(tmp_path):
     env = session_fixture(tmp_path, [command("nested", "print('must not run')", cwd="scratch/nested")])
     with env.session as session:
@@ -243,6 +277,8 @@ def test_scratch_subdirectory_symlink_cannot_escape(tmp_path):
         assert response["failure"]["error_type"] == "PermissionError"
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_scratch_parent_replacement_cannot_create_an_external_directory(tmp_path, monkeypatch):
     env = session_fixture(tmp_path, [command("nested", "print('must not run')", cwd="scratch/nested/test_output")])
     outside = tmp_path / "outside"
@@ -267,8 +303,11 @@ def test_scratch_parent_replacement_cannot_create_an_external_directory(tmp_path
         assert response["failure"] is not None
 
 
+@pytest.mark.fake_run
 @pytest.mark.parametrize("failure_kind", ["cleanup_error", "timeout", "interrupted", "cleanup_reason_only", "closed_interrupted"])
+@MACOS_COMMAND_EXTENSION
 def test_command_cleanup_failure_invalidates_completion_and_keeps_evidence(tmp_path, monkeypatch, failure_kind):
+    """Named substitute: run_cli_process raises a constructed process fault; the native session is real."""
     from agent_runtime.invocation import invocation_local_command_execution as implementation
     from agent_runtime.invocation.invocation_process_execution import CliProcessError, CliProcessTimeout, CliProcessInterrupted
     env = session_fixture(tmp_path, [command("broken", "print('not launched by this fault double')")])
@@ -303,7 +342,9 @@ def test_command_cleanup_failure_invalidates_completion_and_keeps_evidence(tmp_p
         session.validate_completion()
 
 
+@pytest.mark.real_run
 @pytest.mark.parametrize("boundary", ["source_write", "outside_read", "network"])
+@MACOS_COMMAND_EXTENSION
 def test_command_itself_is_sandboxed(tmp_path, boundary):
     outside = tmp_path / "outside"
     outside.write_text("secret test sentinel")
@@ -323,6 +364,8 @@ def test_command_itself_is_sandboxed(tmp_path, boundary):
         session.validate_completion()
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_generated_command_sandbox_denies_its_actual_control_files(tmp_path):
     from agent_runtime.invocation.invocation_process_execution import run_cli_process
     env = session_fixture(tmp_path, [command("ok", "print('ok')")])
@@ -336,6 +379,8 @@ def test_generated_command_sandbox_denies_its_actual_control_files(tmp_path):
         assert "Operation not permitted" in process.stderr
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_timeout_keeps_prefix_and_allows_next_command(tmp_path):
     env = session_fixture(tmp_path, [command("timeout", "import time;print('prefix',flush=True);time.sleep(20)", timeout=1),
                                     command("next", "print('next')")])
@@ -347,6 +392,8 @@ def test_timeout_keeps_prefix_and_allows_next_command(tmp_path):
         session.validate_completion()
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_resource_close_cancels_inflight_and_prevents_new_process(tmp_path):
     env = session_fixture(tmp_path, [command("long", "import time;print('started',flush=True);time.sleep(20)", timeout=30)])
     with env.session as session, ThreadPoolExecutor() as pool:
@@ -365,7 +412,10 @@ def test_resource_close_cancels_inflight_and_prevents_new_process(tmp_path):
             session.validate_completion()
 
 
+@pytest.mark.fake_run
+@MACOS_COMMAND_EXTENSION
 def test_session_close_before_process_creation_prevents_launch(tmp_path, monkeypatch):
+    """Named substitute: a run_cli_process double orders creation with close; the native session is real."""
     from agent_runtime.invocation import invocation_local_command_execution as implementation
     env = session_fixture(tmp_path, [command("ok", "print('must not run')")])
     session = env.session
@@ -406,7 +456,10 @@ def test_session_close_before_process_creation_prevents_launch(tmp_path, monkeyp
         session.close()
 
 
+@pytest.mark.fake_run
+@MACOS_COMMAND_EXTENSION
 def test_session_close_orders_after_creation_without_locking_command_runtime(tmp_path, monkeypatch):
+    """Named substitute: a run_cli_process double returns a process stand-in; the native session is real."""
     from agent_runtime.invocation import invocation_local_command_execution as implementation
     env = session_fixture(tmp_path, [command("ok", "print('process double')")])
     session = env.session
@@ -450,6 +503,8 @@ def test_session_close_orders_after_creation_without_locking_command_runtime(tmp
         session.close()
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_material_change_is_not_an_ordinary_command_error(tmp_path):
     env = session_fixture(tmp_path, [command("ok", "print('ok')")])
     with env.session as session:
@@ -462,6 +517,8 @@ def test_material_change_is_not_an_ordinary_command_error(tmp_path):
             session.validate_completion()
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_parallel_repeated_commands_have_distinct_local_call_ids(tmp_path):
     env = session_fixture(tmp_path, [command("same", "print('same')")])
     with env.session as session, ThreadPoolExecutor(max_workers=3) as pool:
@@ -472,6 +529,8 @@ def test_parallel_repeated_commands_have_distinct_local_call_ids(tmp_path):
         session.validate_completion()
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_private_protocol_rejects_arbitrary_parameters(tmp_path):
     env = session_fixture(tmp_path, [command("ok", "print('ok')")])
     with env.session as session:
@@ -487,6 +546,8 @@ def test_private_protocol_rejects_arbitrary_parameters(tmp_path):
         assert response["local_call_id"] == session.records[0]["tool_call_id"]
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_missing_mcp_extra_does_not_launch_a_command(tmp_path, monkeypatch):
     from agent_runtime.invocation import invocation_local_command_execution as implementation
     env = session_fixture(tmp_path, [command("ok", "print('ok')")])
@@ -500,6 +561,8 @@ def test_missing_mcp_extra_does_not_launch_a_command(tmp_path, monkeypatch):
         assert env.host.launches == 0
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_unrecordable_result_keeps_local_id_and_invalidates_completion(tmp_path):
     class FailedRecords(list):
         def append(self, _):
@@ -514,7 +577,9 @@ def test_unrecordable_result_keeps_local_id_and_invalidates_completion(tmp_path)
             session.validate_completion()
 
 
+@pytest.mark.real_run
 @pytest.mark.parametrize("corruption", ["body", "metadata", "readback"])
+@MACOS_COMMAND_EXTENSION
 def test_session_requires_the_exact_live_resource_content(tmp_path, corruption):
     env = session_fixture(tmp_path, [command("ok", "print('ok')")])
     with env.session as original:
@@ -534,6 +599,8 @@ def test_session_requires_the_exact_live_resource_content(tmp_path, corruption):
         assert env.host.launches == 0
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_same_resource_bytes_do_not_authorize_a_narrower_profile(tmp_path):
     env = session_fixture(tmp_path, [command("ok", "print('ok')")])
     with env.session as session:
@@ -547,22 +614,59 @@ def test_same_resource_bytes_do_not_authorize_a_narrower_profile(tmp_path):
         assert env.host.launches == 0
 
 
+def _exchange_raw(endpoint, raw):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(endpoint))
+        client.sendall(raw)
+        with client.makefile("rb") as response:
+            return json.loads(response.readline())
+
+
+@pytest.mark.real_run
+@UNIX_SOCKET
 @pytest.mark.parametrize("raw", [b'{"method":"definitions","method":"invoke","command_id":"ok"}\n',
                                  b'{"method":"invoke","command_id":NaN}\n', b"x" * 65537 + b"\n"])
-def test_private_protocol_rejects_noncanonical_or_oversized_messages(tmp_path, raw):
-    env = session_fixture(tmp_path, [command("ok", "print('ok')")])
-    with env.session as session:
-        endpoint = session.mcp_config["mcpServers"]["runtime_commands"]["args"][-1]
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.connect(endpoint)
-            client.sendall(raw)
-            with client.makefile("rb") as response:
-                assert "error" in json.loads(response.readline())
-        assert env.host.launches == 0
+def test_private_protocol_rejects_noncanonical_or_oversized_messages(raw):
+    """The private command transport refuses a bad frame before dispatch; no sandboxed session is needed.
+
+    A canonical message on the same endpoint is the control: it does reach dispatch.
+    """
+    dispatched = []
+    private = HOST_PLATFORM.create_private_directory(prefix="rc-", short_path=True)
+    identity = HOST_PLATFORM.private_directory_identity(private)
+    server, thread = start_tool_server(private / "commands.sock",
+                                       lambda message: dispatched.append(message) or "dispatched")
+    try:
+        refused = _exchange_raw(private / "commands.sock", raw)
+        accepted = _exchange_raw(private / "commands.sock", b'{"method":"definitions"}\n')
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+        HOST_PLATFORM.remove_private_directory(private, identity)
+    assert set(refused) == {"error"} and refused["error"]["type"] == "ValueError"
+    assert accepted == {"result": "dispatched"} and dispatched == [{"method": "definitions"}]
+
+
+@pytest.mark.deterministic
+@pytest.mark.skipif(sys.platform == "darwin", reason="this host supports the extension; its native cases run instead")
+def test_declared_commands_are_refused_before_any_effect_off_macos(tmp_path, monkeypatch):
+    """Off macOS the explicit command extension is truthfully unsupported, before any session or process."""
+    profile = _environment(tmp_path)[0].execution_profile
+    with pytest.raises(LocalResourceError) as caught:
+        capture_local_resources(profile=profile, commands=(command("ok", "print('ok')"),))
+    assert caught.value.error_code == "ADAPTER_CAPABILITY_UNSUPPORTED" and "macOS sandbox-exec" in str(caught.value)
+    created = []
+    monkeypatch.setattr(HOST_PLATFORM, "create_private_directory", lambda **options: created.append(options))
+    with pytest.raises(NotImplementedError, match="macOS sandbox-exec"):
+        LocalCommandSession(request=None, profile=profile, host=None, adapter=None, artifact_host=None,
+                            workspace_root=tmp_path, resources_body=b"", source_root=tmp_path, scratch_root=tmp_path)
+    assert created == []
 
 
 @pytest.mark.fake_run
 @pytest.mark.parametrize("cleanup_failure", [False, True])
+@MACOS_COMMAND_EXTENSION
 def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monkeypatch, cleanup_failure):
     """Substitutes: FakeCLI executable and an in-process Claude process runner; the local commands run for real."""
     from agent_runtime import Module, RuntimeModulePlugin, register_runtime_module_plugin
@@ -573,11 +677,11 @@ def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monk
     from test_agent_runtime_claude_native_tools import _fake_cli, _init, _result, _tool_use, _tool_result
     if cleanup_failure:
         from agent_runtime.invocation import invocation_process_execution as capture
-        original_stop = capture._stop_process_group
+        original_stop = capture.HOST_PLATFORM.stop_cli_process
         def report_cleanup_failure(process):
             original_stop(process)  # No actual process leak in this fault test.
             raise RuntimeError("injected cleanup confirmation failure")
-        monkeypatch.setattr(capture, "_stop_process_group", report_cleanup_failure)
+        monkeypatch.setattr(capture.HOST_PLATFORM, "stop_cli_process", report_cleanup_failure)
     source = _task_project(tmp_path / "registration", module_id="summarize_note")
     module = Module.from_registration(source, skill_id=SKILL_ID, module_id="summarize_note",
         execution_requirements=_requirements(max_attempts=1))
@@ -624,7 +728,7 @@ def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monk
     # the Adapter itself is an ordinary test specialization of its existing port.
     monkeypatch.setattr(claude, "ClaudeAdapter", TestAdapter)
     monkeypatch.setattr(kernel, "_authorize_model_attempt", lambda **_: pytest.fail("No Product authority for this self-test"))
-    record = run_local_workflow_test(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path),
+    record = run_local_workflow_test(root, "summarize_note", input_payload={}, cli_path=_fake_cli(tmp_path, monkeypatch),
         material_root=tree, material_files=({"relative_path": "candidate.py", "sha256": hashlib.sha256(original).hexdigest(), "executable": False},),
         read_only_dependencies=(Path(sys.base_prefix).resolve(),), commands=(command("unit", "print('real command')"),))
     assert record["status"] == ("failed" if cleanup_failure else "completed"), record["failure_detail"]
@@ -650,6 +754,8 @@ def test_public_ordinary_module_uses_real_local_command_resources(tmp_path, monk
     assert (tree / "candidate.py").read_bytes() == original
 
 
+@pytest.mark.real_run
+@MACOS_COMMAND_EXTENSION
 def test_real_stdio_mcp_uses_exact_proxy_and_preserves_call_identity(tmp_path):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client

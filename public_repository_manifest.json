@@ -17,6 +17,7 @@
     "tests/test_public_repository_validation.py"
   ],
   "allowed_exact_paths": [
+    ".gitattributes",
     ".gitignore",
     "CHANGELOG.md",
     "LICENSE",
@@ -31,6 +32,7 @@
     "tools/public_repository_validation.py",
     "tests/test_public_repository_validation.py",
     "tests/local_registration_cli.py",
+    "tests/windows_junction_helpers.py",
     "tests/fixtures/claude_v2_replay/committed.json",
     "tests/fixtures/claude_v2_replay/generate.py",
     "tests/fixtures/operator_skills_dev7/agent-runtime-evaluation.SKILL.md",

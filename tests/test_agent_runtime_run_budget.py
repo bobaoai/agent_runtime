@@ -94,24 +94,30 @@ def test_preparation_consumes_budget_and_observation_does_not_serialize_clock():
     json.dumps(record,allow_nan=False)
 
 
-_REAL=pytest.mark.skipif(os.environ.get('AGENT_RUNTIME_REAL_RUN')!='1',reason='real process budget check requires AGENT_RUNTIME_REAL_RUN=1')
+_REAL=pytest.mark.skipif(os.environ.get('AGENT_RUNTIME_REAL_RUN')!='1',
+    reason='unverified: real Provider budget run; set AGENT_RUNTIME_REAL_RUN=1 with an authenticated CLI')
+
+
+def _interpreter_environment():
+    """The minimum environment the local interpreter needs to start on this host (no Provider keys)."""
+    return {key: os.environ[key] for key in ("SYSTEMROOT",) if key in os.environ} if os.name == "nt" else {"PATH": "/usr/bin:/bin"}
 
 
 @pytest.mark.real_run
-@_REAL
 def test_actual_process_is_stopped_by_shorter_enclosing_deadline(tmp_path):
+    """Local process only (no Provider): the enclosing deadline stops the Runtime-started process."""
     started=time.monotonic()
     with pytest.raises(CliProcessTimeout) as caught:
         run_cli_process(argv=[sys.executable,'-I','-c','import time;print("started",flush=True);time.sleep(20)'],
-            prompt='',cwd=tmp_path,timeout_seconds=20,environment={'PATH':'/usr/bin:/bin'},deadline_monotonic=started+1)
+            prompt='',cwd=tmp_path,timeout_seconds=20,environment=_interpreter_environment(),deadline_monotonic=started+1)
     assert 'started' in caught.value.stdout
     assert caught.value.stop_reason=='timeout'
     assert time.monotonic()-started<10
 
 
 @pytest.mark.real_run
-@_REAL
 def test_expired_deadline_never_launches_actual_command(tmp_path):
+    """Local prelaunch check (no Provider): an expired deadline never creates the process."""
     marker=tmp_path/'unexpected'
     with pytest.raises(CliProcessTimeout):
         run_cli_process(argv=[sys.executable,'-I','-c',f'from pathlib import Path;Path({str(marker)!r}).write_text("started")'],
@@ -172,26 +178,6 @@ def test_actual_managed_child_uses_parent_remaining_budget(tmp_path):
         assert budget['limiting_scope']=='parent'
         assert budget['parent_attempt_id']==parent['attempt_id']
     assert result['resources_cleaned']
-
-@pytest.mark.real_run
-@_REAL
-def test_real_process_is_reaped_when_ownership_discovery_is_denied(tmp_path, monkeypatch):
-    """Actual process lifecycle with an explicitly injected metadata-access failure.
-
-    This is failure-injection evidence, not proof that a particular OS sandbox
-    denies process inspection. No Provider response or process is substituted.
-    """
-    import psutil
-    from agent_runtime.invocation import invocation_process_execution as processes
-    def denied(process):
-        raise psutil.AccessDenied(process.pid)
-    monkeypatch.setattr(processes, '_remember_descendants', denied)
-    with pytest.raises(processes.CliProcessError) as caught:
-        run_cli_process(argv=[sys.executable,'-c','import time;time.sleep(30)'],prompt='',cwd=tmp_path,
-                        timeout_seconds=30,environment={'PATH':'/usr/bin:/bin'})
-    assert caught.value.returncode == -9
-    assert caught.value.cleanup_error and 'ownership' in caught.value.cleanup_error
-
 
 @pytest.mark.deterministic
 def test_invalid_parent_is_rejected_before_root_setup(tmp_path):

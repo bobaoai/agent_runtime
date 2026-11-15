@@ -64,7 +64,7 @@ def provider_adapter_descriptor(
     transport_kind: str,
     execution_mode: str,
     input_delivery_mode: str,
-    network_policy: str,
+    network_policies: tuple[str, ...],
     supports_dynamic_operation_authorization: bool = False,
     admission_state: str = "integration_tested",
 ) -> AgentExecutionAdapterDescriptor:
@@ -87,7 +87,7 @@ def provider_adapter_descriptor(
         supported_read_isolation_modes=("entitled_refs",),
         supported_execution_modes=(execution_mode,),
         supported_input_delivery_modes=(input_delivery_mode,),
-        supported_network_policies=(network_policy,),
+        supported_network_policies=tuple(network_policies),
         supports_dynamic_operation_authorization=(
             supports_dynamic_operation_authorization
         ),
@@ -152,6 +152,7 @@ def completed_adapter_result(
     cache_creation_tokens: int | None,
     trace_ref: str,
     trace_sha256: str,
+    ordinary_input_tokens: int | None = None,
 ) -> AgentExecutionResult:
     """Assemble and validate one completed canonical adapter result."""
 
@@ -174,6 +175,7 @@ def completed_adapter_result(
         cell_local_trace_ref=trace_ref,
         cell_local_trace_sha256=trace_sha256,
         tool_observations=tool_observations,
+        ordinary_input_tokens=ordinary_input_tokens,
     )
     completed.validate()
     return completed
@@ -259,6 +261,7 @@ def raise_terminal_failure(
     output_tokens: int | None = None,
     cache_read_tokens: int | None = None,
     cache_creation_tokens: int | None = None,
+    ordinary_input_tokens: int | None = None,
     tool_operation_ref_ids: tuple[str, ...] = (),
     tool_observations: tuple[ModuleToolCallObservation, ...] = (),
     transport_exit_code: int | None = None,
@@ -317,6 +320,7 @@ def raise_terminal_failure(
         cell_local_trace_ref=trace_ref,
         cell_local_trace_sha256=trace_sha256,
         tool_observations=tool_observations,
+        ordinary_input_tokens=ordinary_input_tokens,
     )
     failed.validate()
     raise TerminalAdapterFailure(failed, pending_failure_detail=content if defer_failure_detail else None)

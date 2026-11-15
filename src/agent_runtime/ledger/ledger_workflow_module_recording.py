@@ -433,6 +433,9 @@ class WorkflowModuleLedgerRecorder:
                         cache_creation_tokens=(
                             usage.cache_creation_tokens if usage else None
                         ),
+                        ordinary_input_tokens=(
+                            usage.ordinary_input_tokens if usage else None
+                        ),
                     ),
                     failure_class=formal_attempt.failure_class,
                     provider_trace_ref=formal_attempt.provider_trace_ref,
@@ -1107,6 +1110,9 @@ class WorkflowModuleLedgerRecorder:
                         estimated_cost_usd=None,
                         provider_charge_usd=None,
                         recorded_at_utc=attempt.recorded_at_utc,
+                        ordinary_input_tokens=(
+                            attempt.usage.ordinary_input_tokens
+                        ),
                     ),
                 )
             )

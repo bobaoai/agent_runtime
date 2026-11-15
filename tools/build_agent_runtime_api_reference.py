@@ -50,7 +50,11 @@ API_SOURCES = {
     "src/agent_runtime/foundation/foundation_environment_setup.py": ("setup_runtime", "load_runtime_config"),
     "src/agent_runtime/inspection/inspection_execution_logging.py": ("read_execution_log", "parse_cli_log"),
     "src/agent_runtime/invocation/invocation_claude_cli_execution.py": ("ClaudeAdapter",),
-    "src/agent_runtime/invocation/invocation_codex_module_invocation.py": ("CodexCliModuleExecutor", "CodexCliAgentWorkspaceModuleExecutor", "CodexCliInvocationResult", "build_command"),
+    "src/agent_runtime/invocation/invocation_codex_module_invocation.py": ("CodexCliModuleExecutor", "CodexCliAgentWorkspaceModuleExecutor", "CodexCliInvocationResult", "build_command", "select_codex_mcp_servers"),
+    "src/agent_runtime/invocation/invocation_workspace_preparation.py": (
+        "seal_attempt_workspace", "maintain_attempt_workspaces", "write_attempt_archive",
+        "AttemptWorkspaceRetentionFacts", "AttemptWorkspaceMaintenanceResult",
+    ),
     "src/agent_runtime/inspection/inspection_postgres_querying.py": ("PostgresWorkflowInspectionRepository",),
 }
 ERROR_CONSTANTS = (
@@ -123,6 +127,12 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
         "CodexCliAgentWorkspaceModuleExecutor": "agent_runtime.invocation.invocation_codex_module_invocation",
         "CodexCliInvocationResult": "agent_runtime.invocation.invocation_codex_module_invocation",
         "build_command": "agent_runtime.invocation.invocation_codex_module_invocation",
+        "select_codex_mcp_servers": "agent_runtime.invocation.invocation_codex_module_invocation",
+        "seal_attempt_workspace": "agent_runtime.invocation.invocation_workspace_preparation",
+        "maintain_attempt_workspaces": "agent_runtime.invocation.invocation_workspace_preparation",
+        "write_attempt_archive": "agent_runtime.invocation.invocation_workspace_preparation",
+        "AttemptWorkspaceRetentionFacts": "agent_runtime.invocation.invocation_workspace_preparation",
+        "AttemptWorkspaceMaintenanceResult": "agent_runtime.invocation.invocation_workspace_preparation",
         "run_agent_example": "agent_runtime.testing.conformance_agent_execution",
     }.get(name, "agent_runtime")
     lines = [f'## {name}', "", f"Public import: `from {module} import {name}`", ""]

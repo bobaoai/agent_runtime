@@ -448,9 +448,12 @@ class Module:
 class ModuleReviewer(Module):
     """Supply a fixed environment and inherit Module authoring unchanged.
 
-    Runtime fixes isolated context, read/search/shell, private scratch, denied
-    tool network, inline native output and three attempts. Model choice, run
-    timeout and concrete host resources are resolved at execution time.
+    Runtime fixes isolated context, native read/search/edit/shell capability,
+    private scratch, provider-managed networking (no Runtime-imposed egress
+    restriction), inline native output and three attempts. Capability is not
+    the per-call permit: the host narrows Shell commands with command_permits.
+    Model choice, run timeout and concrete host resources are resolved at
+    execution time. Already registered Reviewers keep their recorded values.
     The specialized load_reviewer_registration entry checks common output
     format; inherited generic loading/export does not grant that guarantee.
     """
@@ -459,8 +462,8 @@ class ModuleReviewer(Module):
         context_isolation="workflow_execution_isolated",
         execution_mode="agent", semantic_input_delivery_mode="inline",
         attempt_workspace_policy="own_draft_read_write",
-        tool_policy=("read", "search", "shell"), gateway_access_reasons=(),
-        network_policy="denied", output_constraint_mode="native_structured_output",
+        tool_policy=("edit", "read", "search", "shell"), gateway_access_reasons=(),
+        network_policy="provider_managed", output_constraint_mode="native_structured_output",
         max_attempts=3,
     )
 

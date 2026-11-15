@@ -48,8 +48,11 @@ def build_parser(*, require_workflow=True, require_input=True):
     parser.add_argument("--effort", help="This call's reasoning effort. Omit to use the parameter files or the default; codex_cli has no default effort.")
     parser.add_argument("--run-timeout-seconds", type=int,
         help="Total synchronous work budget (1..86400 seconds); four-layer default 1200. Managed children cannot extend the parent deadline.")
-    parser.add_argument("--cli-path", type=Path, help="Installed executable; overrides root/.runtime/config.json provider_cli_paths, then PATH is used if unconfigured. Codex uses the host's standard file-based login.")
+    parser.add_argument("--cli-path", type=Path, help="Installed native executable; overrides root/.runtime/config.json provider_cli_paths, then the native program on PATH is used if unconfigured. Each CLI uses the host's own login and configuration.")
     parser.add_argument("--resources", type=Path, help="Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}]. Resource paths are relative to this file; command cwd is source/scratch-relative. python/python3 use current Runtime Python; other arguments are not interpolated. Empty dependencies clear additional host defaults, not the current Python runtime. No models, credentials or production grants here.")
+    parser.add_argument("--project-directory", type=Path, help="Caller-owned existing writable directory (checkout, worktree, task copy or output directory) for a Module whose workspace policy is explicit_project_read_write. Runtime never deletes it.")
+    parser.add_argument("--command-permit", action="append", default=[], dest="command_permits",
+        help="Repeatable Claude Bash rule body pre-approved for this call, e.g. \"python -m pytest:*\". Claude's own read-only commands still run; other commands are denied. Codex refuses per-call permits.")
     return parser
 
 

@@ -1,4 +1,4 @@
-"""Codex workspace v3: the Reviewer default environment executed by Codex.
+"""Codex workspace v4: agent Modules (Shell-capable or MCP-only) executed by Codex.
 
 Deterministic tests check binding, capability checks, the generated
 permission profile, command rendering, layout text and log correlation.
@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -35,18 +36,17 @@ from test_agent_runtime_reviewer_registration_cli import _source, MODULE_ID
 REAL_GATE = pytest.mark.skipif(os.environ.get("AGENT_RUNTIME_REAL_RUN") != "1",
                                reason="unverified: set AGENT_RUNTIME_REAL_RUN=1 with an authenticated Codex CLI")
 REAL_MODEL, REAL_EFFORT = "gpt-6-astra", "low"
-# Tool-free Profile and argv produced before workspace v3 existed (Runtime 0952002).
-V4_PROFILE_SHA256 = "e35072ea7f3170b37cf08c437389bee6407646da2c82a76b3476e5f8d112cdb4"
-V4_ARGV = ["/bin/codex", "exec", "-m", "gpt-6-astra", "-c", 'model_reasoning_effort="xhigh"',
-    "-c", "project_doc_max_bytes=0", "-c", 'approval_policy="never"', "-c", 'cli_auth_credentials_store="file"',
+# Tool-free v5 argv: host login and configuration load normally (no ignore flags, no auth store override).
+V5_ARGV = ["/bin/codex", "exec", "-m", "gpt-6-astra", "-c", 'model_reasoning_effort="xhigh"',
+    "-c", "project_doc_max_bytes=0", "-c", 'approval_policy="never"',
     "-c", "agents.enabled=false", "-c", "skills.include_instructions=false",
     "-c", 'features.code_mode.excluded_tool_namespaces=["functions","collaboration","clock"]',
     "-c", "mcp_servers={}", "-c", "features.skip_host_skill_discovery=true", "-c", 'web_search="disabled"',
     *[part for name in ("shell_tool", "multi_agent", "plugins", "plugin_sharing", "apps", "browser_use", "computer_use",
                         "skill_search", "tool_suggest", "memories", "view_image", "image_generation", "hooks",
                         "workspace_dependencies") for part in ("-c", f"features.{name}=false")],
-    "-C", "/attempt/cwd", "-s", "read-only", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
-    "--strict-config", "--ephemeral", "--json", "--output-schema", "/schema.json", "-"]
+    "-C", str(Path("/attempt/cwd")), "-s", "read-only", "--skip-git-repo-check",
+    "--strict-config", "--ephemeral", "--json", "--output-schema", str(Path("/schema.json")), "-"]
 
 
 def _codex_profile(*, run_timeout_seconds=1200, **changes):
@@ -63,19 +63,18 @@ def _option(argv, prefix):
 @pytest.mark.deterministic
 def test_codex_binding_follows_the_module_execution_mode():
     agent = _codex_profile()
-    assert (agent.executor_adapter_id, agent.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v3")
+    assert (agent.executor_adapter_id, agent.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v4")
     assert agent.tool_policy == ("read", "search", "shell")
     tool_free = _codex_profile(execution_mode="tool_free", tool_policy=(), attempt_workspace_policy="none",
                                run_timeout_seconds=30, max_attempts=1)
-    assert (tool_free.executor_adapter_id, tool_free.executor_adapter_revision) == ("codex_cli_agent_executor", "v4")
-    assert tool_free.release_sha256 == V4_PROFILE_SHA256
+    assert (tool_free.executor_adapter_id, tool_free.executor_adapter_revision) == ("codex_cli_agent_executor", "v5")
     assert codex.build_command(profile=tool_free, workspace=Path("/attempt/cwd"), codex_bin="/bin/codex",
-                               schema_path=Path("/schema.json")) == V4_ARGV
+                               schema_path=Path("/schema.json")) == V5_ARGV
 
 
 @pytest.mark.deterministic
-@pytest.mark.parametrize("tools", [("read",), ("search",), ("read", "search")])
-def test_codex_refuses_read_or_search_without_shell_as_unsupported(tools):
+@pytest.mark.parametrize("tools", [("read",), ("search",), ("read", "search"), ("edit",), ("edit", "mcp__data")])
+def test_codex_refuses_read_search_or_edit_without_shell_as_unsupported(tools):
     with pytest.raises(codex.CodexCapabilityUnsupportedError, match="through its shell tool") as refused:
         _codex_profile(tool_policy=tools)
     assert refused.value.error_code == "ADAPTER_CAPABILITY_UNSUPPORTED"
@@ -87,65 +86,80 @@ def test_codex_refuses_read_or_search_without_shell_as_unsupported(tools):
     dict(network_policy="direct_sandboxed"),
     dict(semantic_input_delivery_mode="gateway_read", network_policy="gateway_only", gateway_access_reasons=("semantic_input",)),
 ])
-def test_codex_refuses_missing_draft_open_network_or_gateway(changes):
+def test_codex_refuses_shell_without_folder_open_network_or_gateway(changes):
     with pytest.raises(ValueError):
         _codex_profile(**changes)
 
 
 @pytest.mark.deterministic
-def test_permission_profile_maps_locations_and_grants_program_files_only(tmp_path):
-    host_temp = (tmp_path / "host_tmp").resolve()
-    workspace = host_temp / "workspace"
-    attempt = workspace / "module_attempt_1" / "work"
-    main, materials = attempt / "scratch", attempt / "materials"
-    state = host_temp / "agent-runtime-codex-state-1"
-    auth = (tmp_path / "login").resolve()
-    dependency = (tmp_path / "dependency").resolve()
-    program = Path("/opt/codex/bin/codex")
-    profile = codex.codex_permission_profile(main_folder=main, materials=materials, readable=(dependency,),
-        program_files=(program,), protected=(host_temp, state, auth), host_temp_root=host_temp,
-        workspace_root=workspace)
-    filesystem = profile["filesystem"]
-    assert (profile["extends"], profile["network"]) == (":read-only", {"enabled": False})
-    assert [path for path, access in filesystem.items() if access == "write"] == [str(main)]
-    assert {path for path, access in filesystem.items() if access == "read"} == {str(materials), str(dependency), str(program)}
-    assert str(program.parent) not in filesystem
-    for denied in ("/Users", "/Volumes", "/tmp", "/private/tmp", "/private/var/folders", "/var/folders",
-                   str(host_temp), str(state), str(auth), str(workspace)):
-        assert filesystem[denied] == "deny", denied
-    assert ":tmpdir" not in filesystem
+def test_mcp_only_codex_reaches_the_public_preparation_with_shell_off():
+    profile = _codex_profile(tool_policy=("mcp__fixture",), attempt_workspace_policy="none",
+                             network_policy="provider_managed")
+    assert (profile.executor_adapter_id, profile.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v4")
+    expectation = codex.CodexCliAgentWorkspaceModuleExecutor.execution_expectation(profile)
+    assert expectation.network_policy == "provider_managed" and expectation.attempt_workspace_policy == "none"
+    connections = codex.validate_codex_mcp_connections({"fixture": {
+        "config": {"command": "python", "args": ["server.py"], "env_vars": ["FIXTURE_TOKEN"]},
+        "environment_keys": ["FIXTURE_TOKEN"]}})
+    argv = codex.build_workspace_command(profile=profile, main_folder=Path("/w/work"), codex_bin="/bin/codex",
+                                         permission_profile=None, mcp_connections=connections)
+    assert _option(argv, "features.shell_tool=") == "features.shell_tool=false"
+    assert _option(argv, "features.code_mode.excluded_tool_namespaces=").endswith('["functions","collaboration","clock"]')
+    assert argv[argv.index("-s") + 1] == "read-only" and not any("default_permissions" in value for value in argv)
+    assert "mcp_servers={}" in argv and _option(argv, "mcp_servers.fixture=").startswith("mcp_servers.fixture={")
+    assert not any("allow_login_shell" in value for value in argv)
+    draft = _codex_profile(tool_policy=("mcp__fixture",), network_policy="provider_managed")
+    permission = codex.codex_permission_profile(write_folders=(Path("/w/scratch"),), network_policy="provider_managed")
+    argv = codex.build_workspace_command(profile=draft, main_folder=Path("/w/scratch"), codex_bin="/bin/codex",
+                                         permission_profile=permission, mcp_connections=connections)
+    assert "-s" not in argv and _option(argv, "default_permissions=") == 'default_permissions="runtime_attempt"'
+    executor_descriptor = codex.CodexCliAgentWorkspaceModuleExecutor(
+        release_registry=None, artifact_host=type("H", (), {"read_bytes": lambda *a: b"", "commit_failure_detail": lambda *a: None,
+                                                            "commit_attempt_trace": lambda *a: None})(),
+        workspace_root=Path("/w")).descriptor
+    assert set(executor_descriptor.supported_network_policies) == {"denied", "provider_managed"}
 
 
 @pytest.mark.deterministic
-@pytest.mark.parametrize("grant", ["home", "codex_home", "root", "users", "host_temp", "host_temp_parent",
-                                   "provider_state", "auth_directory", "inside_workspace", "workspace_parent"])
-def test_permission_profile_refuses_grants_that_reopen_denied_locations(tmp_path, grant):
-    host_temp = (tmp_path / "host_tmp").resolve()
-    workspace = host_temp / "workspace"
-    state, auth = host_temp / "state", (tmp_path / "login").resolve()
-    attempt = workspace / "module_attempt_1" / "work"
-    value = {"home": Path.home(), "codex_home": Path.home() / ".codex" / "packages", "root": Path("/"),
-             "users": Path("/Users"), "host_temp": host_temp, "host_temp_parent": host_temp.parent,
-             "provider_state": state / "nested", "auth_directory": auth, "inside_workspace": workspace / "other",
-             "workspace_parent": workspace.parent}[grant]
+@pytest.mark.parametrize("field", ["env", "http_headers", "bearer_token", "unknown_field"])
+def test_codex_mcp_config_refuses_literal_credentials_and_unknown_fields(field):
+    with pytest.raises(ValueError, match=field):
+        codex.validate_codex_mcp_connections({"data": {"config": {"command": "server", field: {"X": "literal"}},
+                                                       "environment_keys": []}})
+
+
+@pytest.mark.deterministic
+def test_codex_mcp_config_requires_every_referenced_variable_in_environment_keys():
+    with pytest.raises(ValueError, match="TOKEN"):
+        codex.validate_codex_mcp_connections({"data": {"config": {"url": "https://example.invalid/mcp",
+            "bearer_token_env_var": "TOKEN"}, "environment_keys": []}})
+    accepted = codex.validate_codex_mcp_connections({"data": {"config": {"url": "https://example.invalid/mcp",
+        "bearer_token_env_var": "TOKEN", "env_http_headers": {"X-Key": "KEY"}}, "environment_keys": ["TOKEN", "KEY"]}})
+    rendered = codex.render_codex_mcp_servers(accepted)
+    assert rendered[0] == "mcp_servers={}" and "TOKEN" in rendered[1] and "KEY" in rendered[1]
+    recorded = codex.redact_codex_argv(["-c", rendered[1]])
+    assert recorded[1].startswith("mcp_servers.data=<host MCP config sha256:") and "example.invalid" not in recorded[1]
+
+
+@pytest.mark.deterministic
+def test_permission_profile_grants_only_the_declared_write_folders(tmp_path):
+    main, temporary = (tmp_path / "project").resolve(), (tmp_path / "attempt" / "tmp").resolve()
+    denied = codex.codex_permission_profile(write_folders=(main, temporary), network_policy="denied")
+    assert denied == {"extends": ":read-only", "filesystem": {str(main): "write", str(temporary): "write"},
+                      "network": {"enabled": False}}
+    managed = codex.codex_permission_profile(write_folders=(main,), network_policy="provider_managed")
+    assert managed == {"extends": ":read-only", "filesystem": {str(main): "write"}}
+
+
+@pytest.mark.deterministic
+@pytest.mark.parametrize("grant", ["root", "inside_workspace", "workspace_parent", "workspace"])
+def test_dependency_grants_stay_separate_from_runtime_folders(tmp_path, grant):
+    workspace = (tmp_path / "workspace").resolve()
+    value = {"root": Path(Path.cwd().anchor), "inside_workspace": workspace / "other",
+             "workspace_parent": workspace.parent, "workspace": workspace}[grant]
     with pytest.raises(PermissionError):
-        codex.codex_permission_profile(main_folder=attempt / "scratch", materials=attempt / "materials",
-            readable=(value,), program_files=(), protected=(host_temp, state, auth), host_temp_root=host_temp,
-            workspace_root=workspace)
-
-
-@pytest.mark.deterministic
-def test_permission_profile_accepts_a_dependency_inside_the_host_temporary_root(tmp_path):
-    host_temp = (tmp_path / "host_tmp").resolve()
-    workspace, dependency = host_temp / "workspace", host_temp / "fixture_dependency"
-    attempt = workspace / "module_attempt_1" / "work"
-    profile = codex.codex_permission_profile(main_folder=attempt / "scratch", materials=attempt / "materials",
-        readable=(dependency,), program_files=(), protected=(host_temp,), host_temp_root=host_temp,
-        workspace_root=workspace)
-    assert profile["filesystem"][str(dependency)] == "read"
-    with pytest.raises(PermissionError, match="outside its workspace"):
-        codex.codex_permission_profile(main_folder=tmp_path / "elsewhere", materials=attempt / "materials",
-            readable=(), program_files=(), protected=(host_temp,), host_temp_root=host_temp, workspace_root=workspace)
+        codex.check_codex_external_grants((value,), workspace_root=workspace)
+    codex.check_codex_external_grants((tmp_path / "dependency", tmp_path / "workspace_sibling"), workspace_root=workspace)
 
 
 @pytest.mark.deterministic
@@ -155,40 +169,39 @@ def test_command_sandbox_containment_refuses_protected_locations_under_its_read_
         protected=(Path("/Library/Application Support/codex-login"), Path("/usr/local/var/tmp")),
         command_readable_roots=roots)
     assert exposed == (Path("/Library/Application Support/codex-login"), Path("/usr/local/var/tmp"))
-    default_layout = (Path(tempfile.gettempdir()).resolve(), Path(tempfile.gettempdir()).resolve() / "state",
-                      Path.home() / ".codex")
+    default_layout = (Path(tempfile.gettempdir()).resolve(), *codex.codex_home_locations({}))
     assert codex.command_sandbox_conflicts(protected=default_layout, command_readable_roots=roots) == ()
 
 
 @pytest.mark.deterministic
 def test_workspace_command_turns_on_only_the_shell_and_carries_the_permission_profile():
     profile = _codex_profile()
-    permission = {"extends": ":read-only", "filesystem": {"/Users": "deny", "/w/scratch": "write"},
-                  "network": {"enabled": False}}
+    permission = {"extends": ":read-only", "filesystem": {"/w/scratch": "write"}, "network": {"enabled": False}}
     argv = codex.build_workspace_command(profile=profile, main_folder=Path("/w/scratch"), codex_bin="/bin/codex",
                                          permission_profile=permission)
-    assert "-s" not in argv and argv[argv.index("-C") + 1] == "/w/scratch"
+    assert "-s" not in argv and argv[argv.index("-C") + 1] == str(Path("/w/scratch"))
     assert _option(argv, "features.shell_tool=") == "features.shell_tool=true"
     assert _option(argv, "features.code_mode.excluded_tool_namespaces=").endswith('["collaboration","clock"]')
     assert _option(argv, "mcp_servers") == "mcp_servers={}"
     assert _option(argv, "allow_login_shell=") == "allow_login_shell=false"
     assert _option(argv, "default_permissions=") == 'default_permissions="runtime_attempt"'
     assert _option(argv, "permissions.runtime_attempt.filesystem=") == (
-        'permissions.runtime_attempt.filesystem={"/Users"="deny", "/w/scratch"="write"}')
+        'permissions.runtime_attempt.filesystem={"/w/scratch"="write"}')
     assert _option(argv, "permissions.runtime_attempt.network.enabled=").endswith("=false")
     assert all(_option(argv, f"features.{name}=").endswith("=false") for name in codex._FEATURES_OFF)
+    assert "--ignore-user-config" not in argv and "--ignore-rules" not in argv
     with pytest.raises(ValueError):
         codex.build_workspace_command(profile=_codex_profile(execution_mode="tool_free", tool_policy=(),
             attempt_workspace_policy="none"), main_folder=Path("/w"), codex_bin="/bin/codex", permission_profile=permission)
 
 
 @pytest.mark.deterministic
-@pytest.mark.parametrize("path", ["/private/var/tmp/dependency-\U0001F600", "/tmp/\u4e2d\u6587/\u8def\u5f84",
+@pytest.mark.parametrize("path", ["/private/var/tmp/dependency-\U0001F600", "/tmp/中文/路径",
                                   '/tmp/quote"and\\backslash', "/tmp/tab\tnewline\nnul\x00del\x7f",
                                   "/tmp/\U0010FFFF"])
 def test_workspace_command_encodes_every_valid_path_losslessly(path):
     profile = _codex_profile()
-    permission = {"extends": ":read-only", "filesystem": {path: "read", "/w/scratch": "write"},
+    permission = {"extends": ":read-only", "filesystem": {path: "write", "/w/scratch": "write"},
                   "network": {"enabled": False}}
     argv = codex.build_workspace_command(profile=profile, main_folder=Path("/w/scratch"), codex_bin="/bin/codex",
                                          permission_profile=permission)
@@ -200,7 +213,7 @@ def test_workspace_command_encodes_every_valid_path_losslessly(path):
 
 @pytest.mark.deterministic
 def test_workspace_command_refuses_a_path_that_is_not_valid_unicode():
-    permission = {"extends": ":read-only", "filesystem": {"/tmp/undecodable-\udcff": "read", "/w/scratch": "write"},
+    permission = {"extends": ":read-only", "filesystem": {"/tmp/undecodable-\udcff": "write", "/w/scratch": "write"},
                   "network": {"enabled": False}}
     with pytest.raises(ValueError, match="not valid Unicode"):
         codex.build_workspace_command(profile=_codex_profile(), main_folder=Path("/w/scratch"),
@@ -212,17 +225,16 @@ def test_codex_layout_text_states_the_main_folder_with_relative_paths_only(tmp_p
     profile = _codex_profile()
     source = tmp_path / "materials"
     source.mkdir()
-    (source / "note.txt").write_text("note\n")
+    (source / "note.txt").write_bytes(b"note\n")
     body = capture_local_resources(profile=profile, material_root=source, material_files=(
         {"relative_path": "note.txt", "sha256": hashlib.sha256(b"note\n").hexdigest(), "executable": False},),
-        read_only_dependencies=(), commands=({"command_id": "check", "argv": ["/bin/cat", "note.txt"],
-                                              "cwd": "source", "timeout_seconds": 5},))
+        read_only_dependencies=(), commands=())
     text = describe_local_resources(profile=profile, body=body)
-    assert "current working directory is the only location you may modify" in text
+    assert "current working directory is your writable scratch area" in text
     assert "TMPDIR" in text and "../materials/task_input" in text and "../materials/source" in text
-    assert "sandbox_command_execute" in text and '"command_id": "check"' in text
+    assert "Other locations follow the CLI's own permissions" in text
     assert str(tmp_path) not in text
-    assert describe_local_resources(profile=profile, body=None).count("only location you may modify") == 1
+    assert describe_local_resources(profile=profile, body=None).count("writable scratch area") == 1
 
 
 def _mcp_events(identity, command_id, returned, *, status="completed"):
@@ -304,181 +316,21 @@ _PASSING = ("Then return verdict 'passed', one check_result with check_id 'steps
             "assessment and finding_ids [], findings [] and safe_next_step 'none'.\n")
 
 
-def _sandbox(argv, environment, cwd, command):
-    """Run one shell command in Codex's sandbox with the exact permission options the executor rendered."""
-    options = [argv[index + 1] for index, value in enumerate(argv[:-1])
-               if value == "-c" and argv[index + 1].startswith(("default_permissions=", "permissions."))]
-    sandboxed = [argv[0], "sandbox", *[part for option in options for part in ("-c", option)],
-                 "-P", codex.PERMISSION_PROFILE_NAME, "-C", str(cwd), "--", "/bin/sh", "-c", command]
-    return subprocess.run(sandboxed, env=environment, capture_output=True, text=True, timeout=60)
+@pytest.mark.deterministic
+def test_real_test_run_refuses_the_filesystem_root_as_a_dependency(tmp_path, monkeypatch):
+    """Prelaunch validation through the public Test Run entry; no Provider, CLI or process is involved.
 
-
-class _Listener:
-    def __init__(self):
-        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-        received = self.received = []
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                received.append(self.path)
-                self.send_response(200)
-                self.end_headers()
-            def log_message(self, *_):
-                pass
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def close(self):
-        self.server.shutdown()
-        self.server.server_close()
-
-
-def _boundary_run(tmp_path, monkeypatch, *, then_provider):
-    """Probe the boundary of one real Attempt through Test Run, then optionally start the Provider."""
-    # A non-BMP character makes the real Codex parse and apply a path outside the Basic Multilingual Plane.
-    dependency = tmp_path / "dependency-\U0001F600"
-    dependency.mkdir()
-    (dependency / "fixture.txt").write_text("dependency original\n")
-    sentinel = Path(tempfile.mkdtemp(prefix="codex-boundary-sentinel-")).resolve()
-    (sentinel / "secret.txt").write_text("host temporary sentinel\n")
-    listener = _Listener()
-    probes, observed = {}, {}
-    marker = f".runtime_codex_probe_{uuid.uuid4().hex}"
-
-    class Probing(codex.CodexCliAgentWorkspaceModuleExecutor):
-        def __init__(self, **fields):
-            def invoke(**call):
-                cwd, environment, argv = call["cwd"], call["environment"], call["argv"]
-                state = Path(environment["CODEX_HOME"])
-                observed.update(cwd=cwd, environment=dict(environment), argv=list(argv), state=state)
-                program_dir = Path(argv[0]).resolve().parent
-                checks = {
-                    "main_write": ("printf main > probe_main.txt && cat probe_main.txt", True),
-                    "tmpdir_write": ('printf tmp > "$TMPDIR/probe_tmp.txt" && cat "$TMPDIR/probe_tmp.txt"', True),
-                    "materials_read": ("cat ../materials/task_input", True),
-                    "materials_write": ("printf x >> ../materials/task_input", False),
-                    "dependency_read": (f"cat {dependency / 'fixture.txt'}", True),
-                    "dependency_write": (f"printf x >> {dependency / 'fixture.txt'}", False),
-                    "host_temp_other": (f"cat {sentinel / 'secret.txt'}", False),
-                    "provider_state": (f"ls {state}", False),
-                    "slash_tmp_read": ("ls /tmp/", False),
-                    "slash_tmp_write": (f"printf x > /private/tmp/{marker}", False),
-                    "users": ("ls /Users", False),
-                    "codex_home": (f"ls {Path.home() / '.codex'}", False),
-                    "program_dir": (f"ls {program_dir}", False),
-                    "network": (f"/usr/bin/curl -sS -m 5 http://127.0.0.1:{listener.server.server_port}/probe", False),
-                    "system_read": ("ls /Library >/dev/null", True),
-                }
-                if os.access("/opt/homebrew", os.W_OK):
-                    checks["system_write"] = (f"touch /opt/homebrew/{marker}", False)
-                for name, (command, allowed) in checks.items():
-                    done = _sandbox(argv, environment, cwd, command)
-                    probes[name] = (done.returncode, done.stdout + done.stderr, allowed)
-                if then_provider:
-                    return codex._default_invoke(**call)
-                raise RuntimeError("boundary probes complete; this run does not start the Provider")
-            super().__init__(**fields, invoker=invoke)
-
-    monkeypatch.setattr(codex, "CodexCliAgentWorkspaceModuleExecutor", Probing)
-    root = _register(tmp_path, "This is a Runtime capability test with no task steps.\n" + _PASSING)
-    try:
-        record = run_local_workflow_test(root, MODULE_ID, input_payload={}, transport_kind="codex_cli",
-            model_id=REAL_MODEL, reasoning_profile=REAL_EFFORT,
-            resources_path=_resources(tmp_path, dependencies=(dependency,)))
-    finally:
-        listener.close()
-        shutil.rmtree(sentinel)
-        for leftover in (Path("/private/tmp") / marker, Path("/opt/homebrew") / marker):
-            leftover.unlink(missing_ok=True)
-    return record, probes, observed, listener.received, dependency
-
-
-def _assert_probes(probes, received, dependency):
-    for name, (returncode, output, allowed) in probes.items():
-        assert (returncode == 0) is allowed, (name, returncode, output)
-    assert "host temporary sentinel" not in probes["host_temp_other"][1]
-    assert received == []
-    assert (dependency / "fixture.txt").read_text() == "dependency original\n"
-
-
-@pytest.mark.real_run
-@REAL_GATE
-def test_real_attempt_boundary_holds_in_codex_sandbox_and_the_provider_completes(tmp_path, monkeypatch):
-    """Real entry: Test Run prepares an Attempt; installed Codex sandbox runs each probe; then the real Provider runs."""
-    record, probes, observed, received, dependency = _boundary_run(tmp_path, monkeypatch, then_provider=True)
-    _assert_probes(probes, received, dependency)
-    assert record["status"] == "completed", record["failure_detail"]
-    trace = record["provider_trace"]
-    assert trace["main_folder"] == trace["cwd"] == str(observed["cwd"])
-    assert observed["environment"]["TMPDIR"] == str(Path(trace["main_folder"]) / ".tmp")
-    assert trace["isolation_gaps"] == ["system_directories_readable"]
-    filesystem = trace["codex_permission_profile"]["filesystem"]
-    assert filesystem[str(observed["state"].resolve())] == "deny"
-    assert filesystem[str(Path(tempfile.gettempdir()).resolve())] == "deny"
-    rendered = _option(trace["argv"], "permissions.runtime_attempt.filesystem=").split("=", 1)[1]
-    assert tomllib.loads("filesystem = " + rendered)["filesystem"] == filesystem
-
-
-@pytest.mark.real_run
-@REAL_GATE
-def test_real_attempt_boundary_covers_nondefault_temporary_and_credential_locations(tmp_path, monkeypatch):
-    """Real entry: Runtime TMPDIR and the credential file both live under /private/var/tmp; Codex sandbox probes only."""
-    base = Path(tempfile.mkdtemp(prefix="codex-nondefault-", dir="/private/var/tmp")).resolve()
-    try:
-        host_temp, login = base / "host_tmp", base / "login"
-        host_temp.mkdir()
-        login.mkdir()
-        (login / "auth.json").write_text('{"synthetic": "location test only"}')
-        monkeypatch.setattr(tempfile, "tempdir", str(host_temp))
-        monkeypatch.setenv("CODEX_HOME", str(login))
-        record, probes, observed, received, dependency = _boundary_run(tmp_path, monkeypatch, then_provider=False)
-        _assert_probes(probes, received, dependency)
-        filesystem = record["provider_trace"]["codex_permission_profile"]["filesystem"]
-        assert filesystem[str(host_temp)] == filesystem[str(login)] == "deny"
-        for target in (login / "auth.json", observed["state"]):
-            done = _sandbox(observed["argv"], observed["environment"], observed["cwd"], f"ls {target}")
-            assert done.returncode != 0 and "synthetic" not in done.stdout, target
-        assert record["status"] == "failed" and record["output"] is None
-    finally:
-        shutil.rmtree(base)
-
-
-@pytest.mark.real_run
-@REAL_GATE
-@pytest.mark.parametrize("dependency", ["home", "credential_directory", "host_temp_root"])
-def test_real_test_run_refuses_overlapping_dependencies_before_the_provider(tmp_path, monkeypatch, dependency):
-    """Real entry: Test Run with the installed Codex CLI; the refusal comes before any Provider or command process."""
-    host_temp = tmp_path / "host_tmp"
-    host_temp.mkdir()
-    login = tmp_path / "login"
-    login.mkdir()
-    (login / "auth.json").write_text('{"synthetic": "never used"}')
-    monkeypatch.setattr(tempfile, "tempdir", str(host_temp))
-    monkeypatch.setenv("CODEX_HOME", str(login))
-    launched, real_process = [], codex.run_cli_process
-    def observed_process(**fields):
-        launched.append(fields["argv"])
-        return real_process(**fields)
-    monkeypatch.setattr(codex, "run_cli_process", observed_process)
+    The placeholder executable only satisfies argument resolution; any process creation fails the test.
+    """
+    from agent_runtime.invocation.invocation_host_platform_selection import HOST_PLATFORM
+    monkeypatch.setattr(HOST_PLATFORM, "create_cli_process",
+                        lambda *args, **kwargs: pytest.fail("refused resources must not start any process"))
     root = _register(tmp_path, "Capability refusal test.\n" + _PASSING)
-    value = {"home": Path.home(), "credential_directory": login, "host_temp_root": host_temp}[dependency]
-    record = run_local_workflow_test(root, MODULE_ID, input_payload={}, transport_kind="codex_cli", model_id=REAL_MODEL,
-        reasoning_profile=REAL_EFFORT, resources_path=_resources(tmp_path, dependencies=(value,)))
-    # The kernel records the adapter's PermissionError as the failed Attempt; nothing ran.
-    assert record["status"] == "failed" and record["output"] is None and record["provider_trace"] is None
-    assert record["failure_detail"]["exception_type"] == "PermissionError", record["failure_detail"]
-    assert "overlaps" in record["failure_detail"]["message"] or "denied root" in record["failure_detail"]["message"]
-    assert launched == []
-    assert not list(host_temp.glob("agent-runtime-codex-state-*"))
-
-
-@pytest.mark.real_run
-@REAL_GATE
-def test_real_test_run_refuses_the_filesystem_root_as_a_dependency(tmp_path):
-    root = _register(tmp_path, "Capability refusal test.\n" + _PASSING)
+    filesystem_root = Path(Path.cwd().anchor)
     with pytest.raises(LocalResourceError, match="filesystem root"):
         run_local_workflow_test(root, MODULE_ID, input_payload={}, transport_kind="codex_cli", model_id=REAL_MODEL,
-            reasoning_profile=REAL_EFFORT, resources_path=_resources(tmp_path, dependencies=(Path("/"),)))
+            reasoning_profile=REAL_EFFORT, cli_path=Path(sys.executable),
+            resources_path=_resources(tmp_path, dependencies=(filesystem_root,)))
 
 
 _COMMANDS = (
@@ -505,7 +357,7 @@ def test_real_codex_reviewer_uses_shell_draft_and_declared_commands_in_one_log(t
     assert "-s" not in argv and trace["main_folder"] == trace["cwd"] == argv[argv.index("-C") + 1]
     assert [path for path, access in trace["codex_permission_profile"]["filesystem"].items()
             if access == "write"] == [trace["main_folder"]]
-    assert trace["isolation_gaps"] == ["system_directories_readable"]
+    assert "isolation_gaps" not in trace and "--ignore-rules" not in argv
     assert _option(argv, "mcp_servers.runtime_commands=").count("sandbox_command_execute") == 1
     (attempt,) = record["execution_log"]["attempts"]
     assert attempt["complete"] is True and attempt["issues"] == []
@@ -521,11 +373,8 @@ def test_real_codex_reviewer_uses_shell_draft_and_declared_commands_in_one_log(t
 
 @pytest.mark.real_run
 @REAL_GATE
-def test_real_resource_close_during_a_command_fails_the_attempt_and_keeps_its_records(tmp_path, monkeypatch):
+def test_real_resource_close_during_a_command_fails_the_attempt_and_keeps_its_records(tmp_path):
     """Real entry: Test Run with the installed Codex CLI; the public resource_cancel_requested closes resources mid-command."""
-    host_temp = tmp_path / "host_tmp"
-    host_temp.mkdir()
-    monkeypatch.setattr(tempfile, "tempdir", str(host_temp))
     root = _register(tmp_path, "Call the MCP tool sandbox_command_execute with command_id 'wait' once and wait "
                      "for its result.\n" + _PASSING)
     commands = ({"command_id": "wait", "argv": ["/bin/sh", "-c", "touch started; sleep 120"], "cwd": "scratch",
@@ -537,9 +386,10 @@ def test_real_resource_close_during_a_command_fails_the_attempt_and_keeps_its_re
             model_id=REAL_MODEL, reasoning_profile=REAL_EFFORT, resources_path=resources,
             resource_cancel_requested=closed.is_set)
         deadline = time.monotonic() + 240
-        while not list(host_temp.glob("agent-runtime-self-test-*/*/work/scratch/started")) and time.monotonic() < deadline:
+        started = lambda: list((root / ".runtime" / "attempt_workspaces").glob("*/work/scratch/started"))
+        while not started() and time.monotonic() < deadline:
             time.sleep(0.2)
-        assert list(host_temp.glob("agent-runtime-self-test-*/*/work/scratch/started")), "declared command did not start"
+        assert started(), "declared command did not start"
         closed.set()
         record = pending.result(timeout=120)
     assert record["status"] == "failed" and record["output"] is None, record["status"]

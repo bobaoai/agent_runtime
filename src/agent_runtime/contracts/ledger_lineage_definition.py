@@ -35,14 +35,56 @@ def _sha256_json(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def validate_ordinary_input_tokens(
+    ordinary_input_tokens: int | None,
+    *,
+    input_tokens: int | None,
+    cache_read_tokens: int | None,
+    cache_creation_tokens: int | None,
+) -> None:
+    """Validate ordinary input as a reported part of the cache-inclusive total.
+
+    Ordinary input is input the Provider reports as neither cache read nor
+    cache creation. Unknown stays None. When the total is known, ordinary input
+    never exceeds it; when all four input counts are known, the total is
+    exactly their sum, so no count is added twice.
+    """
+
+    if ordinary_input_tokens is None:
+        return
+    validate_int("ordinary_input_tokens", ordinary_input_tokens, minimum=0)
+    if input_tokens is None:
+        return
+    if ordinary_input_tokens > input_tokens:
+        raise ValueError(
+            "ordinary_input_tokens exceeds the cache-inclusive input_tokens total"
+        )
+    if (
+        cache_read_tokens is not None
+        and cache_creation_tokens is not None
+        and input_tokens
+        != ordinary_input_tokens + cache_read_tokens + cache_creation_tokens
+    ):
+        raise ValueError(
+            "input_tokens must equal ordinary input plus cache read and "
+            "cache creation when all four are known"
+        )
+
+
 @dataclass(frozen=True)
 class ModuleUsageObservation:
-    """Provider-reported token usage normalized by an admitted Adapter."""
+    """Provider-reported token usage normalized by an admitted Adapter.
+
+    input_tokens is the total input including cache. ordinary_input_tokens,
+    cache_read_tokens and cache_creation_tokens are its reported parts; output
+    is separate. Any value the Provider did not report stays None.
+    """
 
     input_tokens: int | None
     output_tokens: int | None
     cache_read_tokens: int | None
     cache_creation_tokens: int | None
+    ordinary_input_tokens: int | None = None
 
     def validate(self) -> None:
         """Validate each provider-reported token count when present."""
@@ -55,6 +97,12 @@ class ModuleUsageObservation:
         ):
             if value is not None:
                 validate_int(label, value, minimum=0)
+        validate_ordinary_input_tokens(
+            self.ordinary_input_tokens,
+            input_tokens=self.input_tokens,
+            cache_read_tokens=self.cache_read_tokens,
+            cache_creation_tokens=self.cache_creation_tokens,
+        )
 
     def as_dict(self) -> dict[str, int | None]:
         """Return the validated JSON-ready usage observation."""

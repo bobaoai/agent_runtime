@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0.dev11
+
+- Add `ordinary_input_tokens`: Provider-reported input that is neither cache read nor cache creation (Claude today; unknown for Codex). `input_tokens` keeps its meaning, the cache-inclusive total; unknown stays unknown and ordinary input is never derived by subtracting cache from the total.
+- Attempt records, usage events, replay, Test Run usage, `aggregate_model_usage` and Inspector views carry it. Inspector Attempt cards and workflow summary metrics show "Input total (incl. cache)", "Ordinary input", "Cache read" and "Cache creation", with output separate.
+- Existing stored records and their hashes are unchanged. New usage events that carry a known ordinary count store one additional key. Runtime `0.2.0.dev10` or older cannot byte-verify those new events, so read new ledgers with `0.2.0.dev11` or later.
+- No database migration or schema change is needed. None is run.
+- Regenerate the packaged Design Contract mirror for the Design 08 §11.2 usage amendment.
+
 ## 0.2.0.dev10
 
 - Add optional `progress_observer` to `run_local_workflow_test` for volatile live observation of Claude CLI runs: process liveness, elapsed time, byte counts and one safe current-event summary (init, model activity, tool request or result with a safe category, final result, declared command start/finish by `command_id`). Updates are delivered on receipt through a bounded in-order buffer of 16 with an explicit `updates_dropped` count, plus a heartbeat after 10 s without output; nothing is persisted and no content, arguments or output are exposed.

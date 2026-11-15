@@ -13,12 +13,14 @@ import signal
 import subprocess
 import sys
 from threading import Event, Lock, Thread, current_thread, main_thread
-from typing import Callable
+from typing import Any, Callable
 
-import psutil
+from .invocation_host_platform_selection import HOST_PLATFORM
 
 
 DEFAULT_PROCESS_OUTPUT_BYTES = 16 * 1024 * 1024
+# Bound on waiting for an observer call in flight at the result handoff.
+_DELIVERY_FENCE_SECONDS = 5.0
 _PROGRESS_PENDING_LIMIT = 16
 _PROGRESS_HEARTBEAT_SECONDS = 10.0
 
@@ -308,106 +310,111 @@ class CliProcessInterrupted(KeyboardInterrupt):
         self.prior_stop_reason = prior_stop_reason
 
 
-def _remember_descendants(process):
-    """Retain psutil identities while ancestry establishes invocation ownership.
+class CliProcessStartupError(OSError):
+    """The CLI process did not start, so there is no capture.
 
-    No command lines or environments are read. A vanished intermediate parent
-    can hide never-observed descendants; this is not an OS daemon container.
+    process_created is True only when the host had created a child before the
+    failure. cleanup_error is None when no child was created or every created
+    process was conclusively stopped; otherwise it states the unconfirmed
+    cleanup, so callers never infer process stop from the message.
     """
-    owned = getattr(process, "_runtime_descendants", None)
-    if owned is None:
-        owned = process._runtime_descendants = set()
-    parent = getattr(process, "_runtime_process_identity", None)
-    if parent is None and process.poll() is None:
-        try:
-            parent = psutil.Process(process.pid)
-            parent.create_time()
-            process._runtime_process_identity = parent
-        except psutil.NoSuchProcess:
-            parent = None
-    roots = ([parent] if parent is not None else []) + list(owned)
-    for root in roots:
-        try:
-            for child in root.children(recursive=True):
-                child.create_time()  # Identity must be observable before retention.
-                owned.add(child)
-        except psutil.NoSuchProcess:
-            continue
+
+    def __init__(self, cause: OSError, *, process_created: bool, cleanup_error: str | None) -> None:
+        super().__init__(*cause.args)
+        if cause.filename is not None:
+            self.filename = cause.filename
+        if cause.filename2 is not None:
+            self.filename2 = cause.filename2
+        self.process_created = process_created
+        self.cleanup_error = cleanup_error
+
+    def __str__(self) -> str:
+        message = super().__str__()
+        return message + ("; cleanup: " + self.cleanup_error if self.cleanup_error else "")
 
 
-def _stop_process_group(process: subprocess.Popen) -> None:
+@dataclass(frozen=True)
+class CliProcessCreationEvidence:
+    """Process facts a caller may attach, as ``cli_process_evidence``, to its own exception.
+
+    For an exception raised outside run_cli_process after it created a process,
+    this records whether that process's stop was confirmed (cleanup_error is
+    None); cli_process_stop_confirmed reads it. run_cli_process itself reports a
+    launch-guard failure after creation as CliProcessStartupError or
+    CliProcessInterrupted carrying cleanup_error.
+    """
+
+    process_created: bool
+    cleanup_error: str | None
+
+
+def cli_process_stop_confirmed(error: BaseException) -> bool | None:
+    """Whether a run_cli_process failure states that every created process stopped.
+
+    True or False for a process-module error or a guard failure carrying
+    CliProcessCreationEvidence; None when the error carries no process facts, so
+    callers keep whatever they already knew. Never inferred from message text.
+    """
+    evidence = getattr(error, "cli_process_evidence", None)
+    if isinstance(evidence, CliProcessCreationEvidence):
+        return evidence.cleanup_error is None
+    if isinstance(error, (CliProcessError, CliProcessTimeout, CliProcessInterrupted, CliProcessStartupError)):
+        return error.cleanup_error is None
+    return None
+
+
+def _stop_unstarted(process) -> str | None:
+    """Stop a created process whose launch did not complete and close its pipes; report uncertainty."""
     errors = []
     try:
-        _remember_descendants(process)
+        HOST_PLATFORM.stop_cli_process(process)
     except Exception as exc:
-        errors.append("descendant ownership could not be confirmed: " + str(exc))
-    owned = list(getattr(process, "_runtime_descendants", ()))
-    for child in owned:
+        errors.append(str(exc))
+    for stream in (process.stdin, process.stdout, process.stderr):
         try:
-            if not child.is_running():
-                continue
-            child.kill()  # psutil checks PID reuse before signaling.
-        except (psutil.NoSuchProcess, ProcessLookupError):
-            pass
-        except (psutil.Error, OSError) as exc:
-            errors.append("owned descendant could not be stopped: " + str(exc))
-    # Popen created this session/group. Its leader may already have exited
-    # before discovery; unobserved same-group children still belong to it.
-    # Always terminate the known group, independently of ancestry sampling.
-    try:
-        if os.name == "posix":
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except PermissionError:
-                # Darwin may report EPERM for an exited, unreaped group leader.
-                # Reap only if already finished and retry the same known group;
-                # a live leader or a second denial remains a cleanup failure.
-                if process.poll() is None:
-                    raise
-                os.killpg(process.pid, signal.SIGKILL)
-        elif process.poll() is None:
-            process.kill()
-    except ProcessLookupError:
-        pass
-    except OSError as exc:
-        errors.append("Provider group could not be stopped: " + str(exc))
-    try:
-        process.wait(timeout=3)
-    except subprocess.TimeoutExpired as exc:
-        errors.append("CLI process did not stop after cleanup: " + str(exc))
-    try:
-        _, alive = psutil.wait_procs(owned, timeout=3)
-        survivors = [child for child in alive
-                     if child.is_running() and child.status() != psutil.STATUS_ZOMBIE]
-        if survivors:
-            errors.append("Runtime-owned background processes did not stop")
-    except psutil.Error as exc:
-        errors.append("descendant termination could not be confirmed: " + str(exc))
-    if errors:
-        raise RuntimeError("; ".join(errors))
+            stream.close()
+        except Exception as exc:
+            errors.append("CLI pipe could not be closed: " + str(exc))
+    return "; ".join(errors) or None
 
 
 def _run_cli_process(
     *, argv: list[str], prompt: str, cwd: Path, timeout_seconds: int,
     environment: dict[str, str], max_output_bytes: int = DEFAULT_PROCESS_OUTPUT_BYTES,
     on_stdout_line: Callable[[str], bool] | None = None,
-    launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
+    launch_guard: Callable[[Callable[[], Any]], Any] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
     user_cancel_requested: Callable[[], bool] | None = None,
     deadline_monotonic: float | None = None,
     progress_channel: CliProgressChannel | None = None,
     interrupted: _CliInterruptState,
 ) -> subprocess.CompletedProcess[str]:
-    """Drain both streams, stop the group on failure, preserve exact captured bytes.
+    """Drain both streams, stop the started process, preserve exact captured bytes.
 
     The size bound is shared by both streams. Reaching it fails execution;
     the captured prefix is never reported as a complete transcript. An optional
-    host launch_guard orders the actual Popen with resource invalidation; it
-    releases before stream processing so in-flight calls can still be fenced.
-    CompletedProcess and capture exceptions expose stdout_bytes/stderr_bytes;
-    the original string attributes remain display-compatible. Decode replacement
-    characters never replace the raw bytes. User interruption raises
-    CliProcessInterrupted after cleanup, retaining the same observed prefix.
+    host launch_guard orders the actual host process creation with resource
+    invalidation; it releases before stream processing so in-flight calls can
+    still be fenced. A process created before the guard fails is stopped, never
+    left running; the failure is reported as CliProcessStartupError (or
+    CliProcessInterrupted for an interruption) with that stop's cleanup
+    certainty. HostPlatform owns creation and the
+    host-native stop of the started process (POSIX: its session group); every
+    exit path stops it before joining stream workers. CLI-internal processes
+    are the CLI's own and are not enumerated. Three facts stay separate:
+    process exit (returncode), stop confirmation (cleanup_error is None) and
+    log completeness. A worker still blocked after the bounded join, for
+    example on a pipe a CLI-internal process kept open, sets
+    ``output_streams_closed`` False on the result instead of failing the call;
+    True only means both pipes reached EOF. The handoff is fenced: once the
+    returned or raised snapshot is fixed, such a worker neither appends bytes nor
+    calls on_stdout_line, so the caller's observer state cannot change after
+    return (later bytes are not part of this invocation's record). CompletedProcess and capture
+    exceptions expose stdout_bytes/stderr_bytes; the original string attributes
+    remain display-compatible. Decode replacement characters never replace the
+    raw bytes. User interruption raises CliProcessInterrupted after cleanup,
+    retaining the same observed prefix. A host start failure raises
+    CliProcessStartupError with explicit cleanup certainty.
     """
     if type(max_output_bytes) is not int or max_output_bytes < 1:
         raise ValueError("CLI process output limit must be positive")
@@ -427,13 +434,38 @@ def _run_cli_process(
         if cancel_requested is not None and cancel_requested():
             raise CliProcessError(None, argv, stop_reason="resource_closed", message="Runtime process resources are closed",
                                   output="", stderr="", stdout_bytes=b"", stderr_bytes=b"")
-        return subprocess.Popen(
-            argv, cwd=cwd, env=environment, stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
-        )
-    process = launch_guard(launch) if launch_guard is not None else launch()
-    from threading import Lock
+        if launched:
+            raise RuntimeError("CLI launch guard attempted a second process creation")
+        try:
+            created = HOST_PLATFORM.create_cli_process(argv, cwd=cwd, environment=environment)
+        except OSError as exc:
+            raise CliProcessStartupError(exc, process_created=getattr(exc, "process_created", False) is True,
+                                         cleanup_error=getattr(exc, "cleanup_error", None)) from exc
+        launched.append(created)
+        return created
+    launched: list = []
+    try:
+        process = launch_guard(launch) if launch_guard is not None else launch()
+        if launched and process is not launched[0]:
+            raise TypeError("CLI launch guard must return the process it created")
+    except BaseException as failure:
+        if not launched:
+            raise
+        # The guard failed after actual creation: stop that process instead of orphaning it.
+        cleanup_error = _stop_unstarted(launched[0])
+        if isinstance(failure, KeyboardInterrupt):
+            interrupted.requested = True
+            raise CliProcessInterrupted(returncode=launched[0].returncode, output="", stderr="",
+                                        stdout_bytes=b"", stderr_bytes=b"", cleanup_error=cleanup_error) from failure
+        if not isinstance(failure, Exception):
+            raise
+        raise CliProcessStartupError(OSError(f"CLI launch did not complete after process creation: {failure}"),
+                                     process_created=True, cleanup_error=cleanup_error) from failure
     lock = Lock()
+    # Held while the observer runs and while the result is handed off, so no
+    # observer call can happen once the returned snapshot is fixed.
+    delivery = Lock()
+    handed_off = False
     exhausted = Event()
     stopped = Event()
     callback_errors: list[Exception] = []
@@ -447,12 +479,25 @@ def _run_cli_process(
             if failure is None:
                 failure = reason
 
+    def deliver(text: str) -> bool:
+        """Pass one line to the observer unless the result was already handed off."""
+        with delivery:
+            if handed_off:
+                return False
+            if not on_stdout_line(text):
+                mark_failure("observer_stopped")
+                stopped.set()
+                return False
+            return True
+
     def drain(stream, index: int) -> None:
         nonlocal total, failure
         pending = bytearray()
         try:
             while block := stream.read1(8192):
                 with lock:
+                    if handed_off:
+                        return  # Bytes after the handoff are neither captured nor delivered.
                     available = max_output_bytes - total
                     accepted = block[:available]
                     captured[index].extend(accepted)
@@ -466,14 +511,10 @@ def _run_cli_process(
                     while b"\n" in pending:
                         line, _, rest = pending.partition(b"\n")
                         pending = rest
-                        if not on_stdout_line(line.decode("utf-8")):
-                            mark_failure("observer_stopped")
-                            stopped.set()
+                        if not deliver(line.decode("utf-8")):
                             break
-            if pending and not stopped.is_set() and not exhausted.is_set():
-                if not on_stdout_line(pending.decode("utf-8")):
-                    mark_failure("observer_stopped")
-                    stopped.set()
+            if pending and on_stdout_line is not None and not stopped.is_set() and not exhausted.is_set():
+                deliver(pending.decode("utf-8"))
         except Exception as exc:
             callback_errors.append(exc)
             mark_failure("stream_error")
@@ -506,17 +547,8 @@ def _run_cli_process(
     if deadline_monotonic is not None:
         deadline = min(deadline, deadline_monotonic)
     cleanup_errors: list[str] = []
-    ownership_check = 0.0
     try:
         while process.poll() is None:
-            if os.name == "posix" and time.monotonic() >= ownership_check:
-                try:
-                    _remember_descendants(process)
-                except psutil.Error as exc:
-                    cleanup_errors.append("descendant observation unavailable: " + str(exc))
-                    mark_failure("cleanup_error")
-                    break
-                ownership_check = time.monotonic() + 0.1
             if progress_channel is not None:
                 progress_channel._heartbeat_if_quiet(time.monotonic())
             if time.monotonic() >= deadline:
@@ -539,16 +571,16 @@ def _run_cli_process(
         callback_errors.append(exc)
         mark_failure("resource_closed")
     finally:
-        # Descendants must not outlive the one-shot invocation, even if the
-        # CLI parent exits before a descendant closes an inherited output pipe.
+        # Stop the started process first; readable pipe ends stay open so the
+        # workers drain what was already written.
         try:
-            _stop_process_group(process)
+            HOST_PLATFORM.stop_cli_process(process)
         except KeyboardInterrupt:
             interrupted.requested = True
             try:
-                _stop_process_group(process)
+                HOST_PLATFORM.stop_cli_process(process)
             except (Exception, KeyboardInterrupt) as exc:
-                cleanup_errors.append("Interrupted process cleanup: " + str(exc))
+                cleanup_errors.append("Interrupted process stop: " + str(exc))
         except Exception as exc:
             cleanup_errors.append(str(exc))
         for worker in workers:
@@ -557,14 +589,29 @@ def _run_cli_process(
             except KeyboardInterrupt:
                 interrupted.requested = True
                 cleanup_errors.append("Interrupted output-worker join")
-    if any(worker.is_alive() for worker in workers):
-        cleanup_errors.append("CLI output pipe did not close after group cleanup")
+    # Workers close their own streams; one still blocked (a pipe another process
+    # holds open) is a log-completeness fact, not a failure to stop the started process.
+    output_streams_closed = not any(worker.is_alive() for worker in workers[:2])
+    # Fix the handoff: wait for any observer call in flight, then close delivery and
+    # capture together. A worker still blocked on a held pipe neither appends nor
+    # calls the observer after this point, so the returned facts cannot change.
+    fenced = delivery.acquire(timeout=_DELIVERY_FENCE_SECONDS)
+    try:
+        with lock:
+            handed_off = True
+            stdout_bytes, stderr_bytes = map(bytes, captured)
+    finally:
+        if fenced:
+            delivery.release()
+    if not fenced:
+        # An observer call is still running: it may change caller state after return,
+        # so this invocation cannot be reported as a clean result.
+        callback_errors.append(RuntimeError("CLI event observer did not return before the result handoff"))
+        mark_failure("stream_error")
     cleanup_error = "; ".join(cleanup_errors) or None
     stream_error = "; ".join(map(str, callback_errors)) or None
     if cleanup_error:
         mark_failure("cleanup_error")
-    with lock:
-        stdout_bytes, stderr_bytes = map(bytes, captured)
     if progress_channel is not None:
         progress_channel._finish()
     stdout, stderr = (value.decode("utf-8", errors="replace") for value in (stdout_bytes, stderr_bytes))
@@ -592,6 +639,7 @@ def _run_cli_process(
                               stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes)
     result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     result.stdout_bytes, result.stderr_bytes = stdout_bytes, stderr_bytes
+    result.output_streams_closed = output_streams_closed
     return result
 
 
@@ -599,7 +647,7 @@ def run_cli_process(
     *, argv: list[str], prompt: str, cwd: Path, timeout_seconds: int,
     environment: dict[str, str], max_output_bytes: int = DEFAULT_PROCESS_OUTPUT_BYTES,
     on_stdout_line: Callable[[str], bool] | None = None,
-    launch_guard: Callable[[Callable[[], subprocess.Popen]], subprocess.Popen] | None = None,
+    launch_guard: Callable[[Callable[[], Any]], Any] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
     user_cancel_requested: Callable[[], bool] | None = None,
     deadline_monotonic: float | None = None,
@@ -614,7 +662,11 @@ def run_cli_process(
     Custom handlers and non-main-thread signal policy are not replaced.
     An optional trusted cancel_requested callback stops resource-bound commands
     with resource_closed, not a forged user interruption. It is checked before
-    Popen and during waiting; the launch guard still orders creation with close.
+    process creation and during waiting; the launch guard still orders creation
+    with close. On Windows, argv[0] must name a native .exe (bare names resolve
+    only through the supplied PATH); a .cmd/.bat/.ps1 launcher is not started
+    because its interpreter would re-parse the exact argv. The result carries
+    output_streams_closed (EOF on both pipes; not a completeness claim).
     user_cancel_requested is a separate trusted callback for user cancellation
     from another thread; it stops the process and raises CliProcessInterrupted
     with captured bytes. It never converts resource closure into a user action.
@@ -632,8 +684,9 @@ def run_cli_process(
             progress_channel=progress_channel, interrupted=interrupted)
 
 
-__all__ = ["CliEventSummary", "CliProcessError", "CliProcessInterrupted", "CliProcessProgress",
-           "CliProcessTimeout", "CliProgressChannel", "run_cli_process"]
+__all__ = ["CliEventSummary", "CliProcessCreationEvidence", "CliProcessError", "CliProcessInterrupted",
+           "CliProcessProgress", "CliProcessStartupError", "CliProcessTimeout", "CliProgressChannel",
+           "cli_process_stop_confirmed", "run_cli_process"]
 
 
 def invocation_deadline(host, request):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -41,8 +42,34 @@ def _synthetic_private_manifest() -> tuple[dict[str, object], str, str]:
     return manifest, path_segment, content_fragment
 
 
+@pytest.mark.skipif(
+    os.environ.get("AGENT_RUNTIME_RELEASE_BOUNDARY") != "1",
+    reason="unverified release boundary: the reachable Git history is checked only for an explicit public "
+           "export (set AGENT_RUNTIME_RELEASE_BOUNDARY=1); a skip is not release approval",
+)
 def test_current_repository_matches_public_boundary() -> None:
+    """Release gate: the current tree and every reachable Git object meet the public boundary.
+
+    It belongs to a public export or release step, not the ordinary local suite: reachable history
+    can hold material that the current tree no longer tracks. The current tree is checked on every
+    run by the next test, and the synthetic history tests below keep the validator itself honest.
+    """
     assert validate_public_repository(root=REPOSITORY_ROOT) == ()
+
+
+def test_current_tracked_tree_matches_public_boundary_independently_of_history() -> None:
+    """Reachable-history findings must not hide a new boundary violation in the current tree."""
+    manifest = load_public_repository_manifest()
+    findings = validate_public_repository_tree(
+        root=REPOSITORY_ROOT,
+        tracked_paths=tracked_repository_paths(REPOSITORY_ROOT),
+        manifest=manifest,
+    )
+    assert findings == ()
+    for path in (".gitattributes", "tests/windows_junction_helpers.py"):
+        assert public_path_is_allowed(path, manifest=manifest)
+    assert not public_path_is_allowed(".gitattributes.local", manifest=manifest)
+    assert not public_path_is_allowed("tests/private_helpers.py", manifest=manifest)
 
 
 def test_api_documentation_builder_has_an_exact_public_path_only():
@@ -389,6 +416,8 @@ def test_required_public_path_cannot_disappear(tmp_path: Path) -> None:
 
 
 def test_public_repository_rejects_tracked_symlink(tmp_path: Path) -> None:
+    from test_agent_runtime_claude_native_tools import _require_symlink
+    _require_symlink(tmp_path)
     manifest = deepcopy(load_public_repository_manifest())
     manifest["required_paths"] = []
     target = tmp_path / "README.md"

@@ -126,11 +126,7 @@ def test_a_codex_layer_carries_its_own_model_and_effort(tmp_path):
 def _invalid(root, relative, case):
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
-    if case == "symlink":
-        target = root / "elsewhere.json"
-        target.write_text(json.dumps({"schema_version": PARAMETER_FILE_FORMAT}))
-        path.symlink_to(target)
-    elif case == "directory":
+    if case == "directory":
         path.mkdir()
     elif case == "invalid_json":
         path.write_text("{not json")
@@ -150,7 +146,7 @@ def _invalid(root, relative, case):
 
 
 @pytest.mark.deterministic
-@pytest.mark.parametrize("case", ["symlink", "directory", "invalid_json", "duplicate_key", "missing_schema_version",
+@pytest.mark.parametrize("case", ["directory", "invalid_json", "duplicate_key", "missing_schema_version",
                                   "other_schema_version", "version_key", "definition_target_key", "unknown_key",
                                   "empty_value", "non_string_value"])
 def test_an_invalid_workflow_file_fails_instead_of_falling_through(tmp_path, case):

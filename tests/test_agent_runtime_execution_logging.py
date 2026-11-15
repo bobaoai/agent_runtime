@@ -366,19 +366,38 @@ def test_real_process_keeps_non_utf8_and_large_streams(tmp_path):
     assert cli_stream_bytes(recorded, "stderr") == stderr
 
 
-def test_real_user_interrupt_preserves_prefix_after_process_cleanup(tmp_path):
+@pytest.mark.real_run
+@pytest.mark.parametrize("delivery", ["posix_parent_signal", "main_thread_interrupt"])
+def test_real_user_interrupt_preserves_prefix_after_process_cleanup(tmp_path, delivery):
+    """A user interrupt stops the Runtime-started process and keeps the bytes it already wrote.
+
+    posix_parent_signal: the child sends SIGINT to its parent, a POSIX signal path (on Windows
+    os.kill would terminate the parent instead). main_thread_interrupt: a watcher thread delivers
+    a simulated SIGINT to the Runtime's main thread once the child is running; it runs on every host.
+    """
+    if delivery == "posix_parent_signal" and os.name != "posix":
+        pytest.skip("unverified on this host: POSIX signal delivery from a child process to its parent")
     driver = """
-import json,os,sys
+import _thread,json,os,signal,sys,threading,time
 from pathlib import Path
 from agent_runtime.invocation.invocation_process_execution import run_cli_process,CliProcessInterrupted
+if sys.argv[1]=='posix_parent_signal':
+    child="import os,signal,time;os.write(1,b'before interrupt\\\\n');time.sleep(.2);os.kill(os.getppid(),signal.SIGINT);time.sleep(30)"
+else:
+    child="import os,time;os.write(1,b'before interrupt\\\\n');open('child_ready','w').close();time.sleep(30)"
+    def deliver():
+        deadline=time.monotonic()+10
+        while not Path('child_ready').exists() and time.monotonic()<deadline:
+            time.sleep(.01)
+        _thread.interrupt_main(signal.SIGINT)
+    threading.Thread(target=deliver,daemon=True).start()
 try:
-    run_cli_process(argv=[sys.executable,'-u','-c',
-        "import os,signal,time;print('before interrupt',flush=True);time.sleep(.2);os.kill(os.getppid(),signal.SIGINT);time.sleep(30)"],
+    run_cli_process(argv=[sys.executable,'-u','-c',child],
         prompt='',cwd=Path.cwd(),environment=dict(os.environ),timeout_seconds=10)
 except CliProcessInterrupted as exc:
     print(json.dumps({'raw':exc.stdout_bytes.decode(),'stop':exc.stop_reason,'returncode':exc.returncode}))
 """
-    process = subprocess.run([sys.executable, "-c", driver], cwd=tmp_path, capture_output=True, text=True,
+    process = subprocess.run([sys.executable, "-c", driver, delivery], cwd=tmp_path, capture_output=True, text=True,
         timeout=15, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")})
     assert process.returncode == 0, process.stderr
     result = json.loads(process.stdout)
@@ -395,12 +414,12 @@ from unittest.mock import patch
 from agent_runtime.invocation import invocation_process_execution as capture
 previous=signal.getsignal(signal.SIGINT)
 def guard(launch):
-    os.kill(os.getpid(),signal.SIGINT)
+    signal.raise_signal(signal.SIGINT)
     return launch()
-with patch.object(capture.subprocess,'Popen',side_effect=AssertionError('cancelled CLI must not launch')) as start:
+with patch.object(capture.HOST_PLATFORM,'create_cli_process',side_effect=AssertionError('cancelled CLI must not launch')) as start:
     try:
         with capture._capture_cli_interrupts():
-            if sys.argv[1]=='before_call': os.kill(os.getpid(),signal.SIGINT)
+            if sys.argv[1]=='before_call': signal.raise_signal(signal.SIGINT)
             capture.run_cli_process(argv=[sys.executable,'-c','pass'],prompt='',cwd=Path.cwd(),
                 environment=dict(os.environ),timeout_seconds=1,
                 launch_guard=guard if sys.argv[1]=='launch_guard' else None)
@@ -427,24 +446,24 @@ from agent_runtime.invocation import invocation_claude_cli_execution as claude
 from agent_runtime.invocation import invocation_process_execution as capture
 from test_agent_runtime_execution_logging import native,_run_real_native_streams
 previous=signal.getsignal(signal.SIGINT)
-actual_run=claude.subprocess.run
-actual_start=capture.subprocess.Popen
+actual_run=claude.run_cli_process
+actual_start=capture.HOST_PLATFORM.create_cli_process
 starts=[]
 signals=[]
-def preflight(argv,*args,**kwargs):
-    result=actual_run(argv,*args,**kwargs)
-    if argv[1]=='--help':
+def preflight(**fields):
+    result=actual_run(**fields)
+    if fields['argv'][1]=='--help':
         signals.append(True)
-        os.kill(os.getpid(),signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)
     return result
 def start(argv,*args,**kwargs):
-    if argv[0]==sys.executable:
+    if argv[0]==sys.executable and '-c' in argv:  # The Provider stand-in, not the synthetic preflight.
         starts.append(True)
         raise AssertionError('provider process must not start after preflight cancellation')
     return actual_start(argv,*args,**kwargs)
 with pytest.MonkeyPatch.context() as patch:
-    patch.setattr(claude.subprocess,'run',preflight)
-    patch.setattr(capture.subprocess,'Popen',start)
+    patch.setattr(claude,'run_cli_process',preflight)
+    patch.setattr(capture.HOST_PLATFORM,'create_cli_process',start)
     run,cell=_run_real_native_streams(Path.cwd(),patch,b'')
 log=read_execution_log(run.module_run,attempts=run.attempts,read_content=cell.read_bytes,include_private_content=True)
 assert signals and not starts
@@ -469,14 +488,14 @@ from pathlib import Path
 from agent_runtime.invocation import invocation_process_execution as capture
 previous=signal.getsignal(signal.SIGINT)
 phase,outcome=sys.argv[1:]
-original=capture._stop_process_group if phase=='cleanup' else capture.Thread.join
+original=capture.HOST_PLATFORM.stop_cli_process if phase=='cleanup' else capture.Thread.join
 sent=[]
 def interrupt(*args,**kwargs):
     if not sent:
         sent.append(True)
-        os.kill(os.getpid(),signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)
     return original(*args,**kwargs)
-if phase=='cleanup': capture._stop_process_group=interrupt
+if phase=='cleanup': capture.HOST_PLATFORM.stop_cli_process=interrupt
 else: capture.Thread.join=interrupt
 try:
     child="import os,time;os.write(1,b'before shutdown\\\\n');os.write(2,b'actual stderr')"
@@ -517,12 +536,9 @@ def _run_real_native_streams(tmp_path, monkeypatch, raw, stderr=b"", *, timeout=
         return run_cli_process(**options)
     adapter = native.claude.ClaudeAdapter(
         release_registry=registry, artifact_host=cell, workspace_root=tmp_path / "attempts",
-        cli_path=native._fake_cli(tmp_path), process_runner=actual_process)
+        cli_path=native._fake_cli(tmp_path, monkeypatch), process_runner=actual_process)
     adapters = native.AgentExecutionAdapterRegistry()
     adapters.register(adapter)
-    temporary_directory = native.claude.tempfile.TemporaryDirectory
-    monkeypatch.setattr(native.claude.tempfile, "TemporaryDirectory", lambda *args, **kw:
-                        temporary_directory(*args, **{**kw, "dir": tmp_path}))
     run = native.run_module(request, release_registry=registry, adapters=adapters, artifact_host=cell,
                            ledger=native.InMemoryModuleExecutionLedger(), authority=authority,
                            clock=lambda: native._TEST_TIME)
@@ -589,7 +605,7 @@ sent=[]
 def send_once():
     if not sent:
         sent.append(True)
-        os.kill(os.getpid(),signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)
 with pytest.MonkeyPatch.context() as patch:
     adapter_results=[]
     original_execute=claude.ClaudeAdapter.execute
@@ -607,13 +623,15 @@ with pytest.MonkeyPatch.context() as patch:
                 return self.delegate.validate(value)
         patch.setattr(claude,'Draft202012Validator',InterruptingValidator)
     else:
-        owner=(capture if phase=='process_cleanup' else claude.tempfile.TemporaryDirectory
-               if phase=='cleanup' else native.InMemoryCellArtifactStore)
-        name={'cleanup':'cleanup','failure_detail':'commit_failure_detail','trace_finalization':'commit_attempt_trace',
-              'process_cleanup':'_stop_process_group'}[phase]
+        # 'cleanup' is the disposal of the Runtime's private crt- directory, not of the retained Attempt.
+        owner=(capture.HOST_PLATFORM if phase in {'process_cleanup','cleanup'} else native.InMemoryCellArtifactStore)
+        name={'cleanup':'remove_private_directory','failure_detail':'commit_failure_detail',
+              'trace_finalization':'commit_attempt_trace','process_cleanup':'stop_cli_process'}[phase]
         original=getattr(owner,name)
         def interrupt(*args,**kwargs):
-            send_once()
+            # The synthetic preflight processes are stopped too; interrupt the Provider stand-in's stop only.
+            if phase!='process_cleanup' or '-c' in list(getattr(args[0],'args',None) or ()):
+                send_once()
             return original(*args,**kwargs)
         patch.setattr(owner,name,interrupt)
     run,cell=_run_real_native_streams(Path.cwd(),patch,raw,stderr,timeout=outcome=='timeout')
@@ -696,14 +714,20 @@ events=[native._init(),use('before_cleanup','Read',file_path='material.txt'),rep
         native._result(**({'structured_output':{}} if outcome=='schema' else {}))]
 raw=b'\\n'.join(json.dumps(event).encode() for event in events)+b'\\n'
 stderr=b'actual diagnostic stream\\n'
-original=claude.tempfile.TemporaryDirectory.cleanup
-def fail_cleanup(instance):
-    original(instance)
-    if cancel=='yes': os.kill(os.getpid(),signal.SIGINT)
+original=claude.HOST_PLATFORM.remove_private_directory
+disposed=[]
+def fail_cleanup(directory,identity):
+    # Fail the disposal of the Runtime's private crt- directory only, after it really happened.
+    original(directory,identity)
+    if not Path(directory).name.startswith('crt-'):
+        return
+    disposed.append(True)
+    if cancel=='yes': signal.raise_signal(signal.SIGINT)
     raise OSError('fixture cleanup failure')
 with pytest.MonkeyPatch.context() as patch:
-    patch.setattr(claude.tempfile.TemporaryDirectory,'cleanup',fail_cleanup)
+    patch.setattr(claude.HOST_PLATFORM,'remove_private_directory',fail_cleanup)
     run,cell=_run_real_native_streams(Path.cwd(),patch,raw,stderr,timeout=outcome=='timeout')
+assert disposed==[True]
 log=read_execution_log(run.module_run,attempts=run.attempts,read_content=cell.read_bytes,include_private_content=True)
 attempt=log['attempts'][0]
 assert attempt['status']==('cancelled' if cancel=='yes' else 'failed')
