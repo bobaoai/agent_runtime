@@ -24,7 +24,9 @@
 
 ### 安装与第一次运行 / Install and first run
 
-需要 Python 3.11+、所选 CLI 的已安装程序以及宿主自己的 CLI 登录。从 GitHub 公开源码安装：
+安装包和随包 Skills 需要 Python 3.11+；实际运行模型时还需要所选 CLI 的已安装程序与宿主自己的 CLI 登录。
+已 clone 仓库的使用者，直接按下方 [Clone 后安装 Runtime 和 Skills](#clone-and-install-skills) 完成项目接入。
+从 GitHub 公开源码安装：
 
 ```sh
 python -m pip install "agent-runtime-core @ git+https://github.com/bobaoai/agent_runtime@main"
@@ -56,6 +58,87 @@ agent-runtime-test-run --root /path/to/host --workflow my_reviewer --input input
 Test Run 把本次执行事实以 JSON 打印到 stdout；退出码 `0` 表示技术执行完成，不表示业务审核通过。
 完整步骤见[注册新的 Reviewer 并测试](docs/agent_runtime_registration_runbook.md#new-reviewer)；
 第一次在新宿主上验证环境，可以先运行[四种常用模式样例](#runnable-examples)。
+
+<a id="clone-and-install-skills"></a>
+
+### Clone 后安装 Runtime 和 Skills / Set up a cloned checkout
+
+刚 clone 的使用者可以按下面的 PowerShell 步骤完成安装。**源码目录**是 clone 下来的 Runtime 仓库；
+**项目目录**是要使用 Runtime 的业务项目，Skills 安装到这个项目中。只想在 Runtime 仓库里试用时，
+把 `$ProjectRoot` 设成 `$RuntimeRepo`。每个要使用 Skills 的项目各执行一次 setup。
+
+**1. 指定目录和 Python 环境。** 将下面的路径换成实际绝对路径，优先使用项目已有的 Python 3.11+ 环境：
+
+```powershell
+$RuntimeRepo = "C:\work\agent_runtime"
+$ProjectRoot = "C:\work\my_project"
+$Python = "C:\work\my_project\.venv\Scripts\python.exe"
+```
+
+如果项目还没有 Python 环境，先用已安装的 Python 3.11+ 创建虚拟环境；已有环境则跳过这一步：
+
+```powershell
+py -3 -m venv "$ProjectRoot\.venv"
+$Python = "$ProjectRoot\.venv\Scripts\python.exe"
+```
+
+后续命令直接使用这个解释器，无需激活虚拟环境。
+
+**2. 安装 Runtime 包，再安装随包 Skills。** 在同一个 PowerShell 会话中执行，每条命令成功后再继续：
+
+```powershell
+& $Python -m pip install "$RuntimeRepo"
+& $Python -c "from pathlib import Path; import sys; from agent_runtime import setup_runtime; root = Path(sys.argv[1]).resolve(); changed = setup_runtime(root); print('Runtime Skills ready:', root); print('Changed paths:', len(changed))" "$ProjectRoot"
+```
+
+Runtime 对外提供 Python API 和 CLI，三份随包 Skills 指导 Agent 使用这些入口；当前不对外提供
+Runtime MCP 服务。单独 `git clone` 或 `pip install` 不会把 Skills 安装到业务项目；
+上面的 `setup_runtime` 调用才会完成项目准备。
+它在 `$ProjectRoot` 下创建 `.runtime/setup.json`，并向两个原生 Skill 目录安装相同的三份随包内容：
+
+| Skill | 作用 | 安装位置（相对于项目目录） |
+| --- | --- | --- |
+| `agent-runtime-usage` | 按任务选择四种常用模式、推荐 preset、查找配置与可运行样例 | `.agents/skills/agent-runtime-usage/SKILL.md` 与 `.claude/skills/agent-runtime-usage/SKILL.md` |
+| `agent-runtime-registration` | 注册已批准的 Module／Workflow 定义并准确回读 | `.agents/skills/agent-runtime-registration/SKILL.md` 与 `.claude/skills/agent-runtime-registration/SKILL.md` |
+| `agent-runtime-test-run` | 运行已注册任务，查看结果、执行日志与留档 | `.agents/skills/agent-runtime-test-run/SKILL.md` 与 `.claude/skills/agent-runtime-test-run/SKILL.md` |
+
+安装包和 Skills 不需要先登录 Claude／Codex，也不会调用模型。其他共享服务的 Skills（如
+`credential-access`、`dagster-access`）由各自的服务安装流程维护，不属于这三份 Runtime Skills。
+
+如需运行随包的 `mcp_data` 样例，再执行 `& $Python -m pip install "${RuntimeRepo}[cli_tools]"`，
+安装样例数据服务所需的 MCP Python 库。任务使用宿主已有 MCP 的连接能力见[四种常用模式](#four-common-patterns)；
+这与把 Runtime 自身作为 MCP 服务提供给外部 Agent 是两回事。
+
+**3. 验证安装。** 核对实际版本、CLI 入口，以及六份已安装 Skill 是否与当前包完全一致：
+
+```powershell
+& $Python -c "from importlib.metadata import version; print(version('agent-runtime-core'))"
+$RuntimeCli = Join-Path (Split-Path -Parent $Python) "agent-runtime-test-run.exe"
+& $RuntimeCli --help
+@'
+import sys
+from pathlib import Path
+from importlib.resources import files
+
+root = Path(sys.argv[1]).resolve()
+names = ("agent-runtime-usage", "agent-runtime-registration", "agent-runtime-test-run")
+for host in (".agents", ".claude"):
+    for name in names:
+        target = root / host / "skills" / name / "SKILL.md"
+        expected = files("agent_runtime").joinpath("skills", name, "SKILL.md").read_bytes()
+        if target.read_bytes() != expected:
+            raise SystemExit(f"Skill content mismatch: {target}")
+        print(f"OK: {target}")
+'@ | & $Python - "$ProjectRoot"
+```
+
+六行 `OK` 表示两套 Skill 目录都已安装到位。随后在这个项目中使用 `agent-runtime-usage`，
+例如让 Agent「按 Runtime 的四种常用模式，推荐适合我的文件审核任务的 preset，并指出对应样例」。
+真正运行模型前，再准备所选 CLI 的程序与登录，并按[可运行样例](#runnable-examples)验证需要的模式。
+
+更新 Runtime 后，在同一 Python 环境重新安装包，并对各项目重新调用 `setup_runtime` 即可更新受管理的
+Skills；内容已一致时不会重复写入。如果同名 Skill 已被本地修改，setup 会报告具体路径，先处理该处差异，
+不要直接覆盖。更多行为见[轻量运行前 setup](docs/agent_runtime_registration_runbook.md#local-runtime-setup)。
 
 <a id="outer-cli-boundary"></a>
 
@@ -281,6 +364,7 @@ Portable CLI 管审核对象的准备与结果校验，两套 CLI 保持分开�
 
 | 我想做什么 | 从哪里开始 |
 | --- | --- |
+| 刚 clone 仓库，安装 Runtime 与配套 Skills | [Clone 后安装 Runtime 和 Skills](#clone-and-install-skills)：选定项目与 Python 环境，安装包、setup、验证三份 Skills |
 | 在指定 root 使用 Runtime 工具 | [轻量运行前 setup](docs/agent_runtime_registration_runbook.md#local-runtime-setup)；现有命令自动完成，无需另装 Skill |
 | 注册新的 Reviewer / register a new reviewer | [准备资料与注册](docs/agent_runtime_registration_runbook.md#new-reviewer) |
 | 升级已有环境，继续使用旧 Reviewer | [升级与一次性采用](docs/agent_runtime_registration_runbook.md#upgrade-existing-reviewer)：安装包、登记新定义、回读并验证 |
