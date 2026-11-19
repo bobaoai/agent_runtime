@@ -101,25 +101,61 @@ def validate_mcp_connection_entries(entries) -> dict[str, dict]:
     return result
 
 
+_RELEASE_STORE_SCHEMA = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+def validate_release_store_entries(entries) -> dict[str, dict]:
+    """Validate the host's named PostgreSQL release-store locators.
+
+    ``entries`` maps a store name (``[a-z0-9_-]{1,64}``) to
+    ``{"database_url_env": VAR, "schema": SCHEMA}``: the name of the host
+    environment variable that holds the DSN and the existing release schema.
+    The DSN value itself never appears in configuration; it stays in the host
+    environment and is read only by the code that opens the store. Returns a
+    private copy. Whether a Provider would inherit the variable is checked by
+    the execution entry that consumes it.
+    """
+    if type(entries) is not dict:
+        raise ValueError("release_stores must map store names to objects")
+    result = {}
+    for name, entry in entries.items():
+        if type(name) is not str or not _MCP_NAME.fullmatch(name):
+            raise ValueError(f"release store name {name!r} is not accepted")
+        if type(entry) is not dict or set(entry) != {"database_url_env", "schema"}:
+            raise ValueError(f"release store {name} needs exactly database_url_env and schema")
+        variable, schema = entry["database_url_env"], entry["schema"]
+        if type(variable) is not str or not _ENVIRONMENT_KEY.fullmatch(variable):
+            raise ValueError(f"release store {name}: database_url_env must be an environment variable name")
+        if type(schema) is not str or not _RELEASE_STORE_SCHEMA.fullmatch(schema):
+            raise ValueError(f"release store {name}: schema must be a lowercase PostgreSQL identifier")
+        result[name] = {"database_url_env": variable, "schema": schema}
+    return result
+
+
 def load_runtime_config(root: Path) -> dict[str, object]:
     """Read optional host resource defaults from root/.runtime/config.json.
 
     Args:
         root: Host configuration root, never a model read grant. The optional
             JSON object accepts provider_cli_paths, read_only_dependencies,
-            attempt_workspace_root and mcp_servers. provider_cli_paths maps
+            attempt_workspace_root, mcp_servers and release_stores.
+            provider_cli_paths maps
             claude_cli or codex_cli to executable paths; read_only_dependencies is
             a list of trusted dependency directory paths; attempt_workspace_root
             is where this root's Attempt folders are retained (default
             root/.runtime/attempt_workspaces); mcp_servers maps claude_cli or
             codex_cli to the host's selectable MCP connections (see
             validate_mcp_connection_entries). A Module receives only the
-            connections it declares. Relative locators are resolved against
-            root. Tilde is not expanded.
+            connections it declares. release_stores names the host's existing
+            PostgreSQL release stores by DSN environment-variable name and
+            schema (see validate_release_store_entries), so an operator selects
+            a store by name instead of assembling its locator. Relative locators
+            are resolved against root. Tilde is not expanded.
     Returns:
         A new dictionary with provider_cli_paths (a mapping to Path values),
         read_only_dependencies (a tuple of Path values), attempt_workspace_root
-        (a Path) and mcp_servers (transport to validated entries). A missing
+        (a Path), mcp_servers (transport to validated entries) and
+        release_stores (name to validated locator). A missing
         config file supplies these defaults. Locators are normalized here; the execution
         consumer checks the existence and type of resources it actually selects.
         Unused provider/dependency defaults never open resources or add tools.
@@ -141,7 +177,7 @@ def load_runtime_config(root: Path) -> dict[str, object]:
     body = _read(_target(root, ".runtime", "config.json"))
     if body is None:
         return {"provider_cli_paths": {}, "read_only_dependencies": (),
-                "attempt_workspace_root": default_workspaces, "mcp_servers": {}}
+                "attempt_workspace_root": default_workspaces, "mcp_servers": {}, "release_stores": {}}
 
     def unique_object(pairs):
         result = {}
@@ -152,10 +188,11 @@ def load_runtime_config(root: Path) -> dict[str, object]:
         return result
 
     document = json.loads(body, object_pairs_hook=unique_object)
-    allowed = {"provider_cli_paths", "read_only_dependencies", "attempt_workspace_root", "mcp_servers"}
+    allowed = {"provider_cli_paths", "read_only_dependencies", "attempt_workspace_root", "mcp_servers",
+               "release_stores"}
     if type(document) is not dict or set(document) - allowed:
         raise ValueError("Runtime config accepts only provider_cli_paths, read_only_dependencies, "
-                         "attempt_workspace_root and mcp_servers")
+                         "attempt_workspace_root, mcp_servers and release_stores")
     mcp_servers = document.get("mcp_servers", {})
     if type(mcp_servers) is not dict or set(mcp_servers) - {"claude_cli", "codex_cli"}:
         raise ValueError("mcp_servers must map claude_cli/codex_cli to connection entries")
@@ -177,7 +214,8 @@ def load_runtime_config(root: Path) -> dict[str, object]:
             "read_only_dependencies": tuple(locator(value) for value in dependencies),
             "attempt_workspace_root": default_workspaces if workspaces is None else locator(workspaces),
             "mcp_servers": {transport: validate_mcp_connection_entries(entries)
-                            for transport, entries in mcp_servers.items()}}
+                            for transport, entries in mcp_servers.items()},
+            "release_stores": validate_release_store_entries(document.get("release_stores", {}))}
 
 
 def _remove(path: Path) -> None:

@@ -282,7 +282,7 @@ def test_claude_refuses_inconsistent_call_resources_before_any_process(tmp_path,
 
 def _codex_mcp_env(tmp_path, invocation, *, tools=("mcp__fixture",), workspace="none", **executor_options):
     compiled = native._compile_native_module(tmp_path, output_resolution_policy=OutputResolutionPolicy.DIRECT_SINGLE,
-        executor_adapter_id="codex_cli_agent_workspace_executor", executor_adapter_revision="v4",
+        executor_adapter_id="codex_cli_agent_workspace_executor", executor_adapter_revision="v5",
         execution_mode="agent", attempt_workspace_policy=workspace, tool_policy=tools, network_policy="provider_managed")
     registry = native._register_compiled_for_evaluation(compiled)
     artifacts = native.InMemoryCellArtifactStore()

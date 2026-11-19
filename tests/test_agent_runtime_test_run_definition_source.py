@@ -199,7 +199,7 @@ def test_cli_passes_pg_locator_and_constraints_to_the_api_unchanged(tmp_path, mo
                      "--release-database-url-env", "RUNTIME_RELEASE_DSN", "--release-schema", "agent_runtime",
                      "--expected-module-id", "design_contract_reviewer", "--resources", "resources.json",
                      "--transport", "claude_cli", "--input", str(payload)]) == 0
-    assert seen == {"root": tmp_path, "workflow_id": None, "input_payload": {"subject": 1},
+    assert seen == {"root": tmp_path, "workflow_id": None, "input_payload": {"subject": 1}, "selection": None,
                     "expected_module_id": "design_contract_reviewer", "version": None,
                     "release_database_url_env": "RUNTIME_RELEASE_DSN", "release_schema": "agent_runtime",
                     "workflow_release_ref": "runtime-workflow:x@v1", "workflow_release_sha256": "a" * 64,

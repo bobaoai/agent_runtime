@@ -28,7 +28,8 @@ metadata:
 - **查询与配置**：想知道去哪里学样例、某个任务该用哪个 preset、要准备哪些参数。交付类别与 preset、该 preset 的
   实际要求值、源码、API、文档与样例入口、已能确定的调用组装，以及运行前还缺的输入。不调用模型、不注册、不运行样例。
 - **验证随包样例**：在宿主上运行所请求模式的样例，交付其检查结论与运行证据。
-- **运行自己的任务**：按所选 preset 注册并回读定义，再用 Test Run 运行，交付与回读身份一致的执行证据。
+- **运行自己的任务**：从任务 owner 的 source 文件夹按所选 preset 注册并回读，用注册写出的选择文件运行 Test Run，
+  交付与该选择一致的执行证据。
 
 新宿主或新 Provider 上建议先验证对应样例，但这只是建议；请求没有要求时，不把样例验证或任务运行变成必做工作。
 注册和执行仍使用已有的 `agent-runtime-registration`、`agent-runtime-test-run` 和同版本 API；本 Skill 帮助查找、
@@ -51,9 +52,11 @@ metadata:
    回答本身不调用模型、不注册、不运行样例或业务任务，也不修改任何宿主文件。
 5. **请求验证时由样例给出结论。** 对应类别的随包样例给出 `check.json` 结论：通过表示执行身份、文件效果、
    执行日志（以及 MCP 样例的 fixture 审计）实际成立；未通过时保留真实失败与运行文件夹，作为环境缺口交给负责人。
-6. **请求运行自己的任务时得到可核对的结果。** Test Run 执行的正是注册并回读的那个定义：记录中的 Workflow 与 Module
-   身份和回读结果一致，因此结果能证明所选 preset 与任务定义得到验证。交付执行状态、输出、Attempt 文件夹、实际文件
-   效果和所需的语义核对；模型的自我陈述不被当作文件已写、命令已运行或 MCP 已调用的证据。
+6. **请求运行自己的任务时得到可核对的结果。** Test Run 执行的正是注册并回读的那个定义：运行使用注册写出的选择文件，
+   记录的 `definition_selection.executed_matches_selection` 由代码比较执行身份得出，之后注册的新版本不会替换所选定义，
+   因此结果能证明所选 preset 与任务定义得到验证。身份、ref、hash、材料 hash 与记录位置都由代码形成和传递，交付者
+   不需要抄写或手算它们。交付执行状态、输出、Attempt 文件夹、实际文件效果和所需的语义核对；模型的自我陈述（包括
+   复述的命令结果、hash 或 nonce）不被当作文件已写、命令已运行或 MCP 已调用的证据。
 
 ## 3. Boundaries
 
@@ -66,6 +69,7 @@ metadata:
 | Shell 命令范围 | 宿主每次给 Claude 的 `--command-permit` | 给 Claude 开放裸 Bash；给 Codex 传逐条许可 |
 | MCP 连接与后端授权 | 宿主（连接配置）与服务 owner（授权） | 读取、复制或改写服务凭据；用 Runtime callback 代替 MCP |
 | 宿主配置与项目文件 | 宿主 | 样例或任务覆盖已有 `config.json`、项目文件或用户设置 |
+| 机器字段 | Runtime 代码（注册、选择文件、材料准备、记录保存） | 从目录名推断后手输 ID，从输出中抄写 ref/hash 到下一条命令，手算材料 sha256，或编辑选择文件 |
 
 Runtime 只组装任务、模型、输入与 schema、目录、选定 MCP 和原生 CLI 允许规则，启动 `claude -p` 或 `codex exec`，
 管理外层时限、取消、日志、结果校验与留档。CLI 自己规划、读写文件、运行命令、调用 MCP 和重试。
@@ -74,7 +78,7 @@ MCP、网关和后端服务按各自授权批准或拒绝。本 Skill 不新增�
 
 不适用的请求按下列方式转交：
 
-- 注册已审 Reviewer source、bundle 或回读：`agent-runtime-registration`。
+- 注册已审 Reviewer 或普通 Module 的 source、bundle，回读，或为已有版本写出选择文件：`agent-runtime-registration`。
 - 只需执行已有注册定义或随包多 Agent 样例：`agent-runtime-test-run`。
 - 显式 callback 工具（`tool_session_factory`）、记录型 `resources.commands`、`--example` 多 Agent 图：这些是宿主受限的
   高级扩展。callback 需要 macOS/Linux 与 `cli_tools`，Windows 在打开会话前报告不支持；`commands` 只在 macOS 可用。
@@ -100,8 +104,9 @@ MCP、网关和后端服务按各自授权批准或拒绝。本 Skill 不新增�
 
 - 所选 CLI（原生 `claude.exe` 或 `codex.exe`）已安装并由宿主登录。Windows 上 Claude 的 Bash 需要 Git for Windows；
   必要时宿主在本进程设置 `CLAUDE_CODE_GIT_BASH_PATH`。Codex 需要调用者明确的模型与 effort。
-- 按类别需要的本次资源：`file_review` 的材料文件及其 sha256；`code_change` 的项目目录和要允许的检查命令；
-  `mcp_data` 的输出目录，以及宿主已有 MCP 服务器在所选 CLI 中的原生连接配置（命令或 URL、凭据所在环境变量名）。
+- 按类别需要的本次资源：`file_review` 的材料文件夹与要交给模型的文件（sha256 由代码计算）；`code_change` 的项目目录和
+  要允许的检查命令；`mcp_data` 的输出目录，以及宿主已有 MCP 服务器在所选 CLI 中的原生连接配置（命令或 URL、凭据所在
+  环境变量名）。
 - 运行 `mcp_data` 样例需要该 Python 中的 `mcp` 包（安装 `agent-runtime-core[cli_tools]`）。
 
 准确参数、默认值和错误以同版本 `agent-runtime-test-run --help`、随包 README 与
@@ -115,12 +120,12 @@ MCP、网关和后端服务按各自授权批准或拒绝。本 Skill 不新增�
 - 类别、preset ID 和选择理由；`module_requirements_preset(...)` 的实际返回值（字段与值）。
 - 查询与配置时：源码、API、文档与样例入口（见第 5.2、5.3 节的命令与位置）；已确定的组装与其来源；运行前还缺的
   输入（例如 Codex 的模型与 effort、项目目录、命令许可、MCP 连接配置、材料清单）；需要时附上建议的下一步。
-- 运行样例或自己任务时的调用组装：transport、模型、effort 与时限的取值及来源层；`--resources`、`--project-directory`、`--command-permit`
-  和 `root/.runtime/config.json` 中 `mcp_servers.<transport>.<name>` 的实际值（凭据只写环境变量名）。
+- 运行样例或自己任务时的调用组装：transport、模型、effort 与时限的取值及来源层；`--material-root` 与所选 `--material`、
+  `--project-directory`、`--command-permit` 和 `root/.runtime/config.json` 中 `mcp_servers.<transport>.<name>` 的实际值
+  （凭据只写环境变量名）。
 - 样例运行时：运行文件夹路径、`check.json` 的 `passed` 与未通过项、`record.json` 中的状态。
-- 自己任务运行时：注册回读的 Workflow ID、版本与 release hash；Test Run 记录中的 `workflow_release_ref`、
-  `workflow_release_sha256`、`module_release_ref`、`module_release_sha256` 及二者是否一致；Test Run 的状态、输出、
-  `attempt_workspaces` 和语义核对结果。
+- 自己任务运行时：注册输出的 `readback=verified` 与选择文件位置；保存的记录文件位置，其中 `definition_selection` 的
+  Workflow、版本及 `executed_matches_selection`；Test Run 的状态、输出、`attempt_workspaces` 和语义核对结果。
 
 ### 4.3 Completion Contract
 
@@ -131,12 +136,12 @@ MCP、网关和后端服务按各自授权批准或拒绝。本 Skill 不新增�
   这一路径不调用模型、不注册、不运行样例或自己的任务；对新宿主可以建议先验证样例，建议不构成完成前提。
 - **只验证随包样例**（例如在新宿主或新 Provider 上检查环境）：请求的每个模式与 CLI 组合各有一次样例运行，
   其 `check.json` 为 `passed: true`，并交付第 4.2 节的样例项（运行文件夹、`check.json` 的检查结果、`record.json`
-  的状态）时完成。样例自己按代码中的 preset 注册、固定版本运行，并核对执行身份、文件效果与日志；这一路径不需要
-  注册或运行调用者自己的任务。
+  的状态）时完成。样例自己从写出的 source 按代码中的 preset 注册，用代码写出的选择运行，并核对执行身份、文件效果与
+  日志；这一路径不需要注册或运行调用者自己的任务。
 - **为自己的任务选择并运行**：类别与 preset 有依据；要求值来自代码；调用组装与所选 Provider 的实际能力一致；
-  Test Run 记录中的 Workflow 与 Module 身份及 hash 等于注册回读的结果，且结果连同文件效果与语义核对一起报告。
-  身份不一致时，本次结果不作为所选定义的证据：报告两组身份，按回读的版本重新执行，或由调用者明确选择另一
-  已注册对象并记录该选择及其回读。
+  Test Run 使用注册写出的选择文件，记录的 `definition_selection.executed_matches_selection` 为 true，且结果连同文件效果
+  与语义核对一起报告。为 false 或无法用选择文件运行时，本次结果不作为所选定义的证据：保留记录与原错误，交
+  Runtime 维护者；需要运行另一已注册版本时，由调用者明确选择，用 `agent-runtime-registry select` 写出它的选择文件。
 - **请求了多个路径**：同时满足每个已请求路径的条件。
 
 部分完成时如实交付：例如样例因 CLI 未登录、Git Bash 缺失、Codex 无法进入受保护目录而失败，保留运行文件夹、
@@ -201,29 +206,38 @@ python -m agent_runtime.testing.conformance_pattern_examples run --pattern file_
 ```
 
 `--pattern` 取四个 preset ID 之一；需要指定原生程序时加 `--cli-path`。输出 JSON 的 `passed` 汇总 `checks`；
-`run_directory` 下的 `check.json` 与 `record.json` 留作证据。`prepare` 只准备文件夹并打印等价的
-`agent-runtime-test-run` 命令，`check --run-dir DIR` 对保存的记录重新核对。检查依据是磁盘上的文件、
-返回记录中 Inspection 的工具调用日志、代码样例的宿主独立复跑，以及 MCP 样例 fixture 自己的调用审计。
+`run_directory` 下的 `check.json` 与 `record.json` 留作证据。每次运行与自己的任务走同一路径：`source\` 中的普通 v4 source
+经 `register_module` 注册并回读，代码写出 `selection.json`（`file_review` 另由代码按选定材料写出 `resources.json`），
+运行使用该选择并用 `--record-out` 保存记录。`prepare` 只准备文件夹并打印等价的 `agent-runtime-test-run --selection ...`
+命令，`check --run-dir DIR` 对保存的记录重新核对。检查依据是磁盘上的文件、返回记录中 Inspection 的工具调用日志、
+代码样例的宿主独立复跑与日志中实际的命令结果（不要求模型复述 hash 或 nonce），以及 MCP 样例 fixture 自己的调用审计。
 
 ### 5.4 用于自己的任务
 
-1. 由任务 owner 的 v4 source 构造 Module，并传入 preset：
-   `Module.from_registration(source_root, skill_id=..., module_id=..., execution_requirements=module_requirements_preset("code_change"))`，
-   再用 `Module.to_workflow(module.export(module_version="v1")).export()` 得到定义闭包（`origin_bundle`）。
-   随包样例 `build_pattern_workflow` 是同一组合的可读实例。注册与准确回读交给 `agent-runtime-registration`
-   （CLI 的 bundle 注册，或 Python 宿主的 `register_runtime_module_plugin(..., root=host_root)`）；内容变化时
-   注册新版本，不覆盖旧版本。记下回读返回的 Workflow ID、版本和 release hash，以及其中 Module 的 ID 与 hash。
-2. 每次调用都用回读得到的 Workflow ID 和版本，并用 `--expected-module-id` 指定其中的 Module；不省略 `--version`，
-   因为省略时加载的是该 root 最近注册的定义，可能不是本次回读的那个：
+1. 选定任务 owner 交付的 v4 source 文件夹（`.claude/skills/<skill>/runtime_modules/<module>`）和 owner 批准的版本，
+   由 `agent-runtime-registration` 用所选 preset 注册、回读并写出选择文件：
 
    ```powershell
-   agent-runtime-test-run --root $HostRoot --workflow my_module --version v1 --expected-module-id my_module `
-     --input input.json --transport claude_cli --project-directory "D:\work\my project" --command-permit "python -m pytest:*"
+   agent-runtime-registry register-module --root $HostRoot `
+     --source "D:\work\my project\.claude\skills\my-skill\runtime_modules\my_task" `
+     --preset code_change --version v1 --selection-out "$HostRoot\my_task.selection.json"
    ```
 
-   执行后核对记录中的 `workflow_release_ref`、`workflow_release_sha256`、`module_release_ref` 和
-   `module_release_sha256` 与回读结果一致；不一致时按 §4.3 处理。随包样例的 `run` 也固定版本 `v1` 并做同样的核对。
-   `file_review` 用 `--resources resources.json` 提供材料；`code_change` 与 `mcp_data` 用 `--project-directory`；
+   Skill 与 Module 身份由命令从 source 读取；`mcp_data` 加 `--mcp-connection <name>`。内容或要求变化时注册新版本，
+   不覆盖旧版本。Python 宿主用 `register_module(..., execution_requirements=module_requirements_preset(...))`，
+   再把返回结果交给 `selection_from_registration`。随包样例 `build_pattern_workflow` 与 `write_pattern_source`
+   是同一定义的可读实例。
+2. 每次调用都用这份选择文件；之后在同一 root 注册的新版本不会替换它：
+
+   ```powershell
+   agent-runtime-test-run --root $HostRoot --selection "$HostRoot\my_task.selection.json" `
+     --input input.json --transport claude_cli --project-directory "D:\work\my project" `
+     --command-permit "python -m pytest:*" --record-out "$HostRoot\my_task.record.json"
+   ```
+
+   记录的 `definition_selection.executed_matches_selection` 由代码给出；为 false 时按 §4.3 处理。随包样例的 `run` 也走
+   同一路径。`file_review` 用 `--material-root <材料文件夹>` 加可重复的 `--material <文件>`（或明确的
+   `--all-materials`）提供材料，hash 由代码计算；`code_change` 与 `mcp_data` 用 `--project-directory`；
    Claude 需要运行命令时用可重复的 `--command-permit`，Codex 省略；Codex 增加 `--model` 与 `--effort`。
    长期选择写入 `root/.runtime/execution_parameters/workspace.json` 或 `workflows/<workflow_id>.json`。
 3. `mcp_data` 使用宿主已有服务（例如团队已在用的数据 MCP）时，把该服务在所选 CLI 中的原生连接写入
@@ -231,8 +245,9 @@ python -m agent_runtime.testing.conformance_pattern_examples run --pattern file_
    `env`/`headers` 中的 `${VAR}` 并列入 `environment_keys`；Codex 用 `env_vars`、`bearer_token_env_var` 或
    `env_http_headers`），Module 使用 `module_requirements_preset("mcp_data", mcp_connections=("<name>",))`。Runtime
    只传递声明的连接，不读取凭据值、不代管登录；在 CLI 账号层面托管、无法写成连接配置的连接器不经此路径传递。
-4. 读取结果：先确认执行身份与回读一致，再看 `status`（技术完成）、`output`（任务结论）和 `attempt_workspaces`
-   （留档文件夹），文件效果到磁盘核对。
+4. 读取结果：`agent-runtime-inspect --test-run-record <记录文件> --view summary`（`output`、`log`、`files` 视图分别给出
+   输出、执行日志与 Attempt 文件）。先确认 `executed_matches_selection`，再看 `outcome`（技术完成）、`output`（任务结论）
+   和 Attempt 文件夹，文件效果到磁盘核对。查看不注册、不重跑。
 
 ### 5.5 Provider 差异
 
@@ -251,7 +266,7 @@ python -m agent_runtime.testing.conformance_pattern_examples run --pattern file_
   shell 进不了工作目录，失败按 CLI 原样记录。改用 Documents 下的根目录。
 - 路径过长会让 Runtime 或 CLI 在 Attempt 文件夹内建文件失败（`WinError 206`）。根目录保持短路径。
 - `.cmd`、`.bat`、`.ps1` 启动器不会被启动；PATH 里只有这些时用 `--cli-path` 指向原生程序。
-- `prepare` 打印的 `agent-runtime-test-run` 命令在 Windows PowerShell 5.1 中用 `Out-File -Encoding utf8` 保存；
-  含非 ASCII 输出时先设 `[Console]::OutputEncoding = [Text.Encoding]::UTF8` 与 `$env:PYTHONIOENCODING = 'utf-8'`。
+- 记录用 `--record-out` 保存为 UTF-8，不经 PowerShell 重定向；若仍重定向 stdout，含非 ASCII 输出时先设
+  `[Console]::OutputEncoding = [Text.Encoding]::UTF8` 与 `$env:PYTHONIOENCODING = 'utf-8'`。
 - Attempt 文件夹不会自动删除。宿主用 `maintain_attempt_workspaces` 的 `intent="query"`/`"cleanup"` 管理已封存且过期的
   文件夹；调用者的项目目录从不进入清理集合。旧 `--example` 多 Agent 样例则使用临时目录，结束后删除。

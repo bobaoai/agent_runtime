@@ -144,7 +144,16 @@ from .registry.registry_module_loading import load_reviewer_registration
 from .registry.registry_local_persistence import LoadedRuntimeRegistration, load_runtime_registration, save_runtime_registration
 from .foundation.foundation_environment_setup import load_runtime_config, setup_runtime
 from .execution.execution_local_invocation import prepare_local_workflow, prepare_local_workflow_module, run_local_workflow_module
-from .testing.conformance_local_test_run import run_local_workflow_test
+from .testing.conformance_local_test_run import run_local_workflow_test, write_test_run_record
+from .registry.registry_definition_selection import (
+    RuntimeDefinitionSelection,
+    read_definition_selection,
+    select_registered_workflow,
+    selection_from_registration,
+    write_definition_selection,
+)
+from .invocation.invocation_local_resource_preparation import prepare_material_files, write_local_resources
+from .inspection.inspection_test_run_reading import inspect_test_run_record
 from .execution.execution_workflow_evaluation import WorkflowSelfTestResources, LocalWorkflowModuleBridge
 from .registry.registry_workflow_authoring import (
     WORKFLOW_MODULE_CLOSURE_INVALID,
@@ -168,6 +177,7 @@ from .registry.registry_plugin_registration import (
     DomainRuntimePlugin,
     RuntimeModulePlugin,
     register_runtime_module_plugin,
+    register_module,
     register_reviewer,
     register_runtime_plugin,
 )
@@ -299,6 +309,15 @@ __all__ = [
     "WorkflowSelfTestResources",
     "LocalWorkflowModuleBridge",
     "run_local_workflow_test",
+    "RuntimeDefinitionSelection",
+    "selection_from_registration",
+    "select_registered_workflow",
+    "read_definition_selection",
+    "write_definition_selection",
+    "prepare_material_files",
+    "write_local_resources",
+    "inspect_test_run_record",
+    "write_test_run_record",
     "ModuleAuthoringError",
     "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
     "MODULE_OPERATION_DECLARATION_INVALID",
@@ -338,6 +357,7 @@ __all__ = [
     "isolated_execution_scope_id",
     "register_runtime_plugin",
     "register_runtime_module_plugin",
+    "register_module",
     "register_reviewer",
     "run_module",
     "run_registered_workflow_module",

@@ -309,6 +309,46 @@ class Module:
                    entry_policy=entry_policy,
                    output_resolution_policy=output_resolution_policy)
 
+    @classmethod
+    def from_source(
+        cls,
+        source: Path,
+        *,
+        execution_requirements: ModuleExecutionRequirements | None = None,
+        declared_operation_ids: tuple[str, ...] = ("model_execute",),
+        entry_policy: ModuleEntryPolicy = ModuleEntryPolicy.STANDALONE_ALLOWED,
+        output_resolution_policy: OutputResolutionPolicy = OutputResolutionPolicy.EVALUATED_SINGLE,
+    ) -> Self:
+        """Load one explicitly selected Module source, reading its identity in code.
+
+        Args:
+            source: The Module source directory or its module_registration.json.
+                locate_module_registration reads skill_id and module_id from that
+                declaration and derives the project root; the caller does not
+                restate them. Other arguments are those of from_registration.
+            execution_requirements: Explicit ordinary requirements, or None for
+                the subclass's fixed environment.
+            declared_operation_ids: Model operation and real domain operations.
+            entry_policy: Independent or Workflow-bound entry rule.
+            output_resolution_policy: Existing output-resolution rule.
+        Returns:
+            An instance of cls holding the captured source, as from_registration.
+        Raises:
+            FileNotFoundError: The selected source is absent.
+            ValueError: The location differs from its declaration, or the
+                loader/constructor rejects the source or requirements.
+            ModuleAuthoringError: Invalid model/operation declaration.
+        Effects:
+            Reads the selected source closure once. No registration, model choice
+            or provider call.
+        """
+        from .registry_module_loading import locate_module_registration
+        location = locate_module_registration(source)
+        return cls.from_registration(
+            location.project_root, skill_id=location.skill_id, module_id=location.module_id,
+            execution_requirements=execution_requirements, declared_operation_ids=declared_operation_ids,
+            entry_policy=entry_policy, output_resolution_policy=output_resolution_policy)
+
     def export(self, *, module_version: str) -> ModuleExport:
         """Compile this captured task and requirements into one fixed export.
 

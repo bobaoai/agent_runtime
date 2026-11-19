@@ -5,11 +5,6 @@ canonical_owner: designDoc/agent_runtime_08_agent_execution_adapter_contract.md
 parent: designDoc/agent_runtime_00_execution_charter.md
 owned_system_object: provider-neutral Attempt invocation
 language: zh-CN
-reader_persona:
-  - Runtime Maintainer
-  - Provider Adapter Maintainer
-  - Runtime Module Owner
-  - Host Integrator
 ---
 
 # Agent Runtime Environment, Execution Profile and Provider Adaptation
@@ -19,7 +14,7 @@ reader_persona:
 实际接口、默认值、支持组合和验证结果由发布代码及其随包文档提供；设计中描述一种能力不表示所有
 Adapter 都已经实现它。
 
-## 0. Intent Capsule
+<a id="0-intent-capsule"></a>
 
 Invocation 消费已解析的 Module、Execution Profile、本次输入和宿主资源，准备环境并执行一次
 Provider invocation，处理基本运行信息与最终结果，并归档原始公开日志和实际资源执行记录。
@@ -29,7 +24,14 @@ Evaluation 承担，不是普通模型运行的隐含步骤。
 
 本合同同时适用于普通 Module 和 ModuleReviewer。后者只在定义端提供默认运行要求。本文不决定
 业务审核结论、Workflow 路由、生产授权政策、数据库内容或软件发布，也不建立 Profile 选择服务、
-第二套日志服务或底层系统调用监控。Claude 与 Codex 均按 §4.2 的外部 CLI 边界接入。
+第二套日志服务或底层系统调用监控。Claude 与 Codex 均按 §3.2 的外部 CLI 边界接入。
+
+<a id="3-reader-gain"></a>
+
+- Module Owner 能区分任务定义、默认运行要求、模型选择和一次任务的资源。
+- Host Integrator 能知道 root 与 `.runtime` 提供什么，以及什么时候需要认证或持久存储。
+- Adapter Maintainer 能沿同一条配置转换路径实现不同参数组合，并准确表达两种 CLI 的差异。
+- Runtime Maintainer 能区分工具结果、Provider 终态、有效输出与业务结论，并从同一入口取回真实日志。
 
 ## 1. Primary System Flow
 
@@ -56,7 +58,9 @@ Claude 和 Codex 对 Runtime 都是外部执行器。Runtime 的控制边界是�
 自身发起调用的时间与取消，以及接收到的日志和最终结果。CLI 内部的规划、工具调用、重试和 MCP
 交互由 CLI 及相应服务负责，不进入 Runtime 的逐步调度或权限判断。
 
-## 2. User Intent
+<a id="2-user-intent"></a>
+
+## 2. Intended Outcomes
 
 调用者通过 Runtime 的同一公共入口运行已注册 Module，无需为 Claude、Codex 或不同 Reviewer
 分别拼装启动脚本。调用者可以为一次同步运行选择时间预算，无需为每次延长运行重新定义 Reviewer。
@@ -64,14 +68,16 @@ Claude 和 Codex 对 Runtime 都是外部执行器。Runtime 的控制边界是�
 配置要反映 Provider 与宿主真实能够执行的限制；一次被正确阻止的工具操作可以由 Agent 处理，
 不因这个正常拒绝就让整个 Attempt 失去输出资格。
 
-## 3. Reader Gain
+Runtime 向调用者交付以下结果，供宿主接收业务输出并判断执行事实：
 
-- Module Owner 能区分任务定义、默认运行要求、模型选择和一次任务的资源。
-- Host Integrator 能知道 root 与 `.runtime` 提供什么，以及什么时候需要认证或持久存储。
-- Adapter Maintainer 能沿同一条配置转换路径实现不同参数组合，并准确表达两种 CLI 的差异。
-- Runtime Maintainer 能区分工具结果、Provider 终态、有效输出与业务结论，并从同一入口取回真实日志。
+1. 固定任务要求、本次模型与时限、工具能力和实际资源在调用前被解析成准确配置；不相容组合返回明确失败，不自动扩大能力。
+2. 所选 CLI 按给定任务和资源执行；Runtime 接收退出或停止事实、结构化结果、原始日志和实际配置，结果格式与业务结论分别判断。
+3. 超时、取消、启动失败和输出错误保留真实状态及已有诊断；任务已明确交付的项目文件保持归属，Runtime 只维护自身工作目录的留档与清理。
 
-## 4. Capability and Operation
+
+<a id="4-capability-and-operation"></a>
+
+## 3. Capability and Operation
 
 | 处理对象 | 负责人 | 交接结果 |
 | --- | --- | --- |
@@ -89,7 +95,9 @@ Provider Adapter 是技术绑定，不是新的 Agent 角色。Runtime core 不 
 实现或领域数据库；领域操作通过已经提供的公开资源接口执行。真实外部许可、grant 和执行 fence
 仍由授权集成合同及其所属 owner 决定。
 
-### 4.1 本次资源范围与服务端授权
+<a id="41-本次资源范围与服务端授权"></a>
+
+### 3.1 本次资源范围与服务端授权
 
 Runtime 管本次运行可以使用的资源和入口，不管理 MCP 或网关背后的授权。任务 owner 与宿主明确
 提供本次范围，Runtime 在 Module 固定能力内选择和绑定资源，将配置交给相应执行方，并记录实际
@@ -110,7 +118,9 @@ Runtime 允许使用一个入口，不代表该服务一定批准请求。服务
 不自行扩大范围、重新申请权限或切换入口绕过拒绝。执行身份是否匹配、任务是否取消、资源绑定
 是否仍有效等检查仍属于 Runtime 的执行管理；它们不产生业务访问许可。
 
-### 4.2 外部 CLI 执行器边界
+<a id="42-外部-cli-执行器边界"></a>
+
+### 3.2 外部 CLI 执行器边界
 
 对 `claude -p` 和 `codex exec`，Invocation 只维护一份外部调用合同：把本次确定的参数、输入、工作
 目录和现有连接配置交给 CLI，接收它输出的日志、公开事件、退出状态与最终结果。所用 CLI、参数和
@@ -130,10 +140,12 @@ Runtime 不接管 CLI 内部如何规划或调用工具，不逐次审批、重�
 需要处理的外部调用问题。内部某个工具报错是否需要重试或继续，由 CLI 自己决定；Runtime 不从一条
 工具错误替 CLI 改写整次结果。只有明确的新增需求，才另行讨论扩展接口，不默认建设回调桥或沙箱。
 
-### 4.3 常用调用场景
+<a id="43-常用调用场景"></a>
+
+### 3.3 常用调用场景
 
 以下场景是同一调用合同的具体用法，不是额外的执行模式、Module 类别或权限配置系统。它们共用
-§4.2 的外部 CLI 边界：Runtime 准备并传递本次配置，CLI 执行，Runtime 接收日志和结果。能力在
+§3.2 的外部 CLI 边界：Runtime 准备并传递本次配置，CLI 执行，Runtime 接收日志和结果。能力在
 Module 定义中明确，具体材料与连接由任务 owner／宿主提供；任务正文不能偷偷扩大配置范围。
 
 #### 纯文本／结构化输出
@@ -175,7 +187,7 @@ Runtime 命令代执行、回调或逐步审批接口。
 模型、任务、工作目录和所需原生工具配置；CLI 内部如何分步、重试和选择命令由 CLI 决定。
 
 工程改动是任务交付内容。调用者已有的代码目录、交付的 worktree 和修改结果不能被当作 Runtime
-自有临时目录，在取消、退出或到期清理时一并删除。Runtime 只按 §6.6 维护自己明确拥有的工作材料
+自有临时目录，在取消、退出或到期清理时一并删除。Runtime 只按 §3.5.6 维护自己明确拥有的工作材料
 与留档；对外部可写项目仅记录准确交付位置及实际调用事实。
 
 输出说明改了什么、改动所在位置、实际运行的测试与结果，以及未完成项；需要机器消费时使用
@@ -214,13 +226,17 @@ CLI 负责调用查询工具、使用所配本地文件能力并整理结果；R
 验证一次真实的取数、保存、读回链路及输出文件归属；MCP-only 测试只能证明较小组合，不能代替它。
 
 **共同结束与留档。** 四类都记录实际生效配置、接收的日志、退出／停止状态及结果。超时或取消处理
-Runtime 自己启动的外层调用，已有结果与诊断按 §6.6 保存。只对归属明确且满足宿主保留策略的
+Runtime 自己启动的外层调用，已有结果与诊断按 §3.5.6 保存。只对归属明确且满足宿主保留策略的
 Runtime 自有目录执行后续清理；外部项目、Provider 登录状态和服务数据不属于这个清理集合。
 默认不自动启动清理日程，也不把设计中的场景说明当成当前实现已经通过验收。
 
-## 5. Configuration Sources and Execution Profile
+<a id="5-configuration-sources-and-execution-profile"></a>
 
-### 5.1 输入与参数归属
+### 3.4. Configuration Sources and Execution Profile
+
+<a id="51-输入与参数归属"></a>
+
+#### 3.4.1 输入与参数归属
 
 | 参数类别 | 来源与默认规则 | 进入哪里 |
 | --- | --- | --- |
@@ -236,7 +252,9 @@ Runtime 公开参数必须说明省略值、显式空值、允许覆盖的范围
 后写覆盖前写”的通用合并器：模型覆盖不能修改工具，材料路径不能变成授权，存储配置不能进入模型。
 同一语义参数在准备阶段解析一次，后续阶段消费同一结果。
 
-### 5.2 Profile 的含义
+<a id="52-profile-的含义"></a>
+
+#### 3.4.2 Profile 的含义
 
 Execution Profile 是已经解析的执行配置快照，保存模型、Adapter、工具、网络、工作区、上下文、
 名义 Attempt 时间上限和输出方式。Module 运行要求回答需要什么能力；Profile 回答这一次选择了什么
@@ -247,7 +265,7 @@ Execution Profile 是已经解析的执行配置快照，保存模型、Adapter�
 Runtime 发布的默认环境。Portable Reviewer source 提供任务身份、归属、prompt、schema 与相关
 任务文件，不声明 transport、模型或工具配置。定义导出不检查本机 CLI，也不选择本次 Profile。
 
-新的调用准备按 §5.1 的四层来源取得模型选择与同步运行时间预算。root 下的 workspace 与 Workflow 执行参数文件是项目明确写下的
+新的调用准备按 §3.4.1 的四层来源取得模型选择与同步运行时间预算。root 下的 workspace 与 Workflow 执行参数文件是项目明确写下的
 选择，属于合法来源；root 的其他内容、环境名称、相邻项目或历史保存的 Profile 不当作模型选择规则。
 参数不能扩展 Module 固定能力。文件不可读、格式无效或参数不受支持时，在 Provider 前失败，不将
 错误当成该层未写值。低层 exact-Profile 接口继续消费准确 Profile / Variant，不隐式获得高层总预算。
@@ -257,7 +275,9 @@ Runtime 发布的默认环境。Portable Reviewer source 提供任务身份、�
 其他影响执行行为的配置改变，按 Registry 和 Execution 的既有版本及 Variant 规则记录，不能覆盖
 旧记录或在正在运行的 Attempt 内切换。实际 CLI 安装版本和 Adapter revision 分别记录。
 
-### 5.3 同步调用时间预算与受管理子调用
+<a id="53-同步调用时间预算与受管理子调用"></a>
+
+#### 3.4.3 同步调用时间预算与受管理子调用
 
 `run_local_workflow_test` 的本地定义与只读 PG 定义路径，以及 `run_agent_example`，共同提供一次
 同步调用的总工作时间预算。默认 1200 秒，`run_timeout_seconds` 为 1 至 86400 的整数秒；
@@ -287,7 +307,9 @@ Profile 的 `timeout_seconds` 保留单 Attempt 名义上限的含义。新定�
 普通 Shell 中自行启动的 Runtime、远程 worker 和跨进程调用不自动获得此传递保证。跨同步 API
 调用的 durable WAIT、恢复及完整 Workflow 寿命继续由原 Durability 合同决定，不默认变成二十分钟。
 
-### 5.4 独立的能力维度
+<a id="54-独立的能力维度"></a>
+
+#### 3.4.4 独立的能力维度
 
 工具清单、工具网络、文件可读范围、可写范围和输入交付分别表达。允许 Shell 不等于允许联网，
 允许读取不等于允许写入，agent mode 不等于启用全部工具。空工具清单表示明确关闭任务工具。
@@ -312,9 +334,68 @@ Provider 用于完成结构化响应的技术输出机制与访问文件、网�
 普通 native-tool 调用不因存在 Shell 被强制归入 `denied` 或 `direct_sandboxed`。新默认只用于新构造的
 定义；已冻结定义、已发请求和历史记录按原值解释，不能把原有 `denied` 静默改名为 `provider_managed`。
 
-## 6. Host Environment and Preparation
+<a id="55-published-presets-and-per-call-selection"></a>
 
-### 6.1 root 与 .runtime
+#### 3.4.5 Published presets and per-call selection
+
+`module_requirements_preset(preset_id, *, mcp_connections=(), max_attempts=1)` 返回
+`ModuleExecutionRequirements`。调用者把它传入 `Module(..., execution_requirements=...)`，再导出并注册
+Module/Workflow。这个入口只构造固定要求，不执行模型，也不选择模型。改变要求须注册新版本。
+以下为 `0.2.0.dev14` 的实际构造值；`0.2.0.dev12` 随包样例的精确验证范围见第 6.1 节。
+
+| Preset | Mode / workspace | Task tools | Tool network | Suitable result and required call resources |
+| --- | --- | --- | --- | --- |
+| `structured_output` | `tool_free` / `none` | `()` | `denied` | 完整内联输入按 schema 返回结果；不提供材料文件、项目目录或任务工具 |
+| `file_review` | `agent` / `own_draft_read_write` | `edit, read, search, shell` | `provider_managed` | 读取明确材料，在本次 scratch 写审核文件并读回；调用方用 `material_root` 和 `material_files` 选定文件，所需只读依赖用 `read_only_dependencies` 声明 |
+| `code_change` | `agent` / `explicit_project_read_write` | `edit, read, search, shell` | `provider_managed` | 修改调用者提供的 `project_directory` 并运行验证；模型交回 schema 输出，项目修改留在该目录 |
+| `mcp_data` | `agent` / `explicit_project_read_write` | `edit, read, shell, mcp__<name>`，每个声明连接一项 | `provider_managed` | 通过声明的 MCP 取数，在 `project_directory` 保存、读回和处理；构造时必须有非空 `mcp_connections=(name, ...)`，root 配置提供同名连接 |
+
+四项共同采用 `semantic_input_delivery_mode="inline"`、`context_isolation="workflow_execution_isolated"` 和
+`output_constraint_mode="native_structured_output"`；`max_attempts` 默认 1，可显式设为 1 至 100 的整数。
+`file_review` 的材料文件经宿主准备，内联输入包含材料定位及任务要求，二者含义不同。
+`ModuleReviewer` 自身的默认 `max_attempts` 是 3；它与 `file_review` preset 不能按名字视为同一配置。
+已注册的 Reviewer 可能仍保存旧的 `network_policy="denied"`。实际调用必须读取该定义，不把新默认
+应用到已有版本。普通 Module 没有隐含工具，使用 preset 本身也不产生数据库权限或凭据。
+
+`mcp_connections` 只适用于 `mcp_data`，其他 preset 带连接名称会被拒绝；名称缺失、重复或格式无效也
+被拒绝。MCP 的实际入口在 `root/.runtime/config.json` 的 `mcp_servers.<transport>.<name>`，包含
+`config` 和按名字声明的 `environment_keys`；当前 Test Run API 不接受直接的 `mcp_servers` 参数。
+认证由既有服务处理。Codex 的文件操作经原生 shell 完成；Claude 的 Bash 命令范围沿只读命令及
+本次 `command_permits`，因此声明 shell 不替代调用方需要提供的命令选择。
+
+执行参数入口是 `run_local_workflow_test`，CLI 对应 `agent-runtime-test-run`。本次选择
+`transport_kind/model_id/reasoning_profile/run_timeout_seconds`，CLI 分别使用
+`--transport/--model/--effort/--run-timeout-seconds`。省略值按第 3.4.1 节四层来源解析。
+`root` 定位定义和宿主配置；`project_directory` 是具体任务项目；两者可以不同。解析后的
+Execution Profile 保存选择结果；它与 preset、下述 Codex 选项及应用自身的连接配置各司其职，
+不另建一份人工 Profile Registry。
+
+<a id="56-codex-configured-and-host-selection"></a>
+
+#### 3.4.6 Codex configured and host selection
+
+`codex_execution_mode` 是每次调用的 Codex 执行选项，CLI 为 `--codex-execution-mode`。
+`configured` 是省略时的默认，保留现有 Adapter 生成的 CLI 配置：有文件工具时按本次目录与网络
+要求生成 permission profile；没有相应 profile 时采用原 `-s read-only` 路径。已有调用不会因新增
+`host` 选项而自动改变。
+
+`host` 显式选择本人宿主权限。当前 Runtime 接受的准确组合是 `codex_cli`、`agent`、
+`explicit_project_read_write`、`provider_managed`，工具恰为 `read/search/edit/shell`。
+它使用给定 `project_directory`，传入 `-s danger-full-access` 与 `allow_login_shell=false`。
+这个目录是任务工作范围，执行沿宿主权限，目录本身不是 OS 禁写边界。
+
+`host` 当前拒绝 material package、额外只读依赖、`resources.commands` 声明命令扩展及 MCP；调用方
+可显式用 `read_only_dependencies=()` 清除宿主默认依赖。参数未知或为 null 时拒绝；不相容能力组合
+返回 `ADAPTER_CAPABILITY_UNSUPPORTED`，不启动一个更宽的替代调用。这些是 Runtime 当前接口的
+支持范围，不能解释为 Codex 产品无法执行这些任务。`mcp_data` 仍由原 configured 路径提供。
+
+<a id="6-host-environment-and-preparation"></a>
+
+### 3.5. Host Environment and Preparation
+
+<a id="61-root-与-runtime"></a>
+
+#### 3.5.1 root 与 .runtime
 
 宿主 root 是 Runtime 配置与本地注册内容的定位入口。基于 root 的公开操作先复用轻量 setup：
 `.runtime` 不存在时创建，存在时读取和使用其中的 Runtime 内容；随包操作 Skill 通过同一 setup
@@ -331,17 +412,19 @@ Profile 准备和实际调用固定同一结果，不重新从 root、latest 或
 提供。Provider 认证只交给 Provider 的认证机制，PG 凭据只交给对应存储接口。秘密不进入 Profile
 正文、prompt、argv 或共享日志。root 不自动授权建库、迁移 schema、保存执行数据或读取项目全集。
 
-§5.3 决定本能力的预算含义；其他配置文件名、键、schema / table、默认目录与 CLI 选项由公开代码
+§3.4.3 决定本能力的预算含义；其他配置文件名、键、schema / table、默认目录与 CLI 选项由公开代码
 和帮助导出。本文不创造
 一个新的环境配置服务，也不要求为目录、临时文件和凭据建立跨资源的通用管理框架。
 
-### 6.2 实际资源与上下文来源
+<a id="62-实际资源与上下文来源"></a>
+
+#### 3.5.2 实际资源与上下文来源
 
 调用准备区分宿主配置目录、Provider 私有状态、本次模型可见材料、可写工作区和日志目的地。
 它们的用途不能混用。Runtime 不将 Provider 登录材料、私有记录或其他任务资料作为本次模型输入
 交付；实际工具访问范围由已选 Provider、宿主和网关按配置执行。只读材料的全文可能被模型读取，
 准入时按此处理。
-任务结束后哪些目录保留、哪些运行资源立即释放，以及何时允许删除，统一按 §6.6 的生命周期处理。
+任务结束后哪些目录保留、哪些运行资源立即释放，以及何时允许删除，统一按 §3.5.6 的生命周期处理。
 
 项目指令、Skills、Plugins、hooks、MCP、环境变量和历史会话都可能改变模型行为。准备时明确本次
 是否加载以及允许的来源，Adapter 使用 Provider 实际支持的开关和隔离方式实现。默认独立审核
@@ -370,7 +453,9 @@ MCP 接入按其真实来源选择路径，不能把所有工具调用都当作 
 后台授权内容猜测数据库范围；连接不能承载要求的明确范围时，报告配置或适配缺口，不宣称范围已
 被限制。连接配置和凭据仍走既有可信接口，不进入模型正文或共享日志。
 
-### 6.3 调用准备与相容性检查
+<a id="63-调用准备与相容性检查"></a>
+
+#### 3.5.3 调用准备与相容性检查
 
 每次调用只核对本次所需的程序、参数、输入与配置是否可用。已知不支持的参数组合在调用前说明；
 CLI 返回的认证、额度或连接错误保留其真实原因，不由 Runtime 搜索其他账户、查询后台权限或自行
@@ -379,7 +464,9 @@ CLI 返回的认证、额度或连接错误保留其真实原因，不由 Runtim
 Adapter 开发或升级时验证参数转换、日志接收与结果解析是否符合 CLI 的公开接口。普通调用不重复
 运行模型 smoke、权限探针、全仓扫描或底层安全检查，也不为使用已有 MCP 先建设额外服务。
 
-### 6.4 配置执行与日志观测的边界
+<a id="64-配置执行与日志观测的边界"></a>
+
+#### 3.5.4 配置执行与日志观测的边界
 
 Runtime 把本次明确的文件读写范围、工具与连接选择转换为所选 CLI 的现有参数或配置。实际限制由
 Provider、宿主及资源服务执行；Runtime 不另写权限判定器，不查询 MCP 的内部授权，也不通过监听
@@ -394,7 +481,9 @@ Provider、宿主及资源服务执行；Runtime 不另写权限判定器，不�
 日志中的工具错误、拒绝和重试作为原始执行信息保存。Runtime 不从错误文字推测隐藏权限，不扫描
 CLI 的私有状态来补齐内部过程，也不把每个内部工具事件当作自己的执行检查点。
 
-### 6.5 Provider 登录与私有配置
+<a id="65-provider-登录与私有配置"></a>
+
+#### 3.5.5 Provider 登录与私有配置
 
 Claude 和 Codex 使用宿主已配置的登录方式与私有配置。Runtime 通过正常的 CLI 接口使用它们，不
 解析、刷新或重新管理认证内容，不建立一套按调用复制、比较、回写登录文件的策略。登录不可用时，
@@ -404,7 +493,9 @@ Claude 和 Codex 使用宿主已配置的登录方式与私有配置。Runtime �
 临时资源，不删除或重写宿主与 Provider 已有的登录状态。不同平台的登录实现属于 Provider／宿主，
 不在本合同定义 Windows 认证副本与 POSIX 引用两套机制。
 
-### 6.6 任务停止、工作目录留档与到期清理
+<a id="66-任务停止工作目录留档与到期清理"></a>
+
+#### 3.5.6 任务停止、工作目录留档与到期清理
 
 停止执行、保留检查材料和删除过期目录是三个不同动作。普通任务结束后，默认保留本次可供检查的
 工作目录与执行证据，再按宿主明确配置的保留策略清理；不把“进程已停止”理解为“立即删除全部文件”。
@@ -449,7 +540,7 @@ Runtime 的取消结果、所启动进程的退出情况和日志是否接收完
 已发生的执行事实，也不能报告已经留档。停止无法确认时保留原受保护现场，报告未确认的范围与
 恢复位置；不得将它封存为可自动删除的普通历史目录。
 
-任务留档不包含登录材料或未声明的 Provider 会话目录。原始日志仍按 §11 的私有内容与脱敏规则
+任务留档不包含登录材料或未声明的 Provider 会话目录。原始日志仍按 §3.10 的私有内容与脱敏规则
 处理；留档不扩大读取权限，也不要求 Runtime 检查、迁移或备份 Provider 的内部状态。
 
 **到期清理。** 宿主资源策略决定留档位置、保留时长、清理周期及明确的保留例外，并遵守适用的
@@ -474,9 +565,13 @@ UTC 时间事实与可比较时钟；不用进程内 monotonic 值、目录名�
 材料明确报告不可用；留档本身不承诺继续执行或恢复一个 Workflow。
 
 
-## 7. Request, Input and Context
+<a id="7-request-input-and-context"></a>
 
-### 7.1 公共请求
+### 3.6. Request, Input and Context
+
+<a id="71-公共请求"></a>
+
+#### 3.6.1 公共请求
 
 Adapter 的公共 execute 接口消费已经准备好的请求与 request-bound host，返回 AgentExecutionResult。
 请求使用既有 Execution 身份、准确 Module / Profile / Adapter、完整输入与 Prompt Envelope、输出
@@ -487,7 +582,9 @@ Execution 在调用前产生真实 Attempt-start 记录；临时自测也使用�
 受保护操作按授权集成合同携带真实决定；普通自测使用明确测试资源，不伪造生产批准、grant 或
 allow-all 服务。Provider 登录、宿主调用资格和业务资源授权分别处理。
 
-### 7.2 输入交付和输出约束
+<a id="72-输入交付和输出约束"></a>
+
+#### 3.6.2 输入交付和输出约束
 
 Runtime 固定完整任务输入和实际发送的 Prompt 内容，Adapter 不在记录后私自追加任务语义。
 模型可见任务材料与 Runtime 控制信息分开。允许模型探索一个目录，不等于已经把该目录全文作为
@@ -504,7 +601,9 @@ prompt_only_json 和 native_structured_output 显式选择，不因其中一种�
 使用，不自动推广为生产配置。原生输出与 prompt 中的重复 schema 约束须按公开编译规则处理。
 Provider 特有的 schema 转换不产生新的业务 Module，转换行为随 Adapter 版本记录。
 
-### 7.3 Context 与重复执行
+<a id="73-context-与重复执行"></a>
+
+#### 3.6.3 Context 与重复执行
 
 stateless、create、resume 和 reconstruct 使用既有 Context 合同。新请求不从 CLI 的“最近会话”
 或宿主历史自动续接。Native resume 需要同一任务与执行配置的兼容依据；跨模型、Provider 或隔离
@@ -514,9 +613,13 @@ stateless、create、resume 和 reconstruct 使用既有 Context 合同。新请
 形成新的执行身份。无持久存储的自测可以返回完整内存记录，但不承诺进程退出后的恢复。
 工具内部重试、Runtime 新 Attempt 和同一请求的结果重放分别记录。
 
-## 8. Tools, Domain Operations and Provider Bindings
+<a id="8-tools-domain-operations-and-provider-bindings"></a>
 
-### 8.1 原生工具与普通 Module
+### 3.7. Tools, Domain Operations and Provider Bindings
+
+<a id="81-原生工具与普通-module"></a>
+
+#### 3.7.1 原生工具与普通 Module
 
 read、search、shell 是逻辑能力，Adapter 将它们映射为所选 Provider 实际提供的工具。
 不同 Provider 不必暴露相同工具名称，也不能只因名称相似就宣称能力等价。Shell 中的常用读取、
@@ -524,13 +627,15 @@ read、search、shell 是逻辑能力，Adapter 将它们映射为所选 Provide
 
 标准 Reviewer 的运行环境支持读取、搜索和所需检查，提供只读审核材料及必要的本次可写区域，
 上下文独立；网络沿用所选 Provider／宿主配置（`provider_managed`）。本次具体启用的工具与
-命令允许范围按 §8.2 确定，不把原生 Shell 能力当作对所有命令的默认允许。
+命令允许范围按 §3.7.2 确定，不把原生 Shell 能力当作对所有命令的默认允许。
 这些默认值不要求操作系统沙箱或统一断网。普通 Module 也可以明确使用这些能力和自己的非审核
 输出 schema；显式更严格的定义保留其要求，不能借默认值变化静默放宽。
 审核所需命令与业务完成条件由任务输入和验证方说明。Runtime 传递这些要求并返回实际日志与结果，
 不为普通 Reviewer 默认增加一个命令代执行入口，也不把命令是否完成变成自己的内部工具调度。
 
-### 8.2 必做命令、限制命令与领域许可
+<a id="82-必做命令限制命令与领域许可"></a>
+
+#### 3.7.2 必做命令、限制命令与领域许可
 
 必做命令属于任务完成要求，真实结果交给所属 validator 判断。本次允许使用的工具、命令与目录
 是另一份配置，使用 CLI 原生许可或已选工具已有的约束执行；Runtime 不从观察到的日志逐次决定
@@ -563,7 +668,9 @@ read、search、shell 是逻辑能力，Adapter 将它们映射为所选 Provide
 消费所属服务提供的决定、引用和失效事实，不接管其权限策略。仅通过 Provider 使用已有 MCP 时，
 Runtime 按实际工具事件记录结果，不为每个 MCP 另建授权审核或合成并不存在的 grant。
 
-### 8.3 其他接口与 Provider Skill
+<a id="83-其他接口与-provider-skill"></a>
+
+#### 3.7.3 其他接口与 Provider Skill
 
 需要 SDK／API 或其他执行接口时，使用其明确的适配合同；不要求普通 CLI 调用模拟 SDK 的内部
 callback 或 hook。新增回调能力属于独立需求，不能因 Runtime 管理执行就默认引入。
@@ -571,7 +678,9 @@ callback 或 hook。新增回调能力属于独立需求，不能因 Runtime 管
 明确选择的 Provider Skill 内容按其公开接口提供，不改变 Skill 的任务含义，也不因此扩展工具、
 文件或网关范围。缺少必要的接入能力时报告具体缺口，不自动切换另一种 transport。
 
-## 9. Claude CLI Adaptation
+<a id="9-claude-cli-adaptation"></a>
+
+### 3.8. Claude CLI Adaptation
 
 ClaudeAdapter 将已经解析的模型、effort、输入、工作目录、输出方式和已选工具／MCP 配置转换为
 `claude -p` 的参数。准确 flags、settings 格式和支持版本由 Adapter 代码与公开 CLI 文档维护，不
@@ -586,7 +695,9 @@ Execution 流程。工具错误可以出现在一个最终成功的调用中，R
 [Claude CLI reference](https://code.claude.com/docs/en/cli-usage) 与
 [settings](https://code.claude.com/docs/en/configuration)。
 
-## 10. Codex CLI Adaptation
+<a id="10-codex-cli-adaptation"></a>
+
+### 3.9. Codex CLI Adaptation
 
 CodexAdapter 按同一外部调用合同组合 `codex exec`：传入明确模型、推理配置、输入、工作目录、
 现有工具／MCP 选择和输出方式，接收日志、公开事件、退出状态与最终结果。它与 Claude 的差异是
@@ -602,9 +713,13 @@ Reviewer 默认附加 Runtime 代执行命令服务。若当前 Adapter 不支�
 [Codex exec](https://learn.chatgpt.com/docs/developer-commands#codex-exec) 与
 [Configuration Reference](https://learn.chatgpt.com/docs/config-file/config-reference)。
 
-## 11. Output and Execution Records
+<a id="11-output-and-execution-records"></a>
 
-### 11.1 四种结果分别判断
+### 3.10. Output and Execution Records
+
+<a id="111-四种结果分别判断"></a>
+
+#### 3.10.1 四种结果分别判断
 
 | 结果层次 | Runtime 保存和判断什么 |
 | --- | --- |
@@ -617,7 +732,9 @@ Adapter 返回 infrastructure result，不自行批准业务结果、选择 Work
 输出只有经 Execution 的校验与提交后才成为 Runtime 结果；多 Variant 的 Evaluation、Selection
 和 Resolution 保持原职责。文件修改、Provider 成功与产物被业务接受不互相替代。
 
-### 11.2 原始日志与按需检查
+<a id="112-原始日志与按需检查"></a>
+
+#### 3.10.2 原始日志与按需检查
 
 Invocation 首先保留实际收到的 stdout、stderr 与公开 Provider 事件，并关联本次执行身份。日志中
 出现的工具请求、拒绝、错误及内部重试作为 Provider 返回的信息保存，不驱动 Runtime 的逐步干预。
@@ -625,7 +742,7 @@ Invocation 首先保留实际收到的 stdout、stderr 与公开 Provider 事件
 
 只有调用者明确请求详细检查时，Inspection 才从已有公开日志生成视图。缺失事件、未知格式与解析
 不完整如实说明，不扫描 Provider 私有目录补齐，也不反向修改原来的执行结果。历史 `tool_log` 按
-[Inspection §7](agent_runtime_06_standalone_package_and_lifecycle_contract.md#7-execution-inspection)
+[Inspection §3.6](agent_runtime_06_standalone_package_and_lifecycle_contract.md#7-execution-inspection)
 保留原解释，不新增并行日志存储。
 
 未知的内部退出码、权限原因、时间和工具结果保持未知。用量按 Provider 口径归一：input_tokens
@@ -637,13 +754,15 @@ Invocation 首先保留实际收到的 stdout、stderr 与公开 Provider 事件
 超时、取消和输出解析失败也保存已经取得的日志。受保护内容仅供有相应读取资格的调用者使用；
 共享展示按既有规则脱敏，原文和脱敏展示分别说明。保存失败按存储接口返回，不冒充已经留档。
 
-### 11.3 存储、恢复与版本
+<a id="113-存储恢复与版本"></a>
+
+#### 3.10.3 存储、恢复与版本
 
 有明确授权的持久存储时，由 Ledger 和对应内容存储保存记录；没有持久存储时，自测可返回内存
 结果和日志。注册定义持久化与执行日志持久化是两件事。显式要求持久化而保存失败时报告该失败，
 不把内存结果称为已经保存。PG schema 与 table 由存储实现定义，Invocation 不维护另一套数据库。
 
-§6.6 的本地工作目录留档不要求先部署 PG，也不自动成为持久 Ledger。宿主可以保留本次日志、结果
+§3.5.6 的本地工作目录留档不要求先部署 PG，也不自动成为持久 Ledger。宿主可以保留本次日志、结果
 和既有执行记录或 Inspection 导出的准确快照供检查；快照仍绑定原记录，不能从草稿或目录结构反推
 新的终态。留档成功、权威记录保存成功和跨进程恢复能力分别判断。
 
@@ -655,12 +774,14 @@ Attempt 身份；每项配置来源继续使用 execution_parameter_sources。�
 升级供后续调用使用，不改写旧 Profile 或旧日志。参数转换行为改变时更新 Adapter 版本及对应
 绑定；运行中的 Attempt 不自动切换。只保留会话文件或模型摘要不能替代已提交执行记录的重放。
 
-## 12. Public Interface and Effects
+<a id="12-public-interface-and-effects"></a>
+
+## 4. Public Interface and Effects
 
 以下接口沿用当前职责名称。准确 Python 签名、字段、默认值和返回类型由公开代码与 docstring
 定义并自动导出，Design 不维护另一套可执行接口定义。
 
-§6.6 增加的留档资源维护操作由 Invocation 承担，独立于只读 Inspection。输入是宿主明确提供的
+§3.5.6 增加的留档资源维护操作由 Invocation 承担，独立于只读 Inspection。输入是宿主明确提供的
 受控留档范围、对应的既有执行事实与保留策略，以及本次是查询候选还是执行清理的意图；输出逐项
 给出可清理、继续保留、实际删除或失败的结果及原因。只有明确的清理请求才产生删除效果，且仍须
 满足全部归属、停止、保留和时间条件。它不执行 Provider、不控制调度周期、不修改权威终态；实际
@@ -683,9 +804,13 @@ CLI 名称、字段和错误码由相应代码接口导出。
 说明原生工具入口；这两个现有名称不限制通用 Module 的适用范围。它们与本文件分开随软件交付，
 不复制进独立 Design bundle；生成内容必须和代码一致。
 
-## 13. Completion, Failure, and Recovery
+<a id="13-completion-failure-and-recovery"></a>
 
-### 13.1 正常拒绝与执行失败
+## 5. Completion, Failure, and Recovery
+
+<a id="131-正常拒绝与执行失败"></a>
+
+### 5.1 正常拒绝与执行失败
 
 | 观察到的情况 | 本次处理 |
 | --- | --- |
@@ -702,7 +827,9 @@ CLI 名称、字段和错误码由相应代码接口导出。
 permission_denied 事件在普通运行中归档；Provider 宣布整个 invocation 失败时才按其整体终态处理。
 Runtime 不新增工具行为巡检或全量 OS 拒绝检测承诺，不把 Bash 错误作为安全违规。
 
-### 13.2 错误含义与后续动作
+<a id="132-错误含义与后续动作"></a>
+
+### 5.2 错误含义与后续动作
 
 | 既有错误族 / 错误码 | 含义 | 调用者动作 |
 | --- | --- | --- |
@@ -718,7 +845,9 @@ Runtime 不新增工具行为巡检或全量 OS 拒绝检测承诺，不把 Bash
 整次执行条件失效时才形成 terminal failed result。未知原因保持 unknown；调用前的配置错误、
 运行中工具错误、Ledger 保存失败与外部授权结果不混为一种错误。
 
-### 13.3 Retry 与最终提交
+<a id="133-retry-与最终提交"></a>
+
+### 5.3 Retry 与最终提交
 
 Adapter 管理一次 Provider invocation，不暗中重新启动完整 Module。CLI 内部的工具调整和重试
 保留在同一 Attempt；Execution 按既有 Retry Policy 决定是否增加新的 Attempt，次数包括首次。
@@ -730,12 +859,14 @@ Execution 在最终提交时验证身份、必要输出条件及适用 fence。�
 不另建请求回执、全局恢复服务或并行日志。
 
 本次由 Runtime 启动的 CLI 退出或停止结果明确后，Adapter 使用已取得的日志、结果和失败完成交接；
-停止未确认时按失败路径报告并保留现场，不冒充清理完成。释放运行资源与保留工作目录分别按 §6.6
+停止未确认时按失败路径报告并保留现场，不冒充清理完成。释放运行资源与保留工作目录分别按 §3.5.6
 处理，不能用一次无差别目录删除代替二者。运行中的正常取消仍由进程控制处理；保存诊断期间不进行
 取消查询或重复分类循环。归档中保留已发生的错误，不能为了覆盖极晚到达的信号反复改写同一结果
 或增加诊断身份机制。
 
-## 14. Dependencies and Verification
+<a id="14-dependencies-and-verification"></a>
+
+## 6. Dependencies and Verification
 
 本合同消费 Runtime T1 的执行职责、Registry 的准确定义、适用的外部决定和 Ledger 的记录接口。
 验证对象是 Runtime 与外部执行器之间的调用合同，不是重新验证 Claude、Codex 或 MCP 内部的
@@ -762,7 +893,36 @@ Execution 在最终提交时验证身份、必要输出条件及适用 fence。�
 设计审查、Adapter 实现验证和生产采用分别判断。本文没有要求 Runtime 建设第二套权限层、内部
 工具监督器或平台沙箱；后续工程只能围绕明确需要的外部调用能力与真实接口缺口展开。
 
-## 15. References
+<a id="141-verified-preset-scope"></a>
+
+### 6.1 Verified preset scope
+
+下表是既有真实调用的有限验收结果，回读日期为 2026-11-18。记录来自 Windows 上随包样例的
+`record.json`、`check.json` 与保存的 Module 定义；准确 hash、逐项检查和原始文件定位收在仓库附件
+`docs/proposals/profile_configuration_20261118/evidence_readback.json`。它是验收附件，不参与配置解析。
+所有以下成功样例均为 `0.2.0.dev12`、`max_attempts=1`；模型是每次显式选择，Claude 使用
+`claude-opus-5-5/low`，Codex 使用 `gpt-6-astra/low`，不能据此推定其他模型或 effort 已测。
+
+| Preset / saved sample | Claude CLI result | Codex CLI result | Actual scope and remaining limits |
+| --- | --- | --- | --- |
+| `structured_output` | `261115142324-b8ea`，8/8 | `261115143412-cf17`，8/8 | 输出与本次输入相符，未出现任务工具；没有验证文件、外部数据或 shell |
+| `file_review` | `261115150309-395b`，14/14 | `261115150447-6aed`，14/14 | 准确材料未变、报告写入且日志显示读回；保存定义为 provider_managed/1。没有把旧 denied/3 Reviewer 当成同一 preset 验证 |
+| `code_change` | `261115142357-f81e`，11/11 | `261115143453-4333`，11/11 | 合成项目由失败变通过，仅改 pricing.py，模型和宿主各自检查最终文件；Codex 是 configured。dev14 host 的具体业务验收由消费项目持有 |
+| `mcp_data` | `261115150333-d0ce`，10/10 | `261115150522-2592`，10/10 | 合成 stdio MCP 收到调用，完整返回值保存、读回并形成派生摘要；没有验证真实外部数据源、数据库许可或 host/MCP 组合 |
+
+原失败记录保留：Codex file_review `261115143423-3d9f` 未通过 `review_read_back_in_log`；Codex
+mcp_data `261115143524-27ca` 未通过 `data_file_matches_fixture_response`；Claude mcp_data
+`261115142420-3724` 的 fixture 调用及后续数据检查未通过。后续成功样例各有独立定义与记录，不能
+覆盖早先结果，也不能把某次接口失败泛化为全部 Windows 不可用。
+
+本次文档回读没有重新执行任何样例或探测。dev14 的四项 preset 构造值已按源码核对，但本表没有
+宣称四项在 dev14 上完成了全矩阵重跑。普通 native shell 与 Runtime `resources.commands` 扩展应分别
+判断；后者的 macOS 限制不代表 Windows 的原生命令执行不可用。消费项目记录其选定版本、业务
+配置、成功路径及正常拒绝，不能以本表的合成样例代替业务验收。
+
+<a id="15-references"></a>
+
+## 7. References
 
 - [Runtime Domain Root](agent_runtime_00_execution_charter.md)
 - [Runtime Registry](agent_runtime_01_module_contract_and_assembly.md)

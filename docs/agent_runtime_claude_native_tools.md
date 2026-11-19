@@ -270,11 +270,12 @@ python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_pattern_
 ## 4. Codex workspace 执行（Reviewer 默认环境）
 
 agent Module 可以选择 `codex_cli` 执行：本次调用、Workflow 或 workspace 参数文件给出
-`transport_kind=codex_cli`、模型与 effort，Runtime 绑定 `codex_cli_agent_workspace_executor@v4`。
+`transport_kind=codex_cli`、模型与 effort，Runtime 绑定 `codex_cli_agent_workspace_executor@v5`。
 无工具 Module 使用 `codex_cli_agent_executor@v5`。
 执行器参数与错误见 [CodexCliAgentWorkspaceModuleExecutor API](agent_runtime_reviewer_api.md#codexcliagentworkspacemoduleexecutor)。
+省略 `codex_execution_mode` 时使用 `configured`；下表描述这一默认模式，包括 Reviewer 的默认调用。
 
-| 项目 | Codex workspace v4 的做法 |
+| 项目 | Codex workspace v5 的 configured 默认行为 |
 | --- | --- |
 | 支持的组合 | agent、inline、network `denied` 或 `provider_managed`。含 Shell 时需要私有草稿或显式 `project_directory`；Codex 没有独立的 Read、Grep、Edit 工具，read、search、edit 由 shell 承担，没有 shell 的 read/search/edit 组合在准备时报告 `ADAPTER_CAPABILITY_UNSUPPORTED`。只声明 `mcp__<name>` 时 shell 关闭，workspace 可为 `none`，`file_io` 记录为 `unavailable_without_shell` |
 | 主文件夹 | 私有草稿：每个 Attempt 的 scratch，`TMPDIR` 为其中的 `.tmp`；显式项目：调用者的 `project_directory`，`TMPDIR` 为 Attempt 的 `work/tmp`。给 Agent 的说明写明可写区域，其他位置按 CLI 自身权限 |
@@ -284,7 +285,18 @@ agent Module 可以选择 `codex_cli` 执行：本次调用、Workflow 或 works
 | 命令许可 | Codex 没有逐次的命令许可，`command_permits` 报告 `ADAPTER_CAPABILITY_UNSUPPORTED`；Shell 记为 `command_scope=provider_policy`（宿主的 execpolicy 规则生效） |
 | 本地命令 | 仅 macOS：资源声明 commands 时挂载唯一的 MCP 服务 `runtime_commands`，只暴露 `sandbox_command_execute`；命令由 Runtime 在 §2.1 的命令 sandbox 中执行，记录进同一执行日志 |
 
-只读依赖若是文件系统根或与 Runtime 的 Attempt 文件夹根重叠，Runtime 在启动 Provider 前以
+需要本人宿主权限执行的 `code_change` 调用，可以在本次 API 调用中显式传入
+`codex_execution_mode="host"`，或使用 CLI 的 `--codex-execution-mode host`。该模式只接受
+Codex agent、inline、`explicit_project_read_write`、`provider_managed` 和恰好
+read/search/edit/shell；材料包、额外只读依赖、recorded commands 与 MCP 均不适用。
+
+host 使用原生 `-s danger-full-access` 并保留 `approval_policy="never"`，不生成上述权限 profile，
+trace 的 `codex_permission_profile` 为 null。实际模式记录在 `codex_execution_mode` 和
+`effective_configuration.codex_execution_mode`；Shell 记录 `command_scope=host`，文件范围记录
+`filesystem_scope=task_directed`。工作目录表示本次任务范围，不能据此声称操作系统会阻止访问其他位置。
+这是一项本次调用的宿主选择，执行参数文件和 Module 定义不选择它；省略时仍按表中的 configured 行为执行。
+
+configured 模式的只读依赖若是文件系统根或与 Runtime 的 Attempt 文件夹根重叠，Runtime 在启动 Provider 前以
 PermissionError 拒绝；声明的命令能经命令 sandbox 读到宿主临时根或 Codex 登录位置时同样拒绝。
 
 能力测试使用已安装的 Codex CLI。MCP 选择以真实合并结果为准（合成的 CODEX_HOME，只执行

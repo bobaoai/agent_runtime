@@ -1,0 +1,1443 @@
+{
+  "basis": "Read existing record/check/registered definition; no new run",
+  "runs": [
+    {
+      "run": "code_change-claude-261115142357-f81e",
+      "pattern": "code_change",
+      "transport": "claude_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 11,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_code_change@v1', 'workflow_release_sha256': '4197c27fc3fb8799430317c14eb59d821906a18af799f8f886ae4c381da695f4', 'module_release_ref': 'runtime-module:example_code_change@v1', 'module_release_sha256': '40df727f28ba244d31f4d1f8e92ee21f671fb160e7ca56981123857920cfd00a'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_code_change@v1', 'workflow_release_sha256': '4197c27fc3fb8799430317c14eb59d821906a18af799f8f886ae4c381da695f4', 'module_release_ref': 'runtime-module:example_code_change@v1', 'module_release_sha256': "
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-claude-261115142357-f81e\\attempts\\module_attempt_c8226b8dd62cbed4396c7543"
+        },
+        {
+          "check": "project_started_failing",
+          "passed": true,
+          "detail": "CHECK FAILED nonce=f81e8555 pricing_sha256=bd1f011ff985c35dab7cc486bff50d56249d77b1307c0f594adc06f0c6857fa9: line_total(250, 4) = 254, expected 1000; line_total(199, 3) = 202, expected 597; line_total(0, 7) = 7, expected 0; order_total is not 1597"
+        },
+        {
+          "check": "only_pricing_changed",
+          "passed": true,
+          "detail": "changed: ['pricing.py']"
+        },
+        {
+          "check": "no_files_added",
+          "passed": true,
+          "detail": "added: []"
+        },
+        {
+          "check": "host_rerun_passes",
+          "passed": true,
+          "detail": "{'returncode': 0, 'last_line': 'CHECK PASSED nonce=f81e8555 pricing_sha256=d90d174842474f1783f76ba37e81add35d23e23e7473daf7e0c6b6f0c8c268a5', 'stderr_tail': ''}"
+        },
+        {
+          "check": "model_ran_check_on_final_code",
+          "passed": true,
+          "detail": "shell calls with the final pass line: [4]"
+        },
+        {
+          "check": "output_changed_files",
+          "passed": true,
+          "detail": "['pricing.py']"
+        },
+        {
+          "check": "output_check_command",
+          "passed": true,
+          "detail": "got 'sh run_check.sh', expected 'sh run_check.sh'"
+        },
+        {
+          "check": "output_check_result",
+          "passed": true,
+          "detail": "got 'CHECK PASSED nonce=f81e8555 pricing_sha256=d90d174842474f1783f76ba37e81add35d23e23e7473daf7e0c6b6f0c8c268a5', observed 'CHECK PASSED nonce=f81e8555 pricing_sha256=d90d174842474f1783f76ba37e81add35d23e23e7473daf7e0c6b6f0c8c268a5'"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "explicit_project_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "read",
+          "search",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_code_change@v1",
+        "workflow_release_sha256": "4197c27fc3fb8799430317c14eb59d821906a18af799f8f886ae4c381da695f4",
+        "module_release_ref": "runtime-module:example_code_change@v1",
+        "module_release_sha256": "40df727f28ba244d31f4d1f8e92ee21f671fb160e7ca56981123857920cfd00a"
+      },
+      "execution_profile_ref": "execution-profile:claude_cli@sha256_df340511d38f025b8922ea1bfb5b41ba447334f8e879c482af602ed5e94bdbcb",
+      "execution_profile_sha256": "d316307da841c2285a8a34231a7d068ed123a3f783f8cd48485b938900a5d384",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-claude-261115142357-f81e\\record.json",
+          "sha256": "7bd82299a36a58d1a678fa5e8fef8239c7b74f1ddd70a562f5f3d7000a7a9cab"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-claude-261115142357-f81e\\check.json",
+          "sha256": "54ba3112affc953ad7ad91d131bc508ac44800f74fc1b30262ec8e3487d1a465"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-claude-261115142357-f81e\\run.json",
+          "sha256": "6b88b54695549c9efe18306ad5d1a08350354b049b293a429fb218247a85fd41"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-claude-261115142357-f81e\\host\\.runtime\\module\\example_code_change\\v1.json",
+          "sha256": "e3dbc96e132c1c02f148741daf49dc027f59b7e70414a6ab25c54ad584a8f68d"
+        }
+      ]
+    },
+    {
+      "run": "code_change-codex-261115143453-4333",
+      "pattern": "code_change",
+      "transport": "codex_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 11,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_code_change@v1', 'workflow_release_sha256': '4197c27fc3fb8799430317c14eb59d821906a18af799f8f886ae4c381da695f4', 'module_release_ref': 'runtime-module:example_code_change@v1', 'module_release_sha256': '40df727f28ba244d31f4d1f8e92ee21f671fb160e7ca56981123857920cfd00a'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_code_change@v1', 'workflow_release_sha256': '4197c27fc3fb8799430317c14eb59d821906a18af799f8f886ae4c381da695f4', 'module_release_ref': 'runtime-module:example_code_change@v1', 'module_release_sha256': "
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-codex-261115143453-4333\\attempts\\module_attempt_a9983b6dbf1497351ca508c4"
+        },
+        {
+          "check": "project_started_failing",
+          "passed": true,
+          "detail": "CHECK FAILED nonce=4333ab38 pricing_sha256=bd1f011ff985c35dab7cc486bff50d56249d77b1307c0f594adc06f0c6857fa9: line_total(250, 4) = 254, expected 1000; line_total(199, 3) = 202, expected 597; line_total(0, 7) = 7, expected 0; order_total is not 1597"
+        },
+        {
+          "check": "only_pricing_changed",
+          "passed": true,
+          "detail": "changed: ['pricing.py']"
+        },
+        {
+          "check": "no_files_added",
+          "passed": true,
+          "detail": "added: []"
+        },
+        {
+          "check": "host_rerun_passes",
+          "passed": true,
+          "detail": "{'returncode': 0, 'last_line': 'CHECK PASSED nonce=4333ab38 pricing_sha256=d90d174842474f1783f76ba37e81add35d23e23e7473daf7e0c6b6f0c8c268a5', 'stderr_tail': ''}"
+        },
+        {
+          "check": "model_ran_check_on_final_code",
+          "passed": true,
+          "detail": "shell calls with the final pass line: [2]"
+        },
+        {
+          "check": "output_changed_files",
+          "passed": true,
+          "detail": "['pricing.py']"
+        },
+        {
+          "check": "output_check_command",
+          "passed": true,
+          "detail": "got \"& 'C:\\\\Users\\\\bokan.bao\\\\Documents\\\\github\\\\Runtime Example Acceptance\\\\dev12-env\\\\Scripts\\\\python.exe' check_pricing.py\", expected \"& 'C:\\\\Users\\\\bokan.bao\\\\Documents\\\\github\\\\Runtime Example Acceptance\\\\dev12-env\\\\Scripts\\\\python.exe' check_pricing.py\""
+        },
+        {
+          "check": "output_check_result",
+          "passed": true,
+          "detail": "got 'CHECK PASSED nonce=4333ab38 pricing_sha256=d90d174842474f1783f76ba37e81add35d23e23e7473daf7e0c6b6f0c8c268a5', observed 'CHECK PASSED nonce=4333ab38 pricing_sha256=d90d174842474f1783f76ba37e81add35d23e23e7473daf7e0c6b6f0c8c268a5'"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "explicit_project_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "read",
+          "search",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_code_change@v1",
+        "workflow_release_sha256": "4197c27fc3fb8799430317c14eb59d821906a18af799f8f886ae4c381da695f4",
+        "module_release_ref": "runtime-module:example_code_change@v1",
+        "module_release_sha256": "40df727f28ba244d31f4d1f8e92ee21f671fb160e7ca56981123857920cfd00a"
+      },
+      "execution_profile_ref": "execution-profile:codex_cli@sha256_a484767e2b0db4dbbda24097180a7a30ab823c5102496761f3b93d94fb679fb9",
+      "execution_profile_sha256": "c939347414fbbba47dca71ee41344ab662a37d4f7763d810a531527309ea2812",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-codex-261115143453-4333\\record.json",
+          "sha256": "f18aa91a9750a9c33fc88bcb805d600a45f4a5c46ecafe26bfab187a5aebe557"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-codex-261115143453-4333\\check.json",
+          "sha256": "103764c1b0cecd1083294c9b6abe5fbfe69bda7656661e0d2f55a799c19703fc"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-codex-261115143453-4333\\run.json",
+          "sha256": "03a9d06d86b7e0087ecc7de3b3aab2d8518dcc9323b86cc97f0d65c2a31c5030"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\code_change-codex-261115143453-4333\\host\\.runtime\\module\\example_code_change\\v1.json",
+          "sha256": "e3dbc96e132c1c02f148741daf49dc027f59b7e70414a6ab25c54ad584a8f68d"
+        }
+      ]
+    },
+    {
+      "run": "file_review-claude-261115142337-e024",
+      "pattern": "file_review",
+      "transport": "claude_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 14,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_file_review@v1', 'workflow_release_sha256': '40239f87dd45fe254cf65de47701174cc2cd37914d09107a0a75d9077f031c97', 'module_release_ref': 'runtime-module:example_file_review@v1', 'module_release_sha256': '18499998b4e3a0566d64188f6e26c17a0a0e9ef54e7a9db3df3e7efd30048169'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_file_review@v1', 'workflow_release_sha256': '40239f87dd45fe254cf65de47701174cc2cd37914d09107a0a75d9077f031c97', 'module_release_ref': 'runtime-module:example_file_review@v1', 'module_release_sha256': "
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115142337-e024\\attempts\\module_attempt_594e2bc09325fc43becc1801"
+        },
+        {
+          "check": "material_unchanged",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check": "material_fact_absent_from_input",
+          "passed": true,
+          "detail": "the release code exists only in the material file"
+        },
+        {
+          "check": "review_file_written",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115142337-e024\\attempts\\module_attempt_594e2bc09325fc43becc1801\\work\\scratch\\review.md"
+        },
+        {
+          "check": "review_first_line",
+          "passed": true,
+          "detail": "# Review: release_notes.md"
+        },
+        {
+          "check": "review_contains_material_fact",
+          "passed": true,
+          "detail": "expected 'Release code: RC-E02BE9'"
+        },
+        {
+          "check": "review_has_findings",
+          "passed": true,
+          "detail": "3 bullet lines"
+        },
+        {
+          "check": "review_read_back_in_log",
+          "passed": true,
+          "detail": "read steps showing the saved fact: [2]"
+        },
+        {
+          "check": "output_review_file",
+          "passed": true,
+          "detail": "review.md"
+        },
+        {
+          "check": "output_release_code",
+          "passed": true,
+          "detail": "RC-E02BE9"
+        },
+        {
+          "check": "output_readback_first_line",
+          "passed": true,
+          "detail": "# Review: release_notes.md"
+        },
+        {
+          "check": "output_finding_count",
+          "passed": true,
+          "detail": "got 3, file has 3"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "own_draft_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "read",
+          "search",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_file_review@v1",
+        "workflow_release_sha256": "40239f87dd45fe254cf65de47701174cc2cd37914d09107a0a75d9077f031c97",
+        "module_release_ref": "runtime-module:example_file_review@v1",
+        "module_release_sha256": "18499998b4e3a0566d64188f6e26c17a0a0e9ef54e7a9db3df3e7efd30048169"
+      },
+      "execution_profile_ref": "execution-profile:claude_cli@sha256_030719477cb7a578389b36c93173a9ade1b9d43af9cbdb1f2942bb833b23e0e3",
+      "execution_profile_sha256": "440bb35375ae76d359c0e4629386b872705afe794ffb423456d2d342451ae2ec",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115142337-e024\\record.json",
+          "sha256": "874a1e7d69d92d070f5bb1ccd66029e4aa4161d6fbd4ecf028ae1cf71c7a6783"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115142337-e024\\check.json",
+          "sha256": "44e9d9c12650a9c0b2a6e7c3c025dbb5fc1a45a49bb6dd624c605d608d804689"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115142337-e024\\run.json",
+          "sha256": "7a65f6611c4e3ab1d8548928ce828907c1c53136856afe158fdd768327f9430f"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115142337-e024\\host\\.runtime\\module\\example_file_review\\v1.json",
+          "sha256": "371e193fdb105122be12cba3c14006fe21783c5e116b817269fe12e1c5958636"
+        }
+      ]
+    },
+    {
+      "run": "file_review-claude-261115150309-395b",
+      "pattern": "file_review",
+      "transport": "claude_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 14,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_file_review@v1', 'workflow_release_sha256': 'f1beceb5704193d9c09ca6b92a42ea045c7f6b91a3fa0dd87558112b7dcf9229', 'module_release_ref': 'runtime-module:example_file_review@v1', 'module_release_sha256': '8cab455015cddbc09789571ee24bf29d39755df4d11ac8e53298616c56c5d9e8'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_file_review@v1', 'workflow_release_sha256': 'f1beceb5704193d9c09ca6b92a42ea045c7f6b91a3fa0dd87558112b7dcf9229', 'module_release_ref': 'runtime-module:example_file_review@v1', 'module_release_sha256': "
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115150309-395b\\attempts\\module_attempt_50d2230b798269e526753d53"
+        },
+        {
+          "check": "material_unchanged",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check": "material_fact_absent_from_input",
+          "passed": true,
+          "detail": "the release code exists only in the material file"
+        },
+        {
+          "check": "review_file_written",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115150309-395b\\attempts\\module_attempt_50d2230b798269e526753d53\\work\\scratch\\review.md"
+        },
+        {
+          "check": "review_first_line",
+          "passed": true,
+          "detail": "# Review: release_notes.md"
+        },
+        {
+          "check": "review_contains_material_fact",
+          "passed": true,
+          "detail": "expected 'Release code: RC-6EF3D3'"
+        },
+        {
+          "check": "review_has_findings",
+          "passed": true,
+          "detail": "4 bullet lines"
+        },
+        {
+          "check": "review_read_back_in_log",
+          "passed": true,
+          "detail": "read steps showing the saved fact: [2]"
+        },
+        {
+          "check": "output_review_file",
+          "passed": true,
+          "detail": "review.md"
+        },
+        {
+          "check": "output_release_code",
+          "passed": true,
+          "detail": "RC-6EF3D3"
+        },
+        {
+          "check": "output_readback_first_line",
+          "passed": true,
+          "detail": "# Review: release_notes.md"
+        },
+        {
+          "check": "output_finding_count",
+          "passed": true,
+          "detail": "got 4, file has 4"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "own_draft_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "read",
+          "search",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_file_review@v1",
+        "workflow_release_sha256": "f1beceb5704193d9c09ca6b92a42ea045c7f6b91a3fa0dd87558112b7dcf9229",
+        "module_release_ref": "runtime-module:example_file_review@v1",
+        "module_release_sha256": "8cab455015cddbc09789571ee24bf29d39755df4d11ac8e53298616c56c5d9e8"
+      },
+      "execution_profile_ref": "execution-profile:claude_cli@sha256_030719477cb7a578389b36c93173a9ade1b9d43af9cbdb1f2942bb833b23e0e3",
+      "execution_profile_sha256": "440bb35375ae76d359c0e4629386b872705afe794ffb423456d2d342451ae2ec",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115150309-395b\\record.json",
+          "sha256": "bf1524125d72a6e0d53415b2686e02dbff17ac24f03a4acf92028357ce9f19bc"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115150309-395b\\check.json",
+          "sha256": "f0add74cf3f93a8f35ffb852cae541263f52ff2075f48f3edbd564aeb042f593"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115150309-395b\\run.json",
+          "sha256": "e676bfbaf8295875fd015bd2a628979c5d3653c0c4b62451da1cf5438e95ee3f"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-claude-261115150309-395b\\host\\.runtime\\module\\example_file_review\\v1.json",
+          "sha256": "ccfab3b8809802dc0e41833112e12bc797934a18cab7ce20b2e0eca62ef1653c"
+        }
+      ]
+    },
+    {
+      "run": "file_review-codex-261115143423-3d9f",
+      "pattern": "file_review",
+      "transport": "codex_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "completed",
+      "passed": false,
+      "check_count": 14,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_file_review@v1', 'workflow_release_sha256': '40239f87dd45fe254cf65de47701174cc2cd37914d09107a0a75d9077f031c97', 'module_release_ref': 'runtime-module:example_file_review@v1', 'module_release_sha256': '18499998b4e3a0566d64188f6e26c17a0a0e9ef54e7a9db3df3e7efd30048169'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_file_review@v1', 'workflow_release_sha256': '40239f87dd45fe254cf65de47701174cc2cd37914d09107a0a75d9077f031c97', 'module_release_ref': 'runtime-module:example_file_review@v1', 'module_release_sha256': "
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115143423-3d9f\\attempts\\module_attempt_5c54df4b42b72a110c7d7449"
+        },
+        {
+          "check": "material_unchanged",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check": "material_fact_absent_from_input",
+          "passed": true,
+          "detail": "the release code exists only in the material file"
+        },
+        {
+          "check": "review_file_written",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115143423-3d9f\\attempts\\module_attempt_5c54df4b42b72a110c7d7449\\work\\scratch\\review.md"
+        },
+        {
+          "check": "review_first_line",
+          "passed": true,
+          "detail": "# Review: release_notes.md"
+        },
+        {
+          "check": "review_contains_material_fact",
+          "passed": true,
+          "detail": "expected 'Release code: RC-B649AB'"
+        },
+        {
+          "check": "review_has_findings",
+          "passed": true,
+          "detail": "3 bullet lines"
+        },
+        {
+          "check": "review_read_back_in_log",
+          "passed": false,
+          "detail": "read steps showing the saved fact: []"
+        },
+        {
+          "check": "output_review_file",
+          "passed": true,
+          "detail": "review.md"
+        },
+        {
+          "check": "output_release_code",
+          "passed": true,
+          "detail": "RC-B649AB"
+        },
+        {
+          "check": "output_readback_first_line",
+          "passed": true,
+          "detail": "# Review: release_notes.md"
+        },
+        {
+          "check": "output_finding_count",
+          "passed": true,
+          "detail": "got 3, file has 3"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "own_draft_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "read",
+          "search",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_file_review@v1",
+        "workflow_release_sha256": "40239f87dd45fe254cf65de47701174cc2cd37914d09107a0a75d9077f031c97",
+        "module_release_ref": "runtime-module:example_file_review@v1",
+        "module_release_sha256": "18499998b4e3a0566d64188f6e26c17a0a0e9ef54e7a9db3df3e7efd30048169"
+      },
+      "execution_profile_ref": "execution-profile:codex_cli@sha256_dbdaa0c84a3c8e26538e678c3dbb02b5f6803124c4fbda6e17debcacbcd662f0",
+      "execution_profile_sha256": "d0cb04ff39ae9b98b851989510cfd63a8b3ad4696d193573e586f150f34dc18e",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115143423-3d9f\\record.json",
+          "sha256": "d6e30daf79ef608b8c491cf8e79ef49b377601f2e7c9c3a4e813585040050676"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115143423-3d9f\\check.json",
+          "sha256": "628d0fd97e1d5484778287d4eec15de6b743b90b91b9aa7d664229110fab929c"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115143423-3d9f\\run.json",
+          "sha256": "0165dd3dc36d0826d467091b6a6927492f9967019b07296dfefcc9caff69d81e"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115143423-3d9f\\host\\.runtime\\module\\example_file_review\\v1.json",
+          "sha256": "371e193fdb105122be12cba3c14006fe21783c5e116b817269fe12e1c5958636"
+        }
+      ]
+    },
+    {
+      "run": "file_review-codex-261115150447-6aed",
+      "pattern": "file_review",
+      "transport": "codex_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 14,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_file_review@v1', 'workflow_release_sha256': 'f1beceb5704193d9c09ca6b92a42ea045c7f6b91a3fa0dd87558112b7dcf9229', 'module_release_ref': 'runtime-module:example_file_review@v1', 'module_release_sha256': '8cab455015cddbc09789571ee24bf29d39755df4d11ac8e53298616c56c5d9e8'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_file_review@v1', 'workflow_release_sha256': 'f1beceb5704193d9c09ca6b92a42ea045c7f6b91a3fa0dd87558112b7dcf9229', 'module_release_ref': 'runtime-module:example_file_review@v1', 'module_release_sha256': "
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115150447-6aed\\attempts\\module_attempt_6e7f6a63d699b592c36249fd"
+        },
+        {
+          "check": "material_unchanged",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check": "material_fact_absent_from_input",
+          "passed": true,
+          "detail": "the release code exists only in the material file"
+        },
+        {
+          "check": "review_file_written",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115150447-6aed\\attempts\\module_attempt_6e7f6a63d699b592c36249fd\\work\\scratch\\review.md"
+        },
+        {
+          "check": "review_first_line",
+          "passed": true,
+          "detail": "# Review: release_notes.md"
+        },
+        {
+          "check": "review_contains_material_fact",
+          "passed": true,
+          "detail": "expected 'Release code: RC-8F44A4'"
+        },
+        {
+          "check": "review_has_findings",
+          "passed": true,
+          "detail": "4 bullet lines"
+        },
+        {
+          "check": "review_read_back_in_log",
+          "passed": true,
+          "detail": "read steps showing the saved fact: [2]"
+        },
+        {
+          "check": "output_review_file",
+          "passed": true,
+          "detail": "review.md"
+        },
+        {
+          "check": "output_release_code",
+          "passed": true,
+          "detail": "RC-8F44A4"
+        },
+        {
+          "check": "output_readback_first_line",
+          "passed": true,
+          "detail": "# Review: release_notes.md"
+        },
+        {
+          "check": "output_finding_count",
+          "passed": true,
+          "detail": "got 4, file has 4"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "own_draft_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "read",
+          "search",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_file_review@v1",
+        "workflow_release_sha256": "f1beceb5704193d9c09ca6b92a42ea045c7f6b91a3fa0dd87558112b7dcf9229",
+        "module_release_ref": "runtime-module:example_file_review@v1",
+        "module_release_sha256": "8cab455015cddbc09789571ee24bf29d39755df4d11ac8e53298616c56c5d9e8"
+      },
+      "execution_profile_ref": "execution-profile:codex_cli@sha256_dbdaa0c84a3c8e26538e678c3dbb02b5f6803124c4fbda6e17debcacbcd662f0",
+      "execution_profile_sha256": "d0cb04ff39ae9b98b851989510cfd63a8b3ad4696d193573e586f150f34dc18e",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115150447-6aed\\record.json",
+          "sha256": "45e0e6c183e587eec11acbb60276e5f2bcf292f350239d88d42c5c661e756b34"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115150447-6aed\\check.json",
+          "sha256": "07da48a0510f2ad89010e391c88d6f40da5647ccbd445afe5bb12b9e70d77202"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115150447-6aed\\run.json",
+          "sha256": "a380a5352edd785ee5c883ac04540f858cbe56f0db470298d87230486a122456"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\file_review-codex-261115150447-6aed\\host\\.runtime\\module\\example_file_review\\v1.json",
+          "sha256": "ccfab3b8809802dc0e41833112e12bc797934a18cab7ce20b2e0eca62ef1653c"
+        }
+      ]
+    },
+    {
+      "run": "mcp_data-claude-261115142420-3724",
+      "pattern": "mcp_data",
+      "transport": "claude_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "status": "completed",
+      "passed": false,
+      "check_count": 10,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'd5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '883e125c4b8f3132a86b70d2331dc905b74af66e967c83b9cbe8f67e3a0a6108'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'd5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '883e125c4b8"
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115142420-3724\\attempts\\module_attempt_a6322b938f036c29f8c4875e"
+        },
+        {
+          "check": "fixture_received_tools_call",
+          "passed": false,
+          "detail": "0 audited calls with this task's arguments; 0 with other arguments"
+        },
+        {
+          "check": "mcp_call_in_log",
+          "passed": false,
+          "detail": "log calls returning the audited response: []"
+        },
+        {
+          "check": "data_file_matches_fixture_response",
+          "passed": false,
+          "detail": "the saved JSON must equal the complete audited result"
+        },
+        {
+          "check": "data_file_read_back_in_log",
+          "passed": false,
+          "detail": "read steps showing the saved response_id: []"
+        },
+        {
+          "check": "summary_file_derived",
+          "passed": false,
+          "detail": "got None, expected {'response_id': '', 'warehouse': None, 'total_units': 0, 'sku_count': 0}"
+        },
+        {
+          "check": "output_matches_fixture",
+          "passed": false,
+          "detail": "{'response_id': 'ERROR: example_data MCP server failed to connect (CONNECTION_CLOSED); get_stock_snapshot not called', 'total_units': 0, 'sku_count': 0}"
+        },
+        {
+          "check": "output_artifact_paths",
+          "passed": false,
+          "detail": "{'data_file': '', 'summary_file': ''}"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "explicit_project_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "mcp__example_data",
+          "read",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_mcp_data@v1",
+        "workflow_release_sha256": "d5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b",
+        "module_release_ref": "runtime-module:example_mcp_data@v1",
+        "module_release_sha256": "883e125c4b8f3132a86b70d2331dc905b74af66e967c83b9cbe8f67e3a0a6108"
+      },
+      "execution_profile_ref": "execution-profile:claude_cli@sha256_26f41210f232ffb7d5438aac3817e0096dcbc2c521217730437a26196b66cc97",
+      "execution_profile_sha256": "b4bd507dbd1d9b706e7b12d0c7ebe14b466d8d2cc5a02eb6bfe4135d77568128",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115142420-3724\\record.json",
+          "sha256": "ac7cd84fd8357cf2a52ce8987d0510e6bb61ddcd458059ebba6fa63cb542f0b3"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115142420-3724\\check.json",
+          "sha256": "12e5c8c8b8abe5449f16f6162075382a1b366153239538b9c2ae68c3f235ce7b"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115142420-3724\\run.json",
+          "sha256": "075c855c15280eb5addc514d3beab18a53b1acb80aa37b55ce9b6c501bf0ceac"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115142420-3724\\host\\.runtime\\module\\example_mcp_data\\v1.json",
+          "sha256": "3a3474b08ea8f531c6a58926f69ea29ea7ebef96c6cdf85739170bef38be1fa3"
+        }
+      ]
+    },
+    {
+      "run": "mcp_data-claude-261115143132-dba7",
+      "pattern": "mcp_data",
+      "transport": "claude_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 10,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'd5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '883e125c4b8f3132a86b70d2331dc905b74af66e967c83b9cbe8f67e3a0a6108'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'd5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '883e125c4b8"
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115143132-dba7\\attempts\\module_attempt_b23a18d3722b465ff5735488"
+        },
+        {
+          "check": "fixture_received_tools_call",
+          "passed": true,
+          "detail": "1 audited calls with this task's arguments; 0 with other arguments"
+        },
+        {
+          "check": "mcp_call_in_log",
+          "passed": true,
+          "detail": "log calls returning the audited response: [0]"
+        },
+        {
+          "check": "data_file_matches_fixture_response",
+          "passed": true,
+          "detail": "the saved JSON must equal the complete audited result"
+        },
+        {
+          "check": "data_file_read_back_in_log",
+          "passed": true,
+          "detail": "read steps showing the saved response_id: [2]"
+        },
+        {
+          "check": "summary_file_derived",
+          "passed": true,
+          "detail": "got {'response_id': 'resp-cdef34505474', 'warehouse': 'north-dba7', 'total_units': 155, 'sku_count': 3}, expected {'response_id': 'resp-cdef34505474', 'warehouse': 'north-dba7', 'total_units': 155, 'sku_count': 3}"
+        },
+        {
+          "check": "output_matches_fixture",
+          "passed": true,
+          "detail": "{'response_id': 'resp-cdef34505474', 'total_units': 155, 'sku_count': 3}"
+        },
+        {
+          "check": "output_artifact_paths",
+          "passed": true,
+          "detail": "{'data_file': 'stock_snapshot.json', 'summary_file': 'stock_summary.json'}"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "explicit_project_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "mcp__example_data",
+          "read",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_mcp_data@v1",
+        "workflow_release_sha256": "d5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b",
+        "module_release_ref": "runtime-module:example_mcp_data@v1",
+        "module_release_sha256": "883e125c4b8f3132a86b70d2331dc905b74af66e967c83b9cbe8f67e3a0a6108"
+      },
+      "execution_profile_ref": "execution-profile:claude_cli@sha256_26f41210f232ffb7d5438aac3817e0096dcbc2c521217730437a26196b66cc97",
+      "execution_profile_sha256": "b4bd507dbd1d9b706e7b12d0c7ebe14b466d8d2cc5a02eb6bfe4135d77568128",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115143132-dba7\\record.json",
+          "sha256": "afbe410c89d969920f2a2555354ff657ce423c6a98d82a1bef2e6624dbefb592"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115143132-dba7\\check.json",
+          "sha256": "9d21fb4071ff418ad4d16535dd6dd16da4a148dc5fa9370d43999e7d2ccb394a"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115143132-dba7\\run.json",
+          "sha256": "6d4a4eb5d7afb54d2224446c62112621fd43e686229e8807a85ef60f7b7c5471"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115143132-dba7\\host\\.runtime\\module\\example_mcp_data\\v1.json",
+          "sha256": "3a3474b08ea8f531c6a58926f69ea29ea7ebef96c6cdf85739170bef38be1fa3"
+        }
+      ]
+    },
+    {
+      "run": "mcp_data-claude-261115150333-d0ce",
+      "pattern": "mcp_data",
+      "transport": "claude_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 10,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'bd50531786fa55da91091729b76fb83dd497257e6e97b0852c96e42bba9fc492', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '280ccb7af4171228e9813642dcd9ad2cfeea17def4d44c41c13443f5ff3c956f'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'bd50531786fa55da91091729b76fb83dd497257e6e97b0852c96e42bba9fc492', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '280ccb7af41"
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115150333-d0ce\\attempts\\module_attempt_88716efa3f7613d8a427c1f8"
+        },
+        {
+          "check": "fixture_received_tools_call",
+          "passed": true,
+          "detail": "1 audited calls with this task's arguments; 0 with other arguments"
+        },
+        {
+          "check": "mcp_call_in_log",
+          "passed": true,
+          "detail": "log calls returning the audited response: [0]"
+        },
+        {
+          "check": "data_file_matches_fixture_response",
+          "passed": true,
+          "detail": "the saved JSON must equal the complete audited result"
+        },
+        {
+          "check": "data_file_read_back_in_log",
+          "passed": true,
+          "detail": "read steps showing the saved response_id: [2]"
+        },
+        {
+          "check": "summary_file_derived",
+          "passed": true,
+          "detail": "got {'response_id': 'resp-f67bb3d47d33', 'warehouse': 'north-d0ce', 'total_units': 221, 'sku_count': 3}, expected {'response_id': 'resp-f67bb3d47d33', 'warehouse': 'north-d0ce', 'total_units': 221, 'sku_count': 3}"
+        },
+        {
+          "check": "output_matches_fixture",
+          "passed": true,
+          "detail": "{'response_id': 'resp-f67bb3d47d33', 'total_units': 221, 'sku_count': 3}"
+        },
+        {
+          "check": "output_artifact_paths",
+          "passed": true,
+          "detail": "{'data_file': 'stock_snapshot.json', 'summary_file': 'stock_summary.json'}"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "explicit_project_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "mcp__example_data",
+          "read",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_mcp_data@v1",
+        "workflow_release_sha256": "bd50531786fa55da91091729b76fb83dd497257e6e97b0852c96e42bba9fc492",
+        "module_release_ref": "runtime-module:example_mcp_data@v1",
+        "module_release_sha256": "280ccb7af4171228e9813642dcd9ad2cfeea17def4d44c41c13443f5ff3c956f"
+      },
+      "execution_profile_ref": "execution-profile:claude_cli@sha256_26f41210f232ffb7d5438aac3817e0096dcbc2c521217730437a26196b66cc97",
+      "execution_profile_sha256": "b4bd507dbd1d9b706e7b12d0c7ebe14b466d8d2cc5a02eb6bfe4135d77568128",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115150333-d0ce\\record.json",
+          "sha256": "1783d00ccae2dfd74850e0b36e501be3faf6ff89ad80bf5dfb40a00468a492aa"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115150333-d0ce\\check.json",
+          "sha256": "88ecea9b8e4708aac398e31a402664be0e92eec43a51eda8bc2cf0e5070cdc74"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115150333-d0ce\\run.json",
+          "sha256": "5ea399716ee9351ee3ea5df986ee1c7deeed2d457cbcee52457ccbf4fba527e6"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-claude-261115150333-d0ce\\host\\.runtime\\module\\example_mcp_data\\v1.json",
+          "sha256": "9be7257e786622c9b37eeb64aaaecf47f1f2c9923afd7365a1543abae6a037e3"
+        }
+      ]
+    },
+    {
+      "run": "mcp_data-codex-261115143524-27ca",
+      "pattern": "mcp_data",
+      "transport": "codex_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "completed",
+      "passed": false,
+      "check_count": 10,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'd5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '883e125c4b8f3132a86b70d2331dc905b74af66e967c83b9cbe8f67e3a0a6108'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'd5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '883e125c4b8"
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115143524-27ca\\attempts\\module_attempt_6088065a868cee52b96784d2"
+        },
+        {
+          "check": "fixture_received_tools_call",
+          "passed": true,
+          "detail": "1 audited calls with this task's arguments; 0 with other arguments"
+        },
+        {
+          "check": "mcp_call_in_log",
+          "passed": true,
+          "detail": "log calls returning the audited response: [0]"
+        },
+        {
+          "check": "data_file_matches_fixture_response",
+          "passed": false,
+          "detail": "the saved JSON must equal the complete audited result"
+        },
+        {
+          "check": "data_file_read_back_in_log",
+          "passed": true,
+          "detail": "read steps showing the saved response_id: [2]"
+        },
+        {
+          "check": "summary_file_derived",
+          "passed": true,
+          "detail": "got {'response_id': 'resp-371f11aa7eb7', 'warehouse': 'north-27ca', 'total_units': 197, 'sku_count': 3}, expected {'response_id': 'resp-371f11aa7eb7', 'warehouse': 'north-27ca', 'total_units': 197, 'sku_count': 3}"
+        },
+        {
+          "check": "output_matches_fixture",
+          "passed": true,
+          "detail": "{'response_id': 'resp-371f11aa7eb7', 'total_units': 197, 'sku_count': 3}"
+        },
+        {
+          "check": "output_artifact_paths",
+          "passed": true,
+          "detail": "{'data_file': 'stock_snapshot.json', 'summary_file': 'stock_summary.json'}"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "explicit_project_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "mcp__example_data",
+          "read",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_mcp_data@v1",
+        "workflow_release_sha256": "d5100a558d2682a1016489bcffc763b71b175316a7cc8345e411948c2b73c20b",
+        "module_release_ref": "runtime-module:example_mcp_data@v1",
+        "module_release_sha256": "883e125c4b8f3132a86b70d2331dc905b74af66e967c83b9cbe8f67e3a0a6108"
+      },
+      "execution_profile_ref": "execution-profile:codex_cli@sha256_c4802d4bf8325dfa7f41d16de52961229cf5c618c363c52b136e9f598283c866",
+      "execution_profile_sha256": "f82d1da957e92a10cdae98ddcb582cc3aac03ce711e0a548e1da76a082633e38",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115143524-27ca\\record.json",
+          "sha256": "390b74437b319832a980ea5cf2c65bf7f2ac1ccabc5fb5a9f5f22105aab62f4d"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115143524-27ca\\check.json",
+          "sha256": "c731158788c4457bb8df143222ce21bac90978fec85955f7d63ca0bc348c2d7a"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115143524-27ca\\run.json",
+          "sha256": "93d437066fd1ea8c711bff32f0b93f8c16bde05d421ea88b711d3f553b9ebedb"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115143524-27ca\\host\\.runtime\\module\\example_mcp_data\\v1.json",
+          "sha256": "3a3474b08ea8f531c6a58926f69ea29ea7ebef96c6cdf85739170bef38be1fa3"
+        }
+      ]
+    },
+    {
+      "run": "mcp_data-codex-261115150522-2592",
+      "pattern": "mcp_data",
+      "transport": "codex_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 10,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'bd50531786fa55da91091729b76fb83dd497257e6e97b0852c96e42bba9fc492', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '280ccb7af4171228e9813642dcd9ad2cfeea17def4d44c41c13443f5ff3c956f'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_mcp_data@v1', 'workflow_release_sha256': 'bd50531786fa55da91091729b76fb83dd497257e6e97b0852c96e42bba9fc492', 'module_release_ref': 'runtime-module:example_mcp_data@v1', 'module_release_sha256': '280ccb7af41"
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115150522-2592\\attempts\\module_attempt_30fb49a826eb572ae6d30a21"
+        },
+        {
+          "check": "fixture_received_tools_call",
+          "passed": true,
+          "detail": "1 audited calls with this task's arguments; 0 with other arguments"
+        },
+        {
+          "check": "mcp_call_in_log",
+          "passed": true,
+          "detail": "log calls returning the audited response: [0]"
+        },
+        {
+          "check": "data_file_matches_fixture_response",
+          "passed": true,
+          "detail": "the saved JSON must equal the complete audited result"
+        },
+        {
+          "check": "data_file_read_back_in_log",
+          "passed": true,
+          "detail": "read steps showing the saved response_id: [2]"
+        },
+        {
+          "check": "summary_file_derived",
+          "passed": true,
+          "detail": "got {'response_id': 'resp-7e02a658fb23', 'warehouse': 'north-2592', 'total_units': 204, 'sku_count': 3}, expected {'response_id': 'resp-7e02a658fb23', 'warehouse': 'north-2592', 'total_units': 204, 'sku_count': 3}"
+        },
+        {
+          "check": "output_matches_fixture",
+          "passed": true,
+          "detail": "{'response_id': 'resp-7e02a658fb23', 'total_units': 204, 'sku_count': 3}"
+        },
+        {
+          "check": "output_artifact_paths",
+          "passed": true,
+          "detail": "{'data_file': 'stock_snapshot.json', 'summary_file': 'stock_summary.json'}"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "explicit_project_read_write",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "agent",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "provider_managed",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": [
+          "edit",
+          "mcp__example_data",
+          "read",
+          "shell"
+        ]
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_mcp_data@v1",
+        "workflow_release_sha256": "bd50531786fa55da91091729b76fb83dd497257e6e97b0852c96e42bba9fc492",
+        "module_release_ref": "runtime-module:example_mcp_data@v1",
+        "module_release_sha256": "280ccb7af4171228e9813642dcd9ad2cfeea17def4d44c41c13443f5ff3c956f"
+      },
+      "execution_profile_ref": "execution-profile:codex_cli@sha256_c4802d4bf8325dfa7f41d16de52961229cf5c618c363c52b136e9f598283c866",
+      "execution_profile_sha256": "f82d1da957e92a10cdae98ddcb582cc3aac03ce711e0a548e1da76a082633e38",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115150522-2592\\record.json",
+          "sha256": "66b3ebd2909da0f351839948ae26d4a0464c7882a550647d04da2227529be2e5"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115150522-2592\\check.json",
+          "sha256": "65123e6ee422d2b28de1eb17cb175471bff72e6e0181a44299d33f49eab32bdd"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115150522-2592\\run.json",
+          "sha256": "78f093483e7a156e23f3242ef1bbf12b8eba1a4226e1acac01f7ef4feef6fba9"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\mcp_data-codex-261115150522-2592\\host\\.runtime\\module\\example_mcp_data\\v1.json",
+          "sha256": "9be7257e786622c9b37eeb64aaaecf47f1f2c9923afd7365a1543abae6a037e3"
+        }
+      ]
+    },
+    {
+      "run": "structured_output-claude-261115142324-b8ea",
+      "pattern": "structured_output",
+      "transport": "claude_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 8,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_structured_output@v1', 'workflow_release_sha256': 'b0b3b198b6591873778ffa3c9455427b1811521c0fd8c9a46e712fc347a4ef8c', 'module_release_ref': 'runtime-module:example_structured_output@v1', 'module_release_sha256': 'cff670f4e4bcd9fa747961d0df8369136dd4968c4a50f4bf9358c749098af712'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_structured_output@v1', 'workflow_release_sha256': 'b0b3b198b6591873778ffa3c9455427b1811521c0fd8c9a46e712fc347a4ef8c', 'module_release_ref': 'runtime-module:example_structured_output@v1', '"
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-claude-261115142324-b8ea\\attempts\\module_attempt_eeb42e0c7dcb9aee8f46cff8"
+        },
+        {
+          "check": "output_order_id",
+          "passed": true,
+          "detail": "ORD-B8EA27D2"
+        },
+        {
+          "check": "output_lines",
+          "passed": true,
+          "detail": "got {'A-100': 5, 'B-220': 6, 'C-310': 1}, expected {'A-100': 5, 'B-220': 6, 'C-310': 1}"
+        },
+        {
+          "check": "output_total_quantity",
+          "passed": true,
+          "detail": "got 12, expected 12"
+        },
+        {
+          "check": "output_urgent",
+          "passed": true,
+          "detail": "got False, expected False"
+        },
+        {
+          "check": "no_task_tools",
+          "passed": true,
+          "detail": "tool calls recorded: []"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "none",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "tool_free",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "denied",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": []
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_structured_output@v1",
+        "workflow_release_sha256": "b0b3b198b6591873778ffa3c9455427b1811521c0fd8c9a46e712fc347a4ef8c",
+        "module_release_ref": "runtime-module:example_structured_output@v1",
+        "module_release_sha256": "cff670f4e4bcd9fa747961d0df8369136dd4968c4a50f4bf9358c749098af712"
+      },
+      "execution_profile_ref": "execution-profile:claude_cli@sha256_9ad7c0f5314637981c2d8771a20a1be39a4943a72384071843e951a3fdba3622",
+      "execution_profile_sha256": "4b36928b06caa9781da1bf7c8a62312410a6350f4cc39446e63815e093fd2018",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-claude-261115142324-b8ea\\record.json",
+          "sha256": "41ca0c7098cd29d1dbe12257d3d3f886ed2a4498bfb26e54646f138295baa93a"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-claude-261115142324-b8ea\\check.json",
+          "sha256": "e119d6f05533c76ce2a9a6279d8bd08c18e9054b50509cd0f4f8781fe7458e95"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-claude-261115142324-b8ea\\run.json",
+          "sha256": "9befee3d1fedff1962d53e402d5c929c2bcf1928e00d5c37eeb8a88a2e08db5e"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-claude-261115142324-b8ea\\host\\.runtime\\module\\example_structured_output\\v1.json",
+          "sha256": "94333b25f91d266e79a094586a7013bb08ae94517399b0d1a95a6c84b7b80435"
+        }
+      ]
+    },
+    {
+      "run": "structured_output-codex-261115143412-cf17",
+      "pattern": "structured_output",
+      "transport": "codex_cli",
+      "runtime_version": "0.2.0.dev12",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "status": "completed",
+      "passed": true,
+      "check_count": 8,
+      "checks": [
+        {
+          "check": "execution_completed",
+          "passed": true,
+          "detail": "completed"
+        },
+        {
+          "check": "executed_the_registered_definition",
+          "passed": true,
+          "detail": "executed {'workflow_release_ref': 'runtime-workflow:example_structured_output@v1', 'workflow_release_sha256': 'b0b3b198b6591873778ffa3c9455427b1811521c0fd8c9a46e712fc347a4ef8c', 'module_release_ref': 'runtime-module:example_structured_output@v1', 'module_release_sha256': 'cff670f4e4bcd9fa747961d0df8369136dd4968c4a50f4bf9358c749098af712'}, registered readback {'workflow_release_ref': 'runtime-workflow:example_structured_output@v1', 'workflow_release_sha256': 'b0b3b198b6591873778ffa3c9455427b1811521c0fd8c9a46e712fc347a4ef8c', 'module_release_ref': 'runtime-module:example_structured_output@v1', '"
+        },
+        {
+          "check": "attempt_folder_retained",
+          "passed": true,
+          "detail": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-codex-261115143412-cf17\\attempts\\module_attempt_163cba4f4849a635684c04d9"
+        },
+        {
+          "check": "output_order_id",
+          "passed": true,
+          "detail": "ORD-CF173253"
+        },
+        {
+          "check": "output_lines",
+          "passed": true,
+          "detail": "got {'A-100': 9, 'B-220': 8, 'C-310': 4}, expected {'A-100': 9, 'B-220': 8, 'C-310': 4}"
+        },
+        {
+          "check": "output_total_quantity",
+          "passed": true,
+          "detail": "got 21, expected 21"
+        },
+        {
+          "check": "output_urgent",
+          "passed": true,
+          "detail": "got True, expected True"
+        },
+        {
+          "check": "no_task_tools",
+          "passed": true,
+          "detail": "tool calls recorded: []"
+        }
+      ],
+      "requirements": {
+        "attempt_workspace_policy": "none",
+        "context_isolation": "workflow_execution_isolated",
+        "execution_mode": "tool_free",
+        "gateway_access_reasons": [],
+        "max_attempts": 1,
+        "network_policy": "denied",
+        "output_constraint_mode": "native_structured_output",
+        "schema_version": "module_execution_requirements_v2",
+        "semantic_input_delivery_mode": "inline",
+        "tool_policy": []
+      },
+      "definition_identity": {
+        "workflow_release_ref": "runtime-workflow:example_structured_output@v1",
+        "workflow_release_sha256": "b0b3b198b6591873778ffa3c9455427b1811521c0fd8c9a46e712fc347a4ef8c",
+        "module_release_ref": "runtime-module:example_structured_output@v1",
+        "module_release_sha256": "cff670f4e4bcd9fa747961d0df8369136dd4968c4a50f4bf9358c749098af712"
+      },
+      "execution_profile_ref": "execution-profile:codex_cli@sha256_2e148e944127bcd703453bd5d3da3054005786ad3520fe32cf26191c62760bdf",
+      "execution_profile_sha256": "e191980da1ae920b7025d7b155384802b8ae18c48618199ca51fd88e07ee02b7",
+      "sources": [
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-codex-261115143412-cf17\\record.json",
+          "sha256": "e48d092bff0228878954e81c28680fad242d2a23e5d7aeace25d04815ab9e381"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-codex-261115143412-cf17\\check.json",
+          "sha256": "48d1d0b7dac5b1342fb8f6c4c49564256f8cb27bbca66e5618a34fc447173ddc"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-codex-261115143412-cf17\\run.json",
+          "sha256": "6b1ada28ae8a7e8e15a9ffa9ee437513a9c58d8de87c2b9e9e68310482102f95"
+        },
+        {
+          "path": "C:\\Users\\bokan.bao\\Documents\\AR12 Cases\\structured_output-codex-261115143412-cf17\\host\\.runtime\\module\\example_structured_output\\v1.json",
+          "sha256": "94333b25f91d266e79a094586a7013bb08ae94517399b0d1a95a6c84b7b80435"
+        }
+      ]
+    }
+  ]
+}

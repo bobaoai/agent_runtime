@@ -3,9 +3,9 @@
 The adapters implement the canonical ``AuthorizedAgentExecutionAdapter``
 protocol. Both send one complete, precommitted Prompt Envelope assembled from
 authorized inputs. The tool-free adapter (v5) consumes the final response
-directly. The workspace adapter (v4) runs agent Modules: with a recorded
-``shell`` the Codex shell tool works in the declared writable folder under a
-permission profile generated for that call; an MCP-only Module runs with the
+directly. The workspace adapter (v5) runs agent Modules: with a recorded
+``shell`` the Codex shell tool works in the declared task directory using the
+configured permission profile or explicitly selected host mode; an MCP-only Module runs with the
 shell tool off. Codex uses the host's own login and configuration (CODEX_HOME,
 config.toml, execpolicy rules); Runtime adds only explicit ``-c`` overrides for
 context, approval, the declared MCP connections and the declared directory
@@ -352,7 +352,7 @@ _WORKSPACE_POLICIES = ("none", "own_draft_read_write", "explicit_project_read_wr
 
 
 def _workspace_execution_expectation(profile: ExecutionProfileRelease) -> InvocationExecutionExpectation:
-    """Validate an agent combination for workspace v4 without opening resources.
+    """Validate an agent combination for workspace v5 without opening resources.
 
     Codex serves read, search and edit only through its shell tool on the
     bindings observed so far, so a policy with any of them also needs ``shell``.
@@ -363,22 +363,22 @@ def _workspace_execution_expectation(profile: ExecutionProfileRelease) -> Invoca
     from .invocation_tool_definition import MCP_TOOL_PREFIX
     profile.validate()
     if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind,
-            profile.provider_id) != ("codex_cli_agent_workspace_executor", "v4", "codex_cli", "openai"):
-        raise ValueError("Codex workspace v4 requires its exact binding; prepare an explicit compatible Profile")
+            profile.provider_id) != ("codex_cli_agent_workspace_executor", "v5", "codex_cli", "openai"):
+        raise ValueError("Codex workspace v5 requires its exact binding; prepare an explicit compatible Profile")
     if (profile.execution_mode, profile.semantic_input_delivery_mode, profile.gateway_access_reasons) != (
             "agent", "inline", ()) or profile.network_policy not in {"denied", "provider_managed"} \
             or profile.attempt_workspace_policy not in _WORKSPACE_POLICIES:
-        raise ValueError("Codex workspace v4 supports agent with inline input, a none, private-draft or "
+        raise ValueError("Codex workspace v5 supports agent with inline input, a none, private-draft or "
                          "explicit project workspace, and denied or provider_managed network")
     tools = set(profile.tool_policy)
     if not tools or any(name not in {"read", "search", "edit", "shell"} and not name.startswith(MCP_TOOL_PREFIX)
                         for name in tools):
-        raise CodexCapabilityUnsupportedError("Codex workspace v4 supports read, search, edit, shell and declared MCP connections")
+        raise CodexCapabilityUnsupportedError("Codex workspace v5 supports read, search, edit, shell and declared MCP connections")
     if tools & {"read", "search", "edit"} and "shell" not in tools:
         raise CodexCapabilityUnsupportedError("Codex provides read, search and edit only through its shell tool; allow shell as well")
     if "shell" in tools and profile.attempt_workspace_policy == "none":
         raise CodexCapabilityUnsupportedError("Codex shell needs a writable folder; select a private draft or explicit project workspace")
-    return InvocationExecutionExpectation("codex_cli_agent_workspace_executor", "v4", "codex_cli",
+    return InvocationExecutionExpectation("codex_cli_agent_workspace_executor", "v5", "codex_cli",
                                          "agent", "inline", profile.attempt_workspace_policy,
                                          profile.network_policy, profile.tool_policy)
 
@@ -390,6 +390,25 @@ class CodexCapabilityUnsupportedError(ValueError):
     """The requested execution cannot be expressed by a Codex implementation."""
 
     error_code = "ADAPTER_CAPABILITY_UNSUPPORTED"
+
+
+def validate_codex_execution_mode(mode: str, *, profile=None) -> None:
+    """Validate the closed, trusted host choice without opening resources.
+
+    configured preserves the generated CLI permission configuration. host uses
+    the host's permissions for the exact code_change capability combination;
+    the project directory is task scope, not an OS-enforced filesystem boundary.
+    """
+    if type(mode) is not str or mode not in {"configured", "host"}:
+        raise ValueError("codex_execution_mode must be configured or host")
+    if mode == "host" and profile is not None:
+        if (profile.transport_kind != "codex_cli" or profile.execution_mode != "agent"
+                or profile.attempt_workspace_policy != "explicit_project_read_write"
+                or profile.network_policy != "provider_managed"
+                or set(profile.tool_policy) != {"read", "search", "edit", "shell"}):
+            raise CodexCapabilityUnsupportedError(
+                "host execution requires Codex agent, explicit_project_read_write, "
+                "provider_managed network and exactly read/search/edit/shell")
 
 
 def codex_home_locations(environment: dict | None = None) -> tuple[Path, ...]:
@@ -643,8 +662,9 @@ def render_codex_mcp_servers(connections: dict, local_commands: LocalCommandSess
 
 def build_workspace_command(*, profile: ExecutionProfileRelease, main_folder: Path, codex_bin: str,
                             permission_profile: dict | None, local_commands: LocalCommandSession | None = None,
-                            schema_path: Path | None = None, mcp_connections: dict | None = None) -> list[str]:
-    """Render the workspace v4 command for one prepared Attempt, without I/O.
+                            schema_path: Path | None = None, mcp_connections: dict | None = None,
+                            codex_execution_mode: str = "configured") -> list[str]:
+    """Render the workspace v5 command for one prepared Attempt, without I/O.
 
     With a recorded ``shell`` the shell tool is on as a non-login shell and the
     generated permission profile replaces -s, which Codex does not accept
@@ -654,13 +674,15 @@ def build_workspace_command(*, profile: ExecutionProfileRelease, main_folder: Pa
     connections, and the command proxy when explicitly selected, are passed.
 
     Args:
-        profile: Exact workspace v4 Profile; supplies model, effort and tools.
+        profile: Exact workspace v5 Profile; supplies model, effort and tools.
         main_folder: The Attempt's cwd (draft scratch, project directory or work).
         codex_bin: Host-selected CLI executable locator.
         permission_profile: Result of codex_permission_profile, or None for none.
         local_commands: This Attempt's LocalCommandSession, or None.
         schema_path: Optional prepared native schema file.
         mcp_connections: Validated declared connections by name, or None.
+        codex_execution_mode: configured retains the generated permission
+            profile; host selects native host execution for code_change.
     Returns:
         A fresh argv list for one codex exec invocation.
     Raises:
@@ -668,6 +690,13 @@ def build_workspace_command(*, profile: ExecutionProfileRelease, main_folder: Pa
         TypeError: local_commands is not the exact Runtime session.
     """
     _workspace_execution_expectation(profile)
+    validate_codex_execution_mode(codex_execution_mode, profile=profile)
+    if codex_execution_mode == "host":
+        if permission_profile is not None or local_commands is not None or mcp_connections:
+            raise CodexCapabilityUnsupportedError("host execution takes no permission profile, command extension or MCP")
+        return _command(profile=profile, workspace=main_folder, codex_bin=codex_bin, schema_path=schema_path,
+                        mcp_servers=("mcp_servers={}",), shell_tool=True,
+                        permission_options=("allow_login_shell=false",), sandbox=("-s", "danger-full-access"))
     if local_commands is not None and type(local_commands) is not LocalCommandSession:
         raise TypeError("local_commands must be the exact Runtime LocalCommandSession")
     shell_tool = "shell" in profile.tool_policy
@@ -827,6 +856,7 @@ class _CodexCliExecutorBase:
         mcp_servers: dict | None = None,
         project_directory: Path | None = None,
         command_permits: tuple[str, ...] = (),
+        codex_execution_mode: str = "configured",
     ) -> None:
         """Configure the admitted Codex implementation without preparing resources.
 
@@ -846,7 +876,7 @@ class _CodexCliExecutorBase:
                 rejected before resource preparation; no unguarded fallback is tried.
             codex_bin: Optional explicit installed CLI. None uses CODEX_CLI_BIN, then
                 the host's native ``codex`` on PATH, at invocation.
-            read_only_dependencies: Workspace v4 only. Explicit trusted existing
+            read_only_dependencies: Workspace v5 only. Explicit trusted existing
                 directories a Shell-capable Agent may use; never task-supplied.
                 Tool-free v5 accepts none.
             mcp_servers: Host connections for codex_cli by name, each
@@ -858,6 +888,10 @@ class _CodexCliExecutorBase:
                 ``explicit_project_read_write`` Profile. Runtime never deletes it.
             command_permits: Per-call Shell command permits. Codex has no per-call
                 command allow rule, so a non-empty value is refused at execution.
+            codex_execution_mode: Trusted per-call choice, configured (default)
+                or host. host requires the exact code_change capability set and
+                no additional dependencies, materials or command extension.
+                The project directory states task scope, not an OS boundary.
         Raises:
             ValueError: Invalid artifact host, MCP connection or directory locator.
             OSError: A locator cannot be resolved by the host filesystem.
@@ -890,6 +924,10 @@ class _CodexCliExecutorBase:
         if type(command_permits) is not tuple:
             raise ValueError("command_permits must be a tuple")
         self._command_permits = command_permits
+        validate_codex_execution_mode(codex_execution_mode)
+        if codex_execution_mode == "host" and (not self.workspace_execution or self._dependencies):
+            raise CodexCapabilityUnsupportedError("host execution requires the workspace adapter and no extra dependencies")
+        self._codex_execution_mode = codex_execution_mode
         self._descriptor = provider_adapter_descriptor(
             adapter_id=self.executor_adapter_id,
             adapter_revision=self.executor_adapter_revision,
@@ -942,7 +980,7 @@ class _CodexCliExecutorBase:
         Effects:
             Prepares one retained Attempt folder, launches the selected CLI with the
             host's login and configuration plus Runtime's explicit overrides, and
-            stages output and trace through the supplied ports. Workspace v4 also
+            stages output and trace through the supplied ports. Workspace v5 also
             stages materials and records the main folder, permission profile and
             effective configuration. No login, registration, model fallback or
             global environment modification is performed.
@@ -953,6 +991,7 @@ class _CodexCliExecutorBase:
         profile = self._release_registry.get_execution_profile(request.execution_profile_ref,
                                                               request.execution_profile_sha256)
         expectation = self.execution_expectation(profile)
+        validate_codex_execution_mode(self._codex_execution_mode, profile=profile)
         if self.workspace_execution:
             check_codex_external_grants((*_runtime_python_read_roots(), *self._dependencies),
                                         workspace_root=self._workspace_root)
@@ -1028,6 +1067,7 @@ class _CodexCliExecutorBase:
             "execution_profile_ref": profile.release_ref,
             "execution_profile_sha256": profile.release_sha256,
             "timeout_seconds": profile.timeout_seconds,
+            "codex_execution_mode": self._codex_execution_mode,
         }
         parsed = _parse_codex_stream(b"")
         # Set when a CLI process this call started was not confirmed stopped; the
@@ -1164,6 +1204,9 @@ class _CodexCliExecutorBase:
                 except AttemptWorkspaceConflictError as exc:
                     policy_refusal = str(exc)
                     raise
+                if self._codex_execution_mode == "host" and resources_body is not None:
+                    fail("dependency_unavailable", "ADAPTER_CAPABILITY_UNSUPPORTED",
+                         "host execution takes no material package, extra dependencies or command extension")
             else:
                 argv = build_command(profile=profile, workspace=workspace, codex_bin=executable,
                                      schema_path=schema_path)
@@ -1174,7 +1217,7 @@ class _CodexCliExecutorBase:
             permission = None
             if self.workspace_execution:
                 stage = "isolation_preparation"
-                if write_folders:
+                if write_folders and self._codex_execution_mode == "configured":
                     permission = codex_permission_profile(write_folders=write_folders,
                                                           network_policy=profile.network_policy,
                                                           read_folders=(materials,))
@@ -1196,7 +1239,7 @@ class _CodexCliExecutorBase:
                         read_only_dependencies=self._dependencies))
                 argv = build_workspace_command(profile=profile, main_folder=cwd, codex_bin=executable,
                     permission_profile=permission, local_commands=local_commands, schema_path=schema_path,
-                    mcp_connections=connections)
+                    mcp_connections=connections, codex_execution_mode=self._codex_execution_mode)
                 if shell_tool:
                     python = _runtime_python_executable()
                     bins = [str(dep / "bin") for dep in self._dependencies if (dep / "bin").is_dir()]
@@ -1213,6 +1256,7 @@ class _CodexCliExecutorBase:
                          prompt_envelope_sha256=request.prompt_envelope_sha256,
                          environment_keys=sorted(environment))
             trace["effective_configuration"] = {
+                "codex_execution_mode": self._codex_execution_mode,
                 "tools": (["shell"] if shell_tool else []) + ["mcp__" + name for name in declared],
                 "allowed_rules": [],
                 "permission_mode": 'approval_policy="never"',
@@ -1226,7 +1270,10 @@ class _CodexCliExecutorBase:
                                        *("feature:" + name for name in _FEATURES_OFF)],
                 "cli_program": str(Path(executable).absolute()),
                 "cli_version": None,
-                "command_scope": "provider_policy" if shell_tool else "none",
+                "command_scope": ("host" if self._codex_execution_mode == "host" else
+                                  "provider_policy" if shell_tool else "none"),
+                "filesystem_scope": ("task_directed" if self._codex_execution_mode == "host"
+                                     else "provider_configuration"),
                 "file_io": ("via_shell" if shell_tool else
                             "unavailable_without_shell" if self.workspace_execution else "none"),
             }
@@ -1292,6 +1339,10 @@ class _CodexCliExecutorBase:
                     raise command_cleanup_error
                 local_commands.validate_completion()
                 stage = "provider_invocation"
+        except TerminalAdapterFailure:
+            # The terminal trace is already committed. Preserve its failure
+            # classification and single content-store submission.
+            raise
         except (Exception, KeyboardInterrupt) as exc:
             trace.update(stage=stage, error=str(exc))
             if stage == "isolation_preparation" and isinstance(exc, PermissionError):
@@ -1417,16 +1468,16 @@ class CodexCliAgentWorkspaceModuleExecutor(_CodexCliExecutorBase):
     A recorded ``shell`` turns on the Codex shell tool, which on the observed
     bindings is also how Codex reads, searches and edits files; it works in the
     declared writable folder (the Attempt's private scratch or the caller's
-    project directory) under a generated permission profile. Without ``shell``
+    project directory) under the selected configured or native host mode. Without ``shell``
     (for example a Module of only declared MCP connections) the shell tool is off
     and the effective configuration records that file I/O is unavailable.
     Declared MCP connections are the only MCP servers passed; the command proxy
-    is added only when local commands are explicitly selected. Historical v2/v3
+    is added only when local commands are explicitly selected. Historical v2/v3/v4
     Profiles stay readable and are refused by binding.
     """
 
     executor_adapter_id = "codex_cli_agent_workspace_executor"
-    executor_adapter_revision = "v4"
+    executor_adapter_revision = "v5"
     expected_execution_mode = "agent"
     supported_network_policies = ("denied", "provider_managed")
     shell_tool_enabled = None
@@ -1434,7 +1485,7 @@ class CodexCliAgentWorkspaceModuleExecutor(_CodexCliExecutorBase):
 
     @staticmethod
     def execution_expectation(profile: ExecutionProfileRelease) -> InvocationExecutionExpectation:
-        """Check a Profile against workspace v4 without opening resources."""
+        """Check a Profile against workspace v5 without opening resources."""
         return _workspace_execution_expectation(profile)
 
 

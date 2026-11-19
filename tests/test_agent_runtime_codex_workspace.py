@@ -1,4 +1,4 @@
-"""Codex workspace v4: agent Modules (Shell-capable or MCP-only) executed by Codex.
+"""Codex workspace v5: agent Modules (Shell-capable or MCP-only) executed by Codex.
 
 Deterministic tests check binding, capability checks, the generated
 permission profile, command rendering, layout text and log correlation.
@@ -63,7 +63,7 @@ def _option(argv, prefix):
 @pytest.mark.deterministic
 def test_codex_binding_follows_the_module_execution_mode():
     agent = _codex_profile()
-    assert (agent.executor_adapter_id, agent.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v4")
+    assert (agent.executor_adapter_id, agent.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v5")
     assert agent.tool_policy == ("read", "search", "shell")
     tool_free = _codex_profile(execution_mode="tool_free", tool_policy=(), attempt_workspace_policy="none",
                                run_timeout_seconds=30, max_attempts=1)
@@ -95,7 +95,7 @@ def test_codex_refuses_shell_without_folder_open_network_or_gateway(changes):
 def test_mcp_only_codex_reaches_the_public_preparation_with_shell_off():
     profile = _codex_profile(tool_policy=("mcp__fixture",), attempt_workspace_policy="none",
                              network_policy="provider_managed")
-    assert (profile.executor_adapter_id, profile.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v4")
+    assert (profile.executor_adapter_id, profile.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v5")
     expectation = codex.CodexCliAgentWorkspaceModuleExecutor.execution_expectation(profile)
     assert expectation.network_policy == "provider_managed" and expectation.attempt_workspace_policy == "none"
     connections = codex.validate_codex_mcp_connections({"fixture": {

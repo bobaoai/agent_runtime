@@ -14,6 +14,45 @@ drift。
 当前单节点执行入口的参数、授权依赖、重放限制和失败处理也在该接口参考中。
 测试用途不要求复制 Reviewer。Module 内容不变时切换模型只形成新的执行选择；相容性由 Runtime 根据通用运行要求、实际 Adapter 和本次资源判断，source 不再声明 transport。
 
+<a id="code-owned-machine-fields"></a>
+
+## 机器字段的来源与交接
+
+identifier、release ref、hash、内部地址、执行 key 与 lineage 由 Runtime 或其所属宿主／服务的代码负责。
+操作 Agent 选择任务/source/已配置资源并提供业务内容，不手填或猜测这些机器字段。下文 API 所需的
+exact ID/ref/hash 应从已批准 source、配置或前一步返回对象读取，并由调用代码直接传递；报告中可以展示
+返回值，后续绑定不依赖模型从报告中重写这些值。
+
+文中的示例名称和路径表达输入位置，不是让 Agent 自行发明身份或连接。已有 source 的业务命名与版本由
+owner 决定，代码读取并校验；材料 hash 由代码读取实际文件计算；保存位置和运行引用消费真实返回记录。
+来源缺失、选择有歧义或同 ref 内容冲突时报告具体缺件，不让 Agent 编一个值、改版本或手写 `.runtime`
+记录使操作通过。
+
+普通路径按下面的顺序把机器字段从一步交给下一步，操作者只给出选择：
+
+1. **注册。** `register-reviewer --source DIR` 或 `register-module --source DIR --preset P` 读取所选 source
+   文件夹（或其 `module_registration.json`）声明的 Skill 与 Module 身份，编译、注册并准确回读；`--version`
+   是 owner 批准的版本。`--selection-out FILE` 写出定义选择文件，stdout 的 `selection` 是同一内容。
+   已编译 bundle 用 `register --bundle`，发布包标签可省略（由代码从 bundle 唯一的 Workflow 或 Module 读取）。
+2. **选择已有定义。** 不重新注册时，`agent-runtime-registry select --workflow ID --version V
+   [--release-store NAME] --selection-out FILE` 从 root 或已配置的 PG store 读取该准确版本。准备输入需要所选
+   定义的 schema 时，`agent-runtime-registry load --root R --selection FILE` 返回该 Workflow、其 Module 以及
+   `input_schema`、`output_schema`。
+3. **运行。** `agent-runtime-test-run --selection FILE` 每次重新读取所选 ref/hash；之后在同一 root 注册的
+   新版本不会替换它。材料用 `--material-root DIR` 加 `--material FILE`（或明确的 `--all-materials`），
+   relative_path、sha256 与执行位由代码按实际 bytes 计算，原有捕获检查继续拒绝之后的变化。
+   `--record-out FILE` 把返回记录存为新文件。
+4. **查看结果。** `agent-runtime-inspect --test-run-record FILE --view summary` 读取该记录；`output`、`log`、
+   `files` 视图分别给出输出、执行日志与 Attempt 文件。查看不注册、不重跑、不连 PG。
+
+Python 中直接传递返回对象：`register_module`／`register_reviewer` 的结果交给 `selection_from_registration`，
+再把 selection 交给 `run_local_workflow_test(selection=...)`；`prepare_material_files` 的结果作为
+`material_files`；返回记录交给 `inspect_test_run_record`。低层 exact 参数（`--workflow`、`--version`、
+`--workflow-ref`、`--workflow-sha256`、手写 `material_files`）保留给已持有这些代码值的程序。
+设计依据是同版本包内的 `agent_runtime/design_contract/the_agent_runtime.md` §6.3 和
+`agent_runtime/design_contract/agent_runtime_00_execution_charter.md` §5.3；用下方
+`importlib.resources.files("agent_runtime")` 定位当前安装包中的合同，不从另一份 checkout 猜路径。
+
 <a id="local-runtime-setup"></a>
 
 ## 使用工具前的轻量 setup
@@ -56,17 +95,29 @@ CLI 查询仍只读注册定义，但首次调用可能补齐环境；普通 eva
 
 ### 0.1 通过 CLI 注册固定定义
 
-已有完整且已审的 Reviewer source 时，优先使用正式 CLI：
+已有完整且已审的 Reviewer source 时，优先使用正式 CLI，选择 source 文件夹即可：
 
 ```sh
 agent-runtime-registry register-reviewer --help
-agent-runtime-registry register-reviewer --root /path/to/host --source-root /path/to/source \
-  --skill-id reviewed-skill --module-id reviewed_reviewer --version v1
-agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_reviewer
-agent-runtime-registry load --root /path/to/host --kind workflow --id reviewed_reviewer --version v1
+agent-runtime-registry register-reviewer --root /path/to/host \
+  --source /path/to/source/.claude/skills/reviewed-skill/runtime_modules/reviewed_reviewer \
+  --version v1 --selection-out /path/to/reviewed_reviewer.selection.json
 ```
 
-示例中的身份与版本应替换为准确已审 source 的值。source-root 省略时使用 root。
+`--source` 指向 source owner 交付的 Module 文件夹或其中的 `module_registration.json`；Skill 与 Module 身份由
+命令从该声明读取并核对文件夹位置，不需要另外输入。版本是 owner 批准的定义版本。`--selection-out` 写出
+定义选择文件（已存在的文件不会被覆盖），交给下方 Test Run 的 `--selection`。已在程序里持有准确身份的调用者
+仍可用低层的 `--source-root`、`--skill-id`、`--module-id`（source-root 省略时使用 root）。
+普通（非 Reviewer）Module 用同样的方式注册，并给出 owner 选定的运行要求预设：
+
+```sh
+agent-runtime-registry register-module --root /path/to/host \
+  --source /path/to/source/.claude/skills/my-skill/runtime_modules/my_task \
+  --preset code_change --version v1 --selection-out /path/to/my_task.selection.json
+```
+
+`mcp_data` 预设用可重复的 `--mcp-connection NAME` 声明宿主连接。同版本重复注册核对 source 与运行要求；
+内容或要求变化时需要新版本。
 单节点 Workflow 默认与 Module 同名、同版本，通过 `--kind module` 和 `--kind workflow` 区分。
 需要其他图名称时，在注册命令中传入 `--workflow-id explicit_name`；显式组装的图保留自己的名称。
 这项共同能力由 [Module.to_workflow](agent_runtime_reviewer_api.md#moduleto_workflow) 提供，
@@ -108,11 +159,13 @@ registration = register_runtime_module_plugin(store, plugin, root=project_root)
 也可直接从已编译的完整 bundle JSON 通过安装的 CLI 注册、加载：
 
 ```sh
-agent-runtime-registry register --root /path/to/host --bundle bundle.json --plugin-id review_package --plugin-version v1
-agent-runtime-registry load --root /path/to/host --kind workflow --id review_workflow
+agent-runtime-registry register --root /path/to/host --bundle bundle.json --selection-out bundle.selection.json
 agent-runtime-registry load --root /path/to/host --kind workflow --id review_workflow --version v1
 ```
 
+发布包标签（`--plugin-id`、`--plugin-version`）只被校验、不被保存；省略时由代码从 bundle 唯一的 Workflow
+（没有 Workflow 时为唯一的 Module）读取，bundle 含多个对象时须由发布负责人给出。bundle 恰有一个单节点
+Workflow 时输出 `selection`；有多个 Workflow 时输出说明原因，此时用 `select` 明确选择其中一个。
 CLI register 使用既有内存 Registry 校验并保存结果，不自行连接 PG；宿主要同时登记 PG 时使用上面的
 既有 store 调用。未指定版本时选最近成功保存的新定义版本；重复保存不改变顺序，不使用文件 mtime。
 这里没有 active/latest 指针文件或激活步骤。PG 既有入口不因此改义。
@@ -141,14 +194,15 @@ print(files("agent_runtime").joinpath("docs/agent_runtime_registration_runbook.m
 保存准确安装来源；相同版本字符串不证明相同源码。缺失文档或安装与目标版本不一致时，先由
 Runtime 安装维护者处理。PostgreSQL 操作需要安装包的 `postgres` 可选依赖；连接由宿主注入。
 
-以下是示例所需的输入来源表，不是新的配置文件格式。值必须由负责人提供，不能采用 fixture 中的
-ID、hash、数据库或授权替身。表中的名称是后续 Python 示例使用的变量。
+以下是示例所需的输入来源表，不是新的配置文件格式。负责人明确 source 与资源选择，调用代码读取
+这些来源并形成准确变量值，不能让操作 Agent 手填或采用 fixture 中的 ID、hash、数据库或授权替身。
+表中的名称是后续 Python 示例使用的变量。
 
 | 输入 | 提供方与内容 |
 | --- | --- |
 | `project_root`、`skill_id`、`module_id`、`module_version` | Source owner 提供准确、已审的 Skill/Module source 与批准版本；根目录为 Path，两个 ID 对应真实注册文件 |
 | `database_url`、`registry_schema` | 宿主提供本次获准使用的 Registry 连接与 schema；凭据不写入任务材料、日志或本手册 |
-| `plugin_id`、`plugin_version` | 注册操作者提供本次明确的发布包身份；与 Reviewer 的 Module 版本分开 |
+| `plugin_id`、`plugin_version` | 发布负责人确定发布包命名与版本，调用代码从该发布配置读取；与 Reviewer 的 Module 版本分开，不由操作 Agent 临时编造 |
 | 需要外部授权的宿主执行入口 | 宿主提供实际授权/存储资源；Runtime prepare 返回准确 Workflow、Variant 和 Profile，宿主不另选一份模型配置 |
 | 本次审核输入、输出 validator | Source owner 按该 Reviewer 的真实输入 schema 提供；输出由该对象的 schema 与语义 validator 判断 |
 
@@ -198,7 +252,8 @@ print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
 ```
 <!-- example:register-reviewer:end -->
 
-保存这组 ref/hash 以及本次 Runtime 安装来源、目标 Registry 和 source 审核依据。相同 bundle
+由调用代码保存这组返回的 ref/hash，以及本次 Runtime 安装来源、目标 Registry 和 source 审核依据；
+后续调用读取这些记录，不经模型文本重新抄写。相同 bundle
 重复提交使用原生幂等注册；同一 ref 的内容冲突应返回发布负责人，不覆盖已有记录或临时改个版本绕过。
 数据库结构未就绪时停止，本段不会自动建表或迁移。
 
@@ -209,17 +264,23 @@ print({"module_release_ref": module_ref, "module_release_sha256": module_hash})
 
 ### 0.3 首次测试与再次调用 / Test a reviewer
 
-普通自测可以直接使用安装包中的正式命令，不需要 PG 或生产授权：
+普通自测可以直接使用安装包中的正式命令，不需要 PG 或生产授权。用注册时写出的选择文件运行：
 
 ```sh
-agent-runtime-test-run --root /path/to/host --workflow example_reviewer \
-  --input /path/to/prepared_input.json --transport claude_cli
+agent-runtime-test-run --root /path/to/host --selection /path/to/reviewed_reviewer.selection.json \
+  --input /path/to/prepared_input.json --transport claude_cli --record-out /path/to/record.json
+agent-runtime-inspect --test-run-record /path/to/record.json --view output
 ```
 
-输入由该 Reviewer 所属工具按注册 schema 准备。root 只定位已保存定义，不向模型开放整个项目。
-省略 --version 使用最近注册的新定义。要验证刚注册并回读的那个定义时，加回读得到的 `--version` 和
-`--expected-module-id`，并核对结果中的 `workflow_release_ref`、`workflow_release_sha256`、`module_release_ref`、
-`module_release_sha256` 与回读一致；同一 root 之后若注册了更高版本，省略版本会执行那个版本。--transport/--model/--effort/--run-timeout-seconds 是本次选择；省略的项依次取
+输入由该 Reviewer 所属工具按注册 schema 准备；需要查看所选定义的 schema 时，用
+`agent-runtime-registry load --root /path/to/host --selection /path/to/reviewed_reviewer.selection.json`，
+结果中的 `input_schema` 与 `output_schema` 属于选择文件所指的准确版本。root 只定位已保存定义，不向模型开放整个项目。
+`--selection` 执行的正是注册回读的那个定义：每次运行重新读取选择文件中的准确 ref/hash，同一 root 之后注册的
+更高版本不会替换它；结果的 `definition_selection` 写明所用选择，`executed_matches_selection` 由代码比较执行身份
+得出，不需要人工核对四个 ref/hash。选择文件属于创建它的 root，在另一个 root 上使用会被拒绝。
+不重新注册而要运行已有版本时，先用 `agent-runtime-registry select --root /path/to/host --workflow ID --version V
+--selection-out FILE` 写出选择文件。低层 `--workflow`（可加 `--version`、`--expected-module-id`）仍可用；省略
+`--version` 使用最近注册的新定义。--transport/--model/--effort/--run-timeout-seconds 是本次选择；省略的项依次取
 `root/.runtime/execution_parameters/workflows/<workflow_id>.json`、
 `root/.runtime/execution_parameters/workspace.json`，最后是 Runtime 默认。v1 参数文件保留原三个模型字段；v2 另接受整数 run_timeout_seconds，
 不选择定义版本；也不读取旧文件保存的模型绑定。结果的 `execution_parameter_sources` 写明每项的
@@ -237,10 +298,28 @@ agent-runtime-test-run --root /path/to/host --workflow example_reviewer \
 命令用临时资源执行已有单节点 Workflow，stdout 返回结果及内存执行事实，标注
 persistence=not_requested；不会写 PG、注册定义或持久请求回执。CLI 前置 setup 可能补齐环境文件。
 测试资源退出时清理，不能用本次
-execution ID 查询持久历史，也不提供跨进程重放。操作者可以明确保存 stdout 作为测试证据，
-但该文件不是持久 Runtime Ledger。此命令不写 PG；保存类参数会被拒绝，不自动忽略。
+execution ID 查询持久历史，也不提供跨进程重放。`--record-out FILE` 把同一 JSON（或没有返回记录时的
+错误文档）存为新文件；该文件已存在或所在文件夹不存在时，命令在 setup 和模型调用前以用法错误退出。
+保存的记录是测试证据，不是持久 Runtime Ledger，用 `agent-runtime-inspect --test-run-record` 读取。
 
-定义保存在 PG 时，改用准确的 ref/hash 只读取定义，root 仍用于 setup、资源配置和参数文件：
+定义保存在 PG 时，宿主先在 `root/.runtime/config.json` 中按名称配置该 store（只写 DSN 所在的环境变量名和
+schema，DSN 不写进配置）：
+
+```json
+{"release_stores": {"team_releases": {"database_url_env": "RUNTIME_RELEASE_DATABASE_URL", "schema": "agent_runtime"}}}
+```
+
+然后选择准确版本并运行；选择文件只记录 store 名称，每次运行按当前配置打开该 store 并读取准确 ref/hash：
+
+```sh
+agent-runtime-registry select --root /path/to/host --workflow example_reviewer --version v1 \
+  --release-store team_releases --selection-out /path/to/pg.selection.json
+agent-runtime-test-run --root /path/to/host --selection /path/to/pg.selection.json \
+  --input /path/to/prepared_input.json
+```
+
+未配置的名称或缺少的环境变量直接报告，不猜默认 store。已在程序里持有准确 ref/hash 的调用者仍可用低层参数，
+root 仍用于 setup、资源配置和参数文件：
 
 ```sh
 agent-runtime-test-run --root /path/to/host --workflow-ref runtime-workflow:example_reviewer@v1 \
@@ -263,7 +342,7 @@ agent-runtime-test-run --root /path/to/workspace --workflow summarize_note \
 
 Codex要求显式模型与effort。tool_free Module使用codex_cli_agent_executor@v5；agent Module（工具含shell
 并有私有草稿或显式project_directory，或只声明MCP连接而shell关闭；network denied或provider_managed；inline）
-使用codex_cli_agent_workspace_executor@v4，可写范围见
+使用codex_cli_agent_workspace_executor@v5，可写范围见
 [Codex workspace 执行](agent_runtime_claude_native_tools.md#4-codex-workspace-执行reviewer-默认环境)。
 只有read、search或edit而无shell的组合在准备时报告不支持；要求工具的Module不会被自动降为无工具。省略的transport依次取参数文件与原Claude默认；模型名不决定transport。
 Windows上`--cli-path`须指向原生codex.exe（npm安装的`codex.cmd`启动器不被启动）。
@@ -272,23 +351,31 @@ Windows上`--cli-path`须指向原生codex.exe（npm安装的`codex.cmd`启动�
 Web搜索与plugins等功能按次关闭；宿主配置中的MCP服务器只有被Module声明的才保持启用，其余按次关闭
 （见上链接）。实际启动受本次活资源约束，凭据内容不进入模型材料。
 
-新的Codex配置使用codex_cli_agent_executor@v5与workspace v4。旧Profile和已保存结果保持原样；相同准确
+新的Codex配置使用codex_cli_agent_executor@v5与workspace v5。旧Profile和已保存结果保持原样；相同准确
 请求的committed结果可在没有旧Adapter时重放。再次执行需通过prepare或现有compiler创建当前
 Profile/Variant，不能把旧记录静默改成新绑定。Module/Workflow定义不因新执行配置而修改。
 
-普通工程材料仍通过同一命令提供：
+普通工程材料通过同一命令选择，hash 由代码计算：
 
 ```sh
-agent-runtime-test-run --root /path/to/workspace --workflow registered_workflow \
-  --input /path/to/task.json --resources /path/to/resources.json
+agent-runtime-test-run --root /path/to/workspace --selection /path/to/task.selection.json \
+  --input /path/to/task.json --material-root "/path/to/task materials" \
+  --material "notes/review notes.md" --material data.csv
 ```
 
+`--material` 可重复，路径相对 `--material-root`（或位于其中的绝对路径）；要交出整个文件夹时明确写
+`--all-materials`，文件夹中有链接或 reparse point 时拒绝而不是跳过。代码用
+[prepare_material_files](agent_runtime_reviewer_api.md#prepare_material_files) 读取实际 bytes 得到相对路径、
+sha256 与执行位（Windows 没有执行位，记为 false），再交给原有的捕获检查；准备之后文件变化或缺失时运行被拒绝，
+hash 不会被刷新。需要先冻结清单、稍后再运行时，用 `write_local_resources` 写出资源文件并以 `--resources` 使用。
 资源 JSON 提供明确的材料根、带 hash/执行位的文件清单、只读依赖及按 ID 选择的命令；准确字段、
 相对路径规则与错误见 [run_local_workflow_test](agent_runtime_reviewer_api.md#run_local_workflow_test)
-和同版本 `--help`。调用者提供源工具生成的冻结清单，不把整个宿主 root 隐含交给模型。
+和同版本 `--help`。不把整个宿主 root 隐含交给模型。
 材料复制保持相对目录结构，实际完整 prompt 在保存 envelope 前形成。
 
-冻结材料与只读依赖在所有宿主使用 Claude v4 或 Codex workspace v4；commands 仅在 macOS 可用。明确 commands 或任务 callback 时需安装当前包的
+冻结材料与只读依赖在所有宿主使用 Claude v4 或 Codex workspace v5；commands 仅在 macOS 可用。
+Reviewer 作为任务角色在 Windows 上照常注册和运行；只有调用方明确提供非空 commands 并要求其记录型执行证据时，
+才受这一 macOS 限制，Windows 上在调用前报告不支持，不能靠删除 commands 或所需证据绕过。明确 commands 或任务 callback 时需安装当前包的
 `cli_tools` 可选依赖；没有这两类工具时不加载它。Runtime 的本地 MCP 命令工具取得真实进程退出码与原始输出，普通
 原生工具仍按各自许可使用，未被限制成该命令清单。是否已完成全部必做命令由任务 owner 校验。
 
@@ -445,7 +532,23 @@ print({"status": result["status"], "failure_class": result["failure_class"]})
 
 ### 0.4 查询执行结果与失败 / Inspect a review
 
-优先用宿主现成的 inspect 命令。直接使用公共查询 API 时，`execution_id` 来自刚才的真实返回；
+普通 Test Run 的结果用保存的记录文件查看，不需要抄写 execution ID、content ref 或 Attempt 路径：
+
+```sh
+agent-runtime-inspect --test-run-record /path/to/record.json --view summary
+agent-runtime-inspect --test-run-record /path/to/record.json --view output
+agent-runtime-inspect --test-run-record /path/to/record.json --view log
+agent-runtime-inspect --test-run-record /path/to/record.json --view files
+```
+
+结果给出 `outcome`（`completed`、`failed`、`cancelled`，或没有返回记录时的 `no_record` 与原错误）、执行身份、
+所用 selection、各 Attempt 文件夹及其留档是否仍在磁盘上；`output` 加输出与 failure_detail，`log` 加
+执行日志，`files` 列出 Attempt 文件夹内的文件。本地记录的 `durable_history` 为 `not_available`：它是测试
+证据，不能用于持久恢复。记录缺失或不是可读 JSON 时退出 1。Python 用 `inspect_test_run_record`。
+
+持久执行（宿主经 `run_registered_workflow_module` 写入 PG Ledger）返回的 `ModuleRunResult` 可直接交给
+`PostgresWorkflowInspectionRepository(query).read_module_run_result(result)`，读取已提交的 trace、执行日志与输出；
+该存储没有这次执行时报告 FileNotFoundError，不重跑。直接使用更低层的查询 API 时，`execution_id` 来自刚才的真实返回；
 `database_url` 与 `execution_schema` 来自该次执行使用的 Ledger 配置。连接和查询权限由宿主提供。
 这里的 schema 是 Execution Ledger，不是上段的 Registry schema。
 
@@ -566,34 +669,28 @@ wheel 文件名中的版本换为本次批准的构建；使用既有固定 tag/
 
 ```sh
 review_root="/absolute/path/to/consumer"
-review_source="/absolute/path/to/approved-source"
-review_skill="approved-skill"
-review_module="approved_reviewer"
+review_source="/absolute/path/to/approved-source/.claude/skills/approved-skill/runtime_modules/approved_reviewer"
 review_version="runtime_budget_adoption"
 review_input="/absolute/path/to/prepared_input.json"
 
-agent-runtime-registry register-reviewer --root "$review_root" --source-root "$review_source" \
-  --skill-id "$review_skill" --module-id "$review_module" --version "$review_version"
-agent-runtime-registry load --root "$review_root" --kind module \
-  --id "$review_module" --version "$review_version"
-agent-runtime-registry load --root "$review_root" --kind workflow \
-  --id "$review_module" --version "$review_version"
+agent-runtime-registry register-reviewer --root "$review_root" --source "$review_source" \
+  --version "$review_version" --selection-out "$review_root/$review_version.selection.json"
 ```
 
-注册结果应为 `readback=verified`；两次 load 的身份、版本、hash 应与本次注册返回值一致，Workflow
-应引用这份准确 Module。Runtime 在编译时产生新编码。重复旧定义版本会回读旧内容，不会应用新默认；
+`review_source` 是已审 Reviewer 的 Module 文件夹（`.claude/skills/<skill>/runtime_modules/<module>`）。
+注册结果应为 `readback=verified`，输出的 `selection` 与写出的选择文件是本次回读的准确 Workflow 与 Module。Runtime 在编译时产生新编码。重复旧定义版本会回读旧内容，不会应用新默认；
 若新 ref 已存在且内容冲突，回到发布负责人核对版本与 source，不覆盖旧记录或临时换名绕过冲突。
 已有显式 Workflow 名称或图装配要求的宿主继续使用其批准的图，并回读它实际引用的新 Module。
 
 **用准确版本验证运行。** 在已授权的模型/CLI 环境中，通过同一入口运行准备好的材料：
 
 ```sh
-agent-runtime-test-run --root "$review_root" --workflow "$review_module" \
-  --version "$review_version" --input "$review_input" --run-timeout-seconds 3600
+agent-runtime-test-run --root "$review_root" --selection "$review_root/$review_version.selection.json" \
+  --input "$review_input" --run-timeout-seconds 3600 --record-out "$review_root/$review_version.record.json"
 ```
 
 transport、model、effort 继续按四层参数取值，必要时在本次命令明确提供；注册本身不选择模型。
-检查运行记录的 `module_release_ref`、`workflow_release_ref` 与回读值一致，实际 Runtime 版本正确，
+检查运行记录的 `definition_selection.executed_matches_selection` 为 true，实际 Runtime 版本正确，
 执行达到 `completed`，且 `execution_budget.requested_timeout_seconds` 为 3600、对应来源为 `call`。
 随后由该 Reviewer 的所属 validator 核验结果与输入绑定。材料的 `passed`、`non_pass` 或 `blocked`
 是内容结论，不替代执行事实。缺少 CLI/登录、执行失败或校验失败时，保留原始结果，报告尚未验证的

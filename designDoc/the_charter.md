@@ -77,6 +77,12 @@ flowchart LR
 Runtime 只解释执行合同，不解释业务内容。Writer、Verifier、Router、Reviewer 和
 Expert 都是宿主领域注册的 Module role，不是 Runtime 内建子系统。
 
+Runtime 的机器字段由代码负责。Agent 不负责生成、手填、拼接或修补 identifier、hash、address、
+release ref、执行 key 或 lineage；这些值由 Runtime 或其所属服务的代码生成、计算、解析和传递。
+Agent 表达业务意图、提供任务内容、选择已有任务或资源；技术字段的来源和准确性不能依赖模型记忆
+或人工抄录。该规则同时适用于使用 Runtime 的操作 Agent 和 Runtime 启动的任务 Agent，具体合同见
+[Agent Runtime T0 §6.3](the_agent_runtime.md#63-code-owned-machine-fields)。
+
 ## 2. Runtime Responsibility Boundary
 
 Runtime 只有六个同层级的逻辑职责。代码目录和具体技术实现不得被画成新的同级职责。

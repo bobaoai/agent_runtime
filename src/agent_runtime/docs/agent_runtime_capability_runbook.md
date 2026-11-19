@@ -19,7 +19,7 @@ python -m agent_runtime.testing.conformance_pattern_examples run --pattern code_
 python -m agent_runtime.testing.conformance_pattern_examples check --run-dir RUN_FOLDER
 ```
 
-运行固定版本 v1 与 --expected-module-id，并要求执行的 Workflow 与 Module 身份等于注册回读。check.json 的 passed 只在实际效果成立时为 true：structured_output 比对输出与本次输入；file_review 要求 scratch 中的 review.md 含只在材料里出现的事实，并在日志中有读回；code_change 要求只改 pricing.py、不新增文件、宿主独立复跑通过、日志中模型对最终代码运行了检查，且返回的改动文件、命令与检查结果行和实际一致；mcp_data 要求 fixture 审计到参数与任务一致的真实 tools/call、保存的 JSON 与返回的完整结果一致、日志中有读回、派生文件正确，且返回的文件名指向项目目录中的这两个文件。模型自我陈述不算证据。mcp_data 需要 cli_tools（mcp 包）；Codex 需要显式模型与 effort，根目录不能在受保护的 Temp 或被重定向的 AppData 下。真实 CLI 用例由 AGENT_RUNTIME_REAL_RUN=1 加 AGENT_RUNTIME_CLAUDE_BIN 或 AGENT_RUNTIME_CODEX_BIN 开启 tests/test_agent_runtime_pattern_examples.py 中的 real_run 用例；未开启时为 skipped。
+每次运行从写出的普通 v4 source 文件夹用 register_module 注册并回读，以代码写出的 selection.json 运行（--selection，--record-out 保存 record.json），并要求执行的 Workflow 与 Module 身份等于该选择。check.json 的 passed 只在实际效果成立时为 true：structured_output 比对输出与本次输入；file_review 要求 scratch 中的 review.md 含只在材料里出现的事实，并在日志中有读回；code_change 要求只改 pricing.py、不新增文件、宿主独立复跑通过、日志中模型对最终代码运行了检查，且返回的改动文件、命令与通过状态和实际一致（通过证据由代码从日志的命令结果附上，不要求模型复述 hash 或 nonce）；mcp_data 要求 fixture 审计到参数与任务一致的真实 tools/call、保存的 JSON 与返回的完整结果一致、日志中有读回、派生文件正确，且返回的文件名指向项目目录中的这两个文件。模型自我陈述不算证据。mcp_data 需要 cli_tools（mcp 包）；Codex 需要显式模型与 effort，根目录不能在受保护的 Temp 或被重定向的 AppData 下。真实 CLI 用例由 AGENT_RUNTIME_REAL_RUN=1 加 AGENT_RUNTIME_CLAUDE_BIN 或 AGENT_RUNTIME_CODEX_BIN 开启 tests/test_agent_runtime_pattern_examples.py 中的 real_run 用例；未开启时为 skipped。
 
 ### 宿主受限的高级callback样例
 

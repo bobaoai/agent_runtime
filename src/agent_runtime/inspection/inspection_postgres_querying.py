@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
 
 from ..contracts.ledger_content_definition import RuntimeExecutionContent
@@ -120,6 +121,58 @@ class PostgresWorkflowInspectionRepository:
             return item.body
 
         return read_execution_log(trace, read_content=read, include_private_content=include_private_content)
+
+    def read_module_run_result(self, result, *, include_private_content: bool = False) -> dict:
+        """Read the committed facts of a returned ModuleRunResult without retyping its identifiers.
+
+        Args:
+            result: The ModuleRunResult that run_registered_workflow_module (or
+                another persistent Module entry using this store) returned. Its
+                workflow_execution_id and output bindings are taken from the
+                object itself.
+            include_private_content: Passed to read_execution_log.
+        Returns:
+            workflow_execution_id, module_run_id, descriptor (the stored
+            execution descriptor), trace (committed content-free records),
+            execution_log and outputs (each output binding with its stored JSON
+            body, checked against the binding's ref and hash).
+        Raises:
+            TypeError: result is not a ModuleRunResult.
+            FileNotFoundError: The store has no committed execution or output
+                for the result: it ran elsewhere, without this store, or as a
+                non-persistent Test Run. Nothing is re-executed.
+            ValueError: Stored content crosses its requested identity or hash.
+        Effects:
+            Read-only queries through the supplied ports. No Provider call,
+            registration, retry or database write.
+        """
+        module_run, bindings = getattr(result, "module_run", None), getattr(result, "outputs", None)
+        if type(bindings) is not tuple or not hasattr(module_run, "workflow_execution_id"):
+            raise TypeError("result must be the ModuleRunResult returned by a persistent Module execution")
+        execution_id = module_run.workflow_execution_id
+        if not execution_id:
+            raise FileNotFoundError("the result has no workflow execution to read")
+        descriptor = self.get_execution_descriptor(execution_id)
+        if descriptor is None:
+            raise FileNotFoundError(f"this store has no committed execution {execution_id}; a non-persistent "
+                                    "Test Run or another store's result cannot be read here")
+        outputs = []
+        for binding in bindings:
+            item = self.load_content(execution_id, binding.output_ref)
+            if item is None:
+                raise FileNotFoundError("output content is unavailable: " + binding.output_ref)
+            item.validate()
+            if (item.workflow_execution_id, item.content_ref, item.content_sha256) != (
+                    execution_id, binding.output_ref, binding.output_sha256):
+                raise ValueError("stored output crossed its requested identity or hash")
+            outputs.append({"logical_name": binding.logical_name, "output_ref": binding.output_ref,
+                            "output_sha256": binding.output_sha256, "media_type": binding.media_type,
+                            "body": json.loads(item.body) if binding.media_type == "application/json"
+                            else item.body.decode("utf-8", errors="replace")})
+        return {"workflow_execution_id": execution_id, "module_run_id": module_run.module_run_id,
+                "descriptor": descriptor, "trace": self.load_trace(execution_id),
+                "execution_log": self.read_execution_log(execution_id, include_private_content=include_private_content),
+                "outputs": outputs}
 
 
 __all__ = ["PostgresWorkflowInspectionRepository"]

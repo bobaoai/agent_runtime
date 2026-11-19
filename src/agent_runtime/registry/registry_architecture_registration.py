@@ -501,6 +501,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
     ),
     _source(
         "registry",
+        "definition",
+        "selection",
+        "designDoc/agent_runtime_01_module_contract_and_assembly.md",
+    ),
+    _source(
+        "registry",
         "module",
         "authoring",
         "designDoc/agent_runtime_01_module_contract_and_assembly.md",
@@ -783,6 +789,12 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         "inspection",
         "snapshot",
         "exporting",
+        "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
+    ),
+    _source(
+        "inspection",
+        "test_run",
+        "reading",
         "designDoc/agent_runtime_06_standalone_package_and_lifecycle_contract.md",
     ),
     _source(

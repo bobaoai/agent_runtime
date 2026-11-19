@@ -22,12 +22,14 @@ from .inspection_http_serving import (
     serve_live_inspector,
 )
 from .inspection_postgres_querying import PostgresWorkflowInspectionRepository
+from .inspection_test_run_reading import inspect_test_run_record
 
 __all__ = [
     "ARCHITECTURE_PROJECTION_SCHEMA_VERSION",
     "build_runtime_architecture_projection",
     "build_runtime_execution_inspection",
     "build_workflow_review_bundle",
+    "inspect_test_run_record",
     "LiveInspectionAssembly",
     "LiveInspectionAuthorizer",
     "LiveWorkflowInspectorApplication",

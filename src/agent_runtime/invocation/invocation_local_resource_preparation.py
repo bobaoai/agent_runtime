@@ -4,8 +4,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import sys
 
 from ..contracts.registry_release_definition import ExecutionProfileRelease
@@ -140,7 +142,7 @@ def _dependencies(values):
 
 # Current bindings that accept frozen materials, dependencies and commands.
 _RESOURCE_BINDINGS = {("claude_cli_adapter", "v4", "claude_cli"),
-                      ("codex_cli_agent_workspace_executor", "v4", "codex_cli")}
+                      ("codex_cli_agent_workspace_executor", "v5", "codex_cli")}
 
 
 def _profile_resources(profile, *, used, commands):
@@ -155,7 +157,7 @@ def _profile_resources(profile, *, used, commands):
             or profile.network_policy not in {"denied", "provider_managed"} or profile.gateway_access_reasons
             or not set(profile.tool_policy) & {"read", "search", "edit", "shell"}):
         raise LocalResourceError("local files/dependencies/commands require a supported agent binding "
-                                 "(Claude v4 or Codex workspace v4) with a native file tool",
+                                 "(Claude v4 or Codex workspace v5) with a native file tool",
                                  error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
     if commands and sys.platform != "darwin":
         raise LocalResourceError("declared local commands require macOS sandbox-exec",
@@ -237,6 +239,129 @@ def capture_local_resources(*, profile, material_root=None, material_files=(), r
     body = _canonical(document)
     validate_local_resources(profile=profile, body=body)
     return body
+
+
+def _selected_parts(root: Path, value) -> tuple[str, ...]:
+    """Relative path parts of one explicitly selected file under root, without resolving links."""
+    if not isinstance(value, (str, os.PathLike)) or not str(value) or "\x00" in str(value):
+        raise LocalResourceError("a selected material must be a non-empty path")
+    candidate = Path(value)
+    if candidate.is_absolute():
+        try:
+            candidate = Path(os.path.abspath(candidate)).relative_to(root)
+        except ValueError as exc:
+            raise LocalResourceError(f"selected material {value} is outside material_root {root}") from exc
+    parts = candidate.parts
+    if not parts or any(part in {"", ".", ".."} for part in parts) or candidate.anchor:
+        raise LocalResourceError(f"selected material {value} must be a file path inside material_root")
+    _relative("/".join(parts))
+    return tuple(parts)
+
+
+def _whole_folder(root: Path) -> list[tuple[str, ...]]:
+    """Every ordinary file below root; a link, reparse point or special file is refused, not skipped."""
+    found = []
+
+    def visit(folder: Path, prefix: tuple[str, ...]) -> None:
+        with os.scandir(folder) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                info = entry.stat(follow_symlinks=False)
+                if entry.is_symlink() or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                    raise LocalResourceError(f"{Path(entry.path)} is a link or reparse point; select the material "
+                                             "files explicitly instead of the whole folder")
+                if stat.S_ISDIR(info.st_mode):
+                    visit(Path(entry.path), prefix + (entry.name,))
+                elif stat.S_ISREG(info.st_mode):
+                    found.append(prefix + (entry.name,))
+                else:
+                    raise LocalResourceError(f"{Path(entry.path)} is not an ordinary file or folder")
+
+    visit(root, ())
+    return found
+
+
+def prepare_material_files(material_root, selected=None) -> tuple[dict, ...]:
+    """Compute the frozen material list for files explicitly selected under one explicit folder.
+
+    This is the ordinary way to build material_files: the caller chooses the
+    folder and the files, and code reads the actual bytes to produce each
+    relative_path, sha256 and executable value. The result goes unchanged to
+    run_local_workflow_test (or write_local_resources), whose capture reads the
+    files again and refuses any later change; no hash is ever refreshed to hide
+    drift.
+
+    Args:
+        material_root: The explicit folder that holds the materials; resolved
+            once, as capture resolves it. It is never the host root by default.
+        selected: Which files to use. None selects the whole folder: every
+            ordinary file below it, refusing (not skipping) any link, reparse
+            point or special entry. A sequence selects exactly those files,
+            each relative to material_root (native or POSIX separators) or an
+            absolute path inside it. An empty sequence selects nothing and
+            returns an empty tuple; it is never widened to the folder.
+    Returns:
+        Tuple of {relative_path, sha256, executable} rows sorted by POSIX
+        relative_path. executable is the file's execute bit where the host has
+        one; on Windows, which has none, it is False.
+    Raises:
+        FileNotFoundError: material_root or a selected file is missing.
+        LocalResourceError: A path leaves the folder, repeats, names a folder,
+            passes a link or reparse point, or the whole folder has no file.
+        OSError: A selected file cannot be read.
+    Effects:
+        Reads only the selected files (and, for the whole folder, its directory
+        entries). Writes nothing; starts no model or command.
+    """
+    root = Path(material_root).resolve(strict=True)
+    if not root.is_dir():
+        raise LocalResourceError(f"material_root {root} is not a folder")
+    if selected is None:
+        chosen = _whole_folder(root)
+        if not chosen:
+            raise LocalResourceError(f"material_root {root} contains no files to select")
+    else:
+        if isinstance(selected, (str, os.PathLike)) or not isinstance(selected, (tuple, list)):
+            raise LocalResourceError("selected must be None (whole folder) or a sequence of file paths")
+        chosen = [_selected_parts(root, value) for value in selected]
+    rows = {}
+    for parts in chosen:
+        name = "/".join(parts)
+        if name in rows:
+            raise LocalResourceError(f"material {name} is selected twice")
+        target = root.joinpath(*parts)
+        if not target.exists() and not target.is_symlink():
+            raise FileNotFoundError(f"selected material is missing: {target}")
+        content, executable = _host_material(HOST_PLATFORM.read_material_file, root, parts)
+        rows[name] = {"relative_path": name, "sha256": hashlib.sha256(content).hexdigest(),
+                      "executable": bool(executable)}
+    result = tuple(rows[name] for name in sorted(rows))
+    _file_rows(result, captured=False)
+    return result
+
+
+def write_local_resources(path, *, material_root, material_files, read_only_dependencies=(), commands=()) -> Path:
+    """Write a resources file for --resources from code-computed values (exclusive create).
+
+    material_files are normally prepare_material_files rows; material_root and
+    dependency locators are written as absolute paths. The existing reader and
+    capture validate the file again at use, so a material that changed after
+    this file was written is refused then. An existing file is never
+    overwritten and its folder must exist. Returns the resolved path.
+    """
+    _file_rows(material_files, captured=False)
+    if material_files and material_root is None:
+        raise LocalResourceError("material_files require material_root")
+    if type(read_only_dependencies) not in {tuple, list} or type(commands) not in {tuple, list}:
+        raise LocalResourceError("read_only_dependencies and commands must be sequences")
+    _commands(commands, files=material_files)
+    document = {"material_root": None if material_root is None else str(Path(material_root).resolve(strict=True)),
+                "material_files": [dict(row) for row in material_files],
+                "read_only_dependencies": [str(Path(value).resolve(strict=True)) for value in read_only_dependencies],
+                "commands": [dict(row) for row in commands]}
+    path = Path(path)
+    with open(path, "x", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
+    return path.resolve()
 
 
 def parse_local_resources(body: bytes) -> dict:
@@ -411,7 +536,7 @@ def describe_local_resources(*, profile, body: bytes | None) -> str:
     """
     document = validate_local_resources(profile=profile, body=body)
     binding = (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind)
-    if binding in {("claude_cli_adapter", "v4", "claude_cli"), ("codex_cli_agent_workspace_executor", "v4", "codex_cli")}:
+    if binding in {("claude_cli_adapter", "v4", "claude_cli"), ("codex_cli_agent_workspace_executor", "v4", "codex_cli"), ("codex_cli_agent_workspace_executor", "v5", "codex_cli")}:
         return _describe_v4(profile, document, codex=binding[0] == "codex_cli_agent_workspace_executor")
     if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind) == (
             "codex_cli_agent_workspace_executor", "v3", "codex_cli"):
@@ -490,5 +615,6 @@ def _describe_v4(profile, document, *, codex: bool) -> str:
 
 __all__ = ["LOCAL_RESOURCES_SCHEMA_REF", "LOCAL_RESOURCES_SCHEMA_SHA256", "LOCAL_RESOURCES_MEDIA_TYPE",
            "LOCAL_RESOURCES_LOGICAL_NAME", "capture_local_resources", "parse_local_resources",
+           "prepare_material_files", "write_local_resources",
            "validate_local_resources", "materialize_local_resources", "assert_local_materials_unchanged",
            "describe_local_resources", "stage_attempt_materials", "LocalResourceError"]

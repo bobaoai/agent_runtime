@@ -35,6 +35,7 @@ def build_parser(*, require_workflow=True, require_input=True):
                 "Full run profile and API fields: start at agent_runtime/README.md\n"
                 "Portable review CLIs prepare/validate review objects; they are separate from Runtime CLIs."))
     parser.add_argument("--root", required=True, type=Path, help="Root containing .runtime setup, definitions and execution parameter files; not a model read root. Required for local and PostgreSQL definitions.")
+    parser.add_argument("--selection", type=Path, help="Ordinary definition handoff: the selection file an agent-runtime-registry registration or select command wrote with --selection-out. Runs exactly its Workflow and Module refs and hashes from root/.runtime or its configured PostgreSQL release store; a later registered version never replaces it. Excludes --workflow, --version, --expected-module-id and the PostgreSQL arguments.")
     parser.add_argument("--workflow", required=require_workflow, help="Local definition: registered single-node Workflow ID under root/.runtime.")
     parser.add_argument("--version", help="Local definition only: exact version; omit for the latest registered new definition.")
     parser.add_argument("--workflow-ref", help="PostgreSQL definition: exact Workflow release_ref. Requires --workflow-sha256, --release-database-url-env and --release-schema; excludes --workflow and --version.")
@@ -49,10 +50,17 @@ def build_parser(*, require_workflow=True, require_input=True):
     parser.add_argument("--run-timeout-seconds", type=int,
         help="Total synchronous work budget (1..86400 seconds); four-layer default 1200. Managed children cannot extend the parent deadline.")
     parser.add_argument("--cli-path", type=Path, help="Installed native executable; overrides root/.runtime/config.json provider_cli_paths, then the native program on PATH is used if unconfigured. Each CLI uses the host's own login and configuration.")
-    parser.add_argument("--resources", type=Path, help="Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}]. Resource paths are relative to this file; command cwd is source/scratch-relative. python/python3 use current Runtime Python; other arguments are not interpolated. Empty dependencies clear additional host defaults, not the current Python runtime. No models, credentials or production grants here.")
+    parser.add_argument("--resources", type=Path, help="Optional resource JSON: material_root, material_files [{relative_path,sha256,executable}], read_only_dependencies, commands [{command_id,argv,cwd,timeout_seconds}], normally written by write_local_resources from selected files. Resource paths are relative to this file; command cwd is source/scratch-relative. python/python3 use current Runtime Python; other arguments are not interpolated. Empty dependencies clear additional host defaults, not the current Python runtime. No models, credentials or production grants here. Excludes --material-root.")
+    parser.add_argument("--material-root", type=Path, help="Folder holding this call's task materials. Select files in it with --material or the whole folder with --all-materials; Runtime computes each file's relative path, SHA-256 and executable flag from the actual bytes and freezes them for the run. Excludes --resources.")
+    parser.add_argument("--material", action="append", default=None, dest="materials",
+        help="Repeatable file under --material-root to give the model, as a path relative to it (or an absolute path inside it). Links, reparse points and paths leaving the folder are refused.")
+    parser.add_argument("--all-materials", action="store_true", help="Select every ordinary file below --material-root. A link, reparse point or special file anywhere below it is refused rather than skipped.")
     parser.add_argument("--project-directory", type=Path, help="Caller-owned existing writable directory (checkout, worktree, task copy or output directory) for a Module whose workspace policy is explicit_project_read_write. Runtime never deletes it.")
+    parser.add_argument("--codex-execution-mode", choices=("configured", "host"), default="configured",
+        help="Per-call Codex configuration: configured preserves the default; host uses native host permissions for code_change with an explicit project directory. cwd is task scope, not an OS boundary. No material package, extra dependencies, command extension or MCP in host mode.")
     parser.add_argument("--command-permit", action="append", default=[], dest="command_permits",
         help="Repeatable Claude Bash rule body pre-approved for this call, e.g. \"python -m pytest:*\". Claude's own read-only commands still run; other commands are denied. Codex refuses per-call permits.")
+    parser.add_argument("--record-out", type=Path, help="New file (its folder must exist) that receives the returned record, or the error document when no record was returned; an existing file is refused before setup or any model call. Read it later with agent-runtime-inspect --test-run-record.")
     return parser
 
 

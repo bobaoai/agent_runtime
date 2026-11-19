@@ -8,21 +8,29 @@ task material -> a written and read-back review file), code_change (a tiny
 project the model fixes and checks with a bounded command) and mcp_data (a
 declared MCP connection -> a saved, read-back data file -> a derived file).
 
-Each pattern is one ordinary Module composed only from public APIs, the same
-path a host uses: ModuleRegistrationSource and module_requirements_preset ->
-Module.export -> Module.to_workflow -> register_runtime_module_plugin, then
-run_local_workflow_test (the entry behind agent-runtime-test-run). This module
-adds no executor, tool routing, permission rule, sandbox or supervision: the
-selected CLI plans, reads and writes files, runs commands and calls MCP tools
-itself, under its own native permissions. After the run, check compares the
-actual file effects, the Inspection log returned in the record and, for MCP,
-the fixture server's own audit with the task. A model's self-report is never
-counted as evidence.
+Each pattern is one ordinary Module that goes through the same public path a
+host uses, with no machine field written by hand: the task is an ordinary v4
+source folder (source/.claude/skills/runtime-pattern-examples/runtime_modules/
+<module>); register_module reads its identity from that folder, registers it
+with module_requirements_preset(<pattern>) and reads it back;
+selection_from_registration turns the returned result into the code-written
+selection.json; file_review's resources.json comes from prepare_material_files
+over the selected material file; run_local_workflow_test runs exactly that
+selection (the entry behind agent-runtime-test-run --selection) and the record
+is saved with write_test_run_record and read with inspect_test_run_record.
+This module adds no executor, tool routing, permission rule, sandbox or
+supervision: the selected CLI plans, reads and writes files, runs commands and
+calls MCP tools itself, under its own native permissions. After the run, check
+compares the actual file effects, the Inspection log returned in the record
+and, for MCP, the fixture server's own audit with the task. A model's self-report is never counted as evidence; for
+code_change the pass evidence is the host's own rerun and the logged command
+result, never a hash or nonce restated by the model.
 
 Every prepare creates a new folder <root>/<pattern>-<cli>-<UTC time>-<hex> that
-holds its own Runtime host root (host/), Attempt folders (attempts/), input,
-materials or project, so re-running never collides with a registered
-definition version and never touches another folder, configuration or project.
+holds its own task source (source/), Runtime host root (host/), Attempt folders
+(attempts/), input, materials or project, so re-running never collides with a
+registered definition version and never touches another folder, configuration
+or project.
 """
 from __future__ import annotations
 
@@ -54,8 +62,18 @@ supplied input, task materials, project directory and declared connections.
 The example check reads actual files, the returned execution log and the
 fixture audit; a model's own report does not prove that a step happened.
 No production data, credentials or business approval are involved.
+
+Modules: example_structured_output, example_file_review, example_code_change
+and example_mcp_data.
 """
 _OWNER_REF = "owner-contract-sha256:" + hashlib.sha256(_OWNER.encode()).hexdigest()
+_OWNER_PATH = "docs/runtime_pattern_examples.md"
+_SKILL = """# Runtime pattern examples
+
+Example task sources for the four ordinary usage patterns: example_structured_output,
+example_file_review, example_code_change and example_mcp_data. Each Module folder
+holds its prompt and input/output schemas; Runtime registers them unchanged.
+"""
 _STRING = {"type": "string"}
 _INTEGER = {"type": "integer"}
 _BOOLEAN = {"type": "boolean"}
@@ -71,7 +89,7 @@ PATTERN_DEFINITIONS = {
         "instruction": (
             "Extract the order in the input note. Use only the input; no tools are available. Return order_id "
             "exactly as given, one entry in lines per SKU with the quantity the note asks for, total_quantity as "
-            "the sum of those quantities, and urgent true only when the note asks for urgent handling."),
+            "the sum of those quantities, and urgent true only when the note asks for urgent handling.\n"),
         "input": _object(order_id=_STRING, note=_STRING),
         "output": _object(order_id=_STRING, lines={"type": "array", "items": _object(sku=_STRING, quantity=_INTEGER)},
                           total_quantity=_INTEGER, urgent=_BOOLEAN),
@@ -93,7 +111,7 @@ PATTERN_DEFINITIONS = {
             "read command fails, run a clean plain read again; a failed command does not count as reading back.\n"
             "3. Return review_file as the file name, release_code and readback_first_line exactly as read back, "
             "and finding_count as the number of bullet lines in the saved file. Your answer is the structured "
-            "output of this task, not something a shell command has to produce."),
+            "output of this task, not something a shell command has to produce.\n"),
         "input": _object(material_path=_STRING, review_file=_STRING),
         "output": _object(review_file=_STRING, release_code=_STRING, finding_count=_INTEGER,
                           readback_first_line=_STRING),
@@ -105,11 +123,11 @@ PATTERN_DEFINITIONS = {
             "because the file named by edit_file has a bug. Fix that bug by editing only edit_file; do not change, "
             "add or delete any other file. After your final edit, run check_command exactly as written, once, "
             "from the working directory, as its own command (no cd, no wrapper and nothing chained). Return "
-            "changed_files (the files you edited), check_command as you ran it, check_result_line (the exact "
-            "last line the command printed) and passed (true only if that line starts with CHECK PASSED)."),
+            "changed_files (the files you edited), check_command as you ran it and passed (true only if the "
+            "last line the command printed starts with CHECK PASSED).\n"),
         "input": _object(check_command=_STRING, edit_file=_STRING),
         "output": _object(changed_files={"type": "array", "items": _STRING}, check_command=_STRING,
-                          check_result_line=_STRING, passed=_BOOLEAN),
+                          passed=_BOOLEAN),
     },
     "mcp_data": {
         "preset": {"mcp_connections": (MCP_CONNECTION,)},
@@ -128,7 +146,7 @@ PATTERN_DEFINITIONS = {
             "4. Using only the values read back, write the file named by summary_file in your working directory "
             "as a JSON object with response_id, warehouse, total_units (the sum of every item's units) and "
             "sku_count (the number of items).\n"
-            "5. Return response_id, total_units, sku_count, data_file and summary_file."),
+            "5. Return response_id, total_units, sku_count, data_file and summary_file.\n"),
         "input": _object(warehouse=_STRING, request_tag=_STRING, data_file=_STRING, summary_file=_STRING),
         "output": _object(response_id=_STRING, total_units=_INTEGER, sku_count=_INTEGER, data_file=_STRING,
                           summary_file=_STRING),
@@ -142,6 +160,70 @@ def module_id_for(pattern: str) -> str:
     return "example_" + pattern
 
 
+def _schema_text(ref, body) -> str:
+    return json.dumps({"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": ref, **body},
+                      sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def pattern_source(pattern: str):
+    """Return the pattern's v4 task source exactly as loading its written source folder yields it.
+
+    Pure: no IO. write_pattern_source writes the same values as files; the
+    loader reads them back to an equal ModuleRegistrationSource.
+    """
+    from ..registry.registry_module_loading import ModuleRegistrationSource
+    module_id = module_id_for(pattern)
+    definition = PATTERN_DEFINITIONS[pattern]
+    input_ref, output_ref = f"schema:{module_id}_input@v1", f"schema:{module_id}_output@v1"
+    return ModuleRegistrationSource(
+        skill_id=_SKILL_ID, module_id=module_id, owner_contract_ref=_OWNER_REF, owner_contract_content=_OWNER,
+        instruction_text=definition["instruction"],
+        input_schema_ref=input_ref, input_schema_document=_schema_text(input_ref, definition["input"]),
+        output_schema_ref=output_ref, output_schema_document=_schema_text(output_ref, definition["output"]),
+        schema_version="runtime_module_registration_v4",
+    )
+
+
+def pattern_requirements(pattern: str):
+    """The Module requirements the pattern registers: module_requirements_preset(<pattern>), max_attempts 1."""
+    from ..registry.registry_module_authoring import module_requirements_preset
+    _require_pattern(pattern)
+    return module_requirements_preset(pattern, **PATTERN_DEFINITIONS[pattern]["preset"])
+
+
+def write_pattern_source(project_root: Path, pattern: str) -> Path:
+    """Write the pattern as an ordinary v4 task source below project_root and return its Module folder.
+
+    Writes .claude/skills/runtime-pattern-examples/SKILL.md, the owner document
+    and runtime_modules/example_<pattern>/ (module_registration.json, prompt.md
+    and schemas/). Existing files are never overwritten (exclusive create).
+    """
+    source = pattern_source(pattern)
+    project_root = Path(project_root)
+    skill = project_root / ".claude" / "skills" / _SKILL_ID
+    module = skill / "runtime_modules" / source.module_id
+    (module / "schemas").mkdir(parents=True)
+    (project_root / _OWNER_PATH).parent.mkdir(parents=True, exist_ok=True)
+
+    def create(path: Path, text: str) -> None:
+        with open(path, "x", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+    if not (skill / "SKILL.md").exists():
+        create(skill / "SKILL.md", _SKILL)
+    if not (project_root / _OWNER_PATH).exists():
+        create(project_root / _OWNER_PATH, _OWNER)
+    create(module / "module_registration.json", json.dumps({
+        "schema_version": "runtime_module_registration_v4", "skill_id": source.skill_id,
+        "module_id": source.module_id, "owner_contract_path": _OWNER_PATH,
+        "input_schema_ref": source.input_schema_ref, "input_schema_path": "schemas/input.schema.json",
+        "output_schema_ref": source.output_schema_ref, "output_schema_path": "schemas/output.schema.json",
+    }, indent=2, sort_keys=True) + "\n")
+    create(module / "prompt.md", source.instruction_text)
+    create(module / "schemas" / "input.schema.json", source.input_schema_document)
+    create(module / "schemas" / "output.schema.json", source.output_schema_document)
+    return module
+
+
 def build_pattern_workflow(pattern: str):
     """Build one pattern's ordinary Module and one-node Workflow without IO.
 
@@ -149,35 +231,20 @@ def build_pattern_workflow(pattern: str):
         pattern: One of PATTERN_NAMES.
     Returns:
         WorkflowExport of Module example_<pattern> at version v1, with its
-        fixed instruction and input/output schemas. Its execution requirements
-        are exactly module_requirements_preset(<pattern>) with max_attempts 1
-        (mcp_data with the example_data connection). The same definition
-        serves claude_cli and codex_cli.
+        fixed instruction and input/output schemas (pattern_source). Its
+        execution requirements are exactly module_requirements_preset(<pattern>)
+        with max_attempts 1 (mcp_data with the example_data connection). The
+        same definition serves claude_cli and codex_cli, and equals what
+        register_module produces from the written source folder.
     Raises:
         ValueError: Unknown pattern.
     Effects:
         Pure construction; no registration, model selection or execution.
     """
-    from ..registry.registry_module_authoring import Module, module_requirements_preset
-    from ..registry.registry_module_loading import ModuleRegistrationSource
+    from ..registry.registry_module_authoring import Module
 
-    module_id = module_id_for(pattern)
-    definition = PATTERN_DEFINITIONS[pattern]
-
-    def schema(ref, body):
-        return json.dumps({"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": ref, **body},
-                          sort_keys=True, separators=(",", ":"))
-
-    input_ref, output_ref = f"schema:{module_id}_input@v1", f"schema:{module_id}_output@v1"
-    source = ModuleRegistrationSource(
-        skill_id=_SKILL_ID, module_id=module_id, owner_contract_ref=_OWNER_REF, owner_contract_content=_OWNER,
-        instruction_text=definition["instruction"],
-        input_schema_ref=input_ref, input_schema_document=schema(input_ref, definition["input"]),
-        output_schema_ref=output_ref, output_schema_document=schema(output_ref, definition["output"]),
-        schema_version="runtime_module_registration_v4",
-    )
-    requirements = module_requirements_preset(pattern, **definition["preset"])
-    exported = Module(source, execution_requirements=requirements).export(module_version=EXAMPLE_VERSION)
+    exported = Module(pattern_source(pattern), execution_requirements=pattern_requirements(pattern)).export(
+        module_version=EXAMPLE_VERSION)
     return Module.to_workflow(exported).export()
 
 
@@ -347,27 +414,30 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
         cli_path, model_id, reasoning_profile, run_timeout_seconds: Optional
             values copied into the printed agent-runtime-test-run command.
     Returns:
-        The manifest also saved as run.json: run_directory, host_root,
-        workflow_id, version, registered (the exact local readback's Workflow
-        and Module release refs and hashes), input/resources/project paths,
-        command_permits, the equivalent agent-runtime-test-run argv and
-        PowerShell line (pinned with --version and --expected-module-id), the
-        check command, and the expectations the check uses.
+        The manifest also saved as run.json: run_directory, source_directory
+        (the written Module source), host_root, workflow_id, version,
+        selection_path (the code-written selection.json), registered (the
+        selection's Workflow and Module release refs and hashes, read back by
+        code), input/resources/project paths, command_permits, the equivalent
+        agent-runtime-test-run argv and PowerShell line (--selection and
+        --record-out), the inspection and check commands, and the expectations
+        the check uses.
     Raises:
         ValueError: Unknown pattern or transport.
         ModuleNotFoundError: mcp_data without the mcp package for its fixture.
         FileExistsError: The generated run folder already exists.
-        RuntimeError: The readback differs from the registered definition, or
-            the code_change project did not start in its failing state.
+        RuntimeError: The registered definition differs from the pattern's
+            definition, or the code_change project did not start failing.
     Effects:
-        Writes the run folder; registers the definition under host/ with the
-        public register_runtime_module_plugin; writes host/.runtime/config.json
-        with attempt_workspace_root RUN_FOLDER/attempts (short Windows paths)
-        and, for mcp_data, the one MCP connection. Never starts a model.
+        Writes the run folder, including the task source; registers it under
+        host/ with register_module and writes selection.json; writes
+        host/.runtime/config.json with attempt_workspace_root RUN_FOLDER/attempts
+        (short Windows paths) and, for mcp_data, the one MCP connection. Never
+        starts a model.
     """
-    from ..registry.registry_local_persistence import load_runtime_registration
-    from ..registry.registry_plugin_registration import RuntimeModulePlugin, register_runtime_module_plugin
-    from ..registry.registry_release_registration import RuntimeReleaseRegistry
+    from ..invocation.invocation_local_resource_preparation import prepare_material_files, write_local_resources
+    from ..registry.registry_definition_selection import selection_from_registration, write_definition_selection
+    from ..registry.registry_plugin_registration import register_module
 
     _require_pattern(pattern)
     _require_transport(transport)
@@ -382,22 +452,22 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
     run_directory.mkdir()
     host = run_directory / "host"
     config = {"attempt_workspace_root": str(run_directory / "attempts")}
-    workflow = build_pattern_workflow(pattern)
-    register_runtime_module_plugin(RuntimeReleaseRegistry(), RuntimeModulePlugin(
-        "example_" + pattern, EXAMPLE_VERSION, workflow.origin_bundle), root=host)
-    module_id = module_id_for(pattern)
-    # Exact readback: the run is pinned to this version and the check compares the executed identity with it.
-    saved = load_runtime_registration(host, "workflow", module_id, EXAMPLE_VERSION)
-    (node,) = saved.release.nodes
-    module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
-    registered = {"workflow_release_ref": saved.release.release_ref, "workflow_release_sha256": saved.release.release_sha256,
-                  "module_release_ref": module.release_ref, "module_release_sha256": module.release_sha256}
-    if module.module_id != module_id or registered["workflow_release_sha256"] != workflow.workflow_release.release_sha256:
-        raise RuntimeError(f"registered example differs from its readback: {registered}")
-    manifest = {"schema_version": "runtime_pattern_example_v1", "pattern": pattern, "transport": transport,
-                "nonce": nonce, "run_directory": str(run_directory), "host_root": str(host),
-                "workflow_id": module_id, "version": EXAMPLE_VERSION, "registered": registered,
-                "input_path": str(run_directory / "input.json"),
+    # The ordinary path: an approved source folder -> registration and readback -> code-written selection.
+    source = write_pattern_source(run_directory / "source", pattern)
+    result = register_module(host, source=source, module_version=EXAMPLE_VERSION,
+                             execution_requirements=pattern_requirements(pattern))
+    selection = selection_from_registration(result, root=host)
+    selection_path = write_definition_selection(run_directory / "selection.json", selection)
+    registered = {name: getattr(selection, name) for name in (
+        "workflow_release_ref", "workflow_release_sha256", "module_release_ref", "module_release_sha256")}
+    if selection.workflow_release_sha256 != build_pattern_workflow(pattern).workflow_release.release_sha256:
+        raise RuntimeError(f"registered example differs from the pattern definition: {registered}")
+    module_id = selection.module_id
+    manifest = {"schema_version": "runtime_pattern_example_v2", "pattern": pattern, "transport": transport,
+                "nonce": nonce, "run_directory": str(run_directory), "source_directory": str(source),
+                "host_root": str(host), "workflow_id": selection.workflow_id, "version": selection.workflow_version,
+                "selection_path": str(selection_path), "registered": registered,
+                "input_path": str(run_directory / "input.json"), "record_path": str(run_directory / "record.json"),
                 "resources_path": None, "project_directory": None, "command_permits": [], "expected": {}}
     if pattern == "structured_output":
         quantities = {sku: 1 + secrets.randbelow(9) for sku in ("A-100", "B-220", "C-310")}
@@ -413,10 +483,10 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
     elif pattern == "file_review":
         code = "RC-" + secrets.token_hex(3).upper()
         material = _write(run_directory / "materials" / _MATERIAL_PATH, _RELEASE_NOTES.format(code=code))
-        resources = run_directory / "resources.json"
-        _write_json(resources, {"material_root": "materials", "material_files": [
-            {"relative_path": _MATERIAL_PATH, "sha256": _sha256(material), "executable": False}],
-            "read_only_dependencies": [], "commands": []})
+        # Code computes the frozen file list from the selected file; the run refuses later drift.
+        rows = prepare_material_files(run_directory / "materials", (_MATERIAL_PATH,))
+        resources = write_local_resources(run_directory / "resources.json", material_root=run_directory / "materials",
+                                          material_files=rows)
         payload = {"material_path": _MATERIAL_PATH, "review_file": "review.md"}
         manifest["resources_path"] = str(resources)
         manifest["expected"] = {"material_sha256": _sha256(material)}
@@ -442,8 +512,8 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
         manifest["expected"] = {"audit_path": str(audit)}
     _write_json(host / ".runtime" / "config.json", config)
     _write_json(run_directory / "input.json", payload)
-    argv = ["agent-runtime-test-run", "--root", str(host), "--workflow", module_id, "--version", EXAMPLE_VERSION,
-            "--expected-module-id", module_id, "--input", manifest["input_path"], "--transport", transport]
+    argv = ["agent-runtime-test-run", "--root", str(host), "--selection", str(selection_path),
+            "--input", manifest["input_path"], "--transport", transport]
     for flag, value in (("--resources", manifest["resources_path"]), ("--project-directory", manifest["project_directory"]),
                         ("--cli-path", cli_path), ("--model", model_id), ("--effort", reasoning_profile),
                         ("--run-timeout-seconds", run_timeout_seconds)):
@@ -451,10 +521,10 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
             argv += [flag, str(value)]
     for permit in manifest["command_permits"]:
         argv += ["--command-permit", permit]
-    record_path = run_directory / "record.json"
+    argv += ["--record-out", manifest["record_path"]]
     manifest["test_run_argv"] = argv
-    manifest["powershell"] = (" ".join([argv[0], *map(_powershell_quote, argv[1:])])
-                              + " | Out-File -Encoding utf8 " + _powershell_quote(record_path))
+    manifest["powershell"] = " ".join([argv[0], *map(_powershell_quote, argv[1:])])
+    manifest["inspect_argv"] = ["agent-runtime-inspect", "--test-run-record", manifest["record_path"]]
     manifest["check_argv"] = [sys.executable, "-m", _MODULE, "check", "--run-dir", str(run_directory)]
     _write_json(run_directory / "run.json", manifest)
     return manifest
@@ -476,28 +546,34 @@ def run_pattern_example(root: Path, pattern: str, transport: str, *, cli_path=No
         check.json are saved in the run folder.
     Raises:
         Exception: Preparation and run_local_workflow_test errors keep their
-            own types (for example a missing CLI or an unsupported option).
+            own types (for example a missing CLI or an unsupported option);
+            record.json then holds the error document, as --record-out does.
     Effects:
-        Starts the selected CLI once through Runtime's ordinary Test Run,
-        pinned to the registered version and expected Module. The Attempt
-        folder stays under RUN_FOLDER/attempts; Runtime never deletes the
-        project folder.
+        Starts the selected CLI once through Runtime's ordinary Test Run with
+        the code-written selection.json, so exactly the registered version and
+        Module run. The Attempt folder stays under RUN_FOLDER/attempts; Runtime
+        never deletes the project folder.
     """
-    from .conformance_local_test_run import run_local_workflow_test
+    from .conformance_local_test_run import run_local_workflow_test, write_test_run_record
 
     manifest = prepare_pattern_example(root, pattern, transport, cli_path=cli_path, model_id=model_id,
                                        reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds)
     run_directory = Path(manifest["run_directory"])
     project = manifest["project_directory"]
-    record = run_local_workflow_test(
-        Path(manifest["host_root"]), manifest["workflow_id"], version=EXAMPLE_VERSION,
-        expected_module_id=manifest["workflow_id"], input_payload=_read_json(Path(manifest["input_path"])), transport_kind=transport, model_id=model_id,
-        reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds, cli_path=cli_path,
-        resources_path=None if manifest["resources_path"] is None else Path(manifest["resources_path"]),
-        project_directory=None if project is None else Path(project),
-        command_permits=tuple(manifest["command_permits"]))
-    _write(run_directory / "record.json", json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
-    return check_pattern_example(run_directory, record)
+    try:
+        record = run_local_workflow_test(
+            Path(manifest["host_root"]), selection=Path(manifest["selection_path"]),
+            input_payload=_read_json(Path(manifest["input_path"])), transport_kind=transport, model_id=model_id,
+            reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds, cli_path=cli_path,
+            resources_path=None if manifest["resources_path"] is None else Path(manifest["resources_path"]),
+            project_directory=None if project is None else Path(project),
+            command_permits=tuple(manifest["command_permits"]))
+    except BaseException as exc:
+        write_test_run_record(Path(manifest["record_path"]), {
+            "error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", None), "detail": str(exc)})
+        raise
+    write_test_run_record(Path(manifest["record_path"]), record)
+    return check_pattern_example(run_directory)
 
 
 class _Checks:
@@ -630,6 +706,7 @@ def _check_code_change(checks, manifest, record, calls, output):
     # The task allows editing pricing.py only; __pycache__ (bytecode) is the one ignored generated folder.
     added = sorted(set(current) - set(initial_files))
     checks.add("no_files_added", not added, f"added: {added}")
+    # Code computes the pass line for the final file bytes; the model never has to restate it.
     rerun = _host_check(project)
     nonce = manifest["nonce"]
     marker = f"CHECK PASSED nonce={nonce} pricing_sha256={current.get('pricing.py')}"
@@ -642,10 +719,13 @@ def _check_code_change(checks, manifest, record, calls, output):
                and all(_names_file(entry, project, "pricing.py") for entry in changed_files), changed_files)
     checks.add("output_check_command", str(output.get("check_command", "")).strip() == command,
                f"got {output.get('check_command')!r}, expected {command!r}")
-    checks.add("output_check_result", output.get("passed") is True
-               and str(output.get("check_result_line", "")).strip() == marker,
-               f"got {output.get('check_result_line')!r}, observed {marker!r}")
-    return {"project_directory": str(project), "added_files": added, "host_rerun": rerun}
+    passed = rerun["returncode"] == 0 and rerun["last_line"] == marker
+    checks.add("output_passed_agrees_with_host_rerun", output.get("passed") is passed,
+               f"model reported passed={output.get('passed')!r}; host rerun passed={passed}")
+    evidence = [{"log_index": index, "tool_name": calls[index].get("tool_name"),
+                 "request": calls[index].get("request"), "observed_last_line": marker} for index in results]
+    return {"project_directory": str(project), "added_files": added, "host_rerun": rerun,
+            "command_evidence": evidence}
 
 
 def _audit_calls(path: Path) -> list[dict]:
@@ -718,38 +798,53 @@ def check_pattern_example(run_directory: Path, record: dict | None = None) -> di
     """Check one example run against actual effects, never the model's self-report.
 
     Args:
-        run_directory: Folder created by prepare_pattern_example (holds run.json).
-        record: The Test Run record; None reads run_directory/record.json,
-            for example saved from agent-runtime-test-run stdout (UTF-8, with or
-            without BOM, or UTF-16 from Windows PowerShell redirection).
+        run_directory: Folder created by prepare_pattern_example (holds run.json
+            and the code-written selection.json).
+        record: The Test Run record; None reads run_directory/record.json, as
+            saved by run (write_test_run_record) or agent-runtime-test-run
+            --record-out (stdout captures in UTF-8 with or without BOM, or
+            UTF-16 from Windows PowerShell redirection, are also read).
     Returns:
         pattern, transport, run_directory, status (the record's technical
         status), passed (all checks passed), checks (name, passed, detail),
-        artifacts (paths to inspect) and attempt_workspace (the retained
-        Attempt folder row). Evidence: the executed Workflow and Module
-        identity equal to the registered readback, file bytes on disk (only
-        the allowed file changed, nothing added; complete saved MCP result),
-        the record's Inspection tool-call log, an independent host rerun of the
-        code check and the MCP fixture's audit of what it returned for exactly
-        this task's arguments. The final output must agree with these facts
-        (artifact names and locations, changed files, command, checker line).
+        artifacts (paths to inspect), attempt_workspace (the retained Attempt
+        folder row) and inspection (inspect_test_run_record's summary).
+        Evidence: the executed Workflow and Module identity equal to the
+        selection code wrote from the registration, file bytes on disk (only the allowed
+        file changed, nothing added; complete saved MCP result), the record's
+        Inspection tool-call log, an independent host rerun of the code check
+        and the MCP fixture's audit of what it returned for exactly this task's
+        arguments. The final output must agree with these facts (artifact names
+        and locations, changed files, command, pass state); no model-restated
+        hash or nonce is required or trusted.
     Effects:
         Reads the run folder, re-runs check_pricing.py for code_change and
         writes check.json. Changes no other file and starts no model.
     """
+    from ..inspection.inspection_test_run_reading import inspect_test_run_record
+    from ..registry.registry_definition_selection import read_definition_selection
+
     run_directory = Path(run_directory)
     manifest = _read_json(run_directory / "run.json")
     _require_pattern(manifest.get("pattern"))
+    record_path = Path(manifest.get("record_path") or run_directory / "record.json")
     if record is None:
-        record = _read_json(run_directory / "record.json")
+        record = _read_json(record_path)
+    inspection = inspect_test_run_record(record)
     checks = _Checks()
     calls = _tool_calls(record)
     output = record.get("output") if isinstance(record.get("output"), dict) else {}
     checks.add("execution_completed", record.get("status") == "completed",
-               record.get("failure_detail") or record.get("status"))
+               record.get("failure_detail") or record.get("status") or inspection.get("error"))
     executed = {key: record.get(key) for key in manifest["registered"]}
-    checks.add("executed_the_registered_definition", executed == manifest["registered"],
-               f"executed {executed}, registered readback {manifest['registered']}")
+    if manifest.get("selection_path") is not None:
+        selection = read_definition_selection(Path(manifest["selection_path"]))
+        selected = {key: getattr(selection, key) for key in manifest["registered"]}
+    else:
+        # runtime_pattern_example_v1 folders (0.2.0.dev12) recorded the readback refs/hashes in run.json only.
+        selected = manifest["registered"]
+    checks.add("executed_the_registered_definition", executed == selected == manifest["registered"],
+               f"executed {executed}, selection {selected}")
     row = _attempt_row(record)
     checks.add("attempt_folder_retained", row.get("archive_path") and Path(row["archive_path"]).is_file(),
                row.get("workspace_path"))
@@ -758,7 +853,9 @@ def check_pattern_example(run_directory: Path, record: dict | None = None) -> di
               "run_directory": str(run_directory), "status": record.get("status"),
               "passed": all(row["passed"] for row in checks.rows), "checks": checks.rows,
               "output": output, "artifacts": artifacts, "attempt_workspace": row,
-              "record": str(run_directory / "record.json")}
+              "inspection": {key: inspection.get(key) for key in ("outcome", "persistence", "durable_history",
+                                                                 "attempts")},
+              "record": str(record_path)}
     _write_json(run_directory / "check.json", result)
     return result
 
@@ -811,8 +908,8 @@ def main(argv=None) -> int:
 
 
 __all__ = ["PATTERN_NAMES", "TRANSPORTS", "EXAMPLE_VERSION", "MCP_CONNECTION", "MCP_TOOL",
-           "build_pattern_workflow", "module_id_for", "prepare_pattern_example", "run_pattern_example",
-           "check_pattern_example", "main"]
+           "build_pattern_workflow", "module_id_for", "pattern_source", "pattern_requirements",
+           "write_pattern_source", "prepare_pattern_example", "run_pattern_example", "check_pattern_example", "main"]
 
 
 if __name__ == "__main__":

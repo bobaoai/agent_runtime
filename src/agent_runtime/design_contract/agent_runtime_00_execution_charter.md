@@ -234,6 +234,30 @@ Module 定义表达所需能力；任务 owner 与宿主提供本次材料、目
 Shell／脚本的系统可达范围。模型、时限、工具及连接仍按本次准确选择记录。一次调用不会因属于
 某种场景就自动增加内部步骤、独立审核、重试或其他 Agent；需要组合时由已有 Workflow／宿主明确组织。
 
+### 5.3 机器字段由代码生成与绑定
+
+继承 [T0 §6.3](the_agent_runtime.md#63-code-owned-machine-fields)：Agent 不负责手填 identifier、hash、
+address 等 Runtime 技术字段。这个边界覆盖外部操作 Agent、任务 Agent、公开入口、示例和操作 Skill，
+不能只在模型 prompt 中隐藏字段，却在注册、执行或检查步骤中要求另一个 Agent 抄写它们。
+
+| 值的种类 | 代码承担的责任 | Agent 承担的任务 |
+| --- | --- | --- |
+| 对象 identifier、release ref 与依赖引用 | Registry 编译、生成或从已批准 source／已注册记录解析；将准确引用作为返回对象继续传递 | 描述任务、选择已有能力，提供需要发布的业务内容 |
+| 内容、Schema、材料和 release hash | 按合同规定的实际 bytes 与 canonical 规则计算并校验 | 处理材料含义，不在回答或配置中编造、重算或修补 hash |
+| Execution、Run、Variant、Attempt、output 与幂等／关联 key | 对应执行代码创建、保存并按重试／恢复合同复用 | 表达开始、继续、查询或取消的意图，不靠换 key 决定是否重跑 |
+| 文件／存储 handle、URI、服务 address 与连接定位 | 宿主或所属服务从实际配置、明确资源选择和返回记录解析，Runtime 消费绑定 | 选择任务材料、工作目录或已配置连接；不猜测 endpoint、DSN 或内部存储路径 |
+| 输出 lineage 与证据引用 | Ledger／Inspection 从实际执行记录连接并返回 | 给出业务结果，展示工具返回的执行事实 |
+
+业务名称、实际任务材料及 owner 明确提供的位置可以作为输入；代码将这些输入转成准确机器绑定。
+已有业务数据中的标识符仍按业务合同处理。低层接口要求 exact ID/ref/hash，不等于让模型提供这些值：
+调用代码直接读取已批准配置、编译／注册结果或先前返回对象完成交接，避免经模型文本重建。
+无法解析或存在多个候选时，报告具体缺件或要求选择目标，不生成看似合法的替代值。
+
+这是一项入口和组装职责要求，不新增身份服务、权限层、MCP 服务或第二套注册表，也不改变已有
+immutable identity/hash 规则。若现有常用入口仍依赖 Agent 手填技术字段，应明确记录为实现缺口；
+不能用补一段 prompt 或让 Agent 手写清单宣称已满足。验收要证明从业务输入到注册、执行、结果查询
+的机器字段由代码形成并贯通，且缺件、冲突和恢复分支不会借用模型补值。
+
 ## 6. Inherited T0 Constraints
 
 - Agent Runtime T0 定义 provider-neutral execution 与外部 authority handoff。

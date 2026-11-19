@@ -139,6 +139,23 @@ authoring-time API。它们只在 caller 传入 project root 和 exact identitie
 重新加载 Module 定义。Invocation 按已解析执行能力读取授权项目材料的规则由 T2 08 定义；
 该能力不参与 Registry source discovery，也不把项目中的可变 Skill 文件当作已注册 Module prompt。
 
+### 4.1 面向 Agent 的来源选择与机器绑定
+
+按 [T0 §6.3](the_agent_runtime.md#63-code-owned-machine-fields) 与
+[T1 §5.3](agent_runtime_00_execution_charter.md#53-机器字段由代码生成与绑定)，Registry 的 exact identity
+要求由代码兑现，不转成操作 Agent 的手填任务。Agent 可以表达要注册的任务内容、选择已批准 source
+或已有对象；loader／compiler 从选定 source 读取已有身份，按注册合同生成新的 release 引用、计算
+hash 并解析 dependency closure。调用代码把 export／registration／readback 的返回对象传给后续
+操作，不要求模型抄写 ref/hash 或拼接 `.runtime` 路径。
+
+Source 中的稳定命名和版本仍由其 owner 决定，代码读取并校验；不能为了省掉模型手填而擅自替换已有
+Module/Skill/plugin 身份、随机换版本、改变 canonical hash 算法或扫描相邻项目猜目标。显式 source root、
+配置中的地址和已选择的对象必须有实际来源。来源缺失、目标不唯一或同 ref 内容冲突时返回具体缺口，
+不把缺失项交给 Agent 生成一个字符串补齐。
+
+底层 ref/hash 参数保留其精确解析语义；面向 Agent 的普通入口应由代码完成这层绑定。尚需调用者手动
+组装机器字段的入口应标明集成缺口，不能把低层示例宣称为已完成的 Agent 使用路径。
+
 ## 5. Immutable Release Model
 
 Registry 管理以下 release families：
@@ -378,7 +395,7 @@ catalog authority 或 Inspection projection。
 | --- | --- | --- | --- |
 | `REGISTRY_CANDIDATE_INVALID` | candidate shape、identity、Schema 或 policy field 无效 | 没有编译 release | 修 candidate，冻结新 bytes 后重试 |
 | `REGISTRY_DEPENDENCY_UNRESOLVED` | required ref/hash 不存在、未包含于 bundle 或 hash domain 不匹配 | closure 未成立 | 提供 exact dependency closure，不猜附近 release |
-| `REGISTRY_RELEASE_CONFLICT` | 同一 release ref 已存在不同 payload/hash | Registry 未改变 | 生成合法新 version/ref；不得覆盖 |
+| `REGISTRY_RELEASE_CONFLICT` | 同一 release ref 已存在不同 payload/hash | Registry 未改变 | 返回发布负责人决定定义版本；编译器据此生成新 ref，不由 Agent 改字符串绕过，不得覆盖 |
 | `REGISTRY_ACTIVE_POINTER_INVALID` | set/clear request 的 subject、target 或 current-pointer precondition 不成立 | pointer 未改变 | 使用 exact subject、release ref/hash 和 current target 重试；不得猜测 latest-like release |
 | `REGISTRY_RELEASE_NOT_FOUND` | exact ref/hash 或 active pointer 无可解析 release | 没有返回 release | 返回 caller；不得 fallback 到 latest-like release |
 | `REGISTRY_HASH_MISMATCH` | supplied hash 与 stored canonical hash 不同 | release identity 不成立 | 拒绝并重新取得 exact ref/hash |
@@ -422,7 +439,9 @@ Prohibited dependencies：
 8. source/package boundary test 证明 Runtime 不从 host authoring tree 重新加载已注册 Module；
    显式项目工作区读取另按 T2 08 验证；
 9. explicit authoring loader 只读指定 project root 下的固定 Module closure，并返回无 path candidate；
-10. public export、Design bundle 和 generated Registry inspection parity。
+10. public export、Design bundle 和 generated Registry inspection parity；
+11. Agent-facing source/对象选择到编译、注册、准确回读的代码绑定闭合；ID/ref/hash/保存位置来自实际
+    source、配置和返回对象，缺失、歧义、冲突时不要求模型手填或修补。
 
 通用 authoring 首先用非审核输入输出的普通 Module 验证真实加载、导出、投影和单节点构图，再验证
 ModuleReviewer 只提供默认环境并继承这些行为。无工具、非 Agent 与真实领域操作的限制保持；

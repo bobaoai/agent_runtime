@@ -384,7 +384,7 @@ def test_codex_binds_reviewer_default_tools_to_workspace_v4_without_shrinking(tm
                                                    binding["execution_profile_release_sha256"])
     module = saved.registry.get_module(saved.release.nodes[0].module_release_ref,
                                        saved.release.nodes[0].module_release_sha256)
-    assert (profile.executor_adapter_id, profile.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v4")
+    assert (profile.executor_adapter_id, profile.executor_adapter_revision) == ("codex_cli_agent_workspace_executor", "v5")
     assert (profile.model_id, profile.reasoning_profile) == ("gpt-6-astra", "xhigh")
     assert set(profile.tool_policy) == set(module.execution_requirements.tool_policy) >= {"shell"}
     assert profile.attempt_workspace_policy == "own_draft_read_write"

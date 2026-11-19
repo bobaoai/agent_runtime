@@ -427,6 +427,49 @@ production Module Run resolves those persisted releases by ref and hash, so the
 standalone Runtime distribution requires neither the originating repository
 layout nor a mounted Skill directory.
 
+### 6.3 Code-owned machine fields
+
+Runtime identifiers, references, hashes and addresses are machine-owned fields.
+Neither an Agent operating Runtime nor an Agent invoked by Runtime is responsible
+for inventing, typing, assembling, recalculating in model text, or repairing them.
+The owning Runtime or host/service code generates new identities, computes hashes
+from the specified canonical bytes, resolves existing objects and configured
+locations, and carries the resulting bindings between operations.
+
+This includes release refs and dependency hashes; execution, Module Run, Variant,
+Attempt and output identifiers; idempotency/correlation keys; and storage handles,
+artifact URIs and service addresses used by the Runtime control plane. Repeating
+an existing operation preserves its code-bound identity; starting a new operation
+allocates the identity required by its owner. A model must not decide which case
+applies by inventing a fresh key.
+
+An Agent-facing entry accepts task intent, business content and explicit choices
+among known tasks/resources. Code reads approved source/configuration and returned
+records, then performs the exact technical binding. A displayed business name or
+choice label is not a serialized machine identity. Business identifiers needed
+to understand the task remain domain-owned data; this rule does not remove them
+from semantic input or prevent a domain from naming its capabilities.
+
+An address must resolve from the actual configured resource or a location
+explicitly supplied by its owner. Code ownership does not authorize inventing a
+service endpoint, selecting an unrelated store, granting access, or creating a
+new service. Missing or ambiguous source/configuration is a concrete input or
+integration gap; it is not a request for the Agent to guess a technical value.
+
+Lower-level APIs may require exact ref/hash/address arguments. These are
+programmatic bindings consumed from compiler, Registry, configuration or prior
+operation results, not fields for an Agent to manufacture or copy by hand.
+Returning an opaque handle for selection or reporting is allowed; code must
+retain or resolve its exact binding rather than relying on free-form model text
+to recreate it. Documentation and Skills must not turn a missing code path into
+a manual fill-in exercise. An unimplemented binding is reported as such.
+
+Model output carries the task's semantic result. Code adds Runtime identity,
+hashes, locations and lineage from authoritative records after validation; a
+model-authored value cannot become authoritative merely because it matches the
+expected string format. Existing immutable records and their identity/hash
+schemes remain unchanged by this division of responsibility.
+
 ## 7. Adapter Neutrality and Context Portability
 
 Runtime defines replaceable service-provider interfaces for durable execution,
@@ -717,6 +760,7 @@ An implementation is non-conformant when any of these signals is present:
 - A raw Attempt, unresolved execution output, evaluation result, or losing Variant advances to another Runtime Module without Resolution.
 - A `module_output_resolution_record` is presented as Artifact readiness, product delivery eligibility, domain acceptance, or canonical admission.
 - An Agent writes or repairs its own audit log.
+- An Agent is required to hand-author, reconstruct or repair Runtime identifiers, hashes, addresses or lineage, or model text is treated as their authoritative source instead of code-owned bindings (§6.3).
 - Durable history or shared telemetry contains protected content or secrets.
 - Recovery repeats a committed invocation or protected side effect.
 - An in-flight execution silently adopts a new graph, Module, Prompt, adapter, data scope, or authorization closure.

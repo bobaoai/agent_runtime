@@ -33,10 +33,24 @@ from .conformance_agent_execution import run_agent_example
 _ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
+def _forwarded_variable(name: str) -> bool:
+    from ..invocation.invocation_claude_cli_execution import _ENVIRONMENT_KEYS as claude_keys
+    from ..invocation.invocation_codex_module_invocation import _ENVIRONMENT_KEYS as codex_keys
+    return name in claude_keys | codex_keys
+
+
 def _definition_source(*, workflow_id, version, release_store, release_database_url_env, release_schema,
-                       workflow_release_ref, workflow_release_sha256) -> str:
-    """Return local or postgres after checking that exactly one complete target was given."""
+                       workflow_release_ref, workflow_release_sha256, selection=None,
+                       expected_module_id=None) -> str:
+    """Return local, postgres or selection after checking that exactly one complete target was given."""
     postgres = (release_store, release_database_url_env, release_schema, workflow_release_ref, workflow_release_sha256)
+    if selection is not None:
+        if workflow_id is not None or version is not None or any(value is not None for value in postgres):
+            raise ValueError("A selection already fixes the exact definition and its store; give no workflow_id, "
+                             "version or PostgreSQL target with it")
+        if expected_module_id is not None:
+            raise ValueError("A selection already fixes the exact Module; expected_module_id is not used with it")
+        return "selection"
     if workflow_id is not None:
         if any(value is not None for value in postgres):
             raise ValueError("Select either a local workflow_id or an exact PostgreSQL Workflow ref/hash, not both")
@@ -60,9 +74,7 @@ def _definition_source(*, workflow_id, version, release_store, release_database_
         raise ValueError("A PostgreSQL definition requires both release_database_url_env and release_schema, or a release_store object")
     if type(release_database_url_env) is not str or not _ENVIRONMENT_NAME.fullmatch(release_database_url_env):
         raise ValueError("release_database_url_env must be an environment variable name")
-    from ..invocation.invocation_claude_cli_execution import _ENVIRONMENT_KEYS as claude_keys
-    from ..invocation.invocation_codex_module_invocation import _ENVIRONMENT_KEYS as codex_keys
-    if release_database_url_env in claude_keys | codex_keys:
+    if _forwarded_variable(release_database_url_env):
         raise ValueError(f"release_database_url_env {release_database_url_env} is forwarded to Provider processes; "
                          "keep the DSN in a variable no Adapter passes through")
     if type(release_schema) is not str or not release_schema:
@@ -72,7 +84,7 @@ def _definition_source(*, workflow_id, version, release_store, release_database_
 
 def run_local_workflow_test(
     root: Path, workflow_id: str | None = None, *, input_payload: dict,
-    expected_module_id: str | None = None, version: str | None = None,
+    selection=None, expected_module_id: str | None = None, version: str | None = None,
     release_store=None, release_database_url_env: str | None = None, release_schema: str | None = None,
     workflow_release_ref: str | None = None, workflow_release_sha256: str | None = None,
     transport_kind: str | None = None, model_id: str | None = None,
@@ -83,16 +95,31 @@ def run_local_workflow_test(
     read_only_dependencies: tuple[Path, ...] | None = None, commands: tuple[dict, ...] = (),
     tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None,
     progress_observer=None, project_directory: Path | None = None, command_permits: tuple[str, ...] = (),
+    codex_execution_mode: str = "configured",
 ) -> dict:
     """Test-run a registered single-node Workflow with retained Attempt folders.
 
     Args:
-        root: Required in both definition modes. Locates Runtime setup,
+        root: Required in every definition mode. Locates Runtime setup,
             root/.runtime/config.json resource defaults, local definitions and
             the execution parameter files; never a model/tool read root.
         workflow_id: Local definition: Workflow to load from root/.runtime,
             including single-Module Workflows. Excludes every PostgreSQL field.
         input_payload: Exact JSON input validated against the registered schema.
+        selection: The ordinary definition handoff: a RuntimeDefinitionSelection
+            returned by selection_from_registration/select_registered_workflow,
+            or the path of a file written by write_definition_selection (the
+            registry CLI's --selection-out). It must name this root. Runtime
+            re-reads its store (root/.runtime, or the PostgreSQL release store
+            the selection names, opened through its current entry in
+            root/.runtime/config.json release_stores) and runs only the
+            recorded Workflow and Module refs and hashes; a later registered
+            version never replaces it. Another root, an unconfigured store or a
+            missing DSN variable is refused before setup; a missing or different
+            record is refused before materials or a Provider. Excludes
+            workflow_id, version, expected_module_id and the PostgreSQL fields.
+            The record's definition_selection reports the selection and whether
+            the executed identity matched it.
         expected_module_id: Optional exact Module ID the selected Workflow must
             run. Checked before materials are captured or a model is called.
         version: Local definition only: exact version; None resolves the latest
@@ -119,7 +146,7 @@ def run_local_workflow_test(
             search: Grep, Glob; edit: Edit, Write; shell: Bash; mcp__<name>: a
             declared host connection) with no write area, a private draft or an
             explicit project directory. codex_cli supports tool_free (v5) and
-            agent Modules (workspace v4): Shell-capable tools in a private draft
+            agent Modules (workspace v5): Shell-capable tools in a private draft
             or project directory, or only declared MCP connections with the
             shell tool off; both take denied or provider_managed network. It
             requires explicit model_id and effort; unsupported requirements are
@@ -154,7 +181,9 @@ def run_local_workflow_test(
         material_root: Explicit source directory for the frozen file list below,
             never implicitly the host root. Only listed ordinary files are read.
         material_files: Tuple of dictionaries with relative_path, sha256 and
-            executable. Bytes and executable bits must match the supplied list;
+            executable, normally the value prepare_material_files computed from
+            the caller's explicitly selected files (an empty tuple stays empty).
+            Bytes and executable bits must match the supplied list;
             relative structure is preserved in the Attempt's read-only source
             copy. Paths cannot traverse symlinks or escape material_root.
             These auxiliary files are not silently appended as inline task text.
@@ -212,6 +241,15 @@ def run_local_workflow_test(
             pre-approve those commands, Claude's built-in read-only commands still
             run, and other commands are denied. Without permits Runtime adds no
             Bash allow rule. Codex cannot express per-call permits and refuses them.
+        codex_execution_mode: Per-call host resource choice, configured (default)
+            preserves the existing CLI permission configuration. host selects
+            Codex native host execution only for agent, explicit_project_read_write,
+            provider_managed and exactly read/search/edit/shell. It uses host
+            permissions; cwd is task scope, not an OS filesystem boundary.
+            No material package, additional dependencies or recorded commands
+            are accepted in host mode. Unknown values and null are rejected.
+            Parameter files and Module definitions do not select this option.
+            Actual mode, argv and directory are retained in provider_trace.
     Returns:
         JSON-compatible execution facts and output. execution_parameter_sources
         gives each parameter's source layer (call, workflow_file,
@@ -253,7 +291,8 @@ def run_local_workflow_test(
         FileNotFoundError: Missing registration, version or provider executable.
         KeyError: The exact PostgreSQL Workflow release is absent.
         ValueError: Conflicting definition targets or resources, a missing or
-            empty DSN variable, hash mismatch, a different expected Module,
+            empty DSN variable, hash mismatch, a different expected Module, a
+            selection for another root or an unconfigured release store,
             invalid parameter file, mixed transports, unsupported graph/Profile,
             input or resource configuration. Target and resource conflicts are
             rejected before setup, a PostgreSQL connection or a Provider call.
@@ -274,6 +313,10 @@ def run_local_workflow_test(
         directories are never included in Runtime cleanup.
     """
     entered = time.monotonic()
+    from ..invocation.invocation_codex_module_invocation import (
+        validate_codex_execution_mode, CodexCapabilityUnsupportedError,
+    )
+    validate_codex_execution_mode(codex_execution_mode)
     if progress_observer is not None and not callable(progress_observer):
         raise TypeError("progress_observer must be callable")
     if parent_run is not None:
@@ -283,7 +326,8 @@ def run_local_workflow_test(
         parent_run.require_active()
     source = _definition_source(workflow_id=workflow_id, version=version, release_store=release_store,
         release_database_url_env=release_database_url_env, release_schema=release_schema,
-        workflow_release_ref=workflow_release_ref, workflow_release_sha256=workflow_release_sha256)
+        workflow_release_ref=workflow_release_ref, workflow_release_sha256=workflow_release_sha256,
+        selection=selection, expected_module_id=expected_module_id)
     if expected_module_id is not None and (type(expected_module_id) is not str or not expected_module_id):
         raise ValueError("expected_module_id must be a non-empty string when given")
     if resources_path is not None and (material_root is not None or material_files
@@ -294,6 +338,9 @@ def run_local_workflow_test(
         database_url = os.environ.get(release_database_url_env)
         if not database_url:
             raise ValueError(f"Environment variable {release_database_url_env} is missing or empty; no DSN fallback")
+    selected_store = None
+    if source == "selection":
+        selection, selected_store = _checked_selection(selection, root)
 
     from ..invocation.invocation_claude_cli_execution import ClaudeAdapter
     from ..invocation.invocation_codex_module_invocation import (
@@ -313,8 +360,12 @@ def run_local_workflow_test(
     choice = dict(transport_kind=transport_kind, model_id=model_id, reasoning_profile=reasoning_profile,
                   run_timeout_seconds=run_timeout_seconds)
     if source == "local":
-        saved, selection, parameters = _prepare_local_workflow_module_with_sources(
+        saved, variant, parameters = _prepare_local_workflow_module_with_sources(
             root, workflow_id, version=version, **choice)
+    elif source == "selection":
+        from ..registry.registry_definition_selection import resolve_definition_selection
+        loaded = resolve_definition_selection(selection, root=root, release_store=selected_store)
+        saved, variant, parameters = _prepare_loaded_workflow(loaded, root=root, release_store=None, **choice)
     else:
         if release_store is None:
             from ..registry.registry_postgres_persistence import PostgresRuntimeReleaseStore
@@ -322,7 +373,7 @@ def run_local_workflow_test(
         registry = release_store.load_release_registry()
         loaded = registry.get_workflow(workflow_release_ref, workflow_release_sha256)
         _require_single_module_entry(loaded)
-        saved, selection, parameters = _prepare_loaded_workflow(
+        saved, variant, parameters = _prepare_loaded_workflow(
             LoadedRuntimeRegistration(loaded, registry), root=root, release_store=None, **choice)
     from ..execution.execution_run_budget import RunBudget
     budget = RunBudget(parameters.run_timeout_seconds, started=entered, parent_run=parent_run)
@@ -334,15 +385,19 @@ def run_local_workflow_test(
         module = saved.registry.get_module(node.module_release_ref, node.module_release_sha256)
         if expected_module_id is not None and module.module_id != expected_module_id:
             raise ValueError(f"Selected Workflow runs Module {module.module_id}, not the expected {expected_module_id}")
-        binding = selection.policy_document()["bindings"][0]
+        binding = variant.policy_document()["bindings"][0]
         selected_profile = saved.registry.get_execution_profile(
             binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
+        validate_codex_execution_mode(codex_execution_mode, profile=selected_profile)
         config = load_runtime_config(root)
         dependencies = read_only_dependencies
         if dependencies is None:
             dependencies = config["read_only_dependencies"] if selected_profile.tool_policy else ()
         if type(dependencies) is not tuple:
             raise ValueError("read_only_dependencies must be a tuple or None for host defaults")
+        if codex_execution_mode == "host" and (material_root is not None or material_files or dependencies or commands):
+            raise CodexCapabilityUnsupportedError(
+                "host execution takes no material package, extra dependencies or command extension")
         resource_body = capture_local_resources(profile=selected_profile, material_root=material_root,
             material_files=material_files, read_only_dependencies=dependencies, commands=commands)
         dependencies = (() if resource_body is None else
@@ -374,12 +429,13 @@ def run_local_workflow_test(
                 CodexCliAgentWorkspaceModuleExecutor.executor_adapter_id,
                 CodexCliAgentWorkspaceModuleExecutor.executor_adapter_revision):
             adapter = CodexCliAgentWorkspaceModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
-                workspace_root=workspace, codex_bin=str(executable), read_only_dependencies=dependencies, **resources)
+                workspace_root=workspace, codex_bin=str(executable), read_only_dependencies=dependencies,
+                codex_execution_mode=codex_execution_mode, **resources)
         else:
             adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
                 workspace_root=workspace, codex_bin=str(executable), **resources)
         result, record = _run_prepared_workflow_node(registry=saved.registry, workflow=workflow,
-            selection=selection, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
+            selection=variant, input_payload=input_payload, idempotency_key="self_test_"+uuid.uuid4().hex,
             artifact_host=artifacts, ledger=ledger, workspace_root=workspace, adapter=adapter,
             local_resources=resource_body, tool_session_factory=tool_session_factory,
             user_cancel_requested=user_cancel_requested, resource_cancel_requested=resource_cancel_requested, run_budget=budget)
@@ -388,6 +444,8 @@ def run_local_workflow_test(
             read_content=artifacts.read_bytes, include_private_content=True,
         )
         record["execution_parameter_sources"] = parameters.as_record()
+        if source == "selection":
+            record["definition_selection"] = _selection_record(selection, record)
         record["execution_budget"] = budget.as_record()
         record["attempt_workspaces"] = _archive_and_seal(record, workspace_root=workspace,
                                                          project_directory=project_directory)
@@ -396,6 +454,52 @@ def run_local_workflow_test(
         if record is not None:
             record["execution_budget"] = budget.as_record()
         budget.close()
+
+
+def _checked_selection(selection, root):
+    """Read the selection, check its root and open its configured store before setup."""
+    from ..registry.registry_definition_selection import (
+        RuntimeDefinitionSelection, configured_release_store, open_configured_release_store,
+        read_definition_selection,
+    )
+    if type(selection) is not RuntimeDefinitionSelection:
+        if not isinstance(selection, (str, os.PathLike)):
+            raise ValueError("selection must be a RuntimeDefinitionSelection or the path of a saved selection")
+        selection = read_definition_selection(Path(selection))
+    current = str(Path(root).resolve())
+    if os.path.normcase(os.path.normpath(current)) != os.path.normcase(os.path.normpath(selection.root)):
+        raise ValueError(f"the selection was made for root {selection.root}, not {current}")
+    if selection.release_store is None:
+        return selection, None
+    variable = configured_release_store(root, selection.release_store)["database_url_env"]
+    if _forwarded_variable(variable):
+        raise ValueError(f"release store {selection.release_store!r} keeps its DSN in {variable}, which is "
+                         "forwarded to Provider processes; keep the DSN in a variable no Adapter passes through")
+    return selection, open_configured_release_store(root, selection.release_store)
+
+
+def _selection_record(selection, record) -> dict:
+    """The selection used and whether the executed Workflow/Module equal it, compared by code."""
+    names = ("workflow_release_ref", "workflow_release_sha256", "module_release_ref", "module_release_sha256")
+    return {**selection.as_dict(), "executed_matches_selection": all(
+        record.get(name) == getattr(selection, name) for name in names)}
+
+
+def write_test_run_record(path: Path, document: dict) -> Path:
+    """Save one Test Run record, or the error document of a run that returned none, as a new UTF-8 file.
+
+    Exclusive create in an existing folder: an existing file is never
+    overwritten. The saved JSON is evidence for inspect_test_run_record; it is
+    not a Ledger, a recovery receipt or a handle for a later rerun.
+    Returns the resolved path.
+    """
+    if type(document) is not dict:
+        raise ValueError("a Test Run record must be a JSON object")
+    body = json.dumps(document, ensure_ascii=False, allow_nan=False) + "\n"
+    path = Path(path)
+    with open(path, "x", encoding="utf-8", newline="\n") as stream:
+        stream.write(body)
+    return path.resolve()
 
 
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -454,8 +558,18 @@ def _archive_and_seal(record: dict, *, workspace_root: Path, project_directory) 
     return rows
 
 
+def _cli_materials(args):
+    """material_root/material_files computed from --material-root with --material or --all-materials."""
+    if args.material_root is None:
+        return {}
+    from ..invocation.invocation_local_resource_preparation import prepare_material_files
+    selected = None if args.all_materials else tuple(args.materials)
+    return {"material_root": args.material_root,
+            "material_files": prepare_material_files(args.material_root, selected)}
+
+
 def _execute_registered(args):
-    """Test-run once and emit execution JSON on stdout without saving it.
+    """Test-run once and emit execution JSON on stdout; --record-out also saves it.
 
     Exit 0: completed execution with schema-valid output, including a valid
     non_pass verdict. The subject owner applies its own semantic validator.
@@ -465,29 +579,44 @@ def _execute_registered(args):
     remain in the returned execution JSON when invocation had started. No
     verdict is manufactured. Each invocation is a new temporary test. No
     cross-process recovery or stored history is promised. Explicit stdout
-    capture belongs to the calling operator. Setup runs inside
-    run_local_workflow_test: ready setup makes no writes, and registered
-    definitions and persistent execution stores are unchanged.
+    capture belongs to the calling operator; --record-out saves the same JSON
+    (or, when no record was returned, the stderr error document) to a new file.
+    Setup runs inside run_local_workflow_test: ready setup makes no writes, and
+    registered definitions and persistent execution stores are unchanged.
     """
+    document = None
     try:
         payload = json.loads(args.input.read_text(encoding="utf-8"))
         record = run_local_workflow_test(args.root, args.workflow, input_payload=payload,
-            expected_module_id=args.expected_module_id, version=args.version,
+            selection=args.selection, expected_module_id=args.expected_module_id, version=args.version,
             release_database_url_env=args.release_database_url_env, release_schema=args.release_schema,
             workflow_release_ref=args.workflow_ref, workflow_release_sha256=args.workflow_sha256,
             transport_kind=args.transport, model_id=args.model, reasoning_profile=args.effort, run_timeout_seconds=args.run_timeout_seconds,
             cli_path=args.cli_path, resources_path=args.resources,
             project_directory=None if args.project_directory is None else args.project_directory.resolve(),
-            command_permits=tuple(args.command_permits))
+            command_permits=tuple(args.command_permits), codex_execution_mode=args.codex_execution_mode,
+            **_cli_materials(args))
+        document = record
         print(json.dumps(record, ensure_ascii=False, allow_nan=False))
-        return 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
+        status = 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
     except KeyboardInterrupt:
-        print(json.dumps({"error_type": "KeyboardInterrupt", "detail": "Test Run interrupted"}), file=sys.stderr)
-        return 130
+        document = {"error_type": "KeyboardInterrupt", "detail": "Test Run interrupted"}
+        print(json.dumps(document), file=sys.stderr)
+        status = 130
     except Exception as exc:
-        print(json.dumps({"error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", None),
-                          "detail": str(exc)}, ensure_ascii=False), file=sys.stderr)
-        return 1
+        document = {"error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", None),
+                    "detail": str(exc)}
+        print(json.dumps(document, ensure_ascii=False), file=sys.stderr)
+        status = 1
+    if args.record_out is not None:
+        try:
+            write_test_run_record(args.record_out, document)
+        except OSError as exc:
+            print(json.dumps({"error_type": type(exc).__name__, "error_code": None,
+                              "detail": f"record was not saved to {args.record_out}: {exc}"},
+                             ensure_ascii=False), file=sys.stderr)
+            return status or 1
+    return status
 
 
 
@@ -496,8 +625,9 @@ def build_parser():
     parser = _execution_parser(require_workflow=False, require_input=False)
     parser.prog = "agent-runtime-test-run"
     parser.description = ("Test-run a registered single-Module Workflow, from root/.runtime or read-only from an exact "
-                          "PostgreSQL release, or a packaged multi-Agent example. Select exactly one target: --workflow, "
-                          "--workflow-ref with --workflow-sha256, or --example. No production authorization; nothing is persisted.")
+                          "PostgreSQL release, or a packaged multi-Agent example. Select exactly one target: --selection "
+                          "(the file a registry command wrote), --workflow, --workflow-ref with --workflow-sha256, or "
+                          "--example. No production authorization; nothing is persisted except an explicit --record-out file.")
     parser.epilog += ("\n\nPackaged --example graphs register fixed definitions and run a fresh execution. Saved JSON is "
                       "evidence, not cross-process resume. They use explicitly selected callback tools: host-limited "
                       "advanced examples for macOS/Linux with the cli_tools extra; Windows reports the callback extension "
@@ -516,13 +646,18 @@ def build_parser():
 def main(argv=None):
     """Run the selected target and print its actual execution records as JSON.
 
-    Exactly one target is required: --workflow (local definition),
-    --workflow-ref with --workflow-sha256 (read-only PostgreSQL definition,
-    also requiring --release-database-url-env and --release-schema), or
-    --example. Registered definitions require --input; all their arguments go
-    unchanged to run_local_workflow_test, which runs setup, reads the resource
-    file and resolves execution parameters. --example owns fixed definitions
-    and fixture resources, so --version, --resources, PostgreSQL arguments and
+    Exactly one target is required: --selection (the code-written selection
+    from a registry command; the ordinary handoff), --workflow (local
+    definition), --workflow-ref with --workflow-sha256 (read-only PostgreSQL
+    definition, also requiring --release-database-url-env and
+    --release-schema), or --example. Registered definitions require --input;
+    their arguments go to run_local_workflow_test, which runs setup, reads the
+    resource file and resolves execution parameters. --material-root with
+    --material or --all-materials is turned into the frozen file list by
+    prepare_material_files first. An existing --record-out file or its missing
+    folder is a usage error before setup. --example owns fixed definitions
+    and fixture resources, so --version, --resources, materials, --selection,
+    --record-out, PostgreSQL arguments and
     --expected-module-id are rejected; its model choice uses the same
     execution parameter layers. Optional --input contains task and
     required_facts. Exit 0 means technical completion, not business acceptance
@@ -547,11 +682,24 @@ def main(argv=None):
     postgres = {"--workflow-ref": args.workflow_ref, "--workflow-sha256": args.workflow_sha256,
                 "--release-database-url-env": args.release_database_url_env, "--release-schema": args.release_schema}
     uses_postgres = any(value is not None for value in postgres.values())
-    if sum((args.workflow is not None, uses_postgres, args.example is not None)) != 1:
-        parser.error("select exactly one target: --workflow, --workflow-ref with --workflow-sha256, or --example")
+    if sum((args.selection is not None, args.workflow is not None, uses_postgres, args.example is not None)) != 1:
+        parser.error("select exactly one target: --selection, --workflow, --workflow-ref with --workflow-sha256, or --example")
+    if args.materials is not None and args.all_materials:
+        parser.error("select materials with --material or the whole folder with --all-materials, not both")
+    if args.material_root is None and (args.materials is not None or args.all_materials):
+        parser.error("--material and --all-materials select files under --material-root")
+    if args.material_root is not None:
+        if args.resources is not None:
+            parser.error("give --resources or --material-root, not both")
+        if args.materials is None and not args.all_materials:
+            parser.error("--material-root needs --material FILE (repeatable) or --all-materials")
+    if args.record_out is not None and (args.record_out.exists() or not args.record_out.parent.is_dir()):
+        parser.error(f"--record-out must name a new file in an existing folder: {args.record_out}")
     if args.example is None:
         if args.input is None:
             parser.error("a registered definition requires --input")
+        if args.selection is not None and (args.version is not None or args.expected_module_id is not None):
+            parser.error("--selection already fixes the exact version and Module")
         if args.scenario is not None:
             parser.error("--scenario requires --example")
         if uses_postgres:
@@ -561,7 +709,8 @@ def main(argv=None):
             if args.version is not None:
                 parser.error("--version selects a local definition; a PostgreSQL definition uses --workflow-ref and --workflow-sha256")
         return _execute_registered(args)
-    if args.version is not None or args.resources is not None or args.expected_module_id is not None:
+    if (args.version is not None or args.resources is not None or args.expected_module_id is not None
+            or args.material_root is not None or args.record_out is not None or args.codex_execution_mode != "configured"):
         parser.error("packaged examples own their fixed versions, fixture resources and Modules")
     if args.example == "agent_evaluation_example" and args.scenario not in (None, "accepted"):
         parser.error("agent_evaluation_example does not use selector scenarios")

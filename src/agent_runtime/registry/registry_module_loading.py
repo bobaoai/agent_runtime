@@ -376,6 +376,65 @@ def load_module_registration(
     )
 
 
+@dataclass(frozen=True)
+class ModuleRegistrationLocation:
+    """Exact loader arguments read from one explicitly selected Module source.
+
+    project_root is the root that owns the fixed authoring closure; skill_id and
+    module_id are the identities the source's own registration declares. Pass
+    these values directly to the loaders; they are code results, not text for an
+    Agent to retype.
+    """
+
+    project_root: Path
+    skill_id: str
+    module_id: str
+
+
+def locate_module_registration(source: Path) -> ModuleRegistrationLocation:
+    """Read the identity of one explicitly selected Module source.
+
+    Args:
+        source: The Module source directory
+            (<project>/.claude/skills/<skill_id>/runtime_modules/<module_id>) or
+            its module_registration.json. This is the owner's explicit selection;
+            no sibling, parent or other project is searched.
+    Returns:
+        ModuleRegistrationLocation with the declared skill_id and module_id and
+        the project root four levels above the Module directory.
+    Raises:
+        FileNotFoundError: The selected source or its registration is absent.
+        ValueError: The registration is not JSON naming string skill_id and
+            module_id, or the selected location is not that declaration's fixed
+            authoring directory. Full content checks stay in the loaders.
+    Effects:
+        Reads module_registration.json only. Does not load or register the
+        source, choose a version or open any other file.
+    """
+    selected = Path(source)
+    directory = selected.parent if selected.name == MODULE_REGISTRATION_FILENAME else selected
+    directory = directory.resolve(strict=True)
+    registration = directory / MODULE_REGISTRATION_FILENAME
+    if registration.is_symlink() or not registration.is_file():
+        raise FileNotFoundError(f"Module registration is missing: {registration}")
+    try:
+        payload = json.loads(registration.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Module registration must be UTF-8 JSON") from exc
+    skill_id = payload.get("skill_id") if type(payload) is dict else None
+    module_id = payload.get("module_id") if type(payload) is dict else None
+    if type(skill_id) is not str or type(module_id) is not str or not skill_id or not module_id:
+        raise ValueError("Module registration does not declare skill_id and module_id")
+    project_root = directory.parents[4] if len(directory.parents) > 4 else None
+    expected = (None if project_root is None else
+                project_root / MODULE_AUTHORING_ROOT / skill_id / "runtime_modules" / module_id)
+    if expected is None or expected != directory:
+        raise ValueError(
+            "Selected source is not the fixed directory its registration declares: expected "
+            f"{MODULE_AUTHORING_ROOT.as_posix()}/{skill_id}/runtime_modules/{module_id} below a project root")
+    return ModuleRegistrationLocation(project_root=project_root, skill_id=skill_id, module_id=module_id)
+
+
 def load_reviewer_registration(
     project_root: Path, *, skill_id: str, module_id: str,
 ) -> ModuleRegistrationSource:
@@ -396,7 +455,9 @@ def load_reviewer_registration(
 __all__ = [
     "MODULE_AUTHORING_ROOT",
     "MODULE_REGISTRATION_SCHEMA_VERSION",
+    "ModuleRegistrationLocation",
     "ModuleRegistrationSource",
     "load_module_registration",
     "load_reviewer_registration",
+    "locate_module_registration",
 ]

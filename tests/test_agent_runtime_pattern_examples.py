@@ -30,6 +30,8 @@ from agent_runtime.invocation import invocation_claude_cli_execution as claude
 from agent_runtime.invocation.invocation_codex_module_invocation import validate_codex_mcp_connections
 from agent_runtime.registry import RuntimeReleaseRegistry
 from agent_runtime.registry.registry_local_persistence import load_runtime_registration
+from agent_runtime.registry.registry_module_loading import load_module_registration
+from agent_runtime.registry.registry_definition_selection import read_definition_selection
 from agent_runtime.testing import conformance_fixture_mcp_serving as fixture
 from agent_runtime.testing import conformance_pattern_examples as examples
 
@@ -50,8 +52,30 @@ def short_root():
     shutil.rmtree(root, ignore_errors=True)
 
 
+_ROOTS = {}
+
+
 def _root(tmp_path):
-    return tmp_path / "example root with spaces"
+    """A short example root with spaces for this test (one per tmp_path).
+
+    The examples write an ordinary task source folder
+    (source/.claude/skills/<skill>/runtime_modules/<module>/schemas/...) below
+    each run folder; pytest's own tmp_path is too deep for Windows' 260-character
+    paths once that layout nests below it. Users are told to keep roots short.
+    """
+    import tempfile
+    import uuid
+    if tmp_path not in _ROOTS:
+        _ROOTS[tmp_path] = Path(tempfile.gettempdir()) / f"ar root {uuid.uuid4().hex[:6]}"
+    return _ROOTS[tmp_path]
+
+
+@pytest.fixture(autouse=True)
+def _remove_short_roots():
+    yield
+    import shutil
+    while _ROOTS:
+        shutil.rmtree(_ROOTS.popitem()[1], ignore_errors=True)
 
 
 # --- Definitions ------------------------------------------------------------------------------
@@ -149,10 +173,20 @@ def test_prepare_creates_a_fresh_folder_per_run_under_a_root_with_spaces(tmp_pat
         payload = json.loads(Path(manifest["input_path"]).read_text(encoding="utf-8"))
         assert payload["order_id"] == manifest["expected"]["order_id"] and payload["order_id"] in payload["note"]
         argv = manifest["test_run_argv"]
-        assert argv[:2] == ["agent-runtime-test-run", "--root"] and argv[argv.index("--version") + 1] == "v1"
-        assert argv[argv.index("--expected-module-id") + 1] == "example_structured_output"
-        assert manifest["registered"]["workflow_release_ref"] == saved.release.release_ref
+        # The run command names the code-written selection, never an ID, version, ref or hash.
+        assert argv[:2] == ["agent-runtime-test-run", "--root"] and argv[argv.index("--selection") + 1] == str(
+            folder / "selection.json")
+        assert not {"--workflow", "--version", "--expected-module-id", "--workflow-ref", "--workflow-sha256"} & set(argv)
+        assert argv[argv.index("--record-out") + 1] == manifest["record_path"] == str(folder / "record.json")
+        selection = read_definition_selection(folder / "selection.json")
+        assert (selection.workflow_id, selection.workflow_version, selection.module_id) == (
+            "example_structured_output", "v1", "example_structured_output")
+        assert manifest["registered"]["workflow_release_ref"] == saved.release.release_ref == selection.workflow_release_ref
         assert manifest["registered"]["workflow_release_sha256"] == saved.release.release_sha256
+        # The registered source is an ordinary v4 folder whose loaded content is the pattern definition.
+        source = load_module_registration(folder / "source", skill_id="runtime-pattern-examples",
+                                          module_id="example_structured_output")
+        assert source == examples.pattern_source("structured_output")
         assert "'" + manifest["host_root"] + "'" in manifest["powershell"]  # Quoted: the path has spaces.
     assert first["nonce"] != second["nonce"]
 
@@ -203,7 +237,7 @@ def test_code_change_starts_failing_with_a_transport_specific_check_command(tmp_
         assert payload["check_command"] == "sh run_check.sh" and manifest["command_permits"] == ["sh run_check.sh"]
         script = (project / "run_check.sh").read_bytes()
         assert b"\r" not in script and script.startswith(b"#!/bin/sh\n")
-        assert manifest["test_run_argv"][-2:] == ["--command-permit", "sh run_check.sh"]
+        assert manifest["test_run_argv"][-4:-2] == ["--command-permit", "sh run_check.sh"]
     else:
         assert manifest["command_permits"] == [] and "--command-permit" not in manifest["test_run_argv"]
         assert not (project / "run_check.sh").exists()
@@ -241,19 +275,20 @@ def test_mcp_data_names_the_missing_fixture_dependency_before_writing_config(tmp
 
 # --- Checks over synthetic records (no CLI, no model) ---------------------------------------
 
-def _attempt(folder):
+def _record(folder, calls, output, status="completed", **identity):
+    """A synthetic record that executed the folder's registered definition unless identity overrides it.
+
+    Like Test Run, its Attempt folder holds an archive of the record (without attempt_workspaces).
+    """
+    registered = json.loads((folder / "run.json").read_text(encoding="utf-8"))["registered"]
+    record = {"status": status, "output": output, "persistence": "not_requested",
+              "execution_log": {"attempts": [{"attempt_id": "attempt", "tool_calls": calls}]}, **registered, **identity}
     archive = folder / "attempt" / "archive" / "execution_record.json"
     archive.parent.mkdir(parents=True, exist_ok=True)
-    archive.write_text("{}", encoding="utf-8")
-    return {"attempt_id": "attempt", "workspace_path": str(folder / "attempt"), "archive_path": str(archive),
-            "sealed": True, "seal_skipped_reason": None}
-
-
-def _record(folder, calls, output, status="completed", **identity):
-    """A synthetic record that executed the folder's registered definition unless identity overrides it."""
-    registered = json.loads((folder / "run.json").read_text(encoding="utf-8"))["registered"]
-    return {"status": status, "output": output, "attempt_workspaces": [_attempt(folder)],
-            "execution_log": {"attempts": [{"tool_calls": calls}]}, **registered, **identity}
+    archive.write_text(json.dumps(record), encoding="utf-8")
+    return {**record, "attempt_workspaces": [{"attempt_id": "attempt", "workspace_path": str(folder / "attempt"),
+                                              "archive_path": str(archive), "sealed": True,
+                                              "seal_skipped_reason": None}]}
 
 
 def _codex_command(command, output, exit_code=0):
@@ -286,6 +321,37 @@ def test_structured_output_check_compares_semantics_with_the_generated_input(tmp
     assert json.loads((folder / "check.json").read_text(encoding="utf-8")) == result
     # The right output from another registered version is not evidence for this definition.
     other = examples.check_pattern_example(folder, _record(folder, [], good, workflow_release_sha256="0" * 64))
+    assert _failed(other) == {"executed_the_registered_definition"}
+
+
+def _as_dev12_folder(folder):
+    """Rewrite run.json as 0.2.0.dev12 wrote it (runtime_pattern_example_v1: no source, selection or record path)."""
+    manifest = json.loads((folder / "run.json").read_text(encoding="utf-8"))
+    for key in ("source_directory", "selection_path", "record_path", "inspect_argv"):
+        manifest.pop(key)
+    manifest["schema_version"] = "runtime_pattern_example_v1"
+    (folder / "run.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (folder / "selection.json").unlink()
+    return manifest
+
+
+@pytest.mark.deterministic
+def test_check_rereads_a_dev12_run_folder_by_its_recorded_readback(tmp_path):
+    manifest = examples.prepare_pattern_example(_root(tmp_path), "code_change", "codex_cli")
+    folder, project = Path(manifest["run_directory"]), Path(manifest["project_directory"])
+    _as_dev12_folder(folder)
+    command = json.loads(Path(manifest["input_path"]).read_text(encoding="utf-8"))["check_command"]
+    pricing = project / "pricing.py"
+    pricing.write_bytes(pricing.read_bytes().replace(b"unit_price_cents + quantity", b"unit_price_cents * quantity"))
+    marker = (f"CHECK PASSED nonce={manifest['nonce']} "
+              f"pricing_sha256={hashlib.sha256(pricing.read_bytes()).hexdigest()}")
+    # A dev12 record still carries the model's restated checker line; it is neither required nor trusted.
+    output = {"changed_files": ["pricing.py"], "check_command": command, "check_result_line": marker, "passed": True}
+    record = _record(folder, [_codex_command(command, marker + "\r\n")], output)
+    (folder / "record.json").write_text(json.dumps(record), encoding="utf-8")
+    result = examples.check_pattern_example(folder)
+    assert result["passed"], [row for row in result["checks"] if not row["passed"]]
+    other = examples.check_pattern_example(folder, {**record, "module_release_sha256": "0" * 64})
     assert _failed(other) == {"executed_the_registered_definition"}
 
 
@@ -349,29 +415,31 @@ def test_code_change_check_uses_the_host_rerun_and_the_final_codes_command_resul
     manifest = examples.prepare_pattern_example(_root(tmp_path), "code_change", "codex_cli")
     folder, project = Path(manifest["run_directory"]), Path(manifest["project_directory"])
     command = json.loads(Path(manifest["input_path"]).read_text())["check_command"]
-    claimed_output = {"changed_files": ["pricing.py"], "check_command": command, "check_result_line": "CHECK PASSED",
-                      "passed": True}
+    claimed_output = {"changed_files": ["pricing.py"], "check_command": command, "passed": True}
     claimed = examples.check_pattern_example(folder, _record(folder, [], claimed_output))
     assert {"only_pricing_changed", "host_rerun_passes", "model_ran_check_on_final_code",
-            "output_check_result"} <= _failed(claimed)
+            "output_passed_agrees_with_host_rerun"} <= _failed(claimed)
     pricing = project / "pricing.py"
     pricing.write_bytes(pricing.read_bytes().replace(b"unit_price_cents + quantity", b"unit_price_cents * quantity"))
     marker = (f"CHECK PASSED nonce={manifest['nonce']} "
               f"pricing_sha256={hashlib.sha256(pricing.read_bytes()).hexdigest()}")
-    output = {**claimed_output, "check_result_line": marker}
+    output = dict(claimed_output)
     echoed = _codex_command(f'Write-Output "{marker}"', marker + "\r\n")
     assert _failed(examples.check_pattern_example(folder, _record(folder, [echoed], output))) == {
         "model_ran_check_on_final_code"}
     ran = _codex_command(command, marker + "\r\n")
-    assert examples.check_pattern_example(folder, _record(folder, [ran], output))["passed"]
+    passed = examples.check_pattern_example(folder, _record(folder, [ran], output))
+    assert passed["passed"]
+    # The pass evidence is attached by code from the logged command result, not restated by the model.
+    assert passed["artifacts"]["command_evidence"] == [{"log_index": 0, "tool_name": "command_execution",
+                                                        "request": {"command": command}, "observed_last_line": marker}]
     absolute = {**output, "changed_files": [str(pricing), "./pricing.py"]}
     assert examples.check_pattern_example(folder, _record(folder, [ran], absolute))["passed"]
     # Final output must state the actual change, the task's command and the observed checker line.
     for field, value, failed in (("changed_files", ["not_pricing.py"], "output_changed_files"),
                                  ("changed_files", [], "output_changed_files"),
                                  ("check_command", "python check_pricing.py", "output_check_command"),
-                                 ("check_result_line", "CHECK PASSED invented", "output_check_result"),
-                                 ("passed", False, "output_check_result")):
+                                 ("passed", False, "output_passed_agrees_with_host_rerun")):
         result = examples.check_pattern_example(folder, _record(folder, [ran], {**output, field: value}))
         assert _failed(result) == {failed}, (field, value)
     (project / "unexpected.txt").write_text("not allowed\n", encoding="utf-8")
@@ -522,8 +590,7 @@ def _code(manifest, argv, cwd, call, *, honest=True):
         stdout = f"CHECK PASSED nonce={manifest['nonce']} pricing_sha256=unchanged\n"
         command = f"echo '{stdout.strip()}'"
     call("Bash", stdout, {"stdout": stdout, "stderr": "", "interrupted": False}, command=command)
-    return {"changed_files": ["pricing.py"], "check_command": command, "check_result_line": stdout.strip(),
-            "passed": True}
+    return {"changed_files": ["pricing.py"], "check_command": command, "passed": True}
 
 
 def _mcp(manifest, argv, cwd, call, *, honest=True):
@@ -624,10 +691,15 @@ def test_installed_wheel_contains_and_runs_the_examples_outside_the_checkout(tmp
     wheel = _build_runtime_wheel(tmp_path / "build")
     with zipfile.ZipFile(wheel) as archive:
         members = set(archive.namelist())
-        for name in ("conformance_pattern_examples.py", "conformance_fixture_mcp_serving.py"):
-            assert f"agent_runtime/testing/{name}" in members
+        for name in ("testing/conformance_pattern_examples.py", "testing/conformance_fixture_mcp_serving.py",
+                     "registry/registry_definition_selection.py", "inspection/inspection_test_run_reading.py",
+                     "invocation/invocation_local_resource_preparation.py",
+                     "skills/agent-runtime-registration/SKILL.md", "skills/agent-runtime-test-run/SKILL.md",
+                     "skills/agent-runtime-usage/SKILL.md", "docs/agent_runtime_registration_runbook.md",
+                     "docs/agent_runtime_reviewer_api.md", "README.md"):
+            assert f"agent_runtime/{name}" in members, name
         archive.extractall(tmp_path / "site with spaces")
-    site, root = tmp_path / "site with spaces", tmp_path / "example root"
+    site, root = tmp_path / "site with spaces", _root(tmp_path)
     source = textwrap.dedent("""
         import json, runpy, sys
         sys.path.insert(0, sys.argv[1])
@@ -646,6 +718,24 @@ def test_installed_wheel_contains_and_runs_the_examples_outside_the_checkout(tmp
     assert Path(manifest["run_directory"]).parent == root.resolve()
     assert manifest["expected"]["initial_check"]["returncode"] == 1
     assert manifest["check_argv"][1:3] == ["-m", "agent_runtime.testing.conformance_pattern_examples"]
+    # The installed package registered the written source and wrote the selection the run command names.
+    assert Path(manifest["selection_path"]).is_file()
+    assert manifest["test_run_argv"][manifest["test_run_argv"].index("--selection") + 1] == manifest["selection_path"]
+    for argv in (["agent_runtime.registry.registry_local_persistence", "register-module", "--help"],
+                 ["agent_runtime.registry.registry_local_persistence", "select", "--help"],
+                 ["agent_runtime.testing.conformance_local_test_run", "--help"],
+                 ["agent_runtime.inspection.inspection_snapshot_exporting", "--help"]):
+        command = ("import runpy, sys; sys.path.insert(0, sys.argv[1]); module = sys.argv[2]; "
+                   "sys.argv = [module, *sys.argv[3:]]; runpy.run_module(module, run_name='__main__')")
+        shown = subprocess.run([sys.executable, "-I", "-c", command, str(site), *argv], cwd=tmp_path,
+                               capture_output=True, text=True, timeout=120)
+        assert shown.returncode == 0, (argv, shown.stderr)
+        expected = {"register-module": "--preset", "select": "--release-store"}.get(argv[1], "")
+        assert expected in shown.stdout
+        if argv[0].endswith("conformance_local_test_run"):
+            assert "--selection" in shown.stdout and "--material-root" in shown.stdout and "--record-out" in shown.stdout
+        if argv[0].endswith("inspection_snapshot_exporting"):
+            assert "--test-run-record" in shown.stdout
 
 
 # --- Real CLIs (skipped unless explicitly enabled) --------------------------------------------

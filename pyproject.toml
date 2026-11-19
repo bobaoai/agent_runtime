@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-runtime-core"
-version = "0.2.0.dev12"
-description = "Provider-neutral execution infrastructure for registered agent workflows"
+version = "0.2.0.dev14"
+description = "Windows distribution of provider-neutral execution infrastructure for registered agent workflows"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/bobaoai/agent_runtime"
+Repository = "https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows"
 
 [project.optional-dependencies]
 cli_tools = ["mcp>=1.29,<2"]
