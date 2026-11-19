@@ -1,5 +1,52 @@
 # Agent Runtime for Windows
 
+<a id="four-common-patterns"></a>
+
+## 四种常用模式 / Four common patterns
+
+| 模式（preset ID） | Module 运行要求（注册时固定） | 本次调用提供 | 随包样例的检查依据 |
+| --- | --- | --- | --- |
+| `structured_output` 纯文本／结构化输出 | `tool_free`、`inline`、工具 `()`、workspace `none`、network `denied` | `--input` | 输出字段与本次生成的输入一致；没有任务工具调用 |
+| `file_review` 文件审核 | `agent`、工具 `edit, read, search, shell`、`own_draft_read_write`、`provider_managed`（与 `ModuleReviewer` 的固定能力相同） | `--material-root` 加 `--material`（或明确 `--all-materials`），hash 由代码计算；也可用 `write_local_resources` 写出的 `--resources` 文件；需要运行检查时 Claude 加 `--command-permit` | scratch 中的审核文件含只出现在材料里的事实；日志中有对该文件的读回 |
+| `code_change` 代码开发并运行命令 | `agent`、工具 `edit, read, search, shell`、`explicit_project_read_write`、`provider_managed` | `--project-directory`（调用者的 checkout／worktree）；Claude 用 `--command-permit` 允许检查命令 | 只改了目标文件、没有新增文件；宿主独立复跑检查通过；日志中模型对最终代码运行了检查（证据由代码从日志的命令结果中附上，不要求模型复述 hash 或 nonce）；返回的改动文件、命令与通过状态和实际一致 |
+| `mcp_data` 已有 MCP／网关取数、落盘、读回 | `agent`、工具 `edit, read, shell` 与每个声明连接的 `mcp__<name>`、`explicit_project_read_write`、`provider_managed` | 宿主在 `root/.runtime/config.json` 的 `mcp_servers.<transport>.<name>` 配好连接；输出目录用 `--project-directory` | fixture 自己审计到参数与任务一致的真实 `tools/call`；保存的 JSON 与它返回的完整结果一致；日志中有读回；派生文件正确；返回的文件名指向项目目录中的这两个文件 |
+
+运行要求来自代码中的预设，不另抄一份配置。`module_requirements_preset(preset_id, *, mcp_connections=(), max_attempts=1)`
+返回普通 `ModuleExecutionRequirements`，作为 `execution_requirements` 明确传给 `register_module`（或
+`Module`）；默认 `max_attempts=1`，可传其他合法值，`ModuleReviewer` 仍固定为 3。CLI 用
+`agent-runtime-registry register-module --source DIR --preset mcp_data --mcp-connection team_data --version v1`；
+Python 中把注册结果直接交给下一步：
+
+```python
+from agent_runtime import (module_requirements_preset, register_module, run_local_workflow_test,
+                           selection_from_registration)
+
+result = register_module(host_root, source=module_folder, module_version="v1",
+                         execution_requirements=module_requirements_preset("mcp_data", mcp_connections=("team_data",)))
+selection = selection_from_registration(result, root=host_root)
+record = run_local_workflow_test(host_root, selection=selection, input_payload=payload,
+                                 project_directory=output_folder)
+```
+
+预设只决定注册时固定的能力。transport、模型、effort 与时限逐次取本次参数或执行参数文件；材料、项目目录、
+Claude 命令许可和 MCP 连接也在每次调用或宿主 root 中提供。已保存的定义保持其保存的工具与网络要求，
+不按版本标签或当前预设重新推断。选择模式、查看预设和运行样例的完整方法在随包 Skill `agent-runtime-usage`：
+包内位置 `agent_runtime/skills/agent-runtime-usage/SKILL.md`，Runtime setup 会把它与另两份操作 Skill 一起放进
+root 的 `.agents/skills` 和 `.claude/skills`。
+
+Codex 没有独立的 Read、Grep、Edit 工具，read、search、edit 都经由 shell，因此需要 `shell`；只声明 MCP 时
+shell 关闭，模型不能存取本地文件。Codex 不支持 `--command-permit`（`ADAPTER_CAPABILITY_UNSUPPORTED`），
+其 Shell 范围由 Codex 自己的 sandbox 与宿主 execpolicy 决定。第四种模式的“网关”指经已声明 MCP 连接访问的
+既有服务；Runtime 自己的 `gateway_read`／`hybrid` 输入仍未接通。
+
+| 差异 | Claude CLI | Codex CLI |
+| --- | --- | --- |
+| 模型与 effort | 可省略，使用 Runtime 默认 | 必须显式给出 |
+| 文件读写 | Read、Grep／Glob、Edit／Write | 经 shell |
+| 命令 | 自带只读命令加 `--command-permit` 允许的命令 | 不接受逐条许可 |
+| Windows 上的 Shell | Git Bash | PowerShell |
+| MCP | 私有 `mcp.json` 加 `--strict-mcp-config` | `-c mcp_servers.<name>`，未声明的宿主服务器本次关闭 |
+
 <a id="current-status"></a>
 
 ## 当前状态 / Current status: 0.2.0.dev14
@@ -204,53 +251,6 @@ Runtime 的设计要求同时约束使用它的操作 Agent 和它启动的任�
 选择文件只是指向已注册定义的引用，不是定义副本，也不是持久执行回执；PG 选择只记录已配置的 store 名称，
 DSN 留在该名称配置的环境变量里，每次运行按当前配置打开并读取准确 ref/hash。具体交接与同版本设计依据见
 [注册 Runbook：机器字段的来源与交接](docs/agent_runtime_registration_runbook.md#code-owned-machine-fields)。
-
-<a id="four-common-patterns"></a>
-
-### 四种常用模式 / Four common patterns
-
-| 模式（preset ID） | Module 运行要求（注册时固定） | 本次调用提供 | 随包样例的检查依据 |
-| --- | --- | --- | --- |
-| `structured_output` 纯文本／结构化输出 | `tool_free`、`inline`、工具 `()`、workspace `none`、network `denied` | `--input` | 输出字段与本次生成的输入一致；没有任务工具调用 |
-| `file_review` 文件审核 | `agent`、工具 `edit, read, search, shell`、`own_draft_read_write`、`provider_managed`（与 `ModuleReviewer` 的固定能力相同） | `--material-root` 加 `--material`（或明确 `--all-materials`），hash 由代码计算；也可用 `write_local_resources` 写出的 `--resources` 文件；需要运行检查时 Claude 加 `--command-permit` | scratch 中的审核文件含只出现在材料里的事实；日志中有对该文件的读回 |
-| `code_change` 代码开发并运行命令 | `agent`、工具 `edit, read, search, shell`、`explicit_project_read_write`、`provider_managed` | `--project-directory`（调用者的 checkout／worktree）；Claude 用 `--command-permit` 允许检查命令 | 只改了目标文件、没有新增文件；宿主独立复跑检查通过；日志中模型对最终代码运行了检查（证据由代码从日志的命令结果中附上，不要求模型复述 hash 或 nonce）；返回的改动文件、命令与通过状态和实际一致 |
-| `mcp_data` 已有 MCP／网关取数、落盘、读回 | `agent`、工具 `edit, read, shell` 与每个声明连接的 `mcp__<name>`、`explicit_project_read_write`、`provider_managed` | 宿主在 `root/.runtime/config.json` 的 `mcp_servers.<transport>.<name>` 配好连接；输出目录用 `--project-directory` | fixture 自己审计到参数与任务一致的真实 `tools/call`；保存的 JSON 与它返回的完整结果一致；日志中有读回；派生文件正确；返回的文件名指向项目目录中的这两个文件 |
-
-运行要求来自代码中的预设，不另抄一份配置。`module_requirements_preset(preset_id, *, mcp_connections=(), max_attempts=1)`
-返回普通 `ModuleExecutionRequirements`，作为 `execution_requirements` 明确传给 `register_module`（或
-`Module`）；默认 `max_attempts=1`，可传其他合法值，`ModuleReviewer` 仍固定为 3。CLI 用
-`agent-runtime-registry register-module --source DIR --preset mcp_data --mcp-connection team_data --version v1`；
-Python 中把注册结果直接交给下一步：
-
-```python
-from agent_runtime import (module_requirements_preset, register_module, run_local_workflow_test,
-                           selection_from_registration)
-
-result = register_module(host_root, source=module_folder, module_version="v1",
-                         execution_requirements=module_requirements_preset("mcp_data", mcp_connections=("team_data",)))
-selection = selection_from_registration(result, root=host_root)
-record = run_local_workflow_test(host_root, selection=selection, input_payload=payload,
-                                 project_directory=output_folder)
-```
-
-预设只决定注册时固定的能力。transport、模型、effort 与时限逐次取本次参数或执行参数文件；材料、项目目录、
-Claude 命令许可和 MCP 连接也在每次调用或宿主 root 中提供。已保存的定义保持其保存的工具与网络要求，
-不按版本标签或当前预设重新推断。选择模式、查看预设和运行样例的完整方法在随包 Skill `agent-runtime-usage`：
-包内位置 `agent_runtime/skills/agent-runtime-usage/SKILL.md`，Runtime setup 会把它与另两份操作 Skill 一起放进
-root 的 `.agents/skills` 和 `.claude/skills`。
-
-Codex 没有独立的 Read、Grep、Edit 工具，read、search、edit 都经由 shell，因此需要 `shell`；只声明 MCP 时
-shell 关闭，模型不能存取本地文件。Codex 不支持 `--command-permit`（`ADAPTER_CAPABILITY_UNSUPPORTED`），
-其 Shell 范围由 Codex 自己的 sandbox 与宿主 execpolicy 决定。第四种模式的“网关”指经已声明 MCP 连接访问的
-既有服务；Runtime 自己的 `gateway_read`／`hybrid` 输入仍未接通。
-
-| 差异 | Claude CLI | Codex CLI |
-| --- | --- | --- |
-| 模型与 effort | 可省略，使用 Runtime 默认 | 必须显式给出 |
-| 文件读写 | Read、Grep／Glob、Edit／Write | 经 shell |
-| 命令 | 自带只读命令加 `--command-permit` 允许的命令 | 不接受逐条许可 |
-| Windows 上的 Shell | Git Bash | PowerShell |
-| MCP | 私有 `mcp.json` 加 `--strict-mcp-config` | `-c mcp_servers.<name>`，未声明的宿主服务器本次关闭 |
 
 <a id="runnable-examples"></a>
 
