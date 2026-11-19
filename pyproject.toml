@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-runtime-core"
 version = "0.2.0.dev14"
-description = "Windows distribution of provider-neutral execution infrastructure for registered agent workflows"
+description = "Run repeatable Claude Code and Codex tasks on Windows, with structured results, files, and execution logs"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

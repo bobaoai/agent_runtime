@@ -1,81 +1,77 @@
 # Agent Runtime for Windows
 
+**Agent Runtime 让你的项目把 Claude Code 或 Codex 当作可重复调用的 AI 任务来运行。**
+
+你定义任务要做什么、给它哪些材料和工具、希望得到什么格式的结果。Runtime 按这份定义启动
+Claude Code 或 Codex，收集运行日志和最终结果，并保留这次运行产生的文件。你的 Python 项目、
+脚本或业务流程可以继续读取和处理这些结果。
+
+例如，一个项目每次生成研究报告后，都要请 AI 检查报告中的数字和结论。你可以把“报告审核”
+定义成一个任务，以后每次只传入新的报告。调用结束后，项目拿到约定格式的审核结论；需要追查时，
+还能找到当次输入、模型的执行日志和输出文件。
+
+这个项目适合需要**反复运行 AI 任务，并由程序接收结果**的开发者，以及替业务项目接入这些任务的
+Claude Code／Codex Agent。随包提供操作 Skills，帮助 Agent 选择模式、注册任务、运行任务和查看结果。
+
 <a id="four-common-patterns"></a>
 
 ## 四种常用模式 / Four common patterns
 
-| 模式（preset ID） | Module 运行要求（注册时固定） | 本次调用提供 | 随包样例的检查依据 |
+先按要完成的事情选模式。表中的英文名称是内置预设的名字，安装后可以直接用对应样例试跑。
+
+| 我想做什么 | 一个例子 | 运行后得到什么 | 推荐模式 |
 | --- | --- | --- | --- |
-| `structured_output` 纯文本／结构化输出 | `tool_free`、`inline`、工具 `()`、workspace `none`、network `denied` | `--input` | 输出字段与本次生成的输入一致；没有任务工具调用 |
-| `file_review` 文件审核 | `agent`、工具 `edit, read, search, shell`、`own_draft_read_write`、`provider_managed`（与 `ModuleReviewer` 的固定能力相同） | `--material-root` 加 `--material`（或明确 `--all-materials`），hash 由代码计算；也可用 `write_local_resources` 写出的 `--resources` 文件；需要运行检查时 Claude 加 `--command-permit` | scratch 中的审核文件含只出现在材料里的事实；日志中有对该文件的读回 |
-| `code_change` 代码开发并运行命令 | `agent`、工具 `edit, read, search, shell`、`explicit_project_read_write`、`provider_managed` | `--project-directory`（调用者的 checkout／worktree）；Claude 用 `--command-permit` 允许检查命令 | 只改了目标文件、没有新增文件；宿主独立复跑检查通过；日志中模型对最终代码运行了检查（证据由代码从日志的命令结果中附上，不要求模型复述 hash 或 nonce）；返回的改动文件、命令与通过状态和实际一致 |
-| `mcp_data` 已有 MCP／网关取数、落盘、读回 | `agent`、工具 `edit, read, shell` 与每个声明连接的 `mcp__<name>`、`explicit_project_read_write`、`provider_managed` | 宿主在 `root/.runtime/config.json` 的 `mcp_servers.<transport>.<name>` 配好连接；输出目录用 `--project-directory` | fixture 自己审计到参数与任务一致的真实 `tools/call`；保存的 JSON 与它返回的完整结果一致；日志中有读回；派生文件正确；返回的文件名指向项目目录中的这两个文件 |
+| 处理文本，返回固定格式的结果 | 从会议记录中提取主题、决定和待办事项 | 文本或符合约定字段的 JSON | `structured_output` |
+| 读取材料并给出审核结论 | 检查研究报告、设计文档或代码材料 | 审核结论、报告文件和执行日志 | `file_review` |
+| 修改项目里的代码，并运行检查 | 在指定项目中修复一个函数，再运行测试 | 实际改动的文件、检查结果和执行日志 | `code_change` |
+| 从已有服务取数，保存并处理数据 | 通过团队 MCP 查询数字，保存为 JSON，再读回生成汇总 | 保存的数据文件、汇总结果和工具调用记录 | `mcp_data` |
 
-运行要求来自代码中的预设，不另抄一份配置。`module_requirements_preset(preset_id, *, mcp_connections=(), max_attempts=1)`
-返回普通 `ModuleExecutionRequirements`，作为 `execution_requirements` 明确传给 `register_module`（或
-`Module`）；默认 `max_attempts=1`，可传其他合法值，`ModuleReviewer` 仍固定为 3。CLI 用
-`agent-runtime-registry register-module --source DIR --preset mcp_data --mcp-connection team_data --version v1`；
-Python 中把注册结果直接交给下一步：
+MCP 是 Claude／Codex 连接数据服务的一种工具接口。取数模式使用你已有的连接和服务授权，
+也支持把取得的数据保存在指定项目目录，供任务继续读取和处理。
 
-```python
-from agent_runtime import (module_requirements_preset, register_module, run_local_workflow_test,
-                           selection_from_registration)
+每种模式都有一个[可运行样例](#runnable-examples)。需要了解它们具体开放哪些工具、接收哪些参数时，
+再看[预设参数与 CLI 差异](#preset-reference)。
 
-result = register_module(host_root, source=module_folder, module_version="v1",
-                         execution_requirements=module_requirements_preset("mcp_data", mcp_connections=("team_data",)))
-selection = selection_from_registration(result, root=host_root)
-record = run_local_workflow_test(host_root, selection=selection, input_payload=payload,
-                                 project_directory=output_folder)
-```
+## 一次任务怎样运行
 
-预设只决定注册时固定的能力。transport、模型、effort 与时限逐次取本次参数或执行参数文件；材料、项目目录、
-Claude 命令许可和 MCP 连接也在每次调用或宿主 root 中提供。已保存的定义保持其保存的工具与网络要求，
-不按版本标签或当前预设重新推断。选择模式、查看预设和运行样例的完整方法在随包 Skill `agent-runtime-usage`：
-包内位置 `agent_runtime/skills/agent-runtime-usage/SKILL.md`，Runtime setup 会把它与另两份操作 Skill 一起放进
-root 的 `.agents/skills` 和 `.claude/skills`。
+1. **定义一次任务。** 写清任务说明、输入和输出格式，选择上面的模式。Runtime 保存这份任务定义及其版本。
+2. **用新的输入调用。** 提供本次材料、项目目录或已有 MCP 连接，选择 Claude Code／Codex、模型和运行参数。
+3. **取回结果并留档。** Runtime 返回执行状态和任务结果，保存日志与文件；调用方根据实际结果决定下一步。
 
-Codex 没有独立的 Read、Grep、Edit 工具，read、search、edit 都经由 shell，因此需要 `shell`；只声明 MCP 时
-shell 关闭，模型不能存取本地文件。Codex 不支持 `--command-permit`（`ADAPTER_CAPABILITY_UNSUPPORTED`），
-其 Shell 范围由 Codex 自己的 sandbox 与宿主 execpolicy 决定。第四种模式的“网关”指经已声明 MCP 连接访问的
-既有服务；Runtime 自己的 `gateway_read`／`hybrid` 输入仍未接通。
+例如，“报告审核”的任务定义可以反复使用，每次报告分别形成自己的运行记录。
+任务的内部标识符、hash 和结果引用由代码处理，操作 Agent 不需要手工拼接这些机器字段。
 
-| 差异 | Claude CLI | Codex CLI |
-| --- | --- | --- |
-| 模型与 effort | 可省略，使用 Runtime 默认 | 必须显式给出 |
-| 文件读写 | Read、Grep／Glob、Edit／Write | 经 shell |
-| 命令 | 自带只读命令加 `--command-permit` 允许的命令 | 不接受逐条许可 |
-| Windows 上的 Shell | Git Bash | PowerShell |
-| MCP | 私有 `mcp.json` 加 `--strict-mcp-config` | `-c mcp_servers.<name>`，未声明的宿主服务器本次关闭 |
+Runtime 在外层准备调用、启动 CLI、接收日志和结果。Claude Code／Codex 在任务内部自行读写文件、
+运行命令和调用 MCP。数据服务的登录与授权由宿主和服务维护。具体边界见[外层 CLI 边界](#outer-cli-boundary)。
+
+## 第一次使用，从这里开始
+
+1. **安装 Runtime 和操作 Skills：** 按[Clone 后安装 Runtime 和 Skills](#clone-and-install-skills)准备你的业务项目。
+2. **先跑一个样例：** 从[可运行样例](#runnable-examples)中的 `structured_output` 开始，确认 CLI 能运行并返回结果。
+3. **换成自己的任务：** 使用随包的 `agent-runtime-usage` Skill 选择模式，再按[注册与运行 Runbook](docs/agent_runtime_registration_runbook.md)接入自己的材料和任务定义。
+
+Runtime 对外提供 Python API 和命令行工具。Skills 是给 Claude／Codex 阅读的操作说明，
+用于引导它们调用这些入口。安装后可以直接让项目里的 Agent：
+
+> 使用 agent-runtime-usage，帮这个项目接入一个文件审核任务。先说明推荐模式、需要我提供的材料，以及从哪个样例开始。
 
 <a id="current-status"></a>
 
-## 当前状态 / Current status: 0.2.0.dev14
+## 当前版本与运行条件
 
-`agent-runtime-core` 0.2.0.dev14 是面向 Windows 的 standalone 开发版（Pre-Alpha）。
-本项目发布 Windows 版本的源码、安装包、随包 Skills 和四种常用模式样例。
+当前发布为 **`agent-runtime-core 0.2.0.dev14`，Windows 开发版（Pre-Alpha）**。
 
-- [GitLab 源码与 README](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows)
-- [Windows 版本下载（Releases）](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows/-/releases)
-- [安装包（Package Registry）](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows/-/packages)
+- [GitLab 源码](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows)
+- [下载安装包（Releases）](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows/-/releases)
+- [Package Registry](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows/-/packages)
 
-运行环境为 Windows 11、Python 3.11+，模型执行使用宿主已安装并登录的 Claude Code CLI 或 Codex CLI。
-本发布的验收范围是 Windows；包内保留的其他平台实现不代表已经在这些平台完成本版本验收。
+普通本地运行需要 Windows 11、Python 3.11+，以及已安装并登录的 Claude Code CLI 或 Codex CLI。
+使用文件、代码或 MCP 模式时，还需要提供相应目录、材料或连接。普通 Test Run 的记录保存在本地；
+PostgreSQL 和 Temporal 是需要宿主另行配置的可选集成。
 
-- **执行方式**：Runtime 只通过两个外部 CLI 运行模型：Claude Code CLI（`claude -p`，绑定
-  `claude_cli_adapter@v4`）与 Codex CLI（`codex exec`；无工具为 `codex_cli_agent_executor@v5`，带工具为
-  `codex_cli_agent_workspace_executor@v5`）。不使用 Claude Agent SDK，也没有其他 Provider 的执行器。
-- **常用模式**：dev12 增加四种常用模式的 Module 要求预设 `module_requirements_preset`、每种模式一个可直接运行的
-  随包样例，以及第三份随包操作 Skill `agent-runtime-usage`，见[四种常用模式](#four-common-patterns)。
-- **机器字段交接**：dev13 起普通路径不需要手填 ID、ref、hash 或内部路径：注册直接读取选定 source 的身份并写出
-  定义选择文件，Test Run 用 `--selection` 运行该准确版本，材料 hash 由代码按选定文件计算，结果用
-  `--record-out` 保存后由 `agent-runtime-inspect --test-run-record` 读取，见[普通交接路径](#code-owned-machine-fields)。
-- **验证方式**：Windows 开发线在 Windows 11 宿主上用同版本源码的本地测试套件，以及显式开启的真实 Claude CLI、
-  Codex CLI 用例验收（开关见[真实 CLI 用例开关](#live-run-gates)）。需要 macOS/Linux、PostgreSQL、Temporal
-  或其他真实服务的用例在该宿主上被跳过，跳过不算通过。macOS/Linux 实现仍在包内，本开发线没有在这些平台重新验证。
-- **存储**：普通 Test Run 不写 PostgreSQL，Attempt 文件夹在本地留档。PG 注册／执行存储、Live Inspector 与
-  Temporal 需要宿主明确提供。
-- **用量**：dev11 增加 `ordinary_input_tokens`，`input_tokens` 仍是含缓存的输入总量，见
-  [用量与 token 含义](#token-usage)。
+运行成功表示任务完成了技术执行，业务结果是否正确仍由调用方判断。
+本发布的验证范围、平台限制与真实运行开关见[平台与显式扩展限制](#platform-and-extension-limits)和
+[真实 CLI 用例开关](#live-run-gates)。
 
 <a id="install-and-first-run"></a>
 
@@ -251,6 +247,53 @@ Runtime 的设计要求同时约束使用它的操作 Agent 和它启动的任�
 选择文件只是指向已注册定义的引用，不是定义副本，也不是持久执行回执；PG 选择只记录已配置的 store 名称，
 DSN 留在该名称配置的环境变量里，每次运行按当前配置打开并读取准确 ref/hash。具体交接与同版本设计依据见
 [注册 Runbook：机器字段的来源与交接](docs/agent_runtime_registration_runbook.md#code-owned-machine-fields)。
+
+<a id="preset-reference"></a>
+
+### 预设参数与 CLI 差异 / Preset reference
+
+| 模式（preset ID） | Module 运行要求（注册时固定） | 本次调用提供 | 随包样例的检查依据 |
+| --- | --- | --- | --- |
+| `structured_output` 纯文本／结构化输出 | `tool_free`、`inline`、工具 `()`、workspace `none`、network `denied` | `--input` | 输出字段与本次生成的输入一致；没有任务工具调用 |
+| `file_review` 文件审核 | `agent`、工具 `edit, read, search, shell`、`own_draft_read_write`、`provider_managed`（与 `ModuleReviewer` 的固定能力相同） | `--material-root` 加 `--material`（或明确 `--all-materials`），hash 由代码计算；也可用 `write_local_resources` 写出的 `--resources` 文件；需要运行检查时 Claude 加 `--command-permit` | scratch 中的审核文件含只出现在材料里的事实；日志中有对该文件的读回 |
+| `code_change` 代码开发并运行命令 | `agent`、工具 `edit, read, search, shell`、`explicit_project_read_write`、`provider_managed` | `--project-directory`（调用者的 checkout／worktree）；Claude 用 `--command-permit` 允许检查命令 | 只改了目标文件、没有新增文件；宿主独立复跑检查通过；日志中模型对最终代码运行了检查（证据由代码从日志的命令结果中附上，不要求模型复述 hash 或 nonce）；返回的改动文件、命令与通过状态和实际一致 |
+| `mcp_data` 已有 MCP／网关取数、落盘、读回 | `agent`、工具 `edit, read, shell` 与每个声明连接的 `mcp__<name>`、`explicit_project_read_write`、`provider_managed` | 宿主在 `root/.runtime/config.json` 的 `mcp_servers.<transport>.<name>` 配好连接；输出目录用 `--project-directory` | fixture 自己审计到参数与任务一致的真实 `tools/call`；保存的 JSON 与它返回的完整结果一致；日志中有读回；派生文件正确；返回的文件名指向项目目录中的这两个文件 |
+
+运行要求来自代码中的预设，不另抄一份配置。`module_requirements_preset(preset_id, *, mcp_connections=(), max_attempts=1)`
+返回普通 `ModuleExecutionRequirements`，作为 `execution_requirements` 明确传给 `register_module`（或
+`Module`）；默认 `max_attempts=1`，可传其他合法值，`ModuleReviewer` 仍固定为 3。CLI 用
+`agent-runtime-registry register-module --source DIR --preset mcp_data --mcp-connection team_data --version v1`；
+Python 中把注册结果直接交给下一步：
+
+```python
+from agent_runtime import (module_requirements_preset, register_module, run_local_workflow_test,
+                           selection_from_registration)
+
+result = register_module(host_root, source=module_folder, module_version="v1",
+                         execution_requirements=module_requirements_preset("mcp_data", mcp_connections=("team_data",)))
+selection = selection_from_registration(result, root=host_root)
+record = run_local_workflow_test(host_root, selection=selection, input_payload=payload,
+                                 project_directory=output_folder)
+```
+
+预设只决定注册时固定的能力。transport、模型、effort 与时限逐次取本次参数或执行参数文件；材料、项目目录、
+Claude 命令许可和 MCP 连接也在每次调用或宿主 root 中提供。已保存的定义保持其保存的工具与网络要求，
+不按版本标签或当前预设重新推断。选择模式、查看预设和运行样例的完整方法在随包 Skill `agent-runtime-usage`：
+包内位置 `agent_runtime/skills/agent-runtime-usage/SKILL.md`，Runtime setup 会把它与另两份操作 Skill 一起放进
+root 的 `.agents/skills` 和 `.claude/skills`。
+
+Codex 没有独立的 Read、Grep、Edit 工具，read、search、edit 都经由 shell，因此需要 `shell`；只声明 MCP 时
+shell 关闭，模型不能存取本地文件。Codex 不支持 `--command-permit`（`ADAPTER_CAPABILITY_UNSUPPORTED`），
+其 Shell 范围由 Codex 自己的 sandbox 与宿主 execpolicy 决定。第四种模式的“网关”指经已声明 MCP 连接访问的
+既有服务；Runtime 自己的 `gateway_read`／`hybrid` 输入仍未接通。
+
+| 差异 | Claude CLI | Codex CLI |
+| --- | --- | --- |
+| 模型与 effort | 可省略，使用 Runtime 默认 | 必须显式给出 |
+| 文件读写 | Read、Grep／Glob、Edit／Write | 经 shell |
+| 命令 | 自带只读命令加 `--command-permit` 允许的命令 | 不接受逐条许可 |
+| Windows 上的 Shell | Git Bash | PowerShell |
+| MCP | 私有 `mcp.json` 加 `--strict-mcp-config` | `-c mcp_servers.<name>`，未声明的宿主服务器本次关闭 |
 
 <a id="runnable-examples"></a>
 
