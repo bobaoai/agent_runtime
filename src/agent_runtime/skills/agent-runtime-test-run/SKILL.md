@@ -54,6 +54,11 @@ Agent 行为的专门评价使用 Runtime 的 Behavior Evaluation 能力；执�
 workspace 为 none、私有草稿或调用者的项目目录），以及 Codex CLI（无工具 `codex_cli_agent_executor@v5`；
 带工具 `codex_cli_agent_workspace_executor@v5`：read、search、edit 经 shell 提供故须含 `shell`，或只用声明的 MCP 而
 关闭 shell）。Codex 不支持逐条命令许可，收到 `--command-permit` 时报告 `ADAPTER_CAPABILITY_UNSUPPORTED`。
+Antigravity CLI（`antigravity_cli_adapter@v1`）首个绑定只运行 `structured_output` 与 `file_review` 两种要求形状，
+需显式模型与 effort；命令只按 `--command-permit` 允许（agy 规则体，已实测写法为 `regex:` 加完整命令的
+`re.escape`，由 `antigravity_command_permit` 生成，它只转义给定字符串）。任务输入里的每条命令与其许可须来自
+同一字符串，并要求每条命令单独一次工具调用（见随包 registration runbook 的 `antigravity-command-permits`）。
+其他形状在启动模型前报告 `ADAPTER_CAPABILITY_UNSUPPORTED`。
 Runtime 不会把有工具 Module 降为无工具；完整相容性以当前安装的 CLI 和自动 API 文档为准。请求超出当前公开
 参数时，报告准确缺口，交 Runtime 维护者处理，不临时拼执行器或增加参数。
 
@@ -102,17 +107,21 @@ Windows 在打开会话前报告不支持，Runtime 不为此增加 Windows IPC�
   选出文件，或明确用 `--all-materials` 交出整个文件夹；相对路径、sha256 与执行位由代码按实际 bytes 计算。
   事先冻结的清单与只读依赖用 `write_local_resources` 写出的 `--resources` 文件；`explicit_project_read_write`
   用 `--project-directory`（调用者的 checkout、worktree 或输出目录）；Claude 需要运行命令时用可重复的
-  `--command-permit`（如 `"python -m pytest:*"`）。宿主选好的 MCP 连接写在 `root/.runtime/config.json`。
-- 宿主已安装且可用的 Provider CLI，以及当前入口所需的登录条件。Windows 只启动原生 `claude.exe`、`codex.exe`；
+  `--command-permit`（如 `"python -m pytest:*"`）。Claude 自带只读命令无需许可；任务要求运行、需要额外批准的检查命令，
+  许可须覆盖其实际写法。宿主选好的 MCP 连接写在 `root/.runtime/config.json`（用 `agent-runtime-setup --mcp <name>` 写入）。
+  Codex 无法交互式确认，所以仍需本地确认的工具
+  在该连接中设 `default_tools_approval_mode: "approve"`；`enabled_tools`（可选）只限定选定的工具，不是审批开关
+  （见 `agent_runtime_claude_native_tools.md` 的 `codex-mcp-unattended-tools`）。
+- 宿主已安装且可用的 Provider CLI，以及当前入口所需的登录条件。Windows 只启动原生 `claude.exe`、`codex.exe`、`agy.exe`；
   Claude 的 Bash 需要 Git for Windows。transport、model、effort 和同步运行时限逐项取本次
   参数、`root/.runtime/execution_parameters/workflows/<workflow_id>.json`、
   `root/.runtime/execution_parameters/workspace.json`，最后是 Runtime 默认。参数文件是 JSON 对象：
   `runtime_execution_parameters_v1` 保留 `transport_kind`、`model_id`、`reasoning_profile` 三字段；
   `runtime_execution_parameters_v2` 另外允许 `run_timeout_seconds`，其值为整数秒。未知键或非法值
-  均拒绝，文件不选择定义版本；格式说明见随包 `agent_runtime/README.md` 的执行
-  参数段。文件无效时准备失败，不跳到下一层。model 或 effort 可以来自任一层，但该层及其以下各层得到的
-  transport 必须等于最终 transport，否则 Runtime 拒绝；Codex 没有默认模型和 effort，不会从 Claude 默认
-  补齐。不能从模型名或环境名推断 Provider。模型默认值和支持语法由 Runtime 与同版本 CLI 说明，不在
+  均拒绝，文件不选择定义版本；格式说明与示例见随包 `agent_runtime/docs/agent_runtime_registration_runbook.md`
+  （anchor `test-reviewer`）。文件无效时准备失败，不跳到下一层。model 或 effort 可以来自任一层，但该层及其以下各层得到的
+  transport 必须等于最终 transport，否则 Runtime 拒绝；Codex 与 Antigravity 没有默认模型和 effort，不会从
+  Claude 默认补齐。不能从模型名或环境名推断 Provider。模型默认值和支持语法由 Runtime 与同版本 CLI 说明，不在
   Skill 保存另一份表。
 - 仅在需要留存时提供明确的证据输出位置：一个尚不存在、所在文件夹已存在的 `--record-out` 文件。普通运行默认
   只返回结果。
@@ -123,7 +132,8 @@ Windows 在打开会话前报告不支持，Runtime 不为此增加 Windows IPC�
 
 准确支持范围、参数和错误来自当前安装的 CLI 与随包文档，见 §5.1。root 在每种定义来源都必填，只定位
 setup、注册定义和参数文件，不向模型开放整个项目，也不授权访问生产数据。Provider 登录仍由宿主维护；缺失时报告，
-不自行开启登录、搜索其他账号或修改环境配置。
+不自行开启登录、搜索其他账号或修改环境配置。程序位置或登录状态不明时，`agent-runtime-setup --root <root> --provider <cli>`
+给出所选程序与登录状态；本人完成登录后再运行。
 
 ### 4.2 Output
 
@@ -142,9 +152,18 @@ setup、注册定义和参数文件，不向模型开放整个项目，也不授
 普通路径的 `attempt_workspaces` 列出每个 Attempt 文件夹（默认在 `root/.runtime/attempt_workspaces`），其中保存
 材料副本、scratch 和 `archive/execution_record.json`；执行结束、所启动的 CLI 进程确认停止且留档保存后才封存，
 否则给出 `seal_skipped_reason`。这些文件夹不会自动删除，由宿主用 `maintain_attempt_workspaces` 查询或清理已封存且
-过期的文件夹；调用者的项目目录从不进入清理集合。样例路径的工作目录是临时目录，结束后删除。
+过期的文件夹；调用者的项目目录从不进入清理集合。只有 `--example` 样例路径的工作目录是临时目录，结束后删除；
+`agent-runtime-usage` 的四种预设与 `native_project` 样例的 Attempt 文件夹保留在其运行文件夹的 `attempts` 下。
+root 配置了中央 `run_archive` 且调用者要求留档时，在运行结束后用 `agent-runtime-archive save --root ROOT --record
+RECORD --receipt-out RECEIPT` 保存本次记录与 Attempt 文件并从数据库读回核对，`cleanup --receipt RECEIPT` 只删本次
+Attempt 现场，`read --receipt RECEIPT` 从数据库取回记录、日志与文件。`RECORD` 是 `--record-out` 写出的完整记录文件，
+不是 inspect 摘要；留档命令所在的 Python 环境需安装 `agent-runtime-core[postgres]`。分别报告
+收据的 `run_status`（运行结果）与 `archive_status`（留档结果）；留档失败或保留原因照实交回，不自行删除现场。
+项目目录中的业务产出不在 Attempt 内，不进入留档。说明与可运行样例见随包 registration runbook 的 `archive-test-run`
+节（样例 anchor `archive-test-run-example`）。
 
-本命令返回 `persistence=not_requested`，指执行事实不写持久存储，不排除前置 setup 补齐环境文件。
+本命令返回 `persistence=not_requested`，指执行事实不写持久存储，不排除前置 setup 补齐环境文件，也不妨碍运行结束后
+用上述 `agent-runtime-archive` 显式留档这份记录。
 已注册定义仍留在 `.runtime`。execution ID 不能用于之后查询持久历史。`--record-out` 把同一 JSON（运行未返回记录时
 为错误文档）存为新文件，用 `agent-runtime-inspect --test-run-record FILE --view summary|output|log|files` 查看结果、
 执行日志与 Attempt 文件；查看不注册、不重跑、不连 PG，`durable_history=not_available` 表示它是测试证据，不构成
@@ -222,6 +241,8 @@ agent-runtime-test-run --root /path/to/host --selection /path/to/registered.sele
   --transport codex_cli --model selected_model --effort selected_effort
 ```
 
+Antigravity 同样使用 `--transport antigravity_cli --model selected_model --effort selected_effort`，只适用于
+`structured_output` 与 `file_review` 形状的定义。
 `selected_model` 和 `selected_effort` 换成本次明确的真实值，不写入 source 或另存环境 Profile。
 长期固定的项目或 Workflow 选择写进上述参数文件，由 Runtime 取值并在结果中记录来源。
 
@@ -258,6 +279,20 @@ agent-runtime-test-run --root /path/to/host --selection /path/to/registered.sele
   --input /path/to/prepared_input.json --project-directory /path/to/checkout \
   --command-permit "python -m pytest:*"
 ```
+
+要让 Agent 在调用者项目里按项目指令和项目 Skills 工作时，用原生项目模式代替命令许可：加 `--native-project`
+（Codex 另加 `--codex-execution-mode host`），不再给 `--command-permit`。Claude 加载 CLAUDE.md 与 `.claude/skills`，
+Codex 加载 AGENTS.md 与 `.agents/skills`；Shell 以宿主权限运行，只传 Module 声明的 MCP 连接，每次是一次新的会话。
+只接受 `code_change`／`mcp_data` 形状的 Module，材料包、记录型 commands、额外依赖和 Antigravity 会在调用模型前被拒绝：
+
+```sh
+agent-runtime-test-run --root /path/to/host --selection /path/to/registered.selection.json \
+  --input /path/to/prepared_input.json --project-directory /path/to/project \
+  --transport codex_cli --model MODEL --effort EFFORT --native-project --codex-execution-mode host
+```
+
+记录中每个 Attempt 的 `effective_configuration` 写明 `native_project`、`context_enabled`、`context_suppressed`；实际
+调用了哪些 Skills、命令与 MCP 工具，用 `agent-runtime-inspect --view log` 看原始事件，不以配置或模型自述代替。
 
 不要把模型、凭据或生产授权写进资源文件。需要留存时用 `--record-out` 写到调用者明确的新文件，并保留 stderr 和
 退出码；已有文件不会被覆盖，命令在 setup 和模型调用前以用法错误退出。仅使用当前 CLI 已公开的参数，不追加未支持的

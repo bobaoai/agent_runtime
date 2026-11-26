@@ -59,10 +59,16 @@ API_SOURCES = {
     ),
     "src/agent_runtime/testing/execution_local_test_run.py": (),
     "src/agent_runtime/testing/conformance_local_test_run.py": ("run_local_workflow_test", "write_test_run_record"),
+    "src/agent_runtime/testing/conformance_test_run_archiving.py": (
+        "save_test_run_archive", "read_test_run_archive", "cleanup_test_run_archive", "run_archive_ddl",
+        "PostgresTestRunArchiveStore",
+    ),
     "src/agent_runtime/foundation/foundation_environment_setup.py": ("setup_runtime", "load_runtime_config"),
+    "src/agent_runtime/testing/conformance_host_setup.py": (),
     "src/agent_runtime/inspection/inspection_execution_logging.py": ("read_execution_log", "parse_cli_log"),
     "src/agent_runtime/invocation/invocation_claude_cli_execution.py": ("ClaudeAdapter",),
     "src/agent_runtime/invocation/invocation_codex_module_invocation.py": ("CodexCliModuleExecutor", "CodexCliAgentWorkspaceModuleExecutor", "CodexCliInvocationResult", "build_command", "select_codex_mcp_servers"),
+    "src/agent_runtime/invocation/invocation_antigravity_cli_execution.py": ("AntigravityCliAdapter", "antigravity_command_permit"),
     "src/agent_runtime/invocation/invocation_workspace_preparation.py": (
         "seal_attempt_workspace", "maintain_attempt_workspaces", "write_attempt_archive",
         "AttemptWorkspaceRetentionFacts", "AttemptWorkspaceMaintenanceResult",
@@ -141,6 +147,8 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
         "CodexCliInvocationResult": "agent_runtime.invocation.invocation_codex_module_invocation",
         "build_command": "agent_runtime.invocation.invocation_codex_module_invocation",
         "select_codex_mcp_servers": "agent_runtime.invocation.invocation_codex_module_invocation",
+        "AntigravityCliAdapter": "agent_runtime.invocation.invocation_antigravity_cli_execution",
+        "antigravity_command_permit": "agent_runtime.invocation.invocation_antigravity_cli_execution",
         "seal_attempt_workspace": "agent_runtime.invocation.invocation_workspace_preparation",
         "maintain_attempt_workspaces": "agent_runtime.invocation.invocation_workspace_preparation",
         "write_attempt_archive": "agent_runtime.invocation.invocation_workspace_preparation",
@@ -201,7 +209,7 @@ def _section(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
 
 
 def _cli_sections(tree: ast.Module, standalone: str | None = None,
-                  inherited_tree: ast.Module | None = None) -> list[str]:
+                  inherited_tree: ast.Module | None = None, heading: str = "Test Run CLI") -> list[str]:
     """Read literal argument/help declarations from the real CLI parser AST."""
     parser = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "build_parser")
     parsers = [(parser, {})]
@@ -240,7 +248,7 @@ def _cli_sections(tree: ast.Module, standalone: str | None = None,
                     commands[call.func.value.id][1].append((", ".join(ast.literal_eval(arg) for arg in call.args),
                                                            "required" if required else "optional", help_text))
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
-    result = ["## Test Run CLI" if standalone else "## CLI commands", "", "Generated from the installed parser's argument declarations.", "",
+    result = [f"## {heading}" if standalone else "## CLI commands", "", "Generated from the installed parser's argument declarations.", "",
               _doc(main, "CLI main"), ""]
     for command, arguments in commands.values():
         title = command if standalone else "agent-runtime-registry " + command
@@ -271,7 +279,8 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
     lines.extend(["## " + _doc(overview_tree, "Runtime run profile"), "", "## Contents", ""])
     symbols = [name for names in API_SOURCES.values() for name in names]
     lines.extend(f"- [{name}](#{name.lower()})" for name in symbols)
-    lines.extend(["- [CLI commands](#cli-commands)", "- [Test Run CLI](#test-run-cli)", "- [Error constants](#error-constants)", ""])
+    lines.extend(["- [CLI commands](#cli-commands)", "- [Setup CLI](#setup-cli)", "- [Test Run CLI](#test-run-cli)",
+                  "- [Error constants](#error-constants)", ""])
     constants: dict[str, str] = {}
     for source, selected in API_SOURCES.items():
         tree = ast.parse((project_root / source).read_text(encoding="utf-8"), filename=source)
@@ -286,6 +295,8 @@ def render_api_reference(project_root: Path = PROJECT_ROOT) -> bytes:
         elif source.endswith("conformance_local_test_run.py"):
             inherited = ast.parse((project_root / "src/agent_runtime/testing/execution_local_test_run.py").read_text())
             lines.extend(_cli_sections(tree, standalone="agent-runtime-test-run", inherited_tree=inherited))
+        elif source.endswith("conformance_host_setup.py"):
+            lines.extend(_cli_sections(tree, standalone="agent-runtime-setup", heading="Setup CLI"))
         for node in tree.body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:

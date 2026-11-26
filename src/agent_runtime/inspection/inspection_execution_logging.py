@@ -160,8 +160,87 @@ def _with_local_commands(view: dict, trace: Mapping[str, Any], *, callbacks=Fals
     return view
 
 
+# agy tool steps whose public stream event reports only a summary of the result
+# (read_file: "N lines, M bytes") or no written content (write_file: the path only).
+_ANTIGRAVITY_SUMMARY_RESULTS = frozenset({"read_file", "view_file"})
+_ANTIGRAVITY_CONTENTLESS_REQUESTS = frozenset({"write_file", "write_to_file", "replace_file_content"})
+
+
+def _parse_antigravity_log(trace: Mapping[str, Any], issues: list) -> dict:
+    """Project agy stream-json tool steps; the exact events stay in events.
+
+    One call per tool step_index (step_type "tool"). The ACTIVE update carries
+    the request (tool_info.parameters); the final update carries tool_info and
+    duration_seconds as the response. Only state DONE is completed; another final
+    state is failed. A read summary or a write without its content is an explicit
+    content limitation, never reconstructed. The finish step is the CLI's
+    structured-result mechanism, and init.tools is the general tool catalog;
+    neither is a task tool call. The terminal is the single result event.
+    """
+    events, calls, ambiguous = [], {}, set()
+    terminal_count = 0
+    for position, line in enumerate(cli_stream_bytes(trace, "stdout").splitlines()):
+        if not line.strip():
+            continue
+        try:
+            event = decode_cli_event(line.decode("utf-8"))
+        except (UnicodeError, ValueError):
+            issues.append(f"invalid_event:{position}")
+            continue
+        events.append({"index": position, "event": event})
+        if event.get("event") == "result":
+            terminal_count += 1
+            continue
+        step = event.get("step_update")
+        if event.get("event") != "step_update" or not isinstance(step, dict) or step.get("step_type") != "tool":
+            continue
+        index = step.get("step_index")
+        if type(index) is not int:
+            issues.append(f"missing_tool_call_id:{position}")
+            continue
+        identity = f"step_{index}"
+        row = calls.setdefault(identity, {"tool_call_id": identity, "tool_name": None, "source_kind": "provider_native",
+            "request": None, "response": None, "status": "incomplete", "request_event_indices": [],
+            "response_event_indices": []})
+        name = step.get("tool_name")
+        if row["tool_name"] is not None and name != row["tool_name"]:
+            issues.append(f"conflicting_tool_request:{identity}")
+            ambiguous.add(identity)
+        row["tool_name"] = name if isinstance(name, str) and name else row["tool_name"]
+        info = step.get("tool_info") if isinstance(step.get("tool_info"), dict) else {}
+        parameters = info.get("parameters")
+        if row["request"] is None and isinstance(parameters, dict):
+            row["request"] = parameters
+            row["request_event_indices"].append(position)
+        state = step.get("state")
+        if state == "ACTIVE":
+            continue
+        if row["response_event_indices"]:
+            issues.append(f"duplicate_tool_response:{identity}")
+            ambiguous.add(identity)
+            continue
+        row["response"] = {key: value for key, value in (("state", state), ("tool_info", info),
+                           ("duration_seconds", step.get("duration_seconds"))) if value is not None}
+        row["response_event_indices"].append(position)
+        row["status"] = "completed" if state == "DONE" else "failed"
+        if row["tool_name"] in _ANTIGRAVITY_SUMMARY_RESULTS:
+            issues.append(f"provider_result_content_unavailable:{identity}")
+        if row["tool_name"] in _ANTIGRAVITY_CONTENTLESS_REQUESTS:
+            issues.append(f"provider_request_content_unavailable:{identity}")
+    for identity, row in calls.items():
+        if not row["request_event_indices"] or not row["response_event_indices"]:
+            issues.append(f"unpaired_tool_call:{identity}")
+            ambiguous.add(identity)
+        if identity in ambiguous:
+            row["status"] = "incomplete"
+    if terminal_count != 1:
+        issues.append("terminal_event_missing_or_duplicated")
+    return {"schema_version": "runtime_cli_log_v1", "complete": not issues, "issues": issues, "events": events,
+            "tool_calls": list(calls.values())}
+
+
 def parse_cli_log(trace: Mapping[str, Any]) -> dict:
-    """Project observed Claude/Codex CLI tool calls from a trusted private trace.
+    """Project observed Claude/Codex/Antigravity CLI tool calls from a trusted private trace.
 
     Trusted execution-log readers supply this saved trace, never
     the model's final answer. Returned data describes observations, not grants
@@ -176,6 +255,8 @@ def parse_cli_log(trace: Mapping[str, Any]) -> dict:
     completed. Codex native completion snapshots retain their public fields;
     absent patch bodies and search results are explicit content limitations.
     A complete failed turn is a recorded terminal, not a missing terminal.
+    Antigravity tool steps are paired by step_index; read summaries and
+    content-less writes are explicit content limitations (see _parse_antigravity_log).
     When this invocation supplies local_command_calls, exact returned IDs and
     matching request/result JSON correlate its own process facts with the CLI.
     A paired call appears once in tool_calls with both real identities; the
@@ -190,6 +271,8 @@ def parse_cli_log(trace: Mapping[str, Any]) -> dict:
         issues.append("byte_exact_capture_unavailable")
     if trace.get("process_output_complete") is not True:
         issues.append("process_output_incomplete")
+    if transport == "antigravity_cli":
+        return _parse_antigravity_log(trace, issues)
     if transport not in {"claude_cli", "codex_cli"}:
         return {"schema_version": "runtime_cli_log_v1", "complete": False, "issues": [*issues, "unsupported_transport"],
                 "events": [], "tool_calls": None}

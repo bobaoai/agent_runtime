@@ -21,7 +21,7 @@ def test_missing_config_has_no_setup_or_resource_side_effect(tmp_path):
     root = tmp_path / "not_created"
     assert load_runtime_config(root) == {"provider_cli_paths": {}, "read_only_dependencies": (),
         "attempt_workspace_root": root.resolve() / ".runtime" / "attempt_workspaces", "mcp_servers": {},
-        "release_stores": {}}
+        "release_stores": {}, "run_archive": None}
     assert not root.exists()
 
 
@@ -37,7 +37,7 @@ def test_config_resolves_host_locators_without_opening_unused_resources(tmp_path
     assert result == {"provider_cli_paths": {"claude_cli": root / "bin/claude", "codex_cli": root / "absent/codex"},
         "read_only_dependencies": (root / ".venv", tmp_path / "external-library"),
         "attempt_workspace_root": root.resolve() / ".runtime" / "attempt_workspaces", "mcp_servers": {},
-        "release_stores": {}}
+        "release_stores": {}, "run_archive": None}
     assert _snapshot(root) == before and not (root / ".agents").exists()
     result["provider_cli_paths"]["claude_cli"] = Path("changed")
     assert load_runtime_config(root)["provider_cli_paths"]["claude_cli"] == root / "bin/claude"

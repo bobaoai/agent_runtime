@@ -34,9 +34,10 @@ _ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _forwarded_variable(name: str) -> bool:
+    from ..invocation.invocation_antigravity_cli_execution import _ENVIRONMENT_KEYS as antigravity_keys
     from ..invocation.invocation_claude_cli_execution import _ENVIRONMENT_KEYS as claude_keys
     from ..invocation.invocation_codex_module_invocation import _ENVIRONMENT_KEYS as codex_keys
-    return name in claude_keys | codex_keys
+    return name in claude_keys | codex_keys | antigravity_keys
 
 
 def _definition_source(*, workflow_id, version, release_store, release_database_url_env, release_schema,
@@ -95,7 +96,7 @@ def run_local_workflow_test(
     read_only_dependencies: tuple[Path, ...] | None = None, commands: tuple[dict, ...] = (),
     tool_session_factory=None, user_cancel_requested=None, resource_cancel_requested=None,
     progress_observer=None, project_directory: Path | None = None, command_permits: tuple[str, ...] = (),
-    codex_execution_mode: str = "configured",
+    codex_execution_mode: str = "configured", native_project: bool = False,
 ) -> dict:
     """Test-run a registered single-node Workflow with retained Attempt folders.
 
@@ -150,17 +151,26 @@ def run_local_workflow_test(
             or project directory, or only declared MCP connections with the
             shell tool off; both take denied or provider_managed network. It
             requires explicit model_id and effort; unsupported requirements are
-            rejected, never reduced to fit.
+            rejected, never reduced to fit. antigravity_cli (agy, adapter v1)
+            runs only the structured_output shape (tool_free, workspace none,
+            no tools, network denied) and the file_review shape (agent,
+            own_draft_read_write, exactly read/search/edit/shell,
+            provider_managed), both with native structured output, and also
+            requires explicit model_id and effort; every other shape is refused
+            with ADAPTER_CAPABILITY_UNSUPPORTED before a model starts.
         model_id: This call's concrete model ID; None falls back through the same
             layers to the Claude default.
-            Codex requires an explicit model. Claude verifies observed model
-            identity, allowing its known CLI [1m] selector. Codex retains the
-            requested identity and available Provider facts without inventing
-            an unreported actual response model. Model names do not select transport.
+            Codex and Antigravity require an explicit model. Claude verifies
+            observed model identity, allowing its known CLI [1m] selector.
+            Antigravity requires its init event to report the requested model.
+            Codex retains the requested identity and available Provider facts
+            without inventing an unreported actual response model. Model names
+            do not select transport.
         reasoning_profile: This call's effort; None falls back through the same
             layers to Runtime's default. A model or effort written in a layer
             whose transport differs from the resolved transport is rejected.
-            Required for codex_cli; no default is inferred from another Provider.
+            Required for codex_cli and antigravity_cli; no default is inferred
+            from another Provider.
         run_timeout_seconds: Total synchronous work budget in seconds through the four layers; default 1200.
         parent_run: Optional live context issued by the active managed parent host.
             JSON, arbitrary deadlines and cross-process contexts are rejected.
@@ -172,8 +182,11 @@ def run_local_workflow_test(
             Both definition modes use the same root configuration. On Windows
             the PATH lookup finds the native program (claude.exe, codex.exe);
             a .cmd/.bat/.ps1 launcher is not started because it would re-parse
-            the exact arguments. Each CLI uses the host's own login and
-            configuration, never credentials from task JSON.
+            the exact arguments. For antigravity_cli, when PATH has no agy.exe
+            (a process started before the installer changed PATH), the fixed
+            installed location %LOCALAPPDATA%\\agy\\bin\\agy.exe is used if present.
+            Each CLI uses the host's own login and configuration, never
+            credentials from task JSON.
         resources_path: Declarative resource JSON with material_root,
             material_files, read_only_dependencies and commands; relative paths
             resolve against that file. Excludes the four decomposed resource
@@ -240,16 +253,44 @@ def run_local_workflow_test(
             Claude renders them as Bash(<permit>) allow rules under dontAsk: they
             pre-approve those commands, Claude's built-in read-only commands still
             run, and other commands are denied. Without permits Runtime adds no
-            Bash allow rule. Codex cannot express per-call permits and refuses them.
+            Bash allow rule. Antigravity renders each permit as an agy
+            command(<permit>) allow rule in its session settings; the
+            live-tested body is regex: plus Python re.escape of the complete
+            command (antigravity_command_permit), and without permits no command
+            is allowed. Codex cannot express per-call permits and refuses them.
         codex_execution_mode: Per-call host resource choice, configured (default)
             preserves the existing CLI permission configuration. host selects
             Codex native host execution only for agent, explicit_project_read_write,
-            provider_managed and exactly read/search/edit/shell. It uses host
-            permissions; cwd is task scope, not an OS filesystem boundary.
-            No material package, additional dependencies or recorded commands
-            are accepted in host mode. Unknown values and null are rejected.
+            provider_managed and exactly read/search/edit/shell (with
+            native_project, the native project shapes including declared MCP).
+            It uses host permissions; cwd is task scope, not an OS filesystem
+            boundary. No material package, additional dependencies or recorded
+            commands are accepted in host mode. Unknown values and null are rejected.
             Parameter files and Module definitions do not select this option.
             Actual mode, argv and directory are retained in provider_trace.
+        native_project: Per-call choice, False by default (every behavior above
+            unchanged; parameter files and Module definitions never select it).
+            True runs one independent claude -p or codex exec in the caller's
+            project_directory with the project's native context: Claude loads
+            CLAUDE.md and skills (no safe-mode or slash-command disabling; Skill
+            tool, PowerShell beside Bash; whole-tool allow rules under dontAsk;
+            auto-memory and hooks off), Codex loads AGENTS.md and skills under
+            the explicit codex_execution_mode="host". Only the declared MCP
+            connections from root/.runtime/config.json are passed; credentials
+            stay in each CLI's own mechanism. Shell runs with host permissions;
+            the directory is task scope, not an OS boundary. Python runs as
+            the project's own instructions direct; the Runtime Python still
+            leads PATH. Accepts only the code_change and mcp_data shapes (see
+            validate_native_project) and needs project_directory; a material
+            package, resources commands, additional read_only_dependencies
+            (pass () to clear host defaults), command_permits, a
+            tool_session_factory and Antigravity are refused before any
+            Provider with ADAPTER_CAPABILITY_UNSUPPORTED. Each call is one
+            fresh session that is never resumed (Claude
+            --no-session-persistence, Codex --ephemeral). Recorded as native_project with
+            context_enabled/context_suppressed in each Attempt's
+            effective_configuration; what was discovered and used is in the
+            raw Provider events.
     Returns:
         JSON-compatible execution facts and output. execution_parameter_sources
         gives each parameter's source layer (call, workflow_file,
@@ -301,7 +342,10 @@ def run_local_workflow_test(
         TypeError: progress_observer is not callable, checked before setup.
         Exception: Existing provider/environment errors retain their contracts.
     Effects:
-        Runs lightweight setup_runtime(root), reads fixed definitions (reading
+        Runs lightweight setup_runtime(root) (with native_project only after
+        the arguments, the in-memory definition and Profile, and the host
+        defaults pass the native checks, so a refused call writes nothing),
+        reads fixed definitions (reading
         PostgreSQL only for a PostgreSQL definition), stages input in memory,
         calls the admitted Adapter through the existing Workflow Module kernel,
         and returns facts. Does not write PostgreSQL, register definitions,
@@ -316,7 +360,20 @@ def run_local_workflow_test(
     from ..invocation.invocation_codex_module_invocation import (
         validate_codex_execution_mode, CodexCapabilityUnsupportedError,
     )
+    from ..invocation.invocation_tool_definition import NativeProjectUnsupportedError, validate_native_project
     validate_codex_execution_mode(codex_execution_mode)
+    validate_native_project(native_project)
+    if native_project:
+        if project_directory is None:
+            raise NativeProjectUnsupportedError("native_project needs the caller's project_directory")
+        if command_permits:
+            raise NativeProjectUnsupportedError("native_project takes no command_permits; Shell uses host permissions")
+        if tool_session_factory is not None:
+            raise NativeProjectUnsupportedError("native_project takes no callback tool_session_factory")
+        if (resources_path is not None or material_root is not None or material_files or commands
+                or read_only_dependencies not in (None, ())):
+            raise NativeProjectUnsupportedError(
+                "native_project takes no resources file, material package, additional dependencies or command extension")
     if progress_observer is not None and not callable(progress_observer):
         raise TypeError("progress_observer must be callable")
     if parent_run is not None:
@@ -350,7 +407,10 @@ def run_local_workflow_test(
     from ..foundation.foundation_environment_setup import load_runtime_config, setup_runtime
     from ..invocation.invocation_local_resource_preparation import capture_local_resources, parse_local_resources
 
-    setup_runtime(root)
+    if not native_project:
+        setup_runtime(root)
+    # A native project call first proves its definition, Profile and host defaults acceptable with
+    # in-memory preparation and reads only; setup, which may install root Skills, runs afterwards.
     if resources_path is not None:
         resources = _resource_arguments(Path(resources_path))
         material_root = resources.get("material_root")
@@ -388,13 +448,22 @@ def run_local_workflow_test(
         binding = variant.policy_document()["bindings"][0]
         selected_profile = saved.registry.get_execution_profile(
             binding["execution_profile_release_ref"], binding["execution_profile_release_sha256"])
-        validate_codex_execution_mode(codex_execution_mode, profile=selected_profile)
+        validate_codex_execution_mode(codex_execution_mode, profile=selected_profile, native_project=native_project)
+        validate_native_project(native_project, profile=selected_profile, codex_execution_mode=codex_execution_mode)
         config = load_runtime_config(root)
         dependencies = read_only_dependencies
         if dependencies is None:
             dependencies = config["read_only_dependencies"] if selected_profile.tool_policy else ()
         if type(dependencies) is not tuple:
             raise ValueError("read_only_dependencies must be a tuple or None for host defaults")
+        if native_project:
+            if dependencies:
+                raise NativeProjectUnsupportedError("native_project takes no additional read_only_dependencies; "
+                                                    "pass read_only_dependencies=() to clear the host defaults")
+            # The project directory check the Adapter repeats, made here before any setup write.
+            from ..invocation.invocation_workspace_preparation import validate_project_directory
+            validate_project_directory(project_directory, workspace_root=Path(config["attempt_workspace_root"]))
+            setup_runtime(root)
         if codex_execution_mode == "host" and (material_root is not None or material_files or dependencies or commands):
             raise CodexCapabilityUnsupportedError(
                 "host execution takes no material package, extra dependencies or command extension")
@@ -402,10 +471,13 @@ def run_local_workflow_test(
             material_files=material_files, read_only_dependencies=dependencies, commands=commands)
         dependencies = (() if resource_body is None else
             tuple(Path(value) for value in parse_local_resources(resource_body)["read_only_dependencies"]))
-        program = {"claude_cli": "claude", "codex_cli": "codex"}[selected_profile.transport_kind]
+        program = {"claude_cli": "claude", "codex_cli": "codex", "antigravity_cli": "agy"}[selected_profile.transport_kind]
         executable = cli_path if cli_path is not None else config["provider_cli_paths"].get(selected_profile.transport_kind)
         if executable is None:
             executable = HOST_PLATFORM.resolve_cli_program(program, os.environ)
+        if executable is None and selected_profile.transport_kind == "antigravity_cli":
+            from ..invocation.invocation_antigravity_cli_execution import installed_agy_program
+            executable = installed_agy_program(os.environ)
         if executable is None:
             raise FileNotFoundError(f"{program} CLI executable is unavailable; provide cli_path, provider_cli_paths "
                                     "or a native program on host PATH")
@@ -424,13 +496,17 @@ def run_local_workflow_test(
             adapter = ClaudeAdapter(release_registry=saved.registry, artifact_host=artifacts,
                 workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies,
                 adapter_binding=(selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision),
-                **observation, **resources)
+                native_project=native_project, **observation, **resources)
+        elif selected_profile.transport_kind == "antigravity_cli":
+            from ..invocation.invocation_antigravity_cli_execution import AntigravityCliAdapter
+            adapter = AntigravityCliAdapter(release_registry=saved.registry, artifact_host=artifacts,
+                workspace_root=workspace, cli_path=executable, read_only_dependencies=dependencies, **resources)
         elif (selected_profile.executor_adapter_id, selected_profile.executor_adapter_revision) == (
                 CodexCliAgentWorkspaceModuleExecutor.executor_adapter_id,
                 CodexCliAgentWorkspaceModuleExecutor.executor_adapter_revision):
             adapter = CodexCliAgentWorkspaceModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
                 workspace_root=workspace, codex_bin=str(executable), read_only_dependencies=dependencies,
-                codex_execution_mode=codex_execution_mode, **resources)
+                codex_execution_mode=codex_execution_mode, native_project=native_project, **resources)
         else:
             adapter = CodexCliModuleExecutor(release_registry=saved.registry, artifact_host=artifacts,
                 workspace_root=workspace, codex_bin=str(executable), **resources)
@@ -505,6 +581,13 @@ def write_test_run_record(path: Path, document: dict) -> Path:
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
+def _process_stop_confirmed(attempt: dict) -> bool:
+    """True when this execution_log Attempt reports no cleanup_error and no *_cleanup_failed failure."""
+    provider_log = attempt.get("provider_log") or {}
+    return not (bool(provider_log.get("cleanup_error")) or "_cleanup_failed" in json.dumps(
+        attempt.get("failure_detail"), ensure_ascii=False, default=str))
+
+
 def _archive_and_seal(record: dict, *, workspace_root: Path, project_directory) -> list[dict]:
     """Test-host step: archive the returned record in each Attempt folder, then seal it.
 
@@ -529,9 +612,7 @@ def _archive_and_seal(record: dict, *, workspace_root: Path, project_directory) 
     for attempt in (record.get("execution_log") or {}).get("attempts", ()):
         attempt_id = attempt.get("attempt_id")
         folder = Path(workspace_root) / str(attempt_id)
-        provider_log = attempt.get("provider_log") or {}
-        unconfirmed = bool(provider_log.get("cleanup_error")) or "_cleanup_failed" in json.dumps(
-            attempt.get("failure_detail"), ensure_ascii=False, default=str)
+        unconfirmed = not _process_stop_confirmed(attempt)
         archive_path, archive_error = None, None
         try:
             # Only inside this Attempt's own ordinary archive folder; a link or
@@ -595,7 +676,7 @@ def _execute_registered(args):
             cli_path=args.cli_path, resources_path=args.resources,
             project_directory=None if args.project_directory is None else args.project_directory.resolve(),
             command_permits=tuple(args.command_permits), codex_execution_mode=args.codex_execution_mode,
-            **_cli_materials(args))
+            native_project=args.native_project, **_cli_materials(args))
         document = record
         print(json.dumps(record, ensure_ascii=False, allow_nan=False))
         status = 0 if record["status"] == "completed" else 130 if record["status"] == "cancelled" else 1
@@ -710,7 +791,8 @@ def main(argv=None):
                 parser.error("--version selects a local definition; a PostgreSQL definition uses --workflow-ref and --workflow-sha256")
         return _execute_registered(args)
     if (args.version is not None or args.resources is not None or args.expected_module_id is not None
-            or args.material_root is not None or args.record_out is not None or args.codex_execution_mode != "configured"):
+            or args.material_root is not None or args.record_out is not None or args.codex_execution_mode != "configured"
+            or args.native_project):
         parser.error("packaged examples own their fixed versions, fixture resources and Modules")
     if args.example == "agent_evaluation_example" and args.scenario not in (None, "accepted"):
         parser.error("agent_evaluation_example does not use selector scenarios")

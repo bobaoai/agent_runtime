@@ -7,6 +7,12 @@ Patterns: structured_output (tool-free structured output), file_review (frozen
 task material -> a written and read-back review file), code_change (a tiny
 project the model fixes and checks with a bounded command) and mcp_data (a
 declared MCP connection -> a saved, read-back data file -> a derived file).
+native_project (claude_cli or codex_cli) runs an mcp_data-shaped Module with the
+per-call native_project choice (Codex in host mode) inside a generated project
+holding CLAUDE.md/AGENTS.md, two skills for each CLI and a Python script; the
+check reads the marker the project instructions require, the skill steps and
+Claude's own init skill list in the returned log, the fixture audit and the
+script's artifact.
 
 Each pattern is one ordinary Module that goes through the same public path a
 host uses, with no machine field written by hand: the task is an ordinary v4
@@ -50,7 +56,14 @@ from ..registry.registry_module_authoring import MODULE_REQUIREMENT_PRESETS
 
 _MODULE = "agent_runtime.testing.conformance_pattern_examples"
 PATTERN_NAMES = MODULE_REQUIREMENT_PRESETS  # One example per requirements preset, with the same IDs.
-TRANSPORTS = ("claude_cli", "codex_cli")
+# The per-call native project execution choice, shown on an mcp_data-shaped Module in a generated native
+# project (instructions and two skills for both CLIs, a project script and the MCP fixture).
+NATIVE_PROJECT_PATTERN = "native_project"
+EXAMPLE_PATTERNS = (*PATTERN_NAMES, NATIVE_PROJECT_PATTERN)
+NATIVE_PROJECT_TRANSPORTS = ("claude_cli", "codex_cli")
+TRANSPORTS = ("claude_cli", "codex_cli", "antigravity_cli")
+# The first Antigravity binding admits only these two requirement shapes.
+ANTIGRAVITY_PATTERNS = ("structured_output", "file_review")
 EXAMPLE_VERSION = "v1"
 MCP_CONNECTION = "example_data"
 MCP_TOOL = "get_stock_snapshot"
@@ -151,6 +164,31 @@ PATTERN_DEFINITIONS = {
         "output": _object(response_id=_STRING, total_units=_INTEGER, sku_count=_INTEGER, data_file=_STRING,
                           summary_file=_STRING),
     },
+    NATIVE_PROJECT_PATTERN: {
+        "preset_id": "mcp_data",
+        "preset": {"mcp_connections": (MCP_CONNECTION,)},
+        "skill": """# Runtime pattern examples
+
+Example task source for the native project example: example_native_project. Its Module folder
+holds its prompt and input/output schemas; Runtime registers them unchanged.
+""",
+        "owner": """# Runtime native project example
+
+A synthetic warehouse project run with native_project: the CLI loads the project's own
+instructions (CLAUDE.md, AGENTS.md) and skills, calls the declared MCP fixture and runs the
+project's Python script. The check reads actual files, the returned execution log and the
+fixture audit. No production data, credentials or business approval are involved.
+
+Module: example_native_project.
+""",
+        "instruction": (
+            "Complete the request in the input inside this project. Follow the project's own instructions and use "
+            "the project's skills and tools as they fit the request. Return report_file (the path of the report you "
+            "saved, relative to the project) and response_id, total_units and sku_count exactly as the project's "
+            "summary file gives them.\n"),
+        "input": _object(request=_STRING),
+        "output": _object(report_file=_STRING, response_id=_STRING, total_units=_INTEGER, sku_count=_INTEGER),
+    },
 }
 
 
@@ -175,8 +213,11 @@ def pattern_source(pattern: str):
     module_id = module_id_for(pattern)
     definition = PATTERN_DEFINITIONS[pattern]
     input_ref, output_ref = f"schema:{module_id}_input@v1", f"schema:{module_id}_output@v1"
+    owner = definition.get("owner", _OWNER)
     return ModuleRegistrationSource(
-        skill_id=_SKILL_ID, module_id=module_id, owner_contract_ref=_OWNER_REF, owner_contract_content=_OWNER,
+        skill_id=_SKILL_ID, module_id=module_id,
+        owner_contract_ref="owner-contract-sha256:" + hashlib.sha256(owner.encode()).hexdigest(),
+        owner_contract_content=owner,
         instruction_text=definition["instruction"],
         input_schema_ref=input_ref, input_schema_document=_schema_text(input_ref, definition["input"]),
         output_schema_ref=output_ref, output_schema_document=_schema_text(output_ref, definition["output"]),
@@ -185,10 +226,15 @@ def pattern_source(pattern: str):
 
 
 def pattern_requirements(pattern: str):
-    """The Module requirements the pattern registers: module_requirements_preset(<pattern>), max_attempts 1."""
+    """The Module requirements the pattern registers: module_requirements_preset(<pattern>), max_attempts 1.
+
+    native_project registers the mcp_data preset with the example_data connection; the native
+    choice is per call, never part of the definition.
+    """
     from ..registry.registry_module_authoring import module_requirements_preset
     _require_pattern(pattern)
-    return module_requirements_preset(pattern, **PATTERN_DEFINITIONS[pattern]["preset"])
+    definition = PATTERN_DEFINITIONS[pattern]
+    return module_requirements_preset(definition.get("preset_id", pattern), **definition["preset"])
 
 
 def write_pattern_source(project_root: Path, pattern: str) -> Path:
@@ -209,9 +255,9 @@ def write_pattern_source(project_root: Path, pattern: str) -> Path:
         with open(path, "x", encoding="utf-8", newline="\n") as stream:
             stream.write(text)
     if not (skill / "SKILL.md").exists():
-        create(skill / "SKILL.md", _SKILL)
+        create(skill / "SKILL.md", PATTERN_DEFINITIONS[pattern].get("skill", _SKILL))
     if not (project_root / _OWNER_PATH).exists():
-        create(project_root / _OWNER_PATH, _OWNER)
+        create(project_root / _OWNER_PATH, source.owner_contract_content)
     create(module / "module_registration.json", json.dumps({
         "schema_version": "runtime_module_registration_v4", "skill_id": source.skill_id,
         "module_id": source.module_id, "owner_contract_path": _OWNER_PATH,
@@ -249,13 +295,16 @@ def build_pattern_workflow(pattern: str):
 
 
 def _require_pattern(pattern):
-    if pattern not in PATTERN_NAMES:
-        raise ValueError(f"unknown pattern {pattern!r}; choose one of {', '.join(PATTERN_NAMES)}")
+    if pattern not in EXAMPLE_PATTERNS:
+        raise ValueError(f"unknown pattern {pattern!r}; choose one of {', '.join(EXAMPLE_PATTERNS)}")
 
 
-def _require_transport(transport):
+def _require_transport(transport, pattern=None):
     if transport not in TRANSPORTS:
-        raise ValueError(f"unknown transport {transport!r}; choose claude_cli or codex_cli")
+        raise ValueError(f"unknown transport {transport!r}; choose claude_cli, codex_cli or antigravity_cli")
+    if transport == "antigravity_cli" and pattern is not None and pattern not in ANTIGRAVITY_PATTERNS:
+        raise ValueError(f"antigravity_cli supports only the {' and '.join(ANTIGRAVITY_PATTERNS)} patterns in this "
+                         f"binding; {pattern} is not available for it")
 
 
 def _sha256(data: bytes) -> str:
@@ -394,6 +443,80 @@ def _mcp_connection(transport: str, audit: Path) -> dict:
     return {"mcp_servers": {transport: {MCP_CONNECTION: {"config": config, "environment_keys": []}}}}
 
 
+_NATIVE_INSTRUCTIONS = """# Warehouse operations project
+
+Reports produced in this project are saved under reports/ and start with the line
+"Project-Marker: {marker}" so that reviewers can tell they came from this project.
+
+Run project Python scripts with this project's interpreter: {interpreter}
+Data fetched for a report is kept under data/.
+"""
+_NATIVE_SKILLS = {
+    "stock-report": """---
+name: stock-report
+description: Prepare a warehouse stock report. Use when someone asks for a stock or inventory report for a warehouse; fetches the snapshot through the example_data connection, computes totals with the project script and saves the report.
+---
+
+# Stock report
+
+1. Call the get_stock_snapshot tool of the example_data MCP connection once, with the warehouse and
+   request_tag named in the request.
+2. Save the complete data object the tool returned (response_id, warehouse, request_tag, items and
+   source; not the MCP wrapper around it) as JSON to data/snapshot.json.
+3. Compute the totals with the project script, using the project's interpreter:
+   `{interpreter} scripts/summarize_stock.py data/snapshot.json reports/stock_summary.json`
+   Do not compute the totals by hand.
+4. Write reports/stock_report.md following the project's report rules, with the warehouse, response_id,
+   total_units and sku_count read from reports/stock_summary.json.
+""",
+    "meeting-notes": """---
+name: meeting-notes
+description: Record meeting notes. Use when someone asks to write up or summarize a meeting; saves the notes under notes/.
+---
+
+# Meeting notes
+
+Write the notes to notes/<date>-<topic>.md with attendees, decisions and action items.
+""",
+}
+_NATIVE_SCRIPT = '''"""Summarize a saved stock snapshot. Usage: summarize_stock.py SNAPSHOT_JSON OUTPUT_JSON"""
+import json
+import sys
+from pathlib import Path
+
+SCRIPT_NONCE = "{script_nonce}"
+snapshot = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+items = snapshot["items"]
+summary = {{"response_id": snapshot["response_id"], "warehouse": snapshot["warehouse"],
+           "total_units": sum(item["units"] for item in items), "sku_count": len(items),
+           "python_executable": sys.executable, "script_nonce": SCRIPT_NONCE}}
+target = Path(sys.argv[2])
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(json.dumps(summary, indent=2) + "\\n", encoding="utf-8")
+print(json.dumps(summary))
+'''
+
+
+# The heading of the stock-report skill body; a Codex Shell step that read the file shows it in its output.
+_NATIVE_SKILL_HEADING = "# Stock report"
+
+
+def _write_native_project(project: Path, *, marker: str, script_nonce: str, interpreter: str) -> None:
+    """A caller-owned project as each CLI discovers it natively: CLAUDE.md + .claude/skills, AGENTS.md + .agents/skills.
+
+    The marker and the script nonce exist only in project files, never in the task input or prompt.
+    The interpreter is written with forward slashes so PowerShell and Git Bash both run it as written.
+    """
+    instructions = _NATIVE_INSTRUCTIONS.format(marker=marker, interpreter=interpreter)
+    _write(project / "CLAUDE.md", instructions)
+    _write(project / "AGENTS.md", instructions)
+    for name, body in _NATIVE_SKILLS.items():
+        text = body.format(interpreter=interpreter) if name == "stock-report" else body
+        _write(project / ".claude" / "skills" / name / "SKILL.md", text)
+        _write(project / ".agents" / "skills" / name / "SKILL.md", text)
+    _write(project / "scripts" / "summarize_stock.py", _NATIVE_SCRIPT.format(script_nonce=script_nonce))
+
+
 # --- Prepare, run and check -----------------------------------------------------------------
 
 def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_path=None, model_id=None,
@@ -408,9 +531,11 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
             Windows sandbox cannot enter protected temporary or redirected
             app-data folders, and that CLI failure is reported as it occurs.
         pattern: One of PATTERN_NAMES.
-        transport: claude_cli or codex_cli. It shapes only per-call inputs
-            (the code_change check command and Claude permit, the MCP entry
-            form); the registered definition is the same for both.
+        transport: claude_cli, codex_cli or antigravity_cli. It shapes only
+            per-call inputs (the code_change check command and Claude permit,
+            the MCP entry form, the Antigravity file_review read-back permit);
+            the registered definition is the same for all. antigravity_cli
+            accepts only structured_output and file_review.
         cli_path, model_id, reasoning_profile, run_timeout_seconds: Optional
             values copied into the printed agent-runtime-test-run command.
     Returns:
@@ -440,7 +565,9 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
     from ..registry.registry_plugin_registration import register_module
 
     _require_pattern(pattern)
-    _require_transport(transport)
+    _require_transport(transport, pattern)
+    if pattern == NATIVE_PROJECT_PATTERN and transport not in NATIVE_PROJECT_TRANSPORTS:
+        raise ValueError("native_project runs with claude_cli or codex_cli only")
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     root = root.resolve()
@@ -489,6 +616,11 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
                                           material_files=rows)
         payload = {"material_path": _MATERIAL_PATH, "review_file": "review.md"}
         manifest["resources_path"] = str(resources)
+        if transport == "antigravity_cli":
+            # agy runs only explicitly permitted commands: the live-tested exact regex rule for the
+            # plain read-back the task suggests. Its file tools need no permit.
+            from ..invocation.invocation_antigravity_cli_execution import antigravity_command_permit
+            manifest["command_permits"] = [antigravity_command_permit("Get-Content " + payload["review_file"])]
         manifest["expected"] = {"material_sha256": _sha256(material)}
     elif pattern == "code_change":
         project = run_directory / "project"
@@ -501,7 +633,7 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
         payload = {"check_command": command, "edit_file": "pricing.py"}
         manifest.update(project_directory=str(project), command_permits=list(permits))
         manifest["expected"] = {"initial_files": _project_hashes(project), "initial_check": initial}
-    else:
+    elif pattern == "mcp_data":
         project = run_directory / "project"
         project.mkdir()
         audit = run_directory / "mcp_fixture_audit.jsonl"
@@ -510,6 +642,21 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
                    "data_file": "stock_snapshot.json", "summary_file": "stock_summary.json"}
         manifest["project_directory"] = str(project)
         manifest["expected"] = {"audit_path": str(audit)}
+    else:
+        project = run_directory / "project"
+        audit = run_directory / "mcp_fixture_audit.jsonl"
+        config.update(_mcp_connection(transport, audit))
+        marker, script_nonce = "PRJ-" + secrets.token_hex(4).upper(), secrets.token_hex(4)
+        interpreter = Path(sys.executable).as_posix()
+        _write_native_project(project, marker=marker, script_nonce=script_nonce, interpreter=interpreter)
+        warehouse, tag = "north-" + nonce[:4], "tag-" + nonce
+        payload = {"request": f"Please prepare the stock report for warehouse {warehouse} (request tag {tag})."}
+        # Per-call choices, never part of the registered definition: Codex runs native projects in host mode.
+        manifest.update(project_directory=str(project), native_project=True,
+                        codex_execution_mode="host" if transport == "codex_cli" else "configured")
+        manifest["expected"] = {"audit_path": str(audit), "marker": marker, "script_nonce": script_nonce,
+                                "interpreter": interpreter, "warehouse": warehouse, "request_tag": tag,
+                                "skills": sorted(_NATIVE_SKILLS), "used_skill": "stock-report"}
     _write_json(host / ".runtime" / "config.json", config)
     _write_json(run_directory / "input.json", payload)
     argv = ["agent-runtime-test-run", "--root", str(host), "--selection", str(selection_path),
@@ -521,6 +668,10 @@ def prepare_pattern_example(root: Path, pattern: str, transport: str, *, cli_pat
             argv += [flag, str(value)]
     for permit in manifest["command_permits"]:
         argv += ["--command-permit", permit]
+    if manifest.get("native_project"):
+        argv += ["--native-project"]
+    if manifest.get("codex_execution_mode", "configured") != "configured":
+        argv += ["--codex-execution-mode", manifest["codex_execution_mode"]]
     argv += ["--record-out", manifest["record_path"]]
     manifest["test_run_argv"] = argv
     manifest["powershell"] = " ".join([argv[0], *map(_powershell_quote, argv[1:])])
@@ -567,7 +718,9 @@ def run_pattern_example(root: Path, pattern: str, transport: str, *, cli_path=No
             reasoning_profile=reasoning_profile, run_timeout_seconds=run_timeout_seconds, cli_path=cli_path,
             resources_path=None if manifest["resources_path"] is None else Path(manifest["resources_path"]),
             project_directory=None if project is None else Path(project),
-            command_permits=tuple(manifest["command_permits"]))
+            command_permits=tuple(manifest["command_permits"]),
+            native_project=manifest.get("native_project", False),
+            codex_execution_mode=manifest.get("codex_execution_mode", "configured"))
     except BaseException as exc:
         write_test_run_record(Path(manifest["record_path"]), {
             "error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", None), "detail": str(exc)})
@@ -609,17 +762,33 @@ def _succeeded(call) -> bool:
     return True
 
 
-_READ_STEPS = {"Read", "Bash", "command_execution"}
+_READ_STEPS = {"Read", "Bash", "command_execution", "read_file", "run_command"}
+# Antigravity's stream reports a file read as a summary ("N lines, M bytes"), not its content,
+# and a file write by its path only.
+_SUMMARY_READ_STEPS = {"read_file"}
+_PATH_ONLY_WRITE_STEPS = {"write_file"}
 
 
 def _readbacks(calls, *, file_name: str, marker: str, after: int = -1) -> list[int]:
-    """Indices of completed read steps after `after` that name file_name and whose result, not request, shows marker."""
+    """Indices of completed read steps after `after` that name file_name and whose result, not request, shows marker.
+
+    A summary-only read (Antigravity read_file) cannot show the marker. It counts
+    only when it follows the last logged write naming the same file; the file's
+    content is then shown by the host's own disk checks, not by the log.
+    """
     found = []
+    writes = [index for index, call in enumerate(calls)
+              if call.get("tool_name") in _PATH_ONLY_WRITE_STEPS and file_name in _text(call.get("request"))]
     for index, call in enumerate(calls):
         if index <= after or call.get("tool_name") not in _READ_STEPS or not _succeeded(call):
             continue
         request = _text(call.get("request"))
-        if file_name in request and marker not in request and marker in _text(call.get("response")):
+        if file_name not in request:
+            continue
+        if call.get("tool_name") in _SUMMARY_READ_STEPS:
+            if writes and index > writes[-1]:
+                found.append(index)
+        elif marker not in request and marker in _text(call.get("response")):
             found.append(index)
     return found
 
@@ -683,7 +852,10 @@ def _check_file_review(checks, manifest, record, calls, output):
     checks.add("review_contains_material_fact", f"Release code: {code}" in lines, f"expected 'Release code: {code}'")
     checks.add("review_has_findings", len(bullets) >= 1, f"{len(bullets)} bullet lines")
     readbacks = _readbacks(calls, file_name=payload["review_file"], marker=code) if code else []
-    checks.add("review_read_back_in_log", readbacks, f"read steps showing the saved fact: {readbacks}")
+    summary_only = [index for index in readbacks if calls[index].get("tool_name") in _SUMMARY_READ_STEPS]
+    checks.add("review_read_back_in_log", readbacks, f"read steps showing the saved fact: {readbacks}" + (
+        f"; summary-only reads after the last write {summary_only}: the provider log does not contain the "
+        "read content, which the host file checks above show" if summary_only else ""))
     checks.add("output_review_file", isinstance(output.get("review_file"), str)
                and Path(output["review_file"].strip()).name == payload["review_file"], output.get("review_file"))
     checks.add("output_release_code", output.get("release_code") == code, output.get("release_code"))
@@ -790,8 +962,121 @@ def _check_mcp_data(checks, manifest, record, calls, output):
     return {"project_directory": str(project), "audit": manifest["expected"]["audit_path"]}
 
 
+def _provider_logs(record) -> list[dict]:
+    attempts = ((record or {}).get("execution_log") or {}).get("attempts") or []
+    return [attempt.get("provider_log") or {} for attempt in attempts if isinstance(attempt, dict)]
+
+
+def _claude_init_events(logs) -> list[dict]:
+    """Claude's own init events from the raw stdout each Attempt retained (observation, not configuration)."""
+    events = []
+    for log in logs:
+        for line in str(log.get("stdout") or "").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "system" and event.get("subtype") == "init":
+                events.append(event)
+    return events
+
+
+def _strings(value):
+    """Every string inside a decoded log value (tool output can be nested in lists and objects)."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+
+
+def _check_native_project(checks, manifest, record, calls, output):
+    expected = manifest["expected"]
+    project = Path(manifest["project_directory"])
+    transport = manifest["transport"]
+    logs = _provider_logs(record)
+    configurations = [log.get("effective_configuration") or {} for log in logs]
+    enabled = ["claude_md", "skills"] if transport == "claude_cli" else ["agents_md", "skills"]
+    suppressed = ["auto_memory", "hooks"] if transport == "claude_cli" else None
+    checks.add("native_project_recorded", configurations and all(
+        item.get("native_project") is True and item.get("context_enabled") == enabled
+        and item.get("command_scope") == "host" and item.get("filesystem_scope") == "task_directed"
+        and (suppressed is None or item.get("context_suppressed") == suppressed)
+        and (transport != "claude_cli" or {"Skill", "Bash", "PowerShell"} <= set(item.get("allowed_rules") or ()))
+        for item in configurations),
+        [{key: item.get(key) for key in ("native_project", "context_enabled", "context_suppressed", "command_scope",
+                                         "filesystem_scope", "allowed_rules")} for item in configurations])
+    marker = expected["marker"]
+    sent = _text([log.get("actual_prompt") for log in logs]) + _text(record.get("input_payload"))
+    checks.add("project_marker_only_in_project_files", marker not in sent and marker not in _text(
+        _read_json(Path(manifest["input_path"]))), "the marker exists only in CLAUDE.md/AGENTS.md")
+    report = project / "reports" / "stock_report.md"
+    lines = [line.strip() for line in report.read_text(encoding="utf-8", errors="replace").splitlines()
+             if line.strip()] if report.is_file() else []
+    checks.add("project_instructions_followed", lines[:1] == [f"Project-Marker: {marker}"],
+               f"{report}: first line {lines[:1]}")
+    if transport == "claude_cli":
+        listed = [event.get("skills") or [] for event in _claude_init_events(logs)]
+        checks.add("project_skills_discovered", listed and all(set(expected["skills"]) <= set(names) for names in listed),
+                   f"init skills include {expected['skills']}: {[sorted(set(expected['skills']) & set(n)) for n in listed]}")
+    skill = expected["used_skill"]
+    # Claude must invoke the skill through its native Skill tool; Codex has no such tool and must
+    # actually read the skill's SKILL.md through its Shell. Reading the file does not count for Claude.
+    # A Codex read is proven by the step's own output carrying the skill body: a later command on the
+    # same Shell line may still fail the step as a whole after the file was read.
+    if transport == "claude_cli":
+        used = [index for index, call in enumerate(calls) if _succeeded(call)
+                and call.get("tool_name") == "Skill" and skill in _text(call.get("request"))]
+    else:
+        used = [index for index, call in enumerate(calls) if call.get("tool_name") == "command_execution"
+                and skill in _text(call.get("request")) and "SKILL.md" in _text(call.get("request"))
+                and any(_NATIVE_SKILL_HEADING in text for text in _strings(call.get("response")))]
+    checks.add("relevant_skill_used", used, f"log steps {'invoking' if transport == 'claude_cli' else 'reading'} "
+               f"{skill}: " + _text([(index, calls[index].get("tool_name")) for index in used]))
+    requested = {"warehouse": expected["warehouse"], "request_tag": expected["request_tag"]}
+    audit = [row for row in _audit_calls(Path(expected["audit_path"])) if row.get("arguments") == requested]
+    checks.add("fixture_received_tools_call", audit, f"{len(audit)} audited calls with this task's arguments")
+    snapshot = _load_json_file(project / "data" / "snapshot.json")
+    result = next((row["result"] for row in audit if isinstance(snapshot, dict)
+                   and row["result"].get("response_id") == snapshot.get("response_id")),
+                  audit[-1]["result"] if audit else {})
+    checks.add("snapshot_matches_fixture_response", bool(result) and snapshot == result,
+               "data/snapshot.json must equal the complete audited result")
+    items = result.get("items") or []
+    totals = {"response_id": result.get("response_id"), "warehouse": result.get("warehouse"),
+              "total_units": sum(item.get("units", 0) for item in items), "sku_count": len(items)}
+    summary = _load_json_file(project / "reports" / "stock_summary.json")
+    # The run itself must be in the log: a completed shell step whose command starts Python on the project
+    # script and whose own output carries the JSON the script prints (reading the script shows only its
+    # SCRIPT_NONCE assignment, not this printed field). The artifact then names the interpreter it ran under.
+    printed = f'"script_nonce": "{expected["script_nonce"]}"'
+    runs = [index for index, call in enumerate(calls) if _succeeded(call)
+            and call.get("tool_name") in {"Bash", "PowerShell", "command_execution"}
+            and "summarize_stock.py" in _text(call.get("request")) and "python" in _text(call.get("request")).lower()
+            and any(printed in text for text in _strings(call.get("response")))]
+    interpreter_matches = isinstance(summary, dict) and summary.get("script_nonce") == expected["script_nonce"] and (
+        os.path.normcase(os.path.abspath(str(summary.get("python_executable"))))
+        == os.path.normcase(os.path.abspath(expected["interpreter"])))
+    checks.add("project_python_script_ran", runs and interpreter_matches,
+               {"log_steps_running_the_script": runs, **({key: summary.get(key) for key in (
+                   "script_nonce", "python_executable")} if isinstance(summary, dict) else {"summary": summary})})
+    checks.add("python_artifact_matches_fixture", bool(result) and isinstance(summary, dict) and all(
+        summary.get(key) == value for key, value in totals.items()), f"got {summary}, expected {totals}")
+    checks.add("output_matches_artifact", bool(result) and all(
+        output.get(key) == totals[key] for key in ("response_id", "total_units", "sku_count")),
+        {key: output.get(key) for key in ("response_id", "total_units", "sku_count")})
+    checks.add("output_report_file", _names_file(output.get("report_file"), project, "reports/stock_report.md"),
+               output.get("report_file"))
+    return {"project_directory": str(project), "report": str(report), "audit": expected["audit_path"],
+            "skill_steps": used}
+
+
 _PATTERN_CHECKS = {"structured_output": _check_structured_output, "file_review": _check_file_review,
-                   "code_change": _check_code_change, "mcp_data": _check_mcp_data}
+                   "code_change": _check_code_change, "mcp_data": _check_mcp_data,
+                   NATIVE_PROJECT_PATTERN: _check_native_project}
 
 
 def check_pattern_example(run_directory: Path, record: dict | None = None) -> dict:
@@ -864,19 +1149,20 @@ def build_parser():
     """Return the prepare/run/check argument grammar."""
     parser = argparse.ArgumentParser(
         prog="python -m " + _MODULE,
-        description="Run, or prepare and check, one of the four ordinary Runtime usage-pattern examples. "
-                    "run = prepare + run_local_workflow_test + check. Each run uses a new folder under --root.")
+        description="Run, or prepare and check, one of the four ordinary Runtime usage-pattern examples or the "
+                    "native_project example (claude_cli or codex_cli). run = prepare + run_local_workflow_test + "
+                    "check. Each run uses a new folder under --root.")
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("prepare", "run"):
         command = commands.add_parser(name)
-        command.add_argument("--pattern", required=True, choices=PATTERN_NAMES)
+        command.add_argument("--pattern", required=True, choices=EXAMPLE_PATTERNS)
         command.add_argument("--transport", required=True, choices=TRANSPORTS,
                              help="The CLI to run; never switched automatically")
         command.add_argument("--root", required=True, type=Path,
                              help="Example root; each run creates a new subfolder (use an ordinary user folder)")
-        command.add_argument("--cli-path", type=Path, help="Native claude.exe/codex.exe (default: PATH lookup)")
-        command.add_argument("--model", help="Model for this call (required for codex_cli)")
-        command.add_argument("--effort", help="Effort for this call (required for codex_cli)")
+        command.add_argument("--cli-path", type=Path, help="Native claude.exe/codex.exe/agy.exe (default: PATH lookup)")
+        command.add_argument("--model", help="Model for this call (required for codex_cli and antigravity_cli)")
+        command.add_argument("--effort", help="Effort for this call (required for codex_cli and antigravity_cli)")
         command.add_argument("--run-timeout-seconds", type=int, help="Outer time limit for this call (default 1200)")
     check = commands.add_parser("check")
     check.add_argument("--run-dir", required=True, type=Path, help="Folder created by prepare or run")
@@ -907,7 +1193,7 @@ def main(argv=None) -> int:
     return 0 if args.command == "prepare" or result["passed"] else 1
 
 
-__all__ = ["PATTERN_NAMES", "TRANSPORTS", "EXAMPLE_VERSION", "MCP_CONNECTION", "MCP_TOOL",
+__all__ = ["PATTERN_NAMES", "EXAMPLE_PATTERNS", "NATIVE_PROJECT_PATTERN", "TRANSPORTS", "ANTIGRAVITY_PATTERNS", "EXAMPLE_VERSION", "MCP_CONNECTION", "MCP_TOOL",
            "build_pattern_workflow", "module_id_for", "pattern_source", "pattern_requirements",
            "write_pattern_source", "prepare_pattern_example", "run_pattern_example", "check_pattern_example", "main"]
 

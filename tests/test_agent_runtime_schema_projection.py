@@ -237,3 +237,98 @@ def test_codex_normalization_keeps_null_on_nullable_recursive_ref() -> None:
     )
 
     assert normalized == {"tree": None}
+
+
+# --- Claude keeps supported anyOf through the same recursive projection ----------------------
+
+def _summary_branch() -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "count": {"type": "integer"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["name", "count", "tags"],
+        "additionalProperties": False,
+    }
+
+
+def _with_property(name: str, schema: dict[str, object], **extra) -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["completed", "blocked"]},
+            name: schema,
+        },
+        "required": ["status", name],
+        "additionalProperties": False,
+        **extra,
+    }
+
+
+@pytest.mark.parametrize("null_first", [False, True])
+def test_claude_projection_keeps_a_nullable_object_with_its_required_fields(null_first) -> None:
+    alternatives = [_summary_branch(), {"type": "null"}]
+    canonical = _with_property("summary", {"anyOf": alternatives[::-1] if null_first else alternatives})
+    projected = claude_native_output_schema(task_plane_output_schema(canonical))
+    assert projected == canonical  # Nothing of the shape is erased.
+    validator = Draft202012Validator(projected)
+    assert validator.is_valid({"status": "completed", "summary": {"name": "a", "count": 1, "tags": []}})
+    assert validator.is_valid({"status": "blocked", "summary": None})
+    assert not validator.is_valid({"status": "completed", "summary": {"name": "a", "count": 1}})
+    assert not validator.is_valid({"status": "completed", "summary": {"other": 1}})
+
+
+def test_claude_projection_keeps_local_ref_and_two_object_alternatives() -> None:
+    circle = {"type": "object", "properties": {"radius": {"type": "number"}},
+              "required": ["radius"], "additionalProperties": False}
+    square = {"type": "object", "properties": {"side": {"type": "number"}},
+              "required": ["side"], "additionalProperties": False}
+    canonical = {
+        "type": "object",
+        "properties": {
+            "shape": {"anyOf": [circle, square]},
+            "origin": {"anyOf": [{"$ref": "#/$defs/point"}, {"type": "null"}]},
+        },
+        "required": ["shape", "origin"],
+        "additionalProperties": False,
+        "$defs": {"point": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+                            "required": ["x", "y"], "additionalProperties": False}},
+    }
+    projected = claude_native_output_schema(task_plane_output_schema(canonical))
+    assert projected == canonical  # Both unions and the referenced definition reach Claude.
+
+
+def test_claude_projection_still_prunes_unsupported_keywords_inside_kept_branches() -> None:
+    branch = {"type": "array", "items": {"type": "string"}, "uniqueItems": True}
+    canonical = _with_property("labels", {"anyOf": [branch, {"type": "null"}]})
+    projected = claude_native_output_schema(task_plane_output_schema(canonical))
+    assert projected["properties"]["labels"] == {
+        "anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]}
+
+
+def test_claude_projection_allows_annotations_beside_any_of() -> None:
+    canonical = _with_property("summary", {"title": "Summary", "description": "Optional summary",
+                                           "anyOf": [_summary_branch(), {"type": "null"}]})
+    projected = claude_native_output_schema(task_plane_output_schema(canonical))
+    assert projected["properties"]["summary"]["anyOf"][0]["required"] == ["name", "count", "tags"]
+
+
+# Untyped properties/required are already refused by the strict task-plane projection, so the
+# reachable combinations are anyOf beside type, alone or with the object keywords.
+@pytest.mark.parametrize("siblings,named", [
+    ({"type": "object"}, "type"),
+    ({"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"],
+      "additionalProperties": False}, "properties"),
+])
+def test_claude_projection_refuses_any_of_beside_structural_keywords(siblings, named) -> None:
+    canonical = _with_property("summary", {**siblings, "anyOf": [_summary_branch(), {"type": "null"}]})
+    with pytest.raises(ValueError, match=f"cannot combine anyOf with .*{named}.* at #/properties/summary"):
+        claude_native_output_schema(task_plane_output_schema(canonical))
+
+
+def test_codex_projection_of_a_nullable_required_object_is_unchanged() -> None:
+    canonical = _with_property("summary", {"anyOf": [_summary_branch(), {"type": "null"}]})
+    projected = codex_native_output_schema(task_plane_output_schema(canonical))
+    assert projected == canonical  # Every property is already required; Codex keeps anyOf as before.

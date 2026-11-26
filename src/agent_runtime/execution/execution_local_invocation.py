@@ -70,7 +70,10 @@ def _execution_profile_for_requirements(
     historical bindings. None uses claude_cli, claude-opus-5[1m], xhigh; explicit
     empty/unsupported values fail. codex_cli requires explicit model and effort;
     tool_free binds the v4 executor and agent the workspace v3 executor, whose
-    check validates supported requirements. No executable/resources opened.
+    check validates supported requirements. antigravity_cli also requires explicit
+    model and effort and binds antigravity_cli_adapter@v1, which admits only the
+    structured_output and file_review requirement shapes; any other shape raises
+    ADAPTER_CAPABILITY_UNSUPPORTED here. No executable/resources opened.
     """
     requirements.validate()
     if requirements.schema_version != "module_execution_requirements_v2":
@@ -93,6 +96,14 @@ def _execution_profile_for_requirements(
             if requirements.execution_mode == "agent" else (codex.CodexCliModuleExecutor, codex._execution_expectation))
         model, effort, provider = model_id, reasoning_profile, "openai"
         adapter_id, revision = executor.executor_adapter_id, executor.executor_adapter_revision
+        defaults = None
+    elif transport == "antigravity_cli":
+        if not model_id or not reasoning_profile:
+            raise ValueError("antigravity_cli requires explicit model_id and reasoning_profile; no Claude defaults apply")
+        from ..invocation import invocation_antigravity_cli_execution as antigravity
+        _execution_expectation = antigravity.execution_expectation
+        model, effort, provider = model_id, reasoning_profile, antigravity.PROVIDER_ID
+        adapter_id, revision = antigravity.CURRENT_BINDING
         defaults = None
     else:
         raise ValueError(f"Unsupported model transport: {transport_kind}; no automatic fallback")
@@ -147,6 +158,9 @@ def prepare_local_workflow_module(
             codex_cli binds tool-free requirements to v4 and agent
             requirements whose tools include shell to workspace v3, and
             requires explicit model_id and reasoning_profile from some layer.
+            antigravity_cli binds antigravity_cli_adapter@v1 for exactly the
+            structured_output and file_review requirement shapes, with explicit
+            model_id and reasoning_profile; other shapes are refused here.
             Model names are never used to infer another transport or provider.
         model_id: This call's model; None falls back through the same layers,
             ending at claude-opus-5[1m] for claude_cli. codex_cli has no default.

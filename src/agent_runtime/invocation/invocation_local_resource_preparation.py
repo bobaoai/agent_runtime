@@ -142,7 +142,8 @@ def _dependencies(values):
 
 # Current bindings that accept frozen materials, dependencies and commands.
 _RESOURCE_BINDINGS = {("claude_cli_adapter", "v4", "claude_cli"),
-                      ("codex_cli_agent_workspace_executor", "v5", "codex_cli")}
+                      ("codex_cli_agent_workspace_executor", "v5", "codex_cli"),
+                      ("antigravity_cli_adapter", "v1", "antigravity_cli")}
 
 
 def _profile_resources(profile, *, used, commands):
@@ -157,7 +158,7 @@ def _profile_resources(profile, *, used, commands):
             or profile.network_policy not in {"denied", "provider_managed"} or profile.gateway_access_reasons
             or not set(profile.tool_policy) & {"read", "search", "edit", "shell"}):
         raise LocalResourceError("local files/dependencies/commands require a supported agent binding "
-                                 "(Claude v4 or Codex workspace v5) with a native file tool",
+                                 "(Claude v4, Codex workspace v5 or Antigravity v1) with a native file tool",
                                  error_code="ADAPTER_CAPABILITY_UNSUPPORTED")
     if commands and sys.platform != "darwin":
         raise LocalResourceError("declared local commands require macOS sandbox-exec",
@@ -520,14 +521,67 @@ def stage_attempt_materials(*, request, host, profile, materials: Path, dependen
     return material_hashes, resources_body
 
 
+INVOCATION_LOCATIONS_HEADING = "## Runtime Invocation Locations"
+_TEMPORARY_VARIABLES = ("TMPDIR", "TEMP", "TMP")
+
+
+def invocation_locations(*, working_directory, writable_directories=(), materials_directory=None,
+                         read_only_dependencies=(), runtime_python=None) -> dict:
+    """Return the locations one agent Attempt's adapter actually prepared, as plain JSON values.
+
+    Shared by the Claude and Codex workspace adapters after they prepare the
+    Attempt and before the CLI starts. Every value is passed in by the adapter
+    from what it created or resolved for this call: the CLI working directory,
+    the directories its configuration lets file tools write, the Attempt's
+    read-only materials folder (task_input, plus source when a frozen material
+    package exists), the selected read-only dependency roots and, for a
+    Shell-capable call, the Runtime Python executable that leads PATH. Empty
+    values are omitted. Temporary files are described by variable names only:
+    the per-call folder itself can hold private control files. The origin
+    material_root, the Attempt root and archive, CLI homes, connection
+    configuration and credentials are never accepted here. Pure; no IO.
+    """
+    values = {"working_directory": str(working_directory)}
+    if writable_directories:
+        values["writable_directories"] = [str(path) for path in writable_directories]
+    if materials_directory is not None:
+        values["materials_directory"] = str(materials_directory)
+    if read_only_dependencies:
+        values["read_only_dependencies"] = [str(path) for path in read_only_dependencies]
+    if runtime_python is not None:
+        values["runtime_python"] = str(runtime_python)
+    values["temporary_directory_variables"] = list(_TEMPORARY_VARIABLES)
+    return values
+
+
+def compose_invocation_prompt(locations: dict | None, envelope: str) -> str:
+    """Return the exact CLI stdin: the location section, a blank line, then the unchanged envelope.
+
+    locations None (a tool-free call) returns the envelope itself. The envelope
+    text is never altered or reordered, so a prompt_only_json constraint stays
+    last; its ref and hash keep identifying the frozen envelope only, not this
+    composed text. Keys are rendered sorted, so the same values always give the
+    same text and a recorded locations dictionary reproduces the stdin exactly.
+    Adapters record the returned text as the Attempt trace's actual_prompt, which
+    Inspection reads back. Pure; no IO.
+    """
+    if locations is None:
+        return envelope
+    return (INVOCATION_LOCATIONS_HEADING + "\n\n"
+            "Runtime prepared these exact locations for this call. The materials directory is read-only and "
+            "holds task_input and, when the task lists frozen source files, their source folder.\n\n"
+            + json.dumps(locations, ensure_ascii=False, indent=2, sort_keys=True) + "\n\n" + envelope)
+
+
 def describe_local_resources(*, profile, body: bytes | None) -> str:
-    """Render the Claude or Codex workspace layout for exact request rebuilding.
+    """Render the Claude, Codex or Antigravity workspace layout for exact request rebuilding.
 
     Claude v2/v3 and Codex workspace v3 keep their exact original texts for
     committed replay; they grant no execution capability. The v4 texts describe
     the actual layout of each workspace policy (private draft, explicit project,
     none); explicit command/callback extension calls keep the earlier scratch
-    layout. Earlier bindings and Codex tool-free keep empty descriptions. Only
+    layout. Antigravity v1 file_review uses the Codex scratch-cwd text. Earlier
+    bindings and Codex and Antigravity tool-free keep empty descriptions. Only
     relative paths appear, so the prompt hash does not vary per Attempt.
     Resource capture/admission and the Adapter still require the current revision.
     The private material_root/read_only_dependencies
@@ -538,6 +592,9 @@ def describe_local_resources(*, profile, body: bytes | None) -> str:
     binding = (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind)
     if binding in {("claude_cli_adapter", "v4", "claude_cli"), ("codex_cli_agent_workspace_executor", "v4", "codex_cli"), ("codex_cli_agent_workspace_executor", "v5", "codex_cli")}:
         return _describe_v4(profile, document, codex=binding[0] == "codex_cli_agent_workspace_executor")
+    if binding == ("antigravity_cli_adapter", "v1", "antigravity_cli") and profile.execution_mode == "agent":
+        # The same scratch-cwd layout as Codex: cwd is the private scratch, materials at ../materials.
+        return _describe_v4(profile, document, codex=True)
     if (profile.executor_adapter_id, profile.executor_adapter_revision, profile.transport_kind) == (
             "codex_cli_agent_workspace_executor", "v3", "codex_cli"):
         sections = ["## Runtime Input Resources", "The task input is available at ../materials/task_input.",
@@ -617,4 +674,5 @@ __all__ = ["LOCAL_RESOURCES_SCHEMA_REF", "LOCAL_RESOURCES_SCHEMA_SHA256", "LOCAL
            "LOCAL_RESOURCES_LOGICAL_NAME", "capture_local_resources", "parse_local_resources",
            "prepare_material_files", "write_local_resources",
            "validate_local_resources", "materialize_local_resources", "assert_local_materials_unchanged",
-           "describe_local_resources", "stage_attempt_materials", "LocalResourceError"]
+           "describe_local_resources", "stage_attempt_materials", "LocalResourceError",
+           "INVOCATION_LOCATIONS_HEADING", "invocation_locations", "compose_invocation_prompt"]

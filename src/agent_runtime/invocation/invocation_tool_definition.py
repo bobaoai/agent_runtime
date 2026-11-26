@@ -245,11 +245,57 @@ def callback_tool_names(tool_policy) -> set[str]:
             if name not in NATIVE_LOGICAL_TOOLS and not name.startswith(MCP_TOOL_PREFIX)}
 
 
+class NativeProjectUnsupportedError(ValueError):
+    """Native project execution cannot be expressed for this call's requirements or resources."""
+
+    error_code = "ADAPTER_CAPABILITY_UNSUPPORTED"
+
+
+def validate_native_project(native_project, *, profile=None, codex_execution_mode: str = "configured") -> None:
+    """Check the per-call native project choice; with a Profile, check that it can run that way.
+
+    native_project must be a bool. True with a Profile accepts exactly the existing
+    project shapes (the code_change and mcp_data presets): claude_cli or codex_cli,
+    agent, inline input, explicit_project_read_write, provider_managed network and
+    tools holding read, edit and shell, optionally search, plus declared mcp__<name>
+    connections and nothing else (no callbacks). Codex additionally needs the
+    explicit codex_execution_mode="host". False, or no Profile yet, checks the type
+    only. Pure; no IO.
+
+    Raises:
+        ValueError: native_project is not a bool.
+        NativeProjectUnsupportedError: The Profile cannot run as a native project;
+            nothing is downgraded or substituted.
+    """
+    if type(native_project) is not bool:
+        raise ValueError("native_project must be True or False")
+    if not native_project or profile is None:
+        return
+    if profile.transport_kind not in {"claude_cli", "codex_cli"}:
+        raise NativeProjectUnsupportedError("native project execution supports claude_cli and codex_cli only")
+    if (profile.execution_mode != "agent" or profile.semantic_input_delivery_mode != "inline"
+            or profile.gateway_access_reasons
+            or profile.attempt_workspace_policy != "explicit_project_read_write"
+            or profile.network_policy != "provider_managed"):
+        raise NativeProjectUnsupportedError(
+            "native project execution requires agent, inline input, explicit_project_read_write and provider_managed")
+    tools = set(profile.tool_policy)
+    if not {"read", "edit", "shell"} <= tools or callback_tool_names(tools) or tools - {
+            "read", "search", "edit", "shell"} - {MCP_TOOL_PREFIX + name for name in declared_mcp_connections(tools)}:
+        raise NativeProjectUnsupportedError(
+            "native project execution requires read, edit and shell (search optional) plus declared MCP connections only")
+    if profile.transport_kind == "codex_cli" and codex_execution_mode != "host":
+        raise NativeProjectUnsupportedError(
+            "Codex native project execution runs with host permissions; pass codex_execution_mode=\"host\"")
+
+
 __all__ = [
     "ModuleArtifactHost",
     "ModuleProviderToolSession",
     "ModuleProviderToolSessionFactory",
+    "NativeProjectUnsupportedError",
     "ProviderToolDefinition",
     "runtime_package_version",
+    "validate_native_project",
     "validate_provider_tool_set",
 ]

@@ -72,6 +72,69 @@ setup 不扫描项目或注册历史，不安装软件、连接 PG 或登录 Pro
 CLI 查询仍只读注册定义，但首次调用可能补齐环境；普通 evaluation 的 `persistence=not_requested`
 指本次执行事实不写持久存储，与环境 setup 文件的必要写入分开。
 
+<a id="project-setup"></a>
+
+### 准备项目：agent-runtime-setup
+
+新项目或需要补齐 CLI／MCP 配置时，运行一条命令（参数表见
+[Setup CLI](agent_runtime_reviewer_api.md#setup-cli)）：
+
+```powershell
+agent-runtime-setup --root "C:\work\my_project" --provider both
+agent-runtime-setup --root "C:\work\my_project" --provider codex --mcp my_data
+agent-runtime-setup --root "C:\work\my_project" --provider both --mcp my_data --mcp-config "C:\work\host\.runtime\config.json"
+agent-runtime-setup --root "C:\work\my_project" --provider antigravity
+```
+
+`both` 只表示 Claude 与 Codex。Antigravity（`agy`，首个绑定只运行 `structured_output` 与 `file_review`）用
+`--provider antigravity` 单独准备，可加 `--antigravity-path EXE`；它不接受 `--mcp`。
+
+它依次做以下几件事，可重复运行；已就绪时不写任何文件：
+
+1. 调用上面的 `setup_runtime` 安装三份 Skill（本地修改的同名 Skill 仍按原规则报告冲突并停止）。
+2. 为每个所选 CLI 选定原生程序：`--claude-path`／`--codex-path` 优先；其次是 `provider_cli_paths` 已有值，
+   无法启动时保留原值并列入 `missing`，不静默替换；再次是 PATH 上的原生 `claude.exe`／`codex.exe`；最后只在 PATH 中 npm 启动器
+   （`claude.cmd`、`codex.cmd`）旁的安装包固定位置查找，例如
+   `node_modules\@anthropic-ai\claude-code\bin\claude.exe`。Antigravity 在 PATH 之后只查其安装器的固定位置
+   `%LOCALAPPDATA%\agy\bin\agy.exe`（已启动的进程可能仍持有安装前的 PATH）。不扫描磁盘，也不安装软件。程序先用
+   `--version` 确认能启动，再写入配置。
+3. 运行 CLI 自己的登录状态查询（Claude `auth status --json`，只保留是否登录与登录方式；Codex `login status`，只看退出码）。
+   这些查询都很短，也不会启动登录。agy 没有公开的登录状态命令：setup 不读取认证文件，也不把 `agy models` 当作登录证据，
+   报告 `login: not_verified`，不列入 `missing`；`next_steps` 提醒本人按需在原生 CLI 登录，并给出一次真实样例调用来确认。
+4. 只处理 `--mcp` 选中的连接；未选中的项目连接与 CLI 中的其他服务器既不读取也不改动。来源规则：
+   - 给了 `--mcp-config FILE` 时只用这个文件。它可以是已有 Runtime 配置，此时复制其中的
+     `mcp_servers.<transport>.<name>`，保留原有的工具范围、`default_tools_approval_mode` 与 `environment_keys`。
+     它也可以是 Claude 的 `mcpServers` 文件，此时只用于 `claude_cli`。文件中没有所选名称时报告缺项，不改用其他来源。
+   - 未给文件时，Codex 读取 `codex mcp get <name> --json`。项目中已有同名连接时，刷新连接地址，保留项目已选的
+     `enabled`、`enabled_tools`、`disabled_tools` 与 `default_tools_approval_mode`。Claude 没有可读的 JSON 列表，已有项目连接
+     保持不变；没有时报告需要 `--mcp-config`。
+   - 凭据只能以环境变量名引用：Claude 的 `env`／`headers` 值须为 `${VAR}` 形式，Codex 用 `env_vars`、`bearer_token_env_var`、
+     `env_http_headers`。字面值 `env`／`http_headers`、headers helper、`oauth` 或未知字段等无法这样表达的设置会使该连接被
+     拒绝（`refused`），原有项目连接保留不变。报告只写字段名，不写值。处理方式是由连接 owner 提供这样表达的 Runtime 配置
+     （经 `--mcp-config`），或把原生连接改为环境变量引用；操作 Agent 不手抄地址或凭据。
+5. 只改写 `.runtime/config.json` 中的 `provider_cli_paths` 和所选 `mcp_servers` 条目，其余字段（包括相对路径）原样保留。
+
+stdout 是一份 JSON 报告，各字段含义如下：
+
+- `providers`：每个 CLI 的 `program`、`source`、`started`、`version` 与 `login`。
+- `mcp_servers`：每个所选连接的 `action`，取值为 `imported`、`unchanged`、`kept`、`refused` 或 `missing`。Codex 连接另有
+  `approval`；连接被关闭时还有 `disabled`。
+- `missing`：需要人或 owner 处理的缺项。
+- `next_steps`：下一步命令。
+- `changed_paths`：本次实际写入的文件。setup 中途失败时，它仍列出已经写入的文件，不回滚。
+
+退出码 `0` 表示没有缺项；`1` 表示有缺项或 setup 失败；`2` 表示参数错误。
+
+**准备不等于验证。** 找到程序、显示已登录或写入连接，都不证明模型调用或 MCP 取数可用。分工如下：
+
+- **人：** 在原生 CLI 中完成 Provider 登录（`claude auth login`、`codex login`），以及 MCP 的登录、同意或授权
+  （`claude mcp login <name>`、`codex mcp login <name>`）。setup 不启动这些操作。
+- **Codex 工具审批：** 仍需本地确认的工具是否设 `default_tools_approval_mode: "approve"`，由 owner 决定。可以写在 Codex
+  原生配置或项目连接中（见[无人值守调用 MCP 工具](agent_runtime_claude_native_tools.md#codex-mcp-unattended-tools)）。
+  setup 从不添加这一项；项目连接未设置时只作提示，不算缺项。
+- **Agent：** 在人完成上述步骤后，运行报告中的样例命令做一次真实调用（`structured_output`，Codex 另给模型与 effort）。
+  然后用 `agent-runtime-test-run` 运行项目自己的任务；声明 MCP 连接的任务才是取数是否可用的验证。
+
 <a id="new-reviewer"></a>
 
 ## 0. 注册新的 Reviewer 并在宿主测试 / Register a new reviewer and test it
@@ -81,6 +144,7 @@ CLI 查询仍只读注册定义，但首次调用可能补齐环境；普通 eva
 | 当前已有的东西 | 下一步 |
 | --- | --- |
 | 只有“我需要一个新的 Reviewer”的想法 | 由该审核对象的负责人完成 Reviewer 定义与审核；注册工具不会替你编写职责、prompt 或 schema |
+| Skill 中的一项工作要交给 Runtime 独立执行，尚无 `prompt.md` | source owner 按[从 Skill 提取一项独立任务的执行 prompt](#skill-task-base)写出 source，再注册 |
 | 已批准的准确 Reviewer source，尚未注册 | [通过本地 CLI 注册并回读](#prepare-reviewer) |
 | 已有当前 Runtime 可执行的准确 Module release，想运行一份新材料 | 直接进入[首次或再次测试](#test-reviewer)，不重新编译或注册 |
 | 想在测试运行期间看到 Claude 进程与当前步骤 | 调用时开启[运行中状态](#watch-claude-run) |
@@ -288,6 +352,18 @@ agent-runtime-inspect --test-run-record /path/to/record.json --view output
 [Test Run CLI](agent_runtime_reviewer_api.md#test-run-cli) 与
 [run_local_workflow_test](agent_runtime_reviewer_api.md#run_local_workflow_test)。
 
+参数文件存在但无效（含其他键、null、布尔、小数或越界值）时准备失败，不跳到下一层；某层写的模型或 effort
+与最终 transport 不符时被拒绝，Claude 模型不会发给 Codex。例如让 workspace 的每次 Test Run 使用 Codex（v1），
+或同时选择模型、effort 与一小时时限（v2）：
+
+```json
+{"schema_version": "runtime_execution_parameters_v1", "transport_kind": "codex_cli", "model_id": "gpt-6-astra", "reasoning_profile": "xhigh"}
+```
+
+```json
+{"schema_version": "runtime_execution_parameters_v2", "model_id": "claude-opus-5-5", "reasoning_profile": "xhigh", "run_timeout_seconds": 3600}
+```
+
 运行时间默认1200秒，单次增加 `--run-timeout-seconds 3600` 可选择一小时，不写回参数文件。
 同一同步调用的准备、受管理同进程子调用及实际重试共享期限，子请求不能延长父剩余时间；清理
 可能在工作期限之后完成。结果的 execution_budget 记录请求、有效预算与观测耗时。
@@ -384,6 +460,28 @@ Reviewer 作为任务角色在 Windows 上照常注册和运行；只有调用�
 Claude 的 Shell 命令只按宿主给出的 `--command-permit RULE`（可重复，Python `command_permits`）预批准，
 例如 `--command-permit "python -m pytest:*"`；未给许可时 Runtime 不添加 Bash 允许规则。Codex 不支持逐次许可。
 统一日志按真实返回 ID 关联父进程和 CLI 观察；没有配对证据就明确不完整，不能凭命令名猜测。
+
+<a id="antigravity-command-permits"></a>
+
+Antigravity（`file_review`）的命令同样只按 `--command-permit` 允许：每条许可是 agy 规则体，渲染为本次会话设置中的
+`command(<permit>)`。已实测写法由 `antigravity_command_permit(command)` 生成，即 `regex:` 加完整命令字符串的
+Python `re.escape`；含空格、非 ASCII 字符与括号的解释器路径按此写法已实测运行。许可须非空、单行、不含 NUL。
+该函数只转义给定的字符串：不把 `python` 解析为某个解释器，不规范化路径分隔符或引号，也不合并分别许可的命令。
+调用方在代码里用所选 Runtime Python 把每条命令只构造一次，把这同一字符串原样写进任务输入，并由同一值生成许可；
+任务写明每条命令单独一次工具调用，不改路径或引号、不用 `;` 串联：
+
+```python
+from agent_runtime.invocation.invocation_antigravity_cli_execution import antigravity_command_permit
+
+# runtime_python 例如 Path("D:/Program Files (x86)/Agent Runtime/env/Scripts/python.exe")
+python_literal = runtime_python.as_posix().replace("'", "''")            # PowerShell 单引号字面量
+task_commands = [f"& '{python_literal}' 'build.py'"]                     # 原样写进任务输入
+permits = [antigravity_command_permit(item) for item in task_commands]  # 同一值生成 --command-permit
+```
+
+模型改写的字符串（例如把 `python` 换成绝对路径的 `python.exe`，或把两条命令用 `;` 连接）不是许可所依据的字符串，
+实际运行中曾被 agy 拒绝。拒绝后若结果没有 `structured_output`，失败仍是 `antigravity_cli_structured_output_missing`，
+信息先列出 agy 的 `denied_actions` 与失败的工具步骤；Runtime 不拆分、不重放被拒命令，也不放宽许可。
 
 自定义 callback 使用 Python 的 `tool_session_factory`，由可信宿主提供函数定义与实际会话；
 多节点入口使用 `tool_session_factory_for_node`。它们不是 `--resources` 字段，也不是普通 CLI
@@ -623,6 +721,162 @@ package version。Adapter revision 表示参数转换与能力合同；本次结
 也不等于 Reviewer 对文稿给出 blocked。具体失败保留原生错误和所属负责人：源或 schema 问题找
 source owner，Profile/Adapter/入口不相容找宿主集成维护者，Registry/Ledger 不可用找存储维护者。
 
+<a id="archive-test-run"></a>
+
+### 0.4.1 运行留档与本次清理 / Archive a run and clean its own scene
+
+普通 Test Run 结束后，宿主可以显式把本次记录和本次 Attempt 文件夹存进中央 Runtime 留档库，从数据库读回核对，再只删除
+本次的 Attempt 现场。这是运行记录层：不写 Workflow Ledger，不把 Test Run 变成生产历史；项目目录、业务库和产出只是
+记录中已有的引用，不复制、不清理。默认 Test Run 不变。
+
+**一次性准备。** 数据库 owner 用自己的管理连接执行 `run_archive_ddl` 返回的语句（只建 `runtime_archive` schema 与
+`run_archive`、`archive_content` 两张表，普通应用角色只获 SELECT 与 INSERT）：
+
+```python
+from agent_runtime import run_archive_ddl
+
+for statement in run_archive_ddl("runtime_archive", grant_role="comms_app"):
+    print(statement + ";")
+```
+
+宿主 root 的 `.runtime/config.json` 加一项 `run_archive`（与 `release_stores` 分开；只写凭据名，不写密码）：
+
+```json
+{"run_archive": {"host": "localhost", "port": 5432, "database": "the_workspace", "user": "comms_app",
+                 "schema": "runtime_archive", "password_credential": "project001.postgresql.comms_app"}}
+```
+
+每次新连接时，代码运行 `%LOCALAPPDATA%\the_workspace\credentials\app\venv\Scripts\wscred.exe get <password_credential>`，
+在内存中取得密码并只交给数据库连接；密码不进命令参数、环境变量、配置、记录、收据或输出。凭据客户端失败时只报告
+它的错误码（例如 `LOGIN_REQUIRED`），本次留档失败、现场保留。保留失败收据；`write_failed` 在恢复连接或登录后重新
+执行 `save` 时使用新的 `--receipt-out`。`readback_failed` 可先对原收据执行 `read`，重新核对成功后再执行 `cleanup`。
+
+**日常命令。** 使用安装了 `agent-runtime-core[postgres]` 的 Python 环境中的命令；`--record` 是 `--record-out`
+写出的完整 Test Run 记录文件。标识、hash 与收据都由代码生成，后续命令只读取收据文件：
+
+```powershell
+agent-runtime-test-run --root C:\rt\demo --selection C:\rt\demo\my_task.selection.json `
+  --input C:\rt\demo\input.json --record-out C:\rt\demo\run_001.record.json
+agent-runtime-archive save --root C:\rt\demo --record C:\rt\demo\run_001.record.json `
+  --receipt-out C:\rt\demo\run_001.archive.json
+agent-runtime-archive read --root C:\rt\demo --receipt C:\rt\demo\run_001.archive.json --view output
+agent-runtime-archive cleanup --root C:\rt\demo --receipt C:\rt\demo\run_001.archive.json
+agent-runtime-archive read --root C:\rt\demo --receipt C:\rt\demo\run_001.archive.json --view log `
+  --extract-to C:\rt\demo\run_001_restored
+```
+
+- `save` 保存记录文件和本次每个 Attempt 文件夹中的普通文件（保留相对结构与字节）。Runtime 的 marker 与 seal 是控制
+  元数据，不存；租约在旁边的租约目录，不读。链接、reparse point 与特殊文件不跟随，记为 `unarchived_entries`，该 Attempt
+  的 `scene` 为 `incomplete`。一次事务提交后用新连接读回，按路径集合、大小与 SHA-256 核对。收据的 `run_status` 是运行
+  自身结果，`archive_status` 是 `verified`、`write_failed` 或 `readback_failed`；失败运行也能 `verified` 留档，但仍是失败
+  运行。退出码 0 只表示已核对留档。加 `--cleanup` 时，核对成功后接着执行下面的清理。
+- 清单的 `run` 来自记录本身（状态、失败码、定义身份、模型、effort、记录中的 Runtime 版本）；`archive_host` 是保存时
+  在本机观察到的 Python、操作系统与已安装 Runtime 版本，不代表原运行环境。不读取环境变量全集、登录文件或 MCP 服务端授权。
+- `read` 每次从数据库重新读回并核对；`--view summary|output|log` 按 `inspect_test_run_record` 展示存档记录，
+  `archive.files` 是文件索引，`--extract-to` 把全部存档文件还原到新文件夹（`record/` 与 `attempts/<attempt_id>/`）。
+- `cleanup` 不信收据里的状态，重新读回并核对；只处理存档清单列出的 Attempt，路径固定为
+  `<attempt_workspace_root>/<attempt_id>`。现场与留档索引不一致（例如留档后新增文件）、现场不完整、与记录的项目目录
+  重叠时保留并说明原因；其余交给 `maintain_attempt_workspaces`（`retention_seconds=0`），它照常要求执行结束、进程停止已确认、
+  已封存、无活跃租约，`--hold` 给出 `retention_hold`。`--query` 只报告 `cleanable`。全部 `deleted`（或已 `absent`）时退出 0，
+  否则退出 1 并列出 `retained_reasons`。记录文件、项目目录、业务数据与留档行都不删除；本批没有留档到期清除。
+
+<a id="archive-test-run-example"></a>
+
+**可运行样例。** 用随包 `native_project` 样例跑一次新的 Claude 任务，再保存、读回、只清理本次 Attempt，并在清理后
+读回还原。运行前需要：
+
+- 一个选定的 Python 环境，已安装 `agent-runtime-core[postgres,cli_tools]`：`[postgres]` 用于留档连接，`[cli_tools]`
+  用于样例的本地 MCP fixture。样例运行、项目脚本与留档都使用这个解释器。
+- 一个已配置的 donor root，其 `.runtime\config.json` 已有 `provider_cli_paths.claude_cli`（`agent-runtime-setup` 写入）
+  与 `run_archive`。样例只读取它。
+- 数据库 owner 已按上文建好留档 schema 并授权该应用角色；本机已安装 `wscred.exe` 并已登录，能取得 `password_credential`。
+- 原生 Claude CLI 已登录；Claude 的 Bash 需要 Git for Windows。
+
+```powershell
+$Python = "C:\work\runtime-env\Scripts\python.exe"   # 上述 Python 环境
+$DonorRoot = "C:\work\my_project"                    # 已配置 claude_cli 与 run_archive 的 root
+$ExampleRoot = "$HOME\rt-archive-example"            # 短英文路径；每次运行新建子文件夹
+$Model = "claude-opus-5-5"
+$Effort = "xhigh"
+@'
+import json, sys
+from pathlib import Path
+from agent_runtime import (cleanup_test_run_archive, load_runtime_config, read_test_run_archive,
+                           save_test_run_archive)
+from agent_runtime.testing.conformance_pattern_examples import run_pattern_example
+
+donor, example_root, model, effort = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+donor_config = load_runtime_config(donor)
+archive_binding = donor_config["run_archive"]
+if archive_binding is None:
+    sys.exit(f"{donor} has no run_archive in .runtime/config.json")
+cli_path = donor_config["provider_cli_paths"]["claude_cli"]
+
+
+def show(step, value):
+    print(f"== {step}\n" + json.dumps(value, ensure_ascii=False, indent=2, default=str), flush=True)
+
+
+# 1. A new native_project Test Run; record.json is its complete record.
+result = run_pattern_example(example_root, "native_project", "claude_cli", cli_path=cli_path,
+                             model_id=model, reasoning_profile=effort)
+run, record = Path(result["run_directory"]), Path(result["record"])
+show("run", {key: result[key] for key in ("run_directory", "status", "passed", "record")})
+if not result["passed"]:
+    sys.exit("example checks failed; nothing archived or cleaned (see check.json)")
+
+# 2. Add only the donor's run_archive to the generated host config.
+host = run / "host"
+config_path = host / ".runtime" / "config.json"
+config = json.loads(config_path.read_text(encoding="utf-8"))
+config["run_archive"] = archive_binding
+config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+# 3. Save, verified on a new connection, then read back.
+receipt_path = run / "archive_receipt.json"
+receipt = save_test_run_archive(host, record, receipt_out=receipt_path)
+show("save", receipt)
+if receipt["archive_status"] != "verified":
+    sys.exit("archive not verified; the Attempt folder is kept")
+reading = read_test_run_archive(host, receipt_path, view="output")
+show("read", {"verified": reading["verified"], "run_status": reading["run_status"],
+              "output": reading["record_inspection"].get("output")})
+
+# 4. Query, then remove only this run's own Attempt folders.
+for query in (True, False):
+    cleanup = cleanup_test_run_archive(host, receipt_path, query=query)
+    show("cleanup query" if query else "cleanup", cleanup["attempts"])
+    if not cleanup["complete"]:
+        sys.exit("cleanup not complete; see retained_reasons")
+
+# 5. After deletion: read again, restore, and compare with what stays on disk.
+restored = run / "restored"
+reading = read_test_run_archive(host, receipt_path, view="log", extract_to=restored)
+facts = {
+    "attempt_folders_removed": not any(Path(row["workspace_path"]).exists() for row in cleanup["attempts"]),
+    "record_bytes_restored": (restored / "record" / "execution_record.json").read_bytes() == record.read_bytes(),
+    "attempts_restored": all((restored / "attempts" / attempt).is_dir() for attempt in receipt["attempt_ids"]),
+    "project_kept": (run / "project" / "reports" / "stock_report.md").is_file(),
+}
+show("after cleanup", {**facts, "restored_to": reading["extracted_to"]})
+if not all(facts.values()):
+    sys.exit("restored files differ from the run")
+'@ | & $Python - $DonorRoot $ExampleRoot $Model $Effort
+if ($LASTEXITCODE -ne 0) { throw "archive example stopped at the step printed above (exit $LASTEXITCODE)" }
+```
+
+脚本逐步打印结果，任一步失败即停止，不会继续清理；在中央保存之前停止时，本地的 `record.json` 与 Attempt 文件夹
+（含 `archive\execution_record.json`）照常保留。留档的是完整 `record.json`（不是 `check.json` 或查看摘要）；完成后本次
+Attempt 文件夹已删除，`restored\record\execution_record.json` 与 `record.json` 字节相同，`restored\attempts\<attempt_id>\`
+是还原的 Attempt 文件。原生项目的业务产出（本例 `project\reports`、`project\data`）在 Attempt 之外，不进入留档也不被清理。
+模型任务使用随包的本地 MCP fixture，不是业务 MCP；留档步骤连接 donor 配置的 Runtime 留档数据库。同样的保存、读回与
+清理适用于任何普通 Test Run：用该次运行的 root 和 `--record-out` 文件替换第 1 步。
+
+Python 宿主用同名 API：
+`save_test_run_archive(root, record, receipt_out=...)`、`read_test_run_archive(root, receipt, view=..., extract_to=...)`、
+`cleanup_test_run_archive(root, receipt, query=..., retention_hold=...)`；隔离测试库可传
+`store=PostgresTestRunArchiveStore.from_dsn(dsn, schema=...)`。
+
 <a id="upgrade-existing-reviewer"></a>
 
 ### 0.5 升级已有 Reviewer / Upgrade an existing reviewer
@@ -655,7 +909,7 @@ Reviewer source、准确的 Skill/Module ID、一个获准且未使用的新定�
 **安装已批准的软件包。** 例如已取得 wheel 时：
 
 ```sh
-python -m pip install --upgrade /absolute/path/to/agent_runtime_core-0.2.0.dev9-py3-none-any.whl
+python -m pip install --upgrade /absolute/path/to/agent_runtime_core-0.2.0.dev22-py3-none-any.whl
 python -c 'import agent_runtime; from importlib.metadata import version; print(version("agent-runtime-core")); print(agent_runtime.__file__)'
 agent-runtime-registry register-reviewer --help
 agent-runtime-test-run --help
@@ -834,6 +1088,177 @@ workflow = Module.to_workflow(exported).export()
 已保存的定义保持其保存的工具与网络要求，不按版本标签或之后的预设重新推断。transport、模型、effort 与时限
 仍由每次调用或执行参数文件决定。完整的选择方法与随包样例见随包 Skill `agent-runtime-usage`；
 样例中的 `build_pattern_workflow` 是同一组合的可读实例。
+
+需要在调用者项目里按项目指令和项目 Skills 执行时，照样用 `code_change` 或 `mcp_data` 注册；原生项目模式是
+每次调用的 `--native-project`（Codex 另加 `--codex-execution-mode host`），不写入定义，也不需要新的 preset。
+见 [原生项目执行](agent_runtime_claude_native_tools.md#6-native-project-execution)。
+
+<a id="skill-task-base"></a>
+
+### 4.2 从 Skill 提取一项独立任务的执行 prompt / Build one task's execution prompt from a Skill
+
+本节写给 source owner 与 Skill 作者：Skill 中的一项工作需要交给 Runtime 独立执行时，怎样写出上面
+source 目录里的 `prompt.md`。注册只读取、校验并冻结 owner 交付的内容，不编写任务含义，也不批准领域
+任务；写好后仍按 §0.1 注册、用 Test Run 验证，不另设注册路径。
+
+1. **先确定一个角色和一项稳定任务。** 说明执行 Agent 是谁、处理什么对象、交付什么。一份
+   `prompt.md` 只承接这一项任务。它要保留这项任务的：
+   - 目的，实质结果与质量要求；
+   - 各项输入的用途；
+   - 边界；
+   - 会改变结果的判断与方法；
+   - 输出要求、完成条件和缺件处理。
+2. **使用固定的五章结构：** `1. Task Summary`、`2. Intended Outcomes`、`3. Boundaries`、
+   `4. Inputs and Completion`（`4.1 Inputs`、`4.2 Output`、`4.3 Completion Contract`）、`5. Method`。
+   - 这是一份完整的执行 prompt，不是供发现的 Skill，也不是一张删减规则清单。
+   - 结果确定性指交付内容中可核对的验收证据，不要求措辞、条数或固定 SOP 一致。
+   - Method 写会改变结果的判断，其余选择留给执行 Agent。
+3. **调用方的工作留在 prompt 之外。** 以下事情属于调用方或宿主 harness：选择并组装资源，选择
+   运行配置（预设、模型、时限），发起调用，绑定机器身份，处理和保存结果。
+   - 不把 Skill 的发现信息、调用方操作说明、Authoring Rules、审核或发布流程放进 prompt。
+   - 执行角色实际需要的工具用法与操作边界要保留，例如“只修改 edit_file”“把结果写入工作目录中的
+     指定文件”。不是机械删除所有操作类句子。
+4. **prompt、声明输入与输出约定合起来完整说明执行。** 执行 Agent 不能靠未声明的原始 `SKILL.md`
+   或历史聊天补齐指令。Output schema 只给出结构；语义质量与完成条件仍写在 Intended Outcomes 和
+   Completion Contract 中。
+5. **稳定指令、选定框架与本次材料分开。**
+   - `prompt.md` 是稳定的任务指令。
+   - 选定的专业框架提供知识，本次 Source 与必要的事实元数据是内容证据。两者都作为声明输入或
+     材料资源交付。
+   - 选哪个框架、哪份来源由业务 harness 决定；Runtime 不替业务选择。
+6. **每项要求走到一个去处。** 用一张简表逐项核对原 Skill 的要求，既不丢失含义或完成条件，也不
+   把同一段定义复制到多处。同一要求在结果、方法和验收中承担不同作用时可以分别出现。这张表是作者的
+   检查记录，不是新的追踪 schema。
+
+   | 去处 | 放什么 |
+   | --- | --- |
+   | `prompt.md` | 角色任务、实质结果与质量、边界、关键判断方法、输出含义、完成与缺件处理 |
+   | 调用方／harness | 资源选择与组装、运行配置、调用、机器身份、结果处理与保存 |
+   | 声明输入或材料资源 | 本次 Source 与事实元数据、选定的专业框架 |
+   | Output schema | 字段、类型与必填结构 |
+7. **位置由 Runtime 代码交付。** agent 调用时，Runtime 在冻结 prompt 前加一段
+   `## Runtime Invocation Locations`，给出本次实际的工作、可写、材料与依赖目录和 Runtime Python
+   （见 [ClaudeAdapter 与 Claude CLI 执行](agent_runtime_claude_native_tools.md)）。
+   - `prompt.md` 用相对布局或“本次提供的目录”指代它们，不写本机路径。
+   - 这段位置说明不是把 harness 的操作手册或选择逻辑复制进 prompt 的理由。
+
+**示例（通用、非业务）。** 设想一份“整理来源笔记”的 Skill。它既说明何时使用、调用方怎样挑选来源与
+分析框架、怎样调用和保存，也说明笔记应满足的要求。逐项分去处如下：
+
+| 原 Skill 中的内容 | 去处 |
+| --- | --- |
+| frontmatter `description`、何时使用本 Skill | 留在 Skill，不进 prompt |
+| “从资料库挑一份来源，按领域选框架，调用 Runtime，保存结果” | 调用方／harness |
+| “每条笔记脱离原文也能读懂；保留来源的数字、限定、日期与观点归属；正负面信息按同一相关性标准取舍；不加入处理者立场” | `prompt.md`：Intended Outcomes 与 Method |
+| “相关内容按完整事项归组，不按段落、图表或单个指标拆散” | `prompt.md`：Method |
+| “来源不完整或图片无法读取时，说明未读部分，不补写” | `prompt.md`：Output、Completion Contract 与 Method；Output schema 的 `status` 与 `unread_parts` |
+| 领域分析框架正文 | 声明输入：选定的框架，由 harness 选择 |
+| 来源全文、日期、出处定位 | 声明输入：本次 Source 与事实元数据 |
+| “返回 status、entries 与 unread_parts” | Output schema 给出结构；各字段的含义、各状态的条件与验收仍写在 prompt |
+| Authoring Rules、审核流程 | 留在 Skill 与审核方法，不进 prompt |
+
+由此得到的完整 `prompt.md`：
+
+```markdown
+## 1. Task Summary
+把本次提供的一份来源整理为忠于来源、可独立阅读的笔记条目，供阅读、检索和后续研究使用，
+并如实说明来源中哪些部分没有读到。
+
+## 2. Intended Outcomes
+1. 每条笔记围绕一个完整事项，脱离原文也能读懂：说明对象、发生了什么或谁持什么观点，保留来源中的
+   数字、单位、限定词（如“约”“预计”“不超过”）、日期或期间，以及观点归属（谁说的、谁估计的）。
+2. 与本次用途相关的事项都有条目。正面与负面信息按同一相关性标准取舍，不加入处理者自己的立场，
+   也不把来源的观点改写成事实。
+3. 读者能看出覆盖范围：无法读取、明显截断或只给出链接的部分逐项列出，不被补写或略去不提。
+
+## 3. Boundaries
+- 只处理本次 source。不添加来源之外的事实、因果、结论或建议，不判断来源陈述是否属实。
+- frameworks 只用于判断相关性和关注点，本身不是内容证据；框架中出现而来源没有的内容不写入笔记。
+- 不为满足条目数量拆分或合并事项；内容少的来源可以只有少量条目。
+- 不改变输出字段的含义，不在输出中写入本次运行配置、文件位置或处理过程说明。
+
+## 4. Inputs and Completion
+### 4.1 Inputs
+- source.text：本次来源全文（可能包含表格文字与图片链接）。
+- source.metadata：标题、发布者、日期等事实元数据；缺少某项时，笔记中不推测该项。
+- frameworks：本次选定的领域框架，说明什么内容与本次用途相关、应关注哪些方面。
+
+### 4.2 Output
+按 output schema 返回一个 JSON 对象：
+- status：complete、partial 或 no_usable_source，条件见 4.3。
+- entries：笔记条目。每条的 text 是独立可读的笔记；source_locators 列出该笔记依据的全部来源
+  位置（章节、段落或表格标识，可以多处）。
+- unread_parts：没有读到的部分。每项的 source_locator 指出位置，reason 说明原因
+  （例如“只有图片链接”“正文在此处截断”“表格文字缺失”）。没有时为空数组。
+
+### 4.3 Completion Contract
+- complete：已读完整份 source，unread_parts 为空，每个相关事项都有条目。
+- partial：source 有无法读取或截断的部分。可读部分中的相关事项都有条目，未读部分逐项列在
+  unread_parts 中；未读部分的内容不写进任何条目。
+- no_usable_source：source 为空或全部无法读取。entries 为空，unread_parts 说明原因。
+- 每条笔记的数字、限定、日期与归属都能在其 source_locators 指向的位置找到。符合 output schema
+  只证明结构正确，不能代替以上条件。
+
+## 5. Method
+1. **先读懂整份来源。** 通读 source.text，弄清它讨论哪些对象与问题、作者是谁、观点由谁提出。
+   遇到只有链接的图片、缺失的表格或明显截断的正文，立即记入 unread_parts，之后不再猜测其内容。
+2. **确定事项边界。** 讨论同一对象同一问题的内容合为一个事项，包括不相邻的段落和对应的表格。
+   来源对同一事项先后给出不同数字或修正判断时，在同一条笔记中写明先后关系，不拆成互相矛盾的两条。
+   多个对象被并列比较时，保留比较关系和各自的归属。
+3. **判断相关性。** 逐个事项对照 frameworks：与框架所述用途和关注点有关的事项写成条目，无关的不写。
+   正面与负面信息使用同一标准，不因立场不同而取舍不同。框架未覆盖、但来源明确作为重点的事项，
+   按与用途的直接关系判断，不能确定时保留。
+4. **忠实改写。** 可以翻译、调整语序、合并不相邻段落，把代词换成所指对象，使条目独立可读。
+   不新增事实、因果或结论；来源的推测保持推测语气，引用的观点保持其归属。
+5. **处理元数据缺口。** source.metadata 缺少日期或发布者时，条目中不补写；来源正文给出期间的，
+   以正文为准，并在条目中写明是哪个期间。
+6. **完成前回读。** 逐条核对数字、单位、限定、日期与归属能在 source_locators 指向的位置找到；
+   再检查可读部分的每个相关事项都有条目、未读部分都在 unread_parts 中，最后按 4.3 确定 status。
+```
+
+对应的 `schemas/output.schema.json`，表达上面三种状态：
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "entries", "unread_parts"],
+  "properties": {
+    "status": {"type": "string", "enum": ["complete", "partial", "no_usable_source"]},
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "source_locators"],
+        "properties": {
+          "text": {"type": "string", "minLength": 1},
+          "source_locators": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "unread_parts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_locator", "reason"],
+        "properties": {
+          "source_locator": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}
+```
+
+输入 schema 相应声明 `source`（含 `text` 与 `metadata`）和 `frameworks`；由哪个领域框架、哪份来源
+组成本次输入，仍由 harness 决定。
+
+最后换一份同类来源，对照这份 prompt 走读一遍。确认方法仍然适用、不依赖原 `SKILL.md` 或聊天后，按
+§0.1 用合适的预设注册为普通 Module（这个只返回结构化结果的例子是 `structured_output`），再用 Test Run
+验证真实输出。
 
 ## 5. 可选 Workflow assembly
 

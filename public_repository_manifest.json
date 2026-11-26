@@ -33,6 +33,7 @@
     "tests/test_public_repository_validation.py",
     "tests/local_registration_cli.py",
     "tests/windows_junction_helpers.py",
+    "tests/fixtures/antigravity_command_denial/denied_command_no_output.json",
     "tests/fixtures/claude_v2_replay/committed.json",
     "tests/fixtures/claude_v2_replay/generate.py",
     "tests/fixtures/operator_skills_dev7/agent-runtime-evaluation.SKILL.md",

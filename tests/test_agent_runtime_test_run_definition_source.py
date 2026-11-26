@@ -205,7 +205,8 @@ def test_cli_passes_pg_locator_and_constraints_to_the_api_unchanged(tmp_path, mo
                     "workflow_release_ref": "runtime-workflow:x@v1", "workflow_release_sha256": "a" * 64,
                     "transport_kind": "claude_cli", "model_id": None, "reasoning_profile": None, "run_timeout_seconds": None,
                     "cli_path": None, "resources_path": Path("resources.json"),
-                    "project_directory": None, "command_permits": ()}
+                    "project_directory": None, "command_permits": (),
+                    "codex_execution_mode": "configured", "native_project": False}
 
 
 @pytest.mark.real_run

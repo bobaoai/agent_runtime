@@ -1464,8 +1464,8 @@ def test_run_module_refuses_historical_codex_workspace_v2_profile_by_binding(
     authority, _ = _evaluation_authority(registry, request)
 
     original_profile = compiled.execution_profile.as_dict()
-    assert (executor.descriptor.adapter_revision, executor.descriptor.admission_state) == ("v4", "integration_tested")
-    # The registered executor is v4; the kernel finds no adapter for the v2 binding.
+    assert (executor.descriptor.adapter_revision, executor.descriptor.admission_state) == ("v5", "integration_tested")
+    # The registered executor is the current v5; the kernel finds no adapter for the v2 binding.
     with pytest.raises(KeyError, match="codex_cli_agent_workspace_executor@v2"):
         run_module(
             request,

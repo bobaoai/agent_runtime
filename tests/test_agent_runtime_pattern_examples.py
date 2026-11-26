@@ -761,3 +761,20 @@ def test_real_cli_runs_each_pattern_with_actual_effects(pattern, transport):
                                           reasoning_profile=os.environ.get("AGENT_RUNTIME_ACCEPTANCE_EFFORT", "low"),
                                           run_timeout_seconds=900)
     assert result["passed"], json.dumps([row for row in result["checks"] if not row["passed"]], indent=2)
+
+
+@pytest.mark.real_run
+@pytest.mark.parametrize("transport", examples.NATIVE_PROJECT_TRANSPORTS)
+def test_real_cli_native_project_example(transport):
+    """One independent native project call: project instructions, skills, MCP fixture and project Python."""
+    if not (REAL and BINARIES[transport]):
+        pytest.skip(f"unverified: set AGENT_RUNTIME_REAL_RUN=1 and AGENT_RUNTIME_{transport[:-4].upper()}_BIN")
+    if not HAS_MCP:
+        pytest.skip("unverified: the mcp package (cli_tools extra) is not installed")
+    root = Path(os.environ.get("AGENT_RUNTIME_EXAMPLE_ROOT")
+                or Path(__file__).resolve().parents[2] / "agent runtime examples")
+    result = examples.run_pattern_example(root, examples.NATIVE_PROJECT_PATTERN, transport,
+                                          cli_path=BINARIES[transport], model_id=MODELS[transport],
+                                          reasoning_profile=os.environ.get("AGENT_RUNTIME_ACCEPTANCE_EFFORT", "low"),
+                                          run_timeout_seconds=1200)
+    assert result["passed"], json.dumps([row for row in result["checks"] if not row["passed"]], indent=2)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-runtime-core"
-version = "0.2.0.dev14"
+version = "0.2.0.dev22"
 description = "A stable execution environment for versioned AI agent capabilities on Windows, with reusable contracts, configuration, and run records"
 readme = "README.md"
 license = "MIT"
@@ -39,6 +39,8 @@ agent-runtime-test-run = "agent_runtime.testing.conformance_local_test_run:main"
 agent-runtime-registry = "agent_runtime.registry.registry_local_persistence:main"
 agent-runtime-inspect = "agent_runtime.inspection.inspection_snapshot_exporting:main"
 agent-runtime-live-inspect = "agent_runtime.inspection.inspection_http_serving:main"
+agent-runtime-setup = "agent_runtime.testing.conformance_host_setup:main"
+agent-runtime-archive = "agent_runtime.testing.conformance_test_run_archiving:main"
 
 [tool.setuptools]
 packages = [

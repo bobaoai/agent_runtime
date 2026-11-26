@@ -10,7 +10,7 @@ language: zh-CN
 # Agent Runtime Environment, Execution Profile and Provider Adaptation
 
 本文是 Runtime 运行环境、Execution Profile 和 Provider 适配的统一设计入口。它说明一次调用的
-参数从哪里来、怎样成为 Claude 或 Codex 的实际配置，以及执行结果和日志怎样返回 Runtime。
+参数从哪里来、怎样成为 Claude、Codex 或 Antigravity 的实际配置，以及执行结果和日志怎样返回 Runtime。
 实际接口、默认值、支持组合和验证结果由发布代码及其随包文档提供；设计中描述一种能力不表示所有
 Adapter 都已经实现它。
 
@@ -24,7 +24,8 @@ Evaluation 承担，不是普通模型运行的隐含步骤。
 
 本合同同时适用于普通 Module 和 ModuleReviewer。后者只在定义端提供默认运行要求。本文不决定
 业务审核结论、Workflow 路由、生产授权政策、数据库内容或软件发布，也不建立 Profile 选择服务、
-第二套日志服务或底层系统调用监控。Claude 与 Codex 均按 §3.2 的外部 CLI 边界接入。
+第二套日志服务或底层系统调用监控。Claude、Codex 与 Antigravity 均按 §3.2 的外部 CLI 边界接入；
+Antigravity 首个绑定只覆盖 `structured_output` 与 `file_review` 两种形状（§3.10）。
 
 <a id="3-reader-gain"></a>
 
@@ -387,7 +388,49 @@ Execution Profile 保存选择结果；它与 preset、下述 Codex 选项及应
 `host` 当前拒绝 material package、额外只读依赖、`resources.commands` 声明命令扩展及 MCP；调用方
 可显式用 `read_only_dependencies=()` 清除宿主默认依赖。参数未知或为 null 时拒绝；不相容能力组合
 返回 `ADAPTER_CAPABILITY_UNSUPPORTED`，不启动一个更宽的替代调用。这些是 Runtime 当前接口的
-支持范围，不能解释为 Codex 产品无法执行这些任务。`mcp_data` 仍由原 configured 路径提供。
+支持范围，不能解释为 Codex 产品无法执行这些任务。`mcp_data` 仍由原 configured 路径提供；
+需要项目上下文与 MCP 的 host 调用使用 §3.4.7 的原生项目执行。
+
+<a id="57-native-project-execution"></a>
+
+#### 3.4.7 Native project execution
+
+`native_project` 是每次调用的显式选择（CLI `--native-project`），让一次独立的 `claude -p` 或 `codex exec`
+在调用者提供的项目目录中按 CLI 原生规则加载项目指令和 Skills。Runtime 仍组装输入、输出 schema、模型、
+时限与选定连接，接收日志与最终结果并校验、记录和交接。省略时为 false，现有 configured 与 Codex host
+调用的参数与记录完全不变；执行参数文件与 Module 定义不选择它。每次调用不保存、不续接会话，跨次调用
+不共享对话记忆。
+
+它只接受既有 `code_change` 与 `mcp_data` 形状：`agent`、inline 输入、`explicit_project_read_write`、
+`provider_managed`，工具含 read、edit、shell（search 可选），另可有声明的 `mcp__<name>` 连接，不含 callback。
+Claude 使用 `claude_cli`；Codex 另须显式 `codex_execution_mode="host"`。必须提供 `project_directory`；
+材料包、`resources.commands`、额外只读依赖、`command_permits` 与 callback factory 都被拒绝。其他组合与
+Antigravity 在启动 Provider 前返回 `ADAPTER_CAPABILITY_UNSUPPORTED`，不降级为其他模式，也不换 Provider。
+
+| 项目 | Claude | Codex |
+| --- | --- | --- |
+| 项目上下文 | 不加 `--safe-mode` 与 `--disable-slash-commands`；CLAUDE.md 层级与用户、项目 Skills 按 Claude 原生规则发现，经 `Skill` 工具使用 | 不再关闭项目文档与 Skills（不传 `project_doc_max_bytes=0`、`skills.include_instructions=false`、`features.skip_host_skill_discovery=true`）；AGENTS.md 与 `.agents/skills` 按 Codex 文档发现 |
+| 本次仍关闭 | 自动记忆（`autoMemoryEnabled=false`）与 hooks（`disableAllHooks=true`）；托管策略照常生效。Runtime 不另行控制 plugins，实际加载的 plugins 以 init 事件为准 | agents、Web 搜索与既有关闭的 features（memories、hooks、plugins 等）保持关闭 |
+| 工具与许可 | 映射工具加 `Skill`；shell 同时请求 `Bash` 与 `PowerShell`（Claude 只在提供该工具的宿主上给出）；声明 MCP 时加 `ListMcpResourcesTool`、`ReadMcpResourceTool`、`ToolSearch`。`dontAsk` 下允许这些工具、`Edit(./**)` 与每个 `mcp__<name>`；用户、项目与托管的 deny／ask 规则照常优先 | 宿主权限：`-s danger-full-access`、`approval_policy="never"`、非登录 shell；execpolicy 照常生效 |
+| MCP | 只有私有 `mcp.json` 中声明的连接，`--strict-mcp-config` | 渲染声明连接，并逐次关闭宿主配置中未声明的已启用服务器 |
+| Python | Runtime Python 照旧位于 PATH 首位；项目自己的解释器由项目指令或 Skill 写明，经 Shell 调用 | 同左 |
+
+两种 CLI 都不使用 bypassPermissions、跳过权限或关闭托管保护。Shell 以本人宿主权限运行，项目目录是任务
+范围而非操作系统边界。凭据留在 CLI 原生机制中：根配置的连接名与 URL 与原生连接一致时，CLI 自己找到
+已有登录；Runtime 不读取、复制或改写认证文件与全局设置。Runtime 不安装 Python 包、不改全局环境，
+也不替换自己的解释器。
+
+记录：trace 与 `effective_configuration` 写入 `native_project: true`、`context_enabled`（本次不再关闭的
+原生上下文发现，是配置意图而非观察）、`context_suppressed`、实际工具与允许规则、`command_scope=host`、
+`filesystem_scope=task_directed`；MCP 仍以名称与配置哈希记录，不复制 URL 或命令。实际发现与使用以原始
+日志为准：Claude 的 init 事件列出工具、Skills、plugins 与连接状态，两种 CLI 的工具、命令与 MCP 事件由
+Inspection 返回。Shell 发起的 HTTP 请求是命令，不记为 MCP 调用。
+
+**Adapter revision。** 这个选择不新增 Adapter revision：Claude 仍为 `claude_cli_adapter@v4`，Codex workspace
+仍为 `codex_cli_agent_workspace_executor@v5`，Profile／Variant 准备不变。每个既有请求（Profile 加既有的本次
+资源与选择）的转换逐字节不变；新的转换路径只能经新增且被记录的本次选择到达，与 §3.4.6 的
+`codex_execution_mode` 相同，记录中的绑定、`native_project` 与 `runtime_version` 共同说明实际执行了哪条转换。
+改变某个既有请求的转换仍须更新 Adapter revision 及对应绑定（§3.11.3）。
 
 <a id="6-host-environment-and-preparation"></a>
 
@@ -411,6 +454,8 @@ Profile 准备和实际调用固定同一结果，不重新从 root、latest 或
 宿主配置保存程序、依赖、运行资源和可用存储的定位信息；凭据通过对应可信接口或明确的私有位置
 提供。Provider 认证只交给 Provider 的认证机制，PG 凭据只交给对应存储接口。秘密不进入 Profile
 正文、prompt、argv 或共享日志。root 不自动授权建库、迁移 schema、保存执行数据或读取项目全集。
+程序位置与所选 MCP 连接可由随包 setup 命令写入宿主配置（规则见 Design 05 §7）；它只改动所选字段，
+不导入无法以环境变量名引用凭据的连接设置。
 
 §3.4.3 决定本能力的预算含义；其他配置文件名、键、schema / table、默认目录与 CLI 选项由公开代码
 和帮助导出。本文不创造
@@ -485,9 +530,12 @@ CLI 的私有状态来补齐内部过程，也不把每个内部工具事件当�
 
 #### 3.5.5 Provider 登录与私有配置
 
-Claude 和 Codex 使用宿主已配置的登录方式与私有配置。Runtime 通过正常的 CLI 接口使用它们，不
+Claude、Codex 和 Antigravity 使用宿主已配置的登录方式与私有配置。Runtime 通过正常的 CLI 接口使用它们，不
 解析、刷新或重新管理认证内容，不建立一套按调用复制、比较、回写登录文件的策略。登录不可用时，
-返回实际 CLI 错误并交给宿主处理。
+返回实际 CLI 错误并交给宿主处理。Provider 登录以及 MCP 的登录、同意与工具审批由人在原生 CLI 和
+服务中完成。setup 只运行非交互的版本与登录状态查询，以及所选连接的配置查询，并报告缺口；它不启动登录，
+也不代替用户批准。Antigravity 没有公开的登录状态命令：setup 只运行 `agy --version`，不读取认证文件，
+也不把模型列表当作登录证据，登录状态报告为 `not_verified`，由首个真实调用确认。
 
 凭据不进入任务正文、命令参数或共享日志，也不作为普通工作文件留档。Runtime 只释放自己创建的
 临时资源，不删除或重写宿主与 Provider 已有的登录状态。不同平台的登录实现属于 Provider／宿主，
@@ -540,7 +588,7 @@ Runtime 的取消结果、所启动进程的退出情况和日志是否接收完
 已发生的执行事实，也不能报告已经留档。停止无法确认时保留原受保护现场，报告未确认的范围与
 恢复位置；不得将它封存为可自动删除的普通历史目录。
 
-任务留档不包含登录材料或未声明的 Provider 会话目录。原始日志仍按 §3.10 的私有内容与脱敏规则
+任务留档不包含登录材料或未声明的 Provider 会话目录。原始日志仍按 §3.11 的私有内容与脱敏规则
 处理；留档不扩大读取权限，也不要求 Runtime 检查、迁移或备份 Provider 的内部状态。
 
 **到期清理。** 宿主资源策略决定留档位置、保留时长、清理周期及明确的保留例外，并遵守适用的
@@ -558,6 +606,18 @@ UTC 时间事实与可比较时钟；不用进程内 monotonic 值、目录名�
 作用于核验归属的目录，不跟随替换路径或重解析点，不追删被移走的任意目录，不删除注册定义、权威
 执行记录、独立输出存储或业务数据。清理结果分别列明实际删除、保留和失败；错误不会触发更大范围
 的补偿删除。
+
+**中央留档与本次清理。** 普通 Test Run 仍是测试证据。宿主可在运行结束后显式调用 `agent-runtime-archive`
+（`save_test_run_archive`、`read_test_run_archive`、`cleanup_test_run_archive`），把本次记录和本次 Attempt
+文件夹中的普通文件，写入 root 配置 `run_archive` 指定的中央 Runtime 留档 schema（默认 `runtime_archive`，
+只插入的 `run_archive` 与 `archive_content` 两张表；schema 由数据库 owner 用 `run_archive_ddl` 建立，保存时不建表）。
+这一层是 Runtime 运行记录，不是 Workflow Ledger，也不是 Agent 使用的业务 schema：项目目录、业务库与产出只作为
+记录中已有的引用，不复制，不清理。保存在一个事务中提交，再用新连接读回清单与全部内容，按路径集合、大小与 SHA-256
+核对；写入或读回失败报告为留档失败，现场与运行自身的结果保持不变。保存时观察的 Python、操作系统与已安装 Runtime
+版本标为 `archive_host`，不当作原运行环境；原运行事实取自记录本身。清理时再次从数据库读回核对，确认现场文件仍与
+留档索引一致，链接、reparse point 或特殊文件使该 Attempt 视为未完整留档而保留；之后只把清单列出的 Attempt 交给
+上述维护操作，`archive_complete` 只来自这次读回，`retention_hold` 由调用方给出，`retention_seconds=0` 表示封存后
+不再额外等待，`None` 仍表示不自动删除。留档行本批不设到期或删除。
 
 **事后检查。** 检查者可按权限查看保留的材料、草稿、日志与结果快照；权威执行状态和详细日志投影
 仍由 [Inspection](agent_runtime_06_standalone_package_and_lifecycle_contract.md#7-execution-inspection)
@@ -587,6 +647,7 @@ allow-all 服务。Provider 登录、宿主调用资格和业务资源授权分�
 #### 3.6.2 输入交付和输出约束
 
 Runtime 固定完整任务输入和实际发送的 Prompt 内容，Adapter 不在记录后私自追加任务语义。
+冻结的 Prompt Envelope 原样发送。CLI Adapter 可在其前加入一段由代码按本次 Attempt 实际准备结果生成的位置说明（工作目录、可写目录、材料与只读依赖目录、Runtime Python），不含任务语义、凭据或私有控制文件。Envelope 的 ref／hash 只标识冻结 Envelope，不代表整个 CLI 输入；每个 Attempt 记录实际发送的完整文本，供 Inspection 读取。
 模型可见任务材料与 Runtime 控制信息分开。允许模型探索一个目录，不等于已经把该目录全文作为
 冻结输入交付；实际读取内容按 Provider 可取得的事件记录。
 
@@ -713,13 +774,63 @@ Reviewer 默认附加 Runtime 代执行命令服务。若当前 Adapter 不支�
 [Codex exec](https://learn.chatgpt.com/docs/developer-commands#codex-exec) 与
 [Configuration Reference](https://learn.chatgpt.com/docs/config-file/config-reference)。
 
+<a id="10b-antigravity-cli-adaptation"></a>
+
+### 3.10. Antigravity CLI Adaptation (first binding)
+
+`antigravity_cli_adapter@v1`（transport `antigravity_cli`，provider `google`）按同一外部调用合同启动
+原生 `agy`。首个绑定只接受两种已发布要求的准确形状：`structured_output`（`tool_free`、`inline`、
+workspace `none`、无任务工具、network `denied`）与 `file_review`（`agent`、`inline`、
+`own_draft_read_write`、恰为 `read/search/edit/shell`、`provider_managed`），两者都要求
+`native_structured_output` 以及显式模型与 effort。其他组合，包括显式项目／`code_change`、MCP／
+`mcp_data`、回调、`resources.commands`、prompt-only JSON 和 Gateway 输入，在 Profile 准备阶段返回
+`ADAPTER_CAPABILITY_UNSUPPORTED`，不建 Attempt 目录、不启动进程，也不改写 Module 要求去迁就。
+
+每次调用由代码生成三份实际文件并记录其路径：`<cwd>/.agents/agents/agent-runtime-task.md` 自定义
+主 agent（`structured_output` 只列 `finish`，即 CLI 交回 schema 结果的机制而非任务工具；
+`file_review` 列 `view_file`、`write_to_file`、`replace_file_content`、`run_command`、`command_status`
+与 `finish`，搜索经原生 Shell，不依赖 `grep_search`）；只作用于本次会话、从不写入全局设置的
+`--settings` 文件；以及原样的 canonical 输出 schema 文件（`--json-schema`）。argv 与通过的原生
+探测一致：`--input-format stream-json --output-format stream-json --json-schema FILE --agent NAME
+--model M --effort E --settings FILE --disable-slash-commands`，不带 `-p`、续接会话、沙箱或跳过权限
+的参数；时限由 Runtime 现有 deadline 与进程停止负责，不承诺停止整棵进程树。stdin 是一条
+stream-json user 事件，随后关闭；其 content 为冻结 envelope（`file_review` 前置既有的 Invocation
+Locations 段）。trace 分别保存 `actual_prompt` 与准确的 `stdin_jsonl`。
+
+`structured_output` 的会话设置拒绝全部文件、命令、MCP 与 URL 操作。`file_review` 以 Attempt
+`work/scratch` 为 cwd 并接受其中的编辑，允许读取 scratch、只读 materials 与所选依赖，拒绝写入
+materials 和 agent 目录；命令只按宿主本次 `command_permits` 渲染为 `command(<permit>)` 允许规则，
+无许可即无命令允许规则。已实测的规则体是 `regex:` 加完整命令的 Python `re.escape`
+（`antigravity_command_permit`）；含空格、非 ASCII 字符与括号的解释器路径按此写法已实测运行。许可须非空、
+单行、不含 NUL。纯前缀写法未经实测，不作声明，匹配语义由 agy 自己决定。该函数只转义给定字符串，不解析
+`python` 别名、不规范化路径或引号、不合并命令；调用方用同一命令字符串写任务输入并生成许可，要求每条命令单独调用。
+headless 模式下无法获批的工具请求被 agy 软拒绝并在 stderr 说明，调用可继续并以 0 退出；
+Runtime 保留该工具步骤与 stderr，不把拒绝本身判为调用失败，也不把被拒工具记为成功。结果因此没有
+`structured_output` 且 `result.denied_actions` 非空时，失败类别与代码不变（`schema`、
+`antigravity_cli_structured_output_missing`），信息先列出这些原生拒绝与失败的工具步骤，trace 另存
+`native_denied_actions`；不解析 stderr，不拆分或重放被拒命令。
+
+结果接受条件：退出码 0、恰有一个 `init` 与一个 `result` 事件、`result.status` 为 `SUCCESS`、
+`init.agent` 是生成的 agent、`init.model` 等于所请求模型，且 `result.structured_output` 是通过
+canonical schema 的对象；不从回复文本或代码块解析结果。非 `SUCCESS` 状态按实际值写入失败信息。
+用量只取 `result.usage`：`output_tokens` 原样记录（其中已含 `thinking_tokens`，不再相加）；agy 的
+`input_tokens` 是否包含 `cache_read_tokens` 尚未确立，因此含缓存的输入总量、缓存读取、缓存创建与
+普通输入保持未知，原始用量行保留在 trace。
+
+Inspection 按 `step_index` 配对工具步骤；只给出摘要的读取（`N lines, M bytes`）与不含内容的写入
+是明确的内容限制，不据最终回答补造。`finish` 与 `init.tools`（通用工具目录，不代表所选 agent
+的工具集）不计为任务工具。登录留在原生 CLI：Runtime 不读取认证文件，setup 只运行 `agy --version`
+并把登录报告为 `not_verified`，由首个真实调用确认。具体语法参见
+[Antigravity CLI headless](https://antigravity.google/docs/cli/headless/) 与
+[reference](https://antigravity.google/docs/cli/reference/)。
+
 <a id="11-output-and-execution-records"></a>
 
-### 3.10. Output and Execution Records
+### 3.11. Output and Execution Records
 
 <a id="111-四种结果分别判断"></a>
 
-#### 3.10.1 四种结果分别判断
+#### 3.11.1 四种结果分别判断
 
 | 结果层次 | Runtime 保存和判断什么 |
 | --- | --- |
@@ -734,7 +845,7 @@ Adapter 返回 infrastructure result，不自行批准业务结果、选择 Work
 
 <a id="112-原始日志与按需检查"></a>
 
-#### 3.10.2 原始日志与按需检查
+#### 3.11.2 原始日志与按需检查
 
 Invocation 首先保留实际收到的 stdout、stderr 与公开 Provider 事件，并关联本次执行身份。日志中
 出现的工具请求、拒绝、错误及内部重试作为 Provider 返回的信息保存，不驱动 Runtime 的逐步干预。
@@ -756,7 +867,7 @@ Invocation 首先保留实际收到的 stdout、stderr 与公开 Provider 事件
 
 <a id="113-存储恢复与版本"></a>
 
-#### 3.10.3 存储、恢复与版本
+#### 3.11.3 存储、恢复与版本
 
 有明确授权的持久存储时，由 Ledger 和对应内容存储保存记录；没有持久存储时，自测可返回内存
 结果和日志。注册定义持久化与执行日志持久化是两件事。显式要求持久化而保存失败时报告该失败，
@@ -897,28 +1008,22 @@ Execution 在最终提交时验证身份、必要输出条件及适用 fence。�
 
 ### 6.1 Verified preset scope
 
-下表是既有真实调用的有限验收结果，回读日期为 2026-11-18。记录来自 Windows 上随包样例的
-`record.json`、`check.json` 与保存的 Module 定义；准确 hash、逐项检查和原始文件定位收在仓库附件
-`docs/proposals/profile_configuration_20261118/evidence_readback.json`。它是验收附件，不参与配置解析。
-所有以下成功样例均为 `0.2.0.dev12`、`max_attempts=1`；模型是每次显式选择，Claude 使用
-`claude-opus-5-5/low`，Codex 使用 `gpt-6-astra/low`，不能据此推定其他模型或 effort 已测。
+四个预设在 Windows 上的有限真实验收证据收在仓库附件
+`docs/proposals/profile_configuration_20261118/evidence_readback.json`：它逐条回读随包样例保存的
+`record.json`、`check.json` 与已注册定义，给出 Runtime 版本、所选 Provider、模型与 effort、准确 hash、
+逐项检查和原始文件定位，并保留早先未通过的记录。它是验收附件，不参与配置解析。可重复的检查入口是随包
+`agent_runtime.testing.conformance_pattern_examples` 样例及源码 checkout 中
+`tests/test_agent_runtime_pattern_examples.py` 的显式真实运行用例。
 
-| Preset / saved sample | Claude CLI result | Codex CLI result | Actual scope and remaining limits |
-| --- | --- | --- | --- |
-| `structured_output` | `261115142324-b8ea`，8/8 | `261115143412-cf17`，8/8 | 输出与本次输入相符，未出现任务工具；没有验证文件、外部数据或 shell |
-| `file_review` | `261115150309-395b`，14/14 | `261115150447-6aed`，14/14 | 准确材料未变、报告写入且日志显示读回；保存定义为 provider_managed/1。没有把旧 denied/3 Reviewer 当成同一 preset 验证 |
-| `code_change` | `261115142357-f81e`，11/11 | `261115143453-4333`，11/11 | 合成项目由失败变通过，仅改 pricing.py，模型和宿主各自检查最终文件；Codex 是 configured。dev14 host 的具体业务验收由消费项目持有 |
-| `mcp_data` | `261115150333-d0ce`，10/10 | `261115150522-2592`，10/10 | 合成 stdio MCP 收到调用，完整返回值保存、读回并形成派生摘要；没有验证真实外部数据源、数据库许可或 host/MCP 组合 |
+证据只覆盖记录中的版本、Provider、模型与 effort、预设形状和合成样例，不能据此推定其他模型、effort、
+版本或组合已测；后续版本按源码核对构造值不等于全矩阵重跑。早先失败与之后的成功样例各有独立定义与记录，
+不能互相覆盖，也不能把某次接口失败泛化为整个平台不可用。Antigravity（§3.10）与 `native_project`
+（§3.4.7）不在该附件内，由各自版本的发布验收单独记录；原生 `agy` 探测只是接口证据，不等于 Adapter 验收。
+普通 native shell 与 Runtime `resources.commands` 扩展应分别判断；后者的 macOS 限制不代表 Windows 的原生
+命令执行不可用。
 
-原失败记录保留：Codex file_review `261115143423-3d9f` 未通过 `review_read_back_in_log`；Codex
-mcp_data `261115143524-27ca` 未通过 `data_file_matches_fixture_response`；Claude mcp_data
-`261115142420-3724` 的 fixture 调用及后续数据检查未通过。后续成功样例各有独立定义与记录，不能
-覆盖早先结果，也不能把某次接口失败泛化为全部 Windows 不可用。
-
-本次文档回读没有重新执行任何样例或探测。dev14 的四项 preset 构造值已按源码核对，但本表没有
-宣称四项在 dev14 上完成了全矩阵重跑。普通 native shell 与 Runtime `resources.commands` 扩展应分别
-判断；后者的 macOS 限制不代表 Windows 的原生命令执行不可用。消费项目记录其选定版本、业务
-配置、成功路径及正常拒绝，不能以本表的合成样例代替业务验收。
+这些合成样例验证 Runtime 与 CLI 之间的调用合同。消费项目记录其选定版本、业务配置、成功路径及正常拒绝，
+业务验收由消费项目持有，不能以合成样例代替。
 
 <a id="15-references"></a>
 
@@ -937,3 +1042,5 @@ mcp_data `261115143524-27ca` 未通过 `data_file_matches_fixture_response`；Cl
 - [Claude settings](https://code.claude.com/docs/en/configuration)
 - [Codex developer commands](https://learn.chatgpt.com/docs/developer-commands#codex-exec)
 - [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference)
+- [Antigravity CLI headless](https://antigravity.google/docs/cli/headless/)
+- [Antigravity CLI reference](https://antigravity.google/docs/cli/reference/)

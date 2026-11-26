@@ -16,7 +16,6 @@ _CLAUDE_NATIVE_UNSUPPORTED_SCHEMA_KEYS = frozenset(
     {
         "additionalItems",
         "allOf",
-        "anyOf",
         "contains",
         "contentEncoding",
         "contentMediaType",
@@ -41,6 +40,7 @@ _CLAUDE_NATIVE_SUPPORTED_SCHEMA_KEYS = frozenset(
         "$defs",
         "$ref",
         "additionalProperties",
+        "anyOf",
         "const",
         "description",
         "enum",
@@ -60,6 +60,9 @@ _CLAUDE_NATIVE_SUPPORTED_SCHEMA_KEYS = frozenset(
         "type",
     }
 )
+# Annotations Claude accepts beside anyOf in one schema object; structural
+# keywords there (type, properties, ...) are rejected by the provider.
+_CLAUDE_ANY_OF_ANNOTATION_KEYS = frozenset({"description", "title"})
 _CODEX_NATIVE_UNSUPPORTED_SCHEMA_KEYS = frozenset(
     {
         "allOf",
@@ -281,7 +284,13 @@ def _validate_native_schema_subset(
     provider_name: str,
     supported_keys: frozenset[str],
     require_all_properties: bool,
+    any_of_sibling_keys: frozenset[str] | None = None,
 ) -> None:
+    """Refuse what the provider cannot express; never rewrite the projected schema.
+
+    any_of_sibling_keys, when given, lists the only keys allowed beside anyOf in
+    one schema object (the provider rejects anyOf next to structural keywords).
+    """
     for path, node in iter_json_schema_nodes(schema):
         unknown = set(node) - supported_keys
         if unknown:
@@ -319,12 +328,29 @@ def _validate_native_schema_subset(
             raise NativeOutputSchemaProjectionError(
                 f"{provider_name} schema anyOf must be non-empty at {path}"
             )
+        if alternatives is not None and any_of_sibling_keys is not None:
+            structural = set(node) - {"anyOf"} - any_of_sibling_keys
+            if structural:
+                rendered = ", ".join(sorted(structural))
+                raise NativeOutputSchemaProjectionError(
+                    f"{provider_name} schema cannot combine anyOf with {rendered} "
+                    f"in one schema object at {path}"
+                )
 
 
 def claude_native_output_schema(
     registered_output_schema: dict[str, object],
 ) -> dict[str, object]:
-    """Project the registered schema onto Claude native structured output."""
+    """Project the registered schema onto Claude native structured output.
+
+    Supported keywords, including anyOf and each of its branches, are kept by
+    the same recursive projection; unsupported ones (for example oneOf, allOf,
+    not) are pruned and the complete registered schema is still validated after
+    the call. Claude's documented subset rejects anyOf in the same schema object
+    as structural keywords such as type or properties, so that combination
+    raises NativeOutputSchemaProjectionError instead of being dropped or
+    rewritten; title and description may accompany anyOf.
+    """
 
     projected = _project_provider_schema_subset(
         registered_output_schema,
@@ -340,6 +366,7 @@ def claude_native_output_schema(
         provider_name="Claude",
         supported_keys=_CLAUDE_NATIVE_SUPPORTED_SCHEMA_KEYS,
         require_all_properties=False,
+        any_of_sibling_keys=_CLAUDE_ANY_OF_ANNOTATION_KEYS,
     )
     return projected
 

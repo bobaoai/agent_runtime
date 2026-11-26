@@ -89,6 +89,18 @@ API-key-only beta。CLI 不锁定某一个版本，代码检查所需选项，�
 不会继续执行，需使用显式工具配置。
 
 所有 argv 由同一 Adapter 转换逻辑组装，实际调用使用它；输入经 stdin，settings 仅来自已验证资源，调用方不透传任意参数/JSON。命令与生效配置记录在 trace 中，`effective_configuration` 汇总实际工具、允许规则、读写目录、MCP 连接（名称与配置哈希）、命令范围和 CLI 版本。
+
+agent 调用的 stdin 是一段由代码生成的 `## Runtime Invocation Locations`，空一行后接原样的冻结
+Prompt Envelope。这段位置说明以 JSON 给出本次 Attempt 实际准备的位置：工作目录、可写目录、
+Attempt 的只读 materials 文件夹（含 task_input，冻结材料在其 source 下）、本次选定的只读依赖，
+以及启用 Shell 时位于 PATH 最前的 Runtime Python；临时文件只给出变量名 `TMPDIR`、`TEMP`、`TMP`。
+它不含原始 material_root、Attempt 根目录、私有 `crt-` 文件夹（其中有私有 `mcp.json`）、CLI 主目录、
+连接配置或凭据。tool_free 调用只发送 Envelope。trace 的 `actual_prompt` 保存实际 stdin 全文，
+`effective_configuration.invocation_locations` 保存生成它的值，Inspection 的 provider log 原样返回；
+Envelope 的 ref／hash 只标识冻结 Envelope，不是整个 stdin 的 hash。Claude 进程环境中的
+`TMPDIR`、`TEMP`、`TMP` 与 `CLAUDE_CODE_TMPDIR` 都指向本次调用的私有临时文件夹，使 Python、
+Git Bash 工具与 Windows 原生／.NET 工具使用同一位置；只改子进程环境，不改全局变量或访问控制。
+Runtime 不设置 `PYTEST_DISABLE_PLUGIN_AUTOLOAD`，项目已安装的 pytest 插件照常加载（与 Codex 相同）。
 Bash 不默认开放：Runtime 只为宿主提供的 `command_permits` 渲染 `Bash(<permit>)` 允许规则，从不渲染裸 `Bash`；
 Claude 文档中的内置只读命令（含只读 git 形式）始终可运行，因此许可是预批准而非封闭白名单
 （`command_scope=native_read_only_plus_permits`）。封闭命令集需要 §2.1 的显式 commands 扩展。
@@ -181,12 +193,10 @@ Inspection 按需生成统一日志，仅在实际返回的 local_call_id 与父
 python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_claude_native_tools.py
 ```
 
-真实 AB 工具用例需要显式设置 `RUN_PROVIDER_INTEGRATION=1`、
-`AGENT_RUNTIME_TEST_AB_WORKSPACE` 与 `AGENT_RUNTIME_TEST_CLAUDE_BIN`。工作区必须属于测试者授权的
-AB 目录。`AGENT_RUNTIME_TEST_AB_WORKSPACE` 指向已存在的专用可写运行根目录，每批选新目录以免覆盖
-导出的报告；不设为 AB 仓库根。当前 sample 的 Python/Git 目录以测试源码中的
-`read_only_dependencies` 为准，环境需要安装在这些位置；换机器时由宿主调整测试 fixture 的依赖绑定，
-不把这两处本机路径写成 Runtime 的全局默认。
+真实工具用例需要显式设置 `RUN_PROVIDER_INTEGRATION=1`、`AGENT_RUNTIME_TEST_AB_WORKSPACE` 与
+`AGENT_RUNTIME_TEST_CLAUDE_BIN`。工作区是测试者已获授权的专用可写运行根目录，每批选新目录，不设为宿主仓库根；
+sample 的 Python/Git 目录以测试源码中的 `read_only_dependencies` 为准，换机器时由宿主调整该 fixture，
+不写成 Runtime 的全局默认。
 
 ```sh
 python -B -m pytest -q -s -p no:cacheprovider \
@@ -195,45 +205,26 @@ python -B -m pytest -q -s -p no:cacheprovider \
   tests/test_agent_runtime_claude_native_tools.py::test_live_claude_resource_boundaries_in_ab
 ```
 
-### 3.2 AB 的注册 Reviewer 与 PG sample
+### 3.2 宿主的注册 Reviewer 与 PG 用例
 
-这个用例演示宿主搭好环境之后，如何使用 Runtime 完成注册、执行和回读；它不是替所有宿主自动
-安装环境的工具，也不会迁移 AB 的默认 Reviewer 配置。
-
-| 已有配置/环境变量 | 该用例实际读取或要求的内容 |
-| --- | --- |
-| `RUN_PROVIDER_INTEGRATION=1`、`RUN_AB_REVIEWER_PG=1` | 明确开启真实模型和 AB 持久测试；缺少任一个时用例 skipped，不算已执行 |
-| `AGENT_RUNTIME_TEST_AB_ROOT` | AB 项目根，含 `.claude/skills/the-design-authoring/runtime_modules/design_contract_reviewer/` 的完整 source，以及所属 Portable validator |
-| `AGENT_RUNTIME_TEST_AB_WORKSPACE` | §3.1 的专用运行根目录；Runtime 工作区和该用例导出的报告位于这里 |
-| `AGENT_RUNTIME_TEST_CLAUDE_BIN` | §1.1 已检查登录和版本的实际 Claude executable |
-| `AGENT_RUNTIME_TEST_REVIEW_INPUT` | 已由所属 DDM builder 生成的完整输入 JSON；可直接是 payload，也可由已有记录的 `semantic_input` 字段提供，module_id 必须是 design_contract_reviewer |
-| `governance_bindings/ddm_runtime.json` | 用例读取 `database_url_env`、`registry_schema`、`execution_schema`、`module_release_ref`、`module_release_sha256`；原 Module 和它的 Policy 依赖必须已能从目标 Registry 解析 |
-| `database_url_env` 指名的环境变量 | 宿主在调用进程中注入连接；变量名和连接值均由宿主选择，不由 Runtime 猜测 |
-
-AB 的注册和执行可以共用一个 PG 接口，同时分别使用 AB 自己的 Runtime control 与 execution schema。
-其他项目选择自己的 schema；schema 内的表名和安装结构仍由 Runtime 管理，宿主不手写另一套表结构。
-环境准备和注册方法见 [Registration Runbook](agent_runtime_registration_runbook.md) §3 至 §8。
-
-已注册 Reviewer 与 PostgreSQL 回读用例另外要求 `RUN_AB_REVIEWER_PG=1`、
-`AGENT_RUNTIME_TEST_AB_ROOT`、`AGENT_RUNTIME_TEST_REVIEW_INPUT` 及 AB 配置所指的数据库环境变量。
-它复用已注册 Design Reviewer 的指令与 schema，按当前定义与执行准备接口形成测试 Module/Workflow 和独立 CLI 选择，
-消费真实原始审核输入，使用测试授权 ports，写入样例 Profile/Variant 及执行记录，不修改现有 active pointer。该用例不是生产宿主授权实现。
+下面的用例演示宿主（这里是 AB）准备好环境后，用 Runtime 完成注册、执行和 PG 回读；它不替宿主安装环境，
+不迁移宿主的默认 Reviewer 配置，也不修改现有 active pointer。除 `RUN_PROVIDER_INTEGRATION=1` 与
+`RUN_AB_REVIEWER_PG=1` 外，它使用 §3.1 的工作区与 Claude 程序、`AGENT_RUNTIME_TEST_AB_ROOT` 下的 Reviewer
+source 与 `governance_bindings/ddm_runtime.json` 数据库绑定，以及 `AGENT_RUNTIME_TEST_REVIEW_INPUT` 指向的完整
+审核输入；缺少开关时显示 skipped，不算已执行，具体读取内容以测试源码为准。注册与 schema 准备见
+[Registration Runbook](agent_runtime_registration_runbook.md)。
 
 ```sh
 python -B -m pytest -q -s -p no:cacheprovider \
   tests/test_agent_runtime_claude_native_tools.py::test_live_ab_registered_design_reviewer_and_postgres
 ```
 
-工具与 schema 测试通过只说明对应能力成立。是否完成某份实际审核，仍由该 Reviewer 的完整 schema
-和语义 validator 判断；sample 不改变审核要求。
+### 3.3 Runtime 能力检查与业务验收
 
-### 3.3 结果与缺口归属
-
-用例会导出 `registered_review_execution.json`、`registered_review_trace.json` 和
-`registered_review_result.json`。核对同一 execution_id 的 Module/Profile、执行状态、真实工具事件、
-完整输出校验，以及 PG 新连接回读，而不是只看 CLI 退出零或 Reviewer 写了 passed。
-这里的 `_Host` 来自 `tests/test_agent_runtime_registered_module_execution.py`，只用于验证 Runtime 的
-调用与记录边界。真实宿主授权仍需项目自己实现并验证；本 sample 通过不代表它已经完成。
+这些用例验证 Runtime 的调用与记录边界：同一 execution_id 的执行、真实工具事件、完整输出校验与 PG 新连接回读
+（导出文件写入工作区），而不是只看 CLI 退出零或 Reviewer 写了 passed。其中的 `_Host` 是测试授权替身，
+通过不代表宿主授权已经实现。工具与 schema 测试通过只说明对应能力成立；实际审核是否完成，由该 Reviewer 的完整
+schema 和语义 validator 判断，sample 不改变审核要求。
 
 缺少 CLI/登录/运行库/PG/schema/source/input 时，补宿主对应的环境或注册输入；Runtime 公共入口、
 Adapter、记录或查询实现有缺陷时，回到 Runtime 修复并随包交付。审核内容本身的缺陷交给所属
@@ -241,49 +232,67 @@ Reviewer/文稿负责人，不通过改启动参数或替换 schema 让它通过
 
 ### 3.4 四种常用模式的随包样例
 
-`structured_output`、`file_review`、`code_change`、`mcp_data` 四个样例由已安装的包直接运行，各在 `--root` 下新建
-运行文件夹，用公开注册接口登记一个普通 Module，经 `run_local_workflow_test` 调用所选 CLI，再按实际文件、
-执行日志和 MCP fixture 审计检查结果（命令与产物见 README 的“可运行样例”）。`mcp_data` 的 fixture 是随包的
-无凭据 stdio MCP 服务器（标准 `mcp` 包，即 `cli_tools`），经普通 `mcp_servers` 连接配置交给 CLI，不是 Runtime
-callback。PowerShell 示例：
+运行命令、产物与检查依据见 [README 的可运行样例](../README.md#runnable-examples)，真实 CLI 用例的开关见
+[真实 CLI 用例开关](../README.md#live-run-gates)。以下是与 Provider 相关、样例依赖的事实：
 
-```powershell
-$Root = "$HOME\Documents\Agent Runtime Examples"
-python -m agent_runtime.testing.conformance_pattern_examples run --pattern code_change --transport claude_cli --root $Root --cli-path "C:\path\to\claude.exe"
-python -m agent_runtime.testing.conformance_pattern_examples run --pattern mcp_data --transport codex_cli --root $Root --cli-path "C:\path\to\codex.exe" --model MODEL --effort EFFORT
-```
-
-Claude 的 `code_change` 样例以固定命令 `sh run_check.sh`（在 Git Bash 中运行项目内的检查脚本）配合同名
-`--command-permit`；Codex 不接受逐条许可，直接在 PowerShell 中以调用运算符运行检查。
-
-Windows 上 Codex 的 PowerShell 可能处于受限语言模式：`[pscustomobject]` 之类的构造会让整条命令失败，失败的命令
-不算读回。样例指令因此要求用单独、简单的读命令（例如 `Get-Content review.md`）完成读回，失败时重新做一次干净的读取；
-最终答案是任务的结构化输出，不需要在 shell 里拼对象。`mcp_data` 保存的是工具返回的数据对象（有 structured content
-时即它，否则是文本内容中的 JSON），不是 MCP 协议外层（`content`、`structuredContent`、`isError`）。源码 checkout 中的真实用例：
-
-```powershell
-$env:AGENT_RUNTIME_REAL_RUN = "1"
-$env:AGENT_RUNTIME_CODEX_BIN = "C:\path\to\codex.exe"
-python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_pattern_examples.py -k "real_cli and codex_cli"
-```
+- `mcp_data` 的 fixture 是随包的无凭据 stdio MCP 服务器（标准 `mcp` 包，即 `cli_tools`），经普通 `mcp_servers`
+  连接配置交给 CLI，不是 Runtime callback。样例保存的是工具返回的数据对象（有 structured content 时即它，否则是
+  文本内容中的 JSON），不是 MCP 协议外层（`content`、`structuredContent`、`isError`）。
+- Claude 的 `code_change` 样例以固定命令 `sh run_check.sh`（在 Git Bash 中运行项目内的检查脚本）配合同名
+  `--command-permit`；Codex 不接受逐条许可，直接在 PowerShell 中以调用运算符运行检查。
+- Windows 上 Codex 的 PowerShell 可能处于受限语言模式：`[pscustomobject]` 之类的构造会让整条命令失败，失败的命令
+  不算读回。样例指令因此要求用单独、简单的读命令（例如 `Get-Content review.md`）完成读回，失败时重新做一次干净的
+  读取；最终答案是任务的结构化输出，不需要在 shell 里拼对象。
 
 ## 4. Codex workspace 执行（Reviewer 默认环境）
 
 agent Module 可以选择 `codex_cli` 执行：本次调用、Workflow 或 workspace 参数文件给出
 `transport_kind=codex_cli`、模型与 effort，Runtime 绑定 `codex_cli_agent_workspace_executor@v5`。
 无工具 Module 使用 `codex_cli_agent_executor@v5`。
+这两个 v5 绑定是当前绑定（workspace v5 保留 configured 默认行为，另增加显式 host 选择）。历史 Profile
+（包括较早的 workspace 候选 `codex_cli_agent_workspace_executor@v2`）与已提交结果仍可读取，准确的已提交请求
+无需已退役的 Adapter 即按原记录重放；新执行需要明确准备的当前 Profile，旧绑定在绑定检查时被拒绝，已保存记录
+不被改写。Module 要求的工具不会为适配任一路径而被删去。
 执行器参数与错误见 [CodexCliAgentWorkspaceModuleExecutor API](agent_runtime_reviewer_api.md#codexcliagentworkspacemoduleexecutor)。
 省略 `codex_execution_mode` 时使用 `configured`；下表描述这一默认模式，包括 Reviewer 的默认调用。
 
 | 项目 | Codex workspace v5 的 configured 默认行为 |
 | --- | --- |
 | 支持的组合 | agent、inline、network `denied` 或 `provider_managed`。含 Shell 时需要私有草稿或显式 `project_directory`；Codex 没有独立的 Read、Grep、Edit 工具，read、search、edit 由 shell 承担，没有 shell 的 read/search/edit 组合在准备时报告 `ADAPTER_CAPABILITY_UNSUPPORTED`。只声明 `mcp__<name>` 时 shell 关闭，workspace 可为 `none`，`file_io` 记录为 `unavailable_without_shell` |
-| 主文件夹 | 私有草稿：每个 Attempt 的 scratch，`TMPDIR` 为其中的 `.tmp`；显式项目：调用者的 `project_directory`，`TMPDIR` 为 Attempt 的 `work/tmp`。给 Agent 的说明写明可写区域，其他位置按 CLI 自身权限 |
+| 主文件夹 | 私有草稿：每个 Attempt 的 scratch，`TMPDIR`、`TEMP`、`TMP` 都为其中的 `.tmp`；显式项目：调用者的 `project_directory`，三者都为 Attempt 的 `work/tmp`（Codex Windows sandbox 授权写入的文件夹）。给 Agent 的说明写明可写区域，其他位置按 CLI 自身权限 |
+| 实际 stdin | 与 Claude 相同：代码生成的 `## Runtime Invocation Locations`（工作目录、可写目录、Attempt materials、选定只读依赖、启用 Shell 时的 Runtime Python）后接原样的冻结 Envelope；tool-free 只发送 Envelope。trace 的 `actual_prompt` 保存实际 stdin 全文，Inspection 原样返回；Envelope 的 ref／hash 只标识 Envelope |
 | 权限配置 | 每次调用生成的权限 profile 以 Codex 的 `:read-only` 为基线，把本次 Attempt 的只读材料文件夹声明为 `read`（表明预期输入，不声称由此强制），只对声明的可写文件夹授予写入；仅当 Profile 记录 `denied` 时关闭工具网络。Windows 上（codex-cli 0.166.0 实测）Codex sandbox 以自身身份运行命令，Codex 只为可写文件夹加入其 sandbox 访问项，其余读取依赖宿主在上层目录树设置的访问；因此 Attempt 的 work/materials/scratch 以继承宿主访问的普通方式创建（POSIX 仍为 0o700）。根目录位于受保护的临时目录或被应用包重定向的 AppData 时，sandbox 的 shell 无法进入工作目录。trace 的 `codex_permission_profile` 保存实际配置 |
 | 登录与配置 | 使用宿主自身的 Codex 登录（CODEX_HOME 原样传递，Runtime 不读取认证文件），`config.toml` 与 execpolicy 规则正常加载；项目文档、Skills、agents、Web 搜索与 apps/plugins/hooks 等功能关闭，`approval_policy="never"` |
 | MCP | 只渲染声明的连接（`-c mcp_servers.<name>`，凭据仅以 `env_vars`、`bearer_token_env_var`、`env_http_headers` 引用环境变量名）。`-c mcp_servers={}` 不会清除宿主配置里的服务器，因此每次 exec 前由同一程序执行 `mcp list --json`，对未声明的已启用服务器追加 `-c mcp_servers.<name>.enabled=false` 并再次列出核对；启用集合与声明不一致时在 exec 前拒绝（`ADAPTER_BINDING_UNAVAILABLE`）；列出进程本身超时、超限或停止未确认时保留原有失败类别与停止事实。列出内容在任何情况下都不写入 trace 或原始日志，trace 以 `cli_probe` 标明失败发生在 exec 之前。trace 只记录名称（`host_mcp_disabled`）与配置哈希 |
 | 命令许可 | Codex 没有逐次的命令许可，`command_permits` 报告 `ADAPTER_CAPABILITY_UNSUPPORTED`；Shell 记为 `command_scope=provider_policy`（宿主的 execpolicy 规则生效） |
 | 本地命令 | 仅 macOS：资源声明 commands 时挂载唯一的 MCP 服务 `runtime_commands`，只暴露 `sandbox_command_execute`；命令由 Runtime 在 §2.1 的命令 sandbox 中执行，记录进同一执行日志 |
+
+<a id="codex-mcp-unattended-tools"></a>
+
+**Codex 无人值守调用 MCP 工具。** Runtime 以 `approval_policy="never"` 运行 Codex，无法交互式确认。
+因此即使连接已登录，仍需本地确认的 MCP 工具调用也会被拒绝。
+
+宿主为这个连接写的配置在 `root/.runtime/config.json` 的 `mcp_servers.codex_cli.<name>.config`。其中两项作用不同：
+
+- `enabled_tools`（可选）把该连接的工具限定为任务选定、且账号已获授权的那些。它只决定工具范围，不是审批开关。
+- `default_tools_approval_mode: "approve"` 用于仍需本地确认的工具。
+
+```json
+{"mcp_servers": {"codex_cli": {"example_data": {
+  "config": {"url": "https://mcp.example.invalid/mcp",
+             "enabled_tools": ["list_scope", "get_records"],
+             "default_tools_approval_mode": "approve"},
+  "environment_keys": []}}}}
+```
+
+登录或 OAuth 仍在 Codex 中完成（例如 `codex mcp login <name>`）。凭据只用环境变量名引用；Runtime 不读取凭据，
+也不扩大服务端权限。`approve` 只免去 Codex 本地的逐次确认，不授予账号本来没有的权限。Claude 的 MCP 工具
+由 Runtime 以 `mcp__<name>` 允许规则传入，不需要这一项。
+
+**Claude 的命令许可要覆盖需要额外批准的检查命令。** Claude 自带的只读命令无需许可即可运行。任务指令要求
+运行的其他检查命令需要额外批准：调用方的 `command_permits`（`--command-permit`）必须按 Claude Bash 规则覆盖
+这条命令的实际写法。例如任务要求 `python -m pytest -q` 时，用 `"python -m pytest:*"`。这类命令未被许可或用户
+允许规则覆盖时，在 `dontAsk` 下被拒绝，并记入 `permission_denials`。
 
 需要本人宿主权限执行的 `code_change` 调用，可以在本次 API 调用中显式传入
 `codex_execution_mode="host"`，或使用 CLI 的 `--codex-execution-mode host`。该模式只接受
@@ -307,3 +316,96 @@ AGENT_RUNTIME_REAL_RUN=1 AGENT_RUNTIME_CODEX_BIN=/path/to/native/codex \
   python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_cli_boundary.py -k real_codex
 AGENT_RUNTIME_REAL_RUN=1 python -B -m pytest -q -p no:cacheprovider tests/test_agent_runtime_codex_workspace.py
 ```
+
+<a id="5-antigravity-执行首个绑定"></a>
+
+## 5. Antigravity 执行（首个绑定）
+
+本次调用、Workflow 或 workspace 参数文件给出 `transport_kind=antigravity_cli`、模型与 effort 时，Runtime 绑定
+`antigravity_cli_adapter@v1` 并启动原生 `agy`。参数与错误见
+[AntigravityCliAdapter API](agent_runtime_reviewer_api.md#antigravitycliadapter)，合同见 Design 08 §3.10。
+
+| 项目 | Antigravity v1 的行为 |
+| --- | --- |
+| 支持的组合 | 只有两种：`structured_output`（tool_free、inline、workspace `none`、无工具、network `denied`）与 `file_review`（agent、inline、`own_draft_read_write`、恰为 read/search/edit/shell、`provider_managed`），都要求 `native_structured_output` 与显式模型、effort。其他组合在 Profile 准备时报告 `ADAPTER_CAPABILITY_UNSUPPORTED`，不启动模型 |
+| 启动参数 | `--input-format stream-json --output-format stream-json --json-schema FILE --agent agent-runtime-task --model M --effort E --settings FILE --disable-slash-commands`；不带 `-p`、续接会话、沙箱或跳过权限的参数。时限由 Runtime deadline 负责 |
+| 自定义 agent | `<cwd>/.agents/agents/agent-runtime-task.md`。`structured_output` 只列 `finish`（交回 schema 结果的机制，不是任务工具）；`file_review` 列 `view_file`、`write_to_file`、`replace_file_content`、`run_command`、`command_status`、`finish`，不用 `grep_search`，搜索经 Shell |
+| 会话设置 | `--settings` 文件只作用于本次调用，从不写入全局设置。共有 `enableTerminalSandbox=false`、`toolPermission=request-review`、`artifactReviewPolicy=always-proceed`。`structured_output` 拒绝全部文件、命令、MCP、URL 操作；`file_review` 用 `agentMode=accept-edits`，允许读取 scratch、materials 与所选依赖，拒绝写 materials 与 agent 目录 |
+| 主文件夹 | `structured_output`：Attempt 的 `work/`；`file_review`：Attempt 的 `work/scratch`，materials 在 `../materials`，`TMPDIR`、`TEMP`、`TMP` 为 scratch 中的 `.tmp`，Runtime Python 位于 PATH 首位 |
+| 实际 stdin | 一条 stream-json user 事件后关闭 stdin；content 与 Claude／Codex 相同（`file_review` 为 Invocation Locations 段加冻结 Envelope，`structured_output` 只有 Envelope）。trace 同时保存 `actual_prompt` 与准确的 `stdin_jsonl` |
+| 命令许可 | 每条 `command_permits` 渲染为 `command(<permit>)` 允许规则，没有许可就不允许任何命令。已实测的写法是 `regex:` 加完整命令的 Python `re.escape`，可用 `antigravity_command_permit(command)` 生成；含空格、非 ASCII 字符与括号的解释器路径按此写法已实测运行。许可须非空、单行、不含 NUL。该函数只转义给定字符串，不解析 `python` 别名、不规范化路径或引号、不合并命令；任务输入中的命令与许可须来自同一字符串，并要求每条命令单独调用（见 [registration runbook](agent_runtime_registration_runbook.md#antigravity-command-permits)）。纯前缀写法未经实测。agy 对模式是整条匹配还是部分匹配由其自身决定，Runtime 不作声明 |
+| 被拒的工具请求 | headless 模式下无法获批的请求被 agy 软拒绝，stderr 给出说明，调用可继续并以 0 退出。Runtime 保留该工具步骤（状态 failed）与 stderr，不因此判调用失败，也不记为成功。若结果因此没有 `structured_output` 且 `result.denied_actions` 非空，失败仍是 `antigravity_cli_structured_output_missing`（`schema`，不重试），信息先列出这些原生拒绝与失败的工具步骤；trace 另存 `native_denied_actions`，不解析 stderr 文本 |
+| 结果 | 需要退出码 0、恰有一个 `init` 与一个 `result`、`status=SUCCESS`、`init.agent` 为生成的 agent、`init.model` 等于请求模型，且 `result.structured_output` 通过 canonical schema；不解析回复文本 |
+| 用量 | `output_tokens` 原样记录（已含 `thinking_tokens`）；输入总量、缓存读取、缓存创建与普通输入未知，原始用量行保留在 trace 的 `native_usage` |
+| 日志限制 | Inspection 按 `step_index` 配对工具步骤；`read_file` 只给出 `N lines, M bytes` 摘要，`write_file` 不含写入内容，两者记为 `provider_result_content_unavailable`／`provider_request_content_unavailable`。`init.tools` 是通用目录，不代表本次 agent 的工具集 |
+| 登录 | 使用宿主已有的 agy 登录；Runtime 与 setup 都不读取认证文件、不启动登录，setup 报告 `login: not_verified` |
+
+随包 `file_review` 样例为 Antigravity 加一条许可，只允许 `Get-Content review.md` 读回。模型若改用 `view_file` 读回，
+日志只有摘要：检查仅在该读取位于最后一次写入之后时把它算作读回，审核文件的实际内容由宿主对磁盘文件的检查证明，
+`check.json` 的说明会写明这一限制。
+
+<a id="6-native-project-execution"></a>
+
+## 6. 原生项目执行（native_project）
+
+需要 Agent 在调用者自己的项目里按项目指令和项目 Skills 工作时，给一次调用加 `native_project=True`（CLI
+`--native-project`）。仍是一次独立的 `claude -p` 或 `codex exec`：Runtime 组装输入、输出 schema、模型、时限与
+选定的 MCP 连接，接收日志与最终结果，按 canonical schema 校验并保存记录；不保存、不续接会话。合同见
+[Design 08 §3.4.7](../designDoc/agent_runtime_08_agent_execution_adapter_contract.md#57-native-project-execution)，
+参数见 [run_local_workflow_test](agent_runtime_reviewer_api.md#run_local_workflow_test)。
+
+**适用的 Module 与本次资源。** Module 用既有 `code_change` 或 `mcp_data` 预设注册（选择 native 不改定义）；
+本次提供 `--project-directory`（调用者的项目，cwd 与可写范围），Codex 另加 `--codex-execution-mode host`。
+材料包、`--resources` 中的 commands 与额外依赖、`--command-permit`、callback 和 Antigravity 在启动 Provider
+前被拒绝（`ADAPTER_CAPABILITY_UNSUPPORTED`）。宿主的 `read_only_dependencies` 默认值也会被拒绝，Python API 用
+`read_only_dependencies=()` 清除。
+
+| 原生表面 | Claude（claude_cli_adapter@v4） | Codex（workspace v5，host） |
+| --- | --- | --- |
+| 项目指令 | CLAUDE.md 层级（用户、项目上级目录、项目） | AGENTS.md（项目文档默认发现） |
+| Skills | 用户与项目 `.claude/skills` 及 Claude 自带 Skills；经 `Skill` 工具调用，不需要在任务里点名 | 用户与项目 `.agents/skills`；模型读取 SKILL.md 后用 Shell 执行 |
+| 文件与命令 | Read、Grep／Glob（声明 search 时）、Edit／Write，`Bash` 与 `PowerShell`；`dontAsk` 下整项允许，写入规则为 `Edit(./**)` | 原生 Shell（Windows 为 PowerShell），`-s danger-full-access`、`approval_policy="never"` |
+| MCP | 只传根配置中被 Module 声明的连接（私有 `mcp.json`、`--strict-mcp-config`）；同时提供 `ListMcpResourcesTool`、`ReadMcpResourceTool`、`ToolSearch`（延迟加载的 MCP 工具经它取得 schema） | 渲染声明连接；未声明的已启用宿主服务器本次关闭；需要无人值守的工具在连接配置中设 `default_tools_approval_mode: "approve"` |
+| 本次关闭 | 自动记忆、hooks（托管策略照常） | agents、Web 搜索、memories、hooks、plugins 等既有关闭项 |
+| Python | Runtime Python 位于 PATH 首位；项目要用自己的环境时，在 CLAUDE.md／AGENTS.md 或 Skill 中写明解释器的绝对路径 | 同左 |
+
+与默认（configured／隔离）模式的区别：默认 Claude 调用使用 safe-mode 与 `--disable-slash-commands`，不加载
+CLAUDE.md 与 Skills，只按 `--command-permit` 预批准 Bash，文件工具限定在工作目录；默认 Codex 关闭项目文档与
+Skills，以按次生成的权限 profile 运行。原生项目模式下 Shell 以本人宿主权限运行，项目目录是任务范围而非
+操作系统边界；用户、项目与托管的 deny／ask 规则和 Codex execpolicy 仍然生效，不使用 bypassPermissions 或
+跳过权限的参数。
+
+**凭据与连接身份。** 连接写在 `root/.runtime/config.json` 的 `mcp_servers.<transport>.<name>`。使用 OAuth 等原生
+登录的连接，`<name>` 与 URL 要和 CLI 自己的连接一致（`agent-runtime-setup --mcp <name>` 按原名写入），CLI 才能
+在本次调用中找到已有登录；名称不同的连接在 Claude init 中显示为需要认证。Runtime 不读取、复制或改写认证文件
+和全局设置。记录中的连接身份是名称与配置哈希；Codex 另有 `host_mcp_overlaid`（与宿主同名连接叠加）和
+`host_mcp_disabled`。
+
+**记录与检查。** 每个 Attempt 的 `effective_configuration` 写入 `native_project: true`、`context_enabled`
+（Claude `["claude_md", "skills"]`，Codex `["agents_md", "skills"]`，表示 Runtime 不再关闭这些原生发现）、
+`context_suppressed`、实际工具与允许规则、`command_scope=host`、`filesystem_scope=task_directed`。实际发现与
+使用看原始日志：Claude 的 init 事件列出工具、Skills、plugins 与连接状态；`Skill`、命令、文件与 MCP 调用由
+`agent-runtime-inspect --view log` 返回。Shell 里发起的 HTTP 请求是命令，不计为 MCP 调用。
+
+```powershell
+# Claude：项目指令与 Skills 原生加载
+agent-runtime-test-run --root $Root --selection $Selection --input $Input `
+  --transport claude_cli --model claude-sonnet-5-5 --effort high `
+  --project-directory $Project --native-project --record-out $Record
+# Codex：同一 Module，另以 host 权限运行
+agent-runtime-test-run --root $Root --selection $Selection --input $Input `
+  --transport codex_cli --model gpt-6-astra --effort xhigh `
+  --project-directory $Project --native-project --codex-execution-mode host --record-out $Record
+```
+
+随包样例生成一个带 CLAUDE.md／AGENTS.md、两个 Skills（各一份给两种 CLI）、一个 Python 脚本和 MCP fixture 的
+项目，用普通注册与 Test Run 运行，并检查项目指令中的标记、Skill 的实际调用或读取、Claude init 的 Skills 列表、
+fixture 审计、脚本产物与结构化输出：
+
+```powershell
+python -m agent_runtime.testing.conformance_pattern_examples run --pattern native_project --transport claude_cli --root $Root --model claude-sonnet-5-5 --effort high
+python -m agent_runtime.testing.conformance_pattern_examples run --pattern native_project --transport codex_cli --root $Root --model gpt-6-astra --effort xhigh
+```
+
+源码 checkout 中的真实用例：`AGENT_RUNTIME_REAL_RUN=1` 加 `AGENT_RUNTIME_CLAUDE_BIN`／`AGENT_RUNTIME_CODEX_BIN`，
+运行 `tests/test_agent_runtime_pattern_examples.py -k native_project`。

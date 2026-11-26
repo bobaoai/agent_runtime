@@ -306,6 +306,14 @@ def _result(**extra):
             "structured_output": {"value": "checked"}, **extra}
 
 
+def _sent_envelope(sent, locations):
+    """The frozen envelope inside an adapter's actual stdin: everything after the exact location prefix."""
+    from agent_runtime.invocation.invocation_local_resource_preparation import compose_invocation_prompt
+    prefix = compose_invocation_prompt(locations, "")
+    assert sent.startswith(prefix)
+    return sent[len(prefix):]
+
+
 def _init(tools=("Read", "Grep", "Bash")):
     return {"type": "system", "subtype": "init", "model": "claude-opus-5[1m]",
             "permissionMode": "dontAsk",
@@ -1128,9 +1136,18 @@ def test_claude_adapter_executes_each_agent_field_combination(tmp_path, row):
     assert len(calls) == 1
     trace = json.loads(cell.read_bytes(run.attempts[0].provider_trace_ref, run.attempts[0].provider_trace_sha256))
     assert (trace["executor_adapter_id"], trace["executor_adapter_revision"]) == ("claude_cli_adapter", "v4")
-    assert hashlib.sha256(trace["actual_prompt"].encode()).hexdigest() == trace["prompt_envelope_sha256"]
     assert trace["execution_profile_ref"] == run.variants[0].execution_profile_ref
     effective = trace["effective_configuration"]
+    # stdin = this Attempt's code-owned locations + the unchanged frozen envelope (whose hash it keeps).
+    envelope = cell.read_bytes(run.variants[0].prompt_envelope_ref, trace["prompt_envelope_sha256"]).decode()
+    assert trace["actual_prompt"] == calls[0]["prompt"]
+    assert _sent_envelope(trace["actual_prompt"], effective["invocation_locations"]) == envelope
+    assert effective["invocation_locations"] == {
+        "working_directory": str(calls[0]["cwd"]),
+        **({"writable_directories": [str(calls[0]["cwd"] / "scratch")]} if "edit" in tools else {}),
+        "materials_directory": str(calls[0]["cwd"] / "materials"),
+        **({"runtime_python": str(Path(sys.executable).absolute())} if shell else {}),
+        "temporary_directory_variables": ["TMPDIR", "TEMP", "TMP"]}
     assert effective["tools"] == expected and effective["permission_mode"] == "dontAsk"
     assert effective["write_directories"] == ([str(calls[0]["cwd"] / "scratch")] if "edit" in tools else [])
     assert effective["command_scope"] == ("native_read_only_plus_permits" if shell else "none")
@@ -1271,11 +1288,54 @@ def test_schema_mode_mismatch_cannot_create_cli_argv(tmp_path, monkeypatch):
         adapter.build_command(profile=env[0].execution_profile, settings={}, output_schema=None)
 
 
+def _nullable_report_output_schema(**report_siblings):
+    """A registered output whose report is either a complete object or null (generic field names)."""
+    report = {"type": "object", "properties": {"label": {"type": "string"}, "count": {"type": "integer"},
+                                               "values": {"type": "array", "items": {"type": "number"}}},
+              "required": ["label", "count", "values"], "additionalProperties": False}
+    return {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "schema:native_output@v1",
+            "type": "object",
+            "properties": {"status": {"type": "string", "enum": ["completed", "blocked"]},
+                           "report": {**report_siblings, "anyOf": [report, {"type": "null"}]},
+                           "missing_inputs": {"type": "array", "items": {"type": "string"}}},
+            "required": ["status", "report", "missing_inputs"], "additionalProperties": False}
+
+
 @pytest.mark.fake_run
-def test_claude_projection_failure_prevents_provider_invocation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("returned,valid", [
+    ({"status": "completed", "report": {"label": "x", "count": 2, "values": [1.5, 2.5]}, "missing_inputs": []}, True),
+    ({"status": "blocked", "report": None, "missing_inputs": ["source"]}, True),
+    ({"status": "completed", "report": {"label": "x", "count": 2}, "missing_inputs": []}, False),
+], ids=["object", "null", "missing_required_field"])
+def test_claude_receives_the_nullable_object_shape_and_canonical_validation_still_decides(tmp_path, returned, valid):
+    schema = _nullable_report_output_schema()
+    env = _environment(tmp_path, tools=(), mode="tool_free", workspace="none", output_schema_document=schema)
+    sent = []
+    def events(call):
+        argv = call["argv"]
+        sent.append(json.loads(argv[argv.index("--json-schema") + 1]))
+        yield _init(())
+        yield _result(structured_output=returned)
+    run, cell = _run(env, tmp_path, events)
+    # The actual CLI argument carries the complete union, including the nested required fields.
+    assert sent[0]["properties"]["report"] == schema["properties"]["report"]
+    if valid:
+        assert _assert_completed_provider_run(run, cell) == returned
+    else:
+        attempt = run.attempts[0]
+        assert attempt.status == "failed" and attempt.failure_class == "schema" and run.outputs == ()
+        detail = json.loads(cell.read_bytes(attempt.failure_detail_ref, attempt.failure_detail_sha256))
+        assert detail["failure_code"] == "ADAPTER_OUTPUT_INVALID"
+
+
+@pytest.mark.fake_run
+@pytest.mark.parametrize("output_schema", [_unsupported_positional_output_schema(),
+                                           _nullable_report_output_schema(type="object")],
+                         ids=["positional_tuple", "any_of_beside_type"])
+def test_claude_projection_failure_prevents_provider_invocation(tmp_path, monkeypatch, output_schema):
     """Canonical projection refusal precedes CLI preflight and Provider calls."""
     env = _environment(tmp_path, tools=(), mode="tool_free", workspace="none",
-                       output_schema_document=_unsupported_positional_output_schema())
+                       output_schema_document=output_schema)
     calls = []
     def no_process(*args, **kwargs):
         pytest.fail("schema projection failure must precede any CLI process")

@@ -21,7 +21,7 @@ from agent_runtime.ledger import (
 )
 from agent_runtime.contracts.ledger_record_definition import WorkflowModuleExecutionVariantRecord, WorkflowExecutionRecord
 from agent_runtime.invocation import invocation_claude_cli_execution as claude
-from test_agent_runtime_claude_native_tools import _fake_cli, _init, _result
+from test_agent_runtime_claude_native_tools import _fake_cli, _init, _result, _sent_envelope
 from test_agent_runtime_local_commands import MACOS_COMMAND_EXTENSION
 from test_agent_runtime_codex_self_test import _outside_attempts
 from test_agent_runtime_registered_module_execution import _Host, _Contents, _TEST_TIME
@@ -119,7 +119,11 @@ def test_ordinary_module_register_prepare_and_evaluate(tmp_path, monkeypatch, mo
     assert record["status"] == "completed", record["failure_detail"]
     assert record["output"] == {"summary": "the actual ordinary output"}
     assert record["execution_log"]["complete"] and len(calls) == 1
-    assert hashlib.sha256(calls[0]["prompt"].encode()).hexdigest() == record["execution_trace"]["attempts"][0]["prompt_envelope_sha256"]
+    # stdin is the Attempt's location section (agent only) + the unchanged frozen envelope.
+    locations = record["provider_trace"]["effective_configuration"]["invocation_locations"]
+    assert (locations is None) is (mode == "tool_free")
+    envelope = _sent_envelope(calls[0]["prompt"], locations)
+    assert hashlib.sha256(envelope.encode()).hexdigest() == record["execution_trace"]["attempts"][0]["prompt_envelope_sha256"]
     assert record["provider_trace"]["actual_prompt"] == calls[0]["prompt"]
     assert _outside_attempts(root) == before  # Only the retained Attempt folder is new.
 
@@ -207,8 +211,15 @@ def test_public_resources_freeze_tree_and_exact_prompt_with_host_defaults(tmp_pa
         materials = fields["cwd"] / "materials"  # The ordinary Attempt runs in work/, beside materials/.
         assert (materials / "source/pkg/value.py").read_bytes() == body
         assert not (materials / "local_resources").exists()
-        assert str(tree) not in fields["prompt"] and str(dependency) not in fields["prompt"]
-        assert "content_base64" not in fields["prompt"] and "materials/source" in fields["prompt"]
+        # The origin tree stays private; the selected dependency is named only in the location
+        # section, never in the frozen envelope.
+        locations = json.loads(fields["prompt"][fields["prompt"].index("{"):fields["prompt"].index("\n}\n") + 2])
+        envelope = _sent_envelope(fields["prompt"], locations)
+        assert locations["read_only_dependencies"] == [str(dependency.resolve())]
+        assert locations["materials_directory"] == str(materials)
+        assert json.dumps(str(tree))[1:-1] not in fields["prompt"] and str(tree) not in fields["prompt"]
+        assert str(dependency) not in envelope and json.dumps(str(dependency))[1:-1] not in envelope
+        assert "content_base64" not in fields["prompt"] and "materials/source" in envelope
         assert Path(fields["argv"][0]) == executable.resolve()
         (tree / "pkg/value.py").write_text("changed only after capture\n")
         assert (materials / "source/pkg/value.py").read_bytes() == body
@@ -218,7 +229,8 @@ def test_public_resources_freeze_tree_and_exact_prompt_with_host_defaults(tmp_pa
     assert record["status"] == "completed", record["failure_detail"]
     assert len(calls) == 1 and len(record["input_bindings"]) == 2 and _outside_attempts(root) == before
     assert record["provider_trace"]["actual_prompt"] == calls[0]["prompt"]
-    assert hashlib.sha256(calls[0]["prompt"].encode()).hexdigest() == record["execution_trace"]["attempts"][0]["prompt_envelope_sha256"]
+    envelope = _sent_envelope(calls[0]["prompt"], record["provider_trace"]["effective_configuration"]["invocation_locations"])
+    assert hashlib.sha256(envelope.encode()).hexdigest() == record["execution_trace"]["attempts"][0]["prompt_envelope_sha256"]
     _assert_attempt_retained_and_private_state_removed(record, calls[0]["cwd"])
 
 

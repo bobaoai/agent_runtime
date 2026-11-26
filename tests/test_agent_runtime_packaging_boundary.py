@@ -135,6 +135,8 @@ def test_distribution_metadata_packages_only_the_runtime_namespace() -> None:
         "agent-runtime-registry": "agent_runtime.registry.registry_local_persistence:main",
         "agent-runtime-inspect": "agent_runtime.inspection.inspection_snapshot_exporting:main",
         "agent-runtime-live-inspect": "agent_runtime.inspection.inspection_http_serving:main",
+        "agent-runtime-setup": "agent_runtime.testing.conformance_host_setup:main",
+        "agent-runtime-archive": "agent_runtime.testing.conformance_test_run_archiving:main",
     }
     assert configuration["tool"]["setuptools"]["packages"] == [
         "agent_runtime",
@@ -214,18 +216,21 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
         assert Path(agent_runtime.__file__).is_relative_to(Path(sys.argv[1]))  # Any host path separator.
         from agent_runtime.invocation.invocation_claude_cli_execution import ClaudeAdapter
         from agent_runtime.invocation.invocation_codex_module_invocation import CodexCliModuleExecutor
+        from agent_runtime.invocation.invocation_antigravity_cli_execution import AntigravityCliAdapter
         from agent_runtime.execution.execution_content_staging import InMemoryCellArtifactStore
         from agent_runtime.registry.registry_release_registration import RuntimeReleaseRegistry
         from agent_runtime.registry.registry_release_compilation import (
             ExecutionProfileReleaseSpec, compile_execution_profile_release)
         from agent_runtime.registry.registry_local_persistence import main as registry_main
         from agent_runtime.testing.conformance_local_test_run import main as evaluation_main
+        from agent_runtime.testing.conformance_host_setup import main as setup_main
+        from agent_runtime.testing.conformance_test_run_archiving import main as archive_main
         from agent_runtime.invocation.invocation_result_assembly import completed_adapter_result
         from agent_runtime.contracts.invocation_adapter_definition import OutputSubmission
 
         assert importlib.util.find_spec(
             'agent_runtime.invocation.invocation_claude_module_invocation') is None
-        for entry in (registry_main, evaluation_main):
+        for entry in (registry_main, evaluation_main, setup_main, archive_main):
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 try:
                     entry(['--help'])
@@ -264,7 +269,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
         assert not attempted
         assert not any(name == 'claude_agent_sdk' or name.startswith('claude_agent_sdk.')
                        for name in sys.modules)
-        print(json.dumps({'sdk_import_attempts': attempted, 'cli_help_checked': 2,
+        print(json.dumps({'sdk_import_attempts': attempted, 'cli_help_checked': 4,
                           'claude_command_rendered': True, 'runtime_version': assembled.runtime_version}))
         """,
         str(wheel),
@@ -273,7 +278,7 @@ def test_clean_wheel_cli_entry_points_do_not_import_claude_sdk(tmp_path: Path) -
     )
     assert result == {
         "sdk_import_attempts": [],
-        "cli_help_checked": 2,
+        "cli_help_checked": 4,
         "claude_command_rendered": True,
         "runtime_version": tomllib.loads((REPO_ROOT / 'pyproject.toml').read_text())['project']['version'],
     }

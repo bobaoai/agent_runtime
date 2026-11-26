@@ -668,7 +668,7 @@ def _adapter_run(directory, lines, monkeypatch, *, observer=None, exit_code=0, i
     streams = {name: base64.b64decode(value["data"]) for name, value in trace.get("raw_streams", {}).items()}
     outputs = [cell.read_bytes(item.output_ref, item.output_sha256) for item in run.outputs]
     return {"status": attempt.status, "failure_class": attempt.failure_class,
-            "failure_code": detail.get("failure_code"), "outputs": outputs,
+            "failure_code": detail.get("failure_code"), "detail": detail, "outputs": outputs,
             "usage": attempt.usage.as_dict(), "trace": {key: trace.get(key) for key in keys}, "streams": streams}
 
 
@@ -725,6 +725,41 @@ def test_adapter_terminal_result_is_identical_with_or_without_observer(tmp_path,
     if fault == "channel":
         time.sleep(0.2)
         assert observer.snapshots == []
+
+
+# Sanitized observed shape: Claude's only event is an error result with a structured startup
+# failure, no init event, and the process exits 1 (session and credential fields removed).
+STARTUP_FAILURE = {
+    "type": "result", "subtype": "error_during_execution", "is_error": True, "duration_ms": 0,
+    "duration_api_ms": 0, "num_turns": 0, "stop_reason": None, "total_cost_usd": 0,
+    "startup_failure_reason": "sandbox_required_unavailable",
+    "errors": ["Sandbox required but unavailable: sandbox is enabled but the Windows sandbox is not active on "
+               "this session (feature gate off). Set sandbox.failIfUnavailable=false to allow unsandboxed execution."],
+    "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+    "modelUsage": {}, "permission_denials": [], "result_index": 0,
+}
+
+
+@pytest.mark.fake_run
+@pytest.mark.parametrize("lines,exit_code,message", [
+    ([STARTUP_FAILURE], 1, "CLI initialization is missing: Claude reported startup failure "
+                           f"sandbox_required_unavailable: {STARTUP_FAILURE['errors'][0]}"),
+    ([native._result()], 0, "CLI initialization or terminal result is missing"),
+    ([STARTUP_FAILURE, STARTUP_FAILURE], 1, "CLI returned multiple terminal results"),
+], ids=["startup_failure", "generic_missing_init", "duplicate_result"])
+def test_missing_init_failure_names_a_native_startup_failure(tmp_path, monkeypatch, lines, exit_code, message):
+    """Only Claude's structured startup failure changes the message; the failure itself is unchanged."""
+    run = _adapter_run(tmp_path / "run", lines, monkeypatch, exit_code=exit_code)
+    detail, trace = run["detail"], run["trace"]
+    assert (run["status"], run["failure_class"], run["failure_code"]) == (
+        "failed", "provider", "claude_cli_result_missing_or_invalid")
+    assert detail["message"] == message
+    assert detail["retryable"] is False and not run["outputs"]
+    assert trace["initialization"] is None and trace["result"] == lines[-1]
+    if len(lines) == 1:
+        assert trace["exit_code"] == detail["transport_exit_code"] == exit_code
+        assert run["streams"]["stdout"].decode().splitlines() == [json.dumps(line) for line in lines]
+        assert (run["usage"]["input_tokens"], run["usage"]["output_tokens"]) == ((0, 0) if exit_code else (7, 3))
 
 
 # ---- A3: Test Run attaches observation only for a resolved claude_cli transport ----

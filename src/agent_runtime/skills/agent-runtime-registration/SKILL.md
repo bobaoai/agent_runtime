@@ -71,6 +71,9 @@ CLI 或必要资料缺失时说明具体缺件及提供方，保留已完成事�
 - Reviewer 或普通 Module 注册需要 source owner 交付的 source 文件夹
   （`.claude/skills/<skill>/runtime_modules/<module>`，或其中的 `module_registration.json`）、批准的定义版本及
   对应 source 审核依据。普通 Module 另需 owner 选定的运行要求预设；`mcp_data` 预设还需宿主连接名称。
+- source 中的 `prompt.md` 是 source owner 从 Skill 提取的一项独立任务的完整执行 prompt。写法与示例见同版本
+  runbook 的“从 Skill 提取一项独立任务的执行 prompt”（anchor `skill-task-base`）。注册操作者不编写、改写或
+  批准它；缺少或不完整时交回 source owner。
 - 需要特定 Workflow 名称时，提供已批准的名称；未提供时 Runtime 生成与 Module 同名、同版本的单节点 Workflow。
 - 其他 Module 或 Workflow 使用 source owner 提供的完整已编译 bundle JSON。发布包标签只被校验、不被保存。
   bundle 恰有一个 Workflow（不论含几个 Module），或没有 Workflow 且只有一个 Module 时可以省略，由命令从该

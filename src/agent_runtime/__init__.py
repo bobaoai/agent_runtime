@@ -145,6 +145,13 @@ from .registry.registry_local_persistence import LoadedRuntimeRegistration, load
 from .foundation.foundation_environment_setup import load_runtime_config, setup_runtime
 from .execution.execution_local_invocation import prepare_local_workflow, prepare_local_workflow_module, run_local_workflow_module
 from .testing.conformance_local_test_run import run_local_workflow_test, write_test_run_record
+from .testing.conformance_test_run_archiving import (
+    PostgresTestRunArchiveStore,
+    cleanup_test_run_archive,
+    read_test_run_archive,
+    run_archive_ddl,
+    save_test_run_archive,
+)
 from .registry.registry_definition_selection import (
     RuntimeDefinitionSelection,
     read_definition_selection,
@@ -318,6 +325,11 @@ __all__ = [
     "write_local_resources",
     "inspect_test_run_record",
     "write_test_run_record",
+    "save_test_run_archive",
+    "read_test_run_archive",
+    "cleanup_test_run_archive",
+    "run_archive_ddl",
+    "PostgresTestRunArchiveStore",
     "ModuleAuthoringError",
     "MODULE_EXECUTION_PROFILE_INCOMPATIBLE",
     "MODULE_OPERATION_DECLARATION_INVALID",

@@ -1,10 +1,13 @@
 # Agent Runtime for Windows
 
-**Agent Runtime 为业务项目中的 AI Agent 提供稳定的封装环境，让一个 Agent 能力可以作为有明确合同的软件组件，被注册、调用、独立测试和组合使用。**
+**Agent Runtime 在 Windows 上运行有版本的 Agent 任务，也能接入带项目指令、业务 skills、MCP 和 Python 依赖的 Claude Code／Codex 原生项目。每次执行通过统一入口启动，并交回结构化结果和运行记录。**
 
 业务项目负责定义 Agent 要完成什么工作、需要什么输入、怎样的结果才有业务意义。Runtime 负责把这份
 定义放进统一的运行环境，准备执行配置和资源，管理执行过程，并向调用方交回结果及可追查的运行记录。
 各个业务项目可以共用这套底座，同时保留自己的任务内容和业务流程。
+
+在评测场景中，题库、参考答案、业务评分、批量实验和成绩比较由调用方或平台组织。Runtime 提供单次任务的
+执行与证据：技术执行状态、实际配置、工具调用、产物位置和用量；业务判定使用这些记录及所属项目的评分规则。
 
 这里的封装环境包含四个部分：
 
@@ -19,9 +22,29 @@
 按自己的流程组合成 Workflow。更换受支持的模型时，任务定义可以保持不变，本次执行配置单独记录。
 标识符、hash、执行引用等机器字段由代码生成和传递。
 
-Windows 版本目前通过 **Claude Code CLI（`claude -p`）和 Codex CLI（`codex exec`）** 执行模型任务。
+Windows 版本目前通过 **Claude Code CLI（`claude -p`）和 Codex CLI（`codex exec`）** 执行模型任务；
+**Antigravity CLI（`agy`）** 的首个绑定只支持 `structured_output` 与 `file_review` 两种环境。
 它们是这个封装环境中的执行器。CLI 内部怎样思考、读写文件、运行工具和调用 MCP，由 CLI 自己处理；
 Runtime 维护任务外层的定义、配置、生命周期和交接。业务结论的正确性仍由任务所属项目判断。
+
+<a id="agent-entry-paths"></a>
+
+## 先选接入方式：Module 任务或原生项目
+
+两种方式都使用已注册的 Module 保存任务合同和能力要求，也都返回结构化结果与运行记录。
+
+| 你的任务从哪里来 | 接入方式 | 本次调用的关键选择 |
+| --- | --- | --- |
+| 已有一份任务 prompt、输入输出格式，按它完成审核、分析、写作或文件处理 | **默认 Module 调用**：按定义和本次输入执行；Claude／Codex 的原生项目指令与业务 skills 保持关闭 | 从下方四种预设选择工具与工作区，提供输入及相应资源 |
+| 已有 Claude Code／Codex 项目，希望保留项目指令及多个业务 skills，由 Agent 在一次任务中自主选择方法 | **原生项目调用**：保留 Module 合同，由 CLI 按原生规则发现项目指令与 skills | 注册为 `code_change` 或 `mcp_data`，传 `--project-directory` 与 `--native-project`；Codex 另加 `--codex-execution-mode host` |
+
+`--native-project` 是每次调用的选项，与工具／工作区预设分别选择。Claude 使用 `CLAUDE.md` 和
+`.claude/skills/`；Codex 使用 `AGENTS.md` 和 `.agents/skills/`。每次是独立的 `claude -p` 或 `codex exec`，
+已有 MCP 连接由 Module 选择，业务 Python 的解释器和依赖由项目准备。
+
+已有原生项目可直接从[原生项目接入说明与调用示例](#native-project)开始；首次确认宿主能否运行该模式，使用
+[随包 `native_project` 样例](#runnable-examples)。该样例使用随包的本地 MCP fixture，不连接宿主的业务 MCP 或数据库，
+需要安装 `[cli_tools]` 可选依赖。
 
 <a id="four-common-patterns"></a>
 
@@ -41,14 +64,24 @@ Runtime 维护任务外层的定义、配置、生命周期和交接。业务结
 | **搜索工具 `search`** | 关闭 | 开启 | 开启 | 未单独声明 |
 | **执行命令 `shell`** | 关闭 | 开启 | 开启 | 开启 |
 | **调用 MCP 工具** | 关闭 | 关闭 | 关闭 | 开启选定连接；至少选一个 |
-| **模型的工作目录** | 不提供可写任务目录 | 本次运行的独立草稿目录（scratch） | 调用者指定的项目目录 | 调用者指定的项目目录 |
-| **文件写到哪里** | 模型不写文件，直接返回结果 | 写入本次草稿目录，材料副本保持只读 | 在指定项目目录中创建或修改文件 | 在指定项目目录中创建或修改文件 |
+| **原生项目指令与业务 skills** | 不适用 | 不适用 | 可显式加 `--native-project` | 可显式加 `--native-project` |
+| **CLI 的工作目录（cwd）** | 不提供可写任务目录 | Claude：本次 Attempt 的 `work/`（内含只读 `materials/` 与 `scratch/`）；Codex、Antigravity：本次的 `scratch/` | 调用者指定的项目目录（Antigravity 不支持） | 调用者指定的项目目录（Antigravity 不支持） |
+| **文件写到哪里** | 模型不写文件，直接返回结果 | 只写入本次的 `scratch/` 草稿目录，材料副本保持只读 | 在指定项目目录中创建或修改文件 | 在指定项目目录中创建或修改文件 |
 | **工具联网配置** | 无任务工具，额外工具网络关闭 | 沿用 CLI／宿主配置 | 沿用 CLI／宿主配置 | 沿用 CLI／宿主及所选连接配置 |
+
+工作目录与可写目录不一定相同：独立任务工作区里，Claude 在 `work/` 运行而只写 `scratch/`。每次 agent 调用的
+stdin 开头都有一段由代码生成的 `## Runtime Invocation Locations`，给出本次实际的工作目录、可写目录、
+只读材料目录、选定的只读依赖与 Runtime Python；调用方和 Agent 以它为准，不按目录名推测位置。
+`TMPDIR`、`TEMP`、`TMP` 都指向本次调用的临时文件夹。
 
 这张表区分工具声明和实际执行方式：Codex 的文件读取、编辑与搜索均通过原生 Shell 完成；
 Claude 使用原生文件工具和 Bash。MCP 预设虽然没有单独声明 `search`，仍可通过已允许的 Shell 命令搜索。
-“Shell 开启”表示可以使用命令工具；可执行哪些命令仍遵循 CLI 的原生配置。Claude 需要额外允许的命令
-由宿主用 `--command-permit` 提供，Codex 使用自己的权限配置与 execpolicy。
+“Shell 开启”表示可以使用命令工具。默认 Module 调用中，Claude 需要额外允许的命令由宿主用
+`--command-permit` 提供，Codex 使用自己的权限配置与 execpolicy。原生项目调用中，Shell 使用执行账号的
+宿主权限，`--command-permit` 不适用；具体工具和配置见[原生项目模式](#native-project)。
+Antigravity 用原生 `view_file`、`write_to_file`、`replace_file_content` 读写文件，搜索经原生 Shell；它只运行
+`--command-permit` 明确允许的命令（渲染为本次会话设置中的 `command(<permit>)`，已实测写法见
+[Antigravity 执行](docs/agent_runtime_claude_native_tools.md#5-antigravity-执行首个绑定)），没有许可即不运行命令。
 
 ### 怎样选择和提供资源
 
@@ -62,6 +95,9 @@ Claude 使用原生文件工具和 Bash。MCP 预设虽然没有单独声明 `se
 例如，生成一份新报告可以使用独立任务工作区，也可以使用项目工作区，取决于产物应放在哪个目录。
 MCP 环境可以使用所选服务提供的工具；具体工具操作由 prompt 和服务端已有授权决定。Runtime 只传递
 选定连接配置，服务登录、凭据与授权仍由宿主和服务维护。
+
+`--project-directory` 选择本次工作位置；加载该目录的原生项目指令和业务 skills，还需显式选择
+`--native-project`。业务 Python 与 Runtime Python 可以是不同环境，项目指令或 skill 应写明所需解释器。
 
 ### 所有预设共用的能力与配置
 
@@ -88,17 +124,18 @@ MCP 环境可以使用所选服务提供的工具；具体工具操作由 prompt
 4. **上层按统一方式取回结果。** Runtime 交回执行状态、审核结果和记录。项目判断业务结论、决定下一步；后续也能查询这次实际运行了什么。
 
 同一个审核定义可以独立测试、重复调用，也可以成为更大业务流程中的一个步骤。Runtime 提供共同的执行环境，
-项目维护自己的审核标准和流程。设计目的见[产品总纲](designDoc/the_charter.md#1-product-result)，
-职责边界见[Runtime 总章](designDoc/agent_runtime_00_execution_charter.md#2-user-intent)。
+项目维护自己的审核标准和流程。产品总纲与 Runtime 总章的位置见[随包设计文档入口](#source-and-design-contract-map)。
 
 ## 第一次使用，从这里开始
 
 1. **安装 Runtime 和操作 Skills：** 按[Clone 后安装 Runtime 和 Skills](#clone-and-install-skills)准备你的业务项目。
-2. **先跑一个样例：** 从[可运行样例](#runnable-examples)中的无工具环境 `structured_output` 开始，确认 CLI 能运行并返回结果。
-3. **换成自己的任务：** 使用随包的 `agent-runtime-usage` Skill 选择模式，再按[注册与运行 Runbook](docs/agent_runtime_registration_runbook.md)接入自己的材料和任务定义。
+2. **按接入方式跑样例：** 已有原生项目时选 `native_project`，检查项目指令、skill、MCP 和 Python 的实际使用；默认 Module 调用按任务需要选择四种预设对应的[样例](#runnable-examples)，只需确认模型调用时可选 `structured_output`。
+3. **换成自己的任务或项目：** 使用随包的 `agent-runtime-usage` Skill 选择要求，再按[注册与运行 Runbook](docs/agent_runtime_registration_runbook.md)注册任务、准备输入，并按所选接入方式调用。
 
-Runtime 对外提供 Python API 和命令行工具。Skills 是给 Claude／Codex 阅读的操作说明，
-用于引导它们调用这些入口。安装后可以直接让项目里的 Agent：
+查看、留档、升级或查接口等其他操作，见[按任务开始](#start-by-task)。
+
+Runtime 对外提供 Python API 和命令行工具。随包三份 Runtime 操作 Skills 指导 Claude／Codex 选择模式、
+注册和运行任务；项目已有的业务 skills 则在原生项目模式中由 CLI 发现和使用。安装后可以直接让项目里的 Agent：
 
 > 使用 agent-runtime-usage，帮这个项目接入一个文件审核任务。先说明推荐模式、需要我提供的材料，以及从哪个样例开始。
 
@@ -106,13 +143,14 @@ Runtime 对外提供 Python API 和命令行工具。Skills 是给 Claude／Code
 
 ## 当前版本与运行条件
 
-当前发布为 **`agent-runtime-core 0.2.0.dev14`，Windows 开发版（Pre-Alpha）**。
+当前发布为 **`agent-runtime-core 0.2.0.dev22`，Windows 开发版（Pre-Alpha）**。
 
 - [GitLab 源码](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows)
 - [下载安装包（Releases）](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows/-/releases)
 - [Package Registry](https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows/-/packages)
 
-普通本地运行需要 Windows 11、Python 3.11+，以及已安装并登录的 Claude Code CLI 或 Codex CLI。
+普通本地运行需要 Windows 11、Python 3.11+，以及已安装并登录的 Claude Code CLI、Codex CLI，或（仅
+`structured_output` 与 `file_review`）Antigravity CLI。
 使用文件、代码或 MCP 模式时，还需要提供相应目录、材料或连接。普通 Test Run 的记录保存在本地；
 PostgreSQL 和 Temporal 是需要宿主另行配置的可选集成。跨进程持久恢复需要接入对应存储和执行后端。
 
@@ -136,28 +174,39 @@ python -m pip install ./agent-runtime-windows
 ```
 
 `main` 是本 GitLab 项目的 Windows 发布分支；需要固定版本时，把 `@main` 换成发布 tag
-（例如 `@v0.2.0.dev14-windows`）或该版本的完整 commit。
+（例如 `@v0.2.0.dev22-windows`）或该版本的完整 commit。
 
 也可以从上方 Releases 或 Package Registry 下载 wheel，再在 PowerShell 安装本地文件：
 
 ```powershell
-python -m pip install .\agent_runtime_core-0.2.0.dev14-py3-none-any.whl
+python -m pip install .\agent_runtime_core-0.2.0.dev22-py3-none-any.whl
 ```
 
-两种安装方式都包含三份 Runtime Skills。安装完成后，继续按下方步骤在业务项目中调用
-`setup_runtime` 安装 Skills；仅安装 wheel 不会自动把 Skills 写入项目目录。
+安装后，用一条命令准备要使用 Runtime 的业务项目（`--provider` 取 `claude`、`codex` 或 `both`）：
+
+```powershell
+agent-runtime-setup --root "C:\work\my_project" --provider both
+```
+
+它在项目中安装三份 Runtime Skills，并找到所选 CLI 的原生程序：依次查看已有配置、PATH 上的原生程序，
+最后查看 npm 安装包里的固定位置，然后把程序位置写入 `.runtime\config.json`。它还会读取 CLI 自己的版本与
+登录状态，最后打印一份 JSON 报告，列出已准备的内容、还缺什么和下一步命令。它不会登录、不调用模型，也不批准任何
+工具权限。报告中缺少的 Provider 登录或 MCP 登录／授权由本人在原生 CLI 中完成，之后再运行报告给出的
+验证命令（详见[项目 setup](docs/agent_runtime_registration_runbook.md#local-runtime-setup)）。
+程序化宿主仍可直接调用 `from agent_runtime import setup_runtime` 只安装 Skills。仅安装 wheel 不会自动修改项目目录。
 可选依赖写在包名之后，例如 `"agent-runtime-core[cli_tools] @ git+https://dacazscegit001.dymonasia.com/ai-fellowship-equities/els-ai-pack/agent-runtime-windows.git@main"`：
-`[cli_tools]`（`mcp` 包：记录型命令、任务 callback 进程桥，以及 `mcp_data` 样例的 MCP fixture）、
-`[postgres]`（PostgreSQL 定义与执行存储）、`[temporal]`（Temporal 协调）。普通 Test Run 不需要它们。
-安装后核对实际版本（本说明对应 `0.2.0.dev14`）和命令：
+`[cli_tools]`（`mcp` 包：记录型命令、任务 callback 进程桥，以及 `mcp_data`／`native_project` 样例的 MCP fixture）、
+`[postgres]`（PostgreSQL 定义与执行存储，以及 `agent-runtime-archive` 的中央留档）、`[temporal]`（Temporal 协调）。
+普通 Test Run 不需要它们。安装后核对实际版本（本说明对应 `0.2.0.dev22`）和命令：
 
 ```sh
 python -c "from importlib.metadata import version; print(version('agent-runtime-core'))"
 agent-runtime-test-run --help
+agent-runtime-archive --help
 ```
 
 Windows 上只启动原生 `claude.exe`、`codex.exe`（PATH 查找也只找原生程序）；`.cmd`、`.bat`、`.ps1` 启动器
-不会被启动，必要时用 `--cli-path` 或 `provider_cli_paths` 指向原生程序。Claude 的 Bash 工具需要
+不会被启动；`agent-runtime-setup` 会找到 npm 安装包中的原生程序并写入 `provider_cli_paths`，也可用 `--cli-path` 指定。Claude 的 Bash 工具需要
 Git for Windows，必要时由宿主设置 `CLAUDE_CODE_GIT_BASH_PATH`。
 从一个已审 Reviewer source 到查看结果的最小路径（只需选择 source 文件夹、版本、输入和输出文件位置）：
 
@@ -200,16 +249,18 @@ $Python = "$ProjectRoot\.venv\Scripts\python.exe"
 
 后续命令直接使用这个解释器，无需激活虚拟环境。
 
-**2. 安装 Runtime 包，再安装随包 Skills。** 在同一个 PowerShell 会话中执行，每条命令成功后再继续：
+**2. 安装 Runtime 包，再准备项目。** 在同一个 PowerShell 会话中执行，每条命令成功后再继续；`--provider`
+按实际使用的 CLI 取 `claude`、`codex` 或 `both`：
 
 ```powershell
 & $Python -m pip install "$RuntimeRepo"
-& $Python -c "from pathlib import Path; import sys; from agent_runtime import setup_runtime; root = Path(sys.argv[1]).resolve(); changed = setup_runtime(root); print('Runtime Skills ready:', root); print('Changed paths:', len(changed))" "$ProjectRoot"
+$RuntimeSetup = Join-Path (Split-Path -Parent $Python) "agent-runtime-setup.exe"
+& $RuntimeSetup --root "$ProjectRoot" --provider both
 ```
 
 Runtime 对外提供 Python API 和 CLI，三份随包 Skills 指导 Agent 使用这些入口；当前不对外提供
 Runtime MCP 服务。单独 `git clone` 或 `pip install` 不会把 Skills 安装到业务项目；
-上面的 `setup_runtime` 调用才会完成项目准备。
+上面的 `agent-runtime-setup` 才会完成项目准备。
 它在 `$ProjectRoot` 下创建 `.runtime/setup.json`，并向两个原生 Skill 目录安装相同的三份随包内容：
 
 | Skill | 作用 | 安装位置（相对于项目目录） |
@@ -218,41 +269,34 @@ Runtime MCP 服务。单独 `git clone` 或 `pip install` 不会把 Skills 安�
 | `agent-runtime-registration` | 注册已批准的 Module／Workflow 定义并准确回读 | `.agents/skills/agent-runtime-registration/SKILL.md` 与 `.claude/skills/agent-runtime-registration/SKILL.md` |
 | `agent-runtime-test-run` | 运行已注册任务，查看结果、执行日志与留档 | `.agents/skills/agent-runtime-test-run/SKILL.md` 与 `.claude/skills/agent-runtime-test-run/SKILL.md` |
 
-安装包和 Skills 不需要先登录 Claude／Codex，也不会调用模型。其他共享服务的 Skills（如
+同一命令还把找到的原生 `claude.exe`／`codex.exe` 写入 `.runtime\config.json` 的 `provider_cli_paths`，并报告
+CLI 版本与登录状态；配置中的其他内容保持不变。找不到程序时用 `--claude-path`／`--codex-path` 指定原生程序；
+已配置但无法启动的程序只被报告，不被静默替换。准备 Skills 不需要先登录 Claude／Codex，setup 也不调用模型。
+`--provider both` 仍只表示 Claude 与 Codex；Antigravity 用 `--provider antigravity`（可加 `--antigravity-path`）单独准备：
+依次使用配置的程序、PATH 上的原生 `agy.exe`、安装器的固定位置 `%LOCALAPPDATA%\agy\bin\agy.exe`，只运行
+`agy --version`。agy 没有公开的登录状态命令，setup 不读取认证文件，也不以模型列表代替登录证据，因此报告
+`login: not_verified`；登录由本人在原生 CLI 中完成，首个真实调用（报告给出的样例命令）才确认可用。
+退出码 `0` 表示没有缺项，`1` 表示报告的 `missing` 中还有需要处理的项（例如尚未登录）。其他共享服务的 Skills（如
 `credential-access`、`dagster-access`）由各自的服务安装流程维护，不属于这三份 Runtime Skills。
 
-如需运行随包的 `mcp_data` 样例，再执行 `& $Python -m pip install "${RuntimeRepo}[cli_tools]"`，
-安装样例数据服务所需的 MCP Python 库。任务使用宿主已有 MCP 的连接能力见[四种常用模式](#four-common-patterns)；
+如需运行随包的 `mcp_data` 或 `native_project` 样例，再执行 `& $Python -m pip install "${RuntimeRepo}[cli_tools]"`，
+安装样例本地 MCP fixture 所需的 MCP Python 库；使用中央留档 `agent-runtime-archive` 时再安装 `"${RuntimeRepo}[postgres]"`。
+任务使用宿主已有 MCP 的连接能力见[四种常用模式](#four-common-patterns)；
 这与把 Runtime 自身作为 MCP 服务提供给外部 Agent 是两回事。
 
-**3. 验证安装。** 核对实际版本、CLI 入口，以及六份已安装 Skill 是否与当前包完全一致：
+**3. 验证安装。** 核对实际版本，再运行一次同样的 setup：
 
 ```powershell
 & $Python -c "from importlib.metadata import version; print(version('agent-runtime-core'))"
-$RuntimeCli = Join-Path (Split-Path -Parent $Python) "agent-runtime-test-run.exe"
-& $RuntimeCli --help
-@'
-import sys
-from pathlib import Path
-from importlib.resources import files
-
-root = Path(sys.argv[1]).resolve()
-names = ("agent-runtime-usage", "agent-runtime-registration", "agent-runtime-test-run")
-for host in (".agents", ".claude"):
-    for name in names:
-        target = root / host / "skills" / name / "SKILL.md"
-        expected = files("agent_runtime").joinpath("skills", name, "SKILL.md").read_bytes()
-        if target.read_bytes() != expected:
-            raise SystemExit(f"Skill content mismatch: {target}")
-        print(f"OK: {target}")
-'@ | & $Python - "$ProjectRoot"
+& $RuntimeSetup --root "$ProjectRoot" --provider both
 ```
 
-六行 `OK` 表示两套 Skill 目录都已安装到位。随后在这个项目中使用 `agent-runtime-usage`，
+第二次报告中 `changed_paths` 为空，表示六份 Skill 与当前包一致、配置无需再改；`status` 为 `prepared` 表示没有缺项。
+有缺项时按 `missing` 与 `next_steps` 处理：登录由本人在 CLI 中完成，然后运行报告给出的样例命令做一次真实调用验证。
+随后在这个项目中使用 `agent-runtime-usage`，
 例如让 Agent「按 Runtime 的四种常用模式，推荐适合我的文件审核任务的 preset，并指出对应样例」。
-真正运行模型前，再准备所选 CLI 的程序与登录，并按[可运行样例](#runnable-examples)验证需要的模式。
 
-更新 Runtime 后，在同一 Python 环境重新安装包，并对各项目重新调用 `setup_runtime` 即可更新受管理的
+更新 Runtime 后，在同一 Python 环境重新安装包，并对各项目重新运行 `agent-runtime-setup` 即可更新受管理的
 Skills；内容已一致时不会重复写入。如果同名 Skill 已被本地修改，setup 会报告具体路径，先处理该处差异，
 不要直接覆盖。更多行为见[轻量运行前 setup](docs/agent_runtime_registration_runbook.md#local-runtime-setup)。
 
@@ -303,7 +347,7 @@ DSN 留在该名称配置的环境变量里，每次运行按当前配置打开�
 | --- | --- | --- | --- |
 | `structured_output` 纯文本／结构化输出 | `tool_free`、`inline`、工具 `()`、workspace `none`、network `denied` | `--input` | 输出字段与本次生成的输入一致；没有任务工具调用 |
 | `file_review` 文件审核 | `agent`、工具 `edit, read, search, shell`、`own_draft_read_write`、`provider_managed`（与 `ModuleReviewer` 的固定能力相同） | `--material-root` 加 `--material`（或明确 `--all-materials`），hash 由代码计算；也可用 `write_local_resources` 写出的 `--resources` 文件；需要运行检查时 Claude 加 `--command-permit` | scratch 中的审核文件含只出现在材料里的事实；日志中有对该文件的读回 |
-| `code_change` 代码开发并运行命令 | `agent`、工具 `edit, read, search, shell`、`explicit_project_read_write`、`provider_managed` | `--project-directory`（调用者的 checkout／worktree）；Claude 用 `--command-permit` 允许检查命令 | 只改了目标文件、没有新增文件；宿主独立复跑检查通过；日志中模型对最终代码运行了检查（证据由代码从日志的命令结果中附上，不要求模型复述 hash 或 nonce）；返回的改动文件、命令与通过状态和实际一致 |
+| `code_change` 代码开发并运行命令 | `agent`、工具 `edit, read, search, shell`、`explicit_project_read_write`、`provider_managed` | `--project-directory`（调用者的 checkout／worktree）；默认 Claude 调用用 `--command-permit` 允许检查命令；原生项目调用见下节 | 只改了目标文件、没有新增文件；宿主独立复跑检查通过；日志中模型对最终代码运行了检查（证据由代码从日志的命令结果中附上，不要求模型复述 hash 或 nonce）；返回的改动文件、命令与通过状态和实际一致 |
 | `mcp_data` 已有 MCP／网关取数、落盘、读回 | `agent`、工具 `edit, read, shell` 与每个声明连接的 `mcp__<name>`、`explicit_project_read_write`、`provider_managed` | 宿主在 `root/.runtime/config.json` 的 `mcp_servers.<transport>.<name>` 配好连接；输出目录用 `--project-directory` | fixture 自己审计到参数与任务一致的真实 `tools/call`；保存的 JSON 与它返回的完整结果一致；日志中有读回；派生文件正确；返回的文件名指向项目目录中的这两个文件 |
 
 运行要求来自代码中的预设，不另抄一份配置。`module_requirements_preset(preset_id, *, mcp_connections=(), max_attempts=1)`
@@ -331,16 +375,59 @@ root 的 `.agents/skills` 和 `.claude/skills`。
 
 Codex 没有独立的 Read、Grep、Edit 工具，read、search、edit 都经由 shell，因此需要 `shell`；只声明 MCP 时
 shell 关闭，模型不能存取本地文件。Codex 不支持 `--command-permit`（`ADAPTER_CAPABILITY_UNSUPPORTED`），
-其 Shell 范围由 Codex 自己的 sandbox 与宿主 execpolicy 决定。第四种模式的“网关”指经已声明 MCP 连接访问的
+默认 configured 模式的 Shell 范围由 Codex 自己的 sandbox 与宿主 execpolicy 决定；原生项目使用后述的 host 方式。第四种模式的“网关”指经已声明 MCP 连接访问的
 既有服务；Runtime 自己的 `gateway_read`／`hybrid` 输入仍未接通。
 
-| 差异 | Claude CLI | Codex CLI |
+下表说明默认调用的 CLI 差异；原生项目调用的指令、skills 和命令条件见下一节。
+
+| 差异 | Claude CLI | Codex CLI | Antigravity CLI（首个绑定） |
+| --- | --- | --- | --- |
+| 支持的预设 | 四种 | 四种 | 仅 `structured_output`、`file_review` |
+| 模型与 effort | 可省略，使用 Runtime 默认 | 必须显式给出 | 必须显式给出 |
+| 文件读写 | Read、Grep／Glob、Edit／Write | 经 shell | `view_file`、`write_to_file`、`replace_file_content`；搜索经 Shell |
+| 命令 | 自带只读命令加 `--command-permit` 允许的命令 | 不接受逐条许可 | 只运行 `--command-permit` 允许的命令（`command(<permit>)`） |
+| Windows 上的 Shell | Git Bash | PowerShell | PowerShell |
+| MCP | 私有 `mcp.json` 加 `--strict-mcp-config` | `-c mcp_servers.<name>`，未声明的宿主服务器本次关闭 | 不支持 |
+| 结构化结果 | `--json-schema` | `--output-schema` | `--json-schema`，结果取 `result.structured_output`（`finish` 机制） |
+
+<a id="native-project"></a>
+
+### 原生项目模式 / Native project execution
+
+**让 Agent 在你自己的项目里按项目指令和项目 Skills 工作时，给这次调用加 `--native-project`。** 仍是一次独立的
+`claude -p` 或 `codex exec`，每次是新会话、不续接；Runtime 照常准备输入、输出 schema、模型、时限与选定的 MCP
+连接，校验结构化结果并保存执行记录。它是每次调用的选择，不改 Module 定义：Module 仍用 `code_change`（无 MCP）
+或 `mcp_data`（带 MCP）预设注册。
+
+| | Claude | Codex |
 | --- | --- | --- |
-| 模型与 effort | 可省略，使用 Runtime 默认 | 必须显式给出 |
-| 文件读写 | Read、Grep／Glob、Edit／Write | 经 shell |
-| 命令 | 自带只读命令加 `--command-permit` 允许的命令 | 不接受逐条许可 |
-| Windows 上的 Shell | Git Bash | PowerShell |
-| MCP | 私有 `mcp.json` 加 `--strict-mcp-config` | `-c mcp_servers.<name>`，未声明的宿主服务器本次关闭 |
+| 项目指令 | CLAUDE.md | AGENTS.md |
+| Skills | `.claude/skills`（及用户 Skills），经原生 `Skill` 工具使用；任务里不用点名 | `.agents/skills`（及用户 Skills），模型读取 SKILL.md 后执行 |
+| 命令 | `Bash` 与 `PowerShell` 在 `dontAsk` 下整项允许，不需要 `--command-permit` | 原生 Shell，须另加 `--codex-execution-mode host` |
+| MCP | 只传 Module 声明、root 配置中同名的连接；登录留在 CLI 自己的机制里 | 同左；未声明的宿主服务器本次关闭 |
+| Python | 项目指令或 Skill 写明项目解释器的绝对路径；Runtime Python 仍在 PATH 首位 | 同左 |
+| 本次关闭 | 自动记忆、hooks | agents、Web 搜索、memories、hooks、plugins 等既有关闭项 |
+
+Shell 以本人宿主权限运行：项目目录是任务范围，不是操作系统边界；用户、项目与托管的 deny／ask 规则和 Codex
+execpolicy 照常生效，不使用 bypassPermissions 或跳过权限的参数。材料包、`--resources` 中的 commands 与额外依赖、
+`--command-permit` 和 Antigravity 不适用，在启动模型前被拒绝。记录中的 `effective_configuration` 写明
+`native_project`、`context_enabled`、`context_suppressed` 与实际工具、允许规则；实际发现和调用了哪些 Skills、命令与
+MCP 工具，以原始日志为准（`agent-runtime-inspect --view log`）。
+
+```powershell
+# Claude
+agent-runtime-test-run --root $Root --selection $Selection --input $Input --transport claude_cli `
+  --model claude-sonnet-5-5 --effort high --project-directory $Project --native-project --record-out $Record
+# Codex
+agent-runtime-test-run --root $Root --selection $Selection --input $Input --transport codex_cli `
+  --model gpt-6-astra --effort xhigh --project-directory $Project --native-project `
+  --codex-execution-mode host --record-out $Record
+```
+
+Python API 对应 `run_local_workflow_test(..., project_directory=project, native_project=True)`，Codex 另加
+`codex_execution_mode="host"`。完整说明、两种 CLI 的原生表面、连接名与登录的关系见
+[原生项目执行](docs/agent_runtime_claude_native_tools.md#6-native-project-execution)；随包可运行样例为
+`--pattern native_project`（见下节）。
 
 <a id="runnable-examples"></a>
 
@@ -355,9 +442,12 @@ python -m agent_runtime.testing.conformance_pattern_examples run --pattern file_
 python -m agent_runtime.testing.conformance_pattern_examples run --pattern code_change --transport claude_cli --root $Root
 python -m agent_runtime.testing.conformance_pattern_examples run --pattern mcp_data --transport claude_cli --root $Root
 # Codex：同样四条，改为 --transport codex_cli 并显式给出 --model <model> --effort <effort>
+# Antigravity：仅前两条，改为 --transport antigravity_cli 并显式给出 --model <model> --effort <effort>
+# 原生项目模式（Claude 或 Codex；Codex 自动以 host 运行，需显式 --model 与 --effort）：
+python -m agent_runtime.testing.conformance_pattern_examples run --pattern native_project --transport claude_cli --root $Root
 ```
 
-每次运行在 `$Root` 下新建 `<pattern>-<claude|codex>-<UTC 时间>-<hex>` 文件夹，不复用、不覆盖已有内容，
+每次运行在 `$Root` 下新建 `<pattern>-<claude|codex|antigravity>-<UTC 时间>-<hex>` 文件夹，不复用、不覆盖已有内容，
 走与自己任务相同的普通路径：`source\` 中写出普通 v4 任务 source，`register_module` 从该文件夹读取身份、注册并回读，
 代码写出 `selection.json`，`file_review` 的 `resources.json` 由 `prepare_material_files` 按选定材料计算；运行使用该选择，
 并核对执行的 Workflow 与 Module 身份等于它。文件夹内还有 `host\`（本次 Runtime root：注册的 `example_<pattern>@v1`
@@ -371,17 +461,24 @@ stdout 的 JSON 中 `passed` 汇总 `checks`，退出码 `0` 表示全部检查�
 | 模式 | 运行后核对的文件 |
 | --- | --- |
 | `structured_output` | `record.json` 的 `output` |
-| `file_review` | `attempts\<attempt>\work\scratch\review.md` |
+| `file_review` | `attempts\<attempt>\work\scratch\review.md`（Antigravity 另带一条已实测写法的命令许可，只允许 `Get-Content review.md` 读回） |
 | `code_change` | `project\pricing.py`（Claude 另有 `run_check.sh`，用于固定的 `--command-permit "sh run_check.sh"`） |
 | `mcp_data` | `project\stock_snapshot.json`、`project\stock_summary.json` 与 `mcp_fixture_audit.jsonl` |
+| `native_project` | `project\reports\stock_report.md`（首行须是项目指令要求的标记）、`project\reports\stock_summary.json`（项目脚本以项目解释器生成）、`project\data\snapshot.json` 与 `mcp_fixture_audit.jsonl`；另查日志中的 Skill 调用或 SKILL.md 读取，以及 Claude init 列出的项目 Skills |
 
 `prepare` 只准备文件夹并在 `run.json` 记录等价的 `agent-runtime-test-run --selection ... --record-out ...` 命令，便于逐步观察；
 `check --run-dir DIR [--record FILE]` 对保存的记录重新检查（`--record-out` 写 UTF-8；若改用 PowerShell 5.1 重定向 stdout，
 check 也能读取 UTF-16 或带 BOM 的 UTF-8）。
-`mcp_data` 需要 `[cli_tools]`（`mcp` 包）。Codex 在 Windows 上用自己的 sandbox 身份运行命令，根目录不能放在受保护的
+`mcp_data` 和 `native_project` 随包样例需要 `[cli_tools]`（`mcp` 包）；它们的 MCP 连接是样例自带的本地 fixture，
+不是宿主的业务 MCP 或数据库。默认 configured 模式的 Codex 在 Windows 上用自己的 sandbox 身份运行命令，根目录不能放在受保护的
 Temp 或被应用包重定向的 AppData 下；Windows 路径默认限 260 字符，根目录宜短。样例不需要生产凭据或数据。
 
-要换成宿主已有的 MCP 服务（例如团队已在用的数据 MCP），把该服务在所选 CLI 中的原生连接配置写入自己 root 的
+运行结束后，可以把任一样例或自己任务的完整记录与 Attempt 文件存入中央留档、读回还原，并只清理本次 Attempt。
+这是对已有运行的后续处理，不是新的运行环境预设；完整流程见
+[运行留档与本次清理样例](docs/agent_runtime_registration_runbook.md#archive-test-run-example)。
+
+要换成宿主已有的 MCP 服务（例如团队已在用的数据 MCP），用 `agent-runtime-setup --mcp <name>` 选择这个连接：
+Codex 读取 `codex mcp get <name> --json`；Claude 或已有的 Runtime 配置用 `--mcp-config FILE` 作为来源。连接写入自己 root 的
 `mcp_servers.<transport>.<name>`，凭据只用环境变量名引用（Claude 的 `env`／`headers` 中写 `${VAR}` 并列入
 `environment_keys`；Codex 用 `env_vars`、`bearer_token_env_var` 或 `env_http_headers`），Module 使用
 `module_requirements_preset("mcp_data", mcp_connections=("<name>",))`。Runtime 只把声明的连接交给 CLI，不读取凭据值、
@@ -391,8 +488,10 @@ Temp 或被应用包重定向的 AppData 下；Windows 路径默认限 260 字�
 
 ### 原生基础文件读写 / Native basic file I/O
 
-Claude 按记录的工具精确映射：read 为 Read，search 为 Grep、Glob，edit 为 Edit、Write，shell 为 Bash。
-Runtime 只为宿主的 `--command-permit` 渲染 `Bash(<permit>)` 允许规则，从不开放裸 Bash；Claude 自带的只读命令
+本节说明默认 Module 调用的配置；原生项目模式的文件与 Shell 条件见[原生项目接入](#native-project)。
+
+默认 Claude 调用按记录的工具精确映射：read 为 Read，search 为 Grep、Glob，edit 为 Edit、Write，shell 为 Bash。
+Runtime 为宿主的 `--command-permit` 渲染 `Bash(<permit>)` 允许规则；Claude 自带的只读命令
 始终可运行，未被允许规则覆盖的命令被拒绝。
 
 | workspace | 工作目录与可写范围 |
@@ -402,11 +501,12 @@ Runtime 只为宿主的 `--command-permit` 渲染 `Bash(<permit>)` 允许规则�
 | `explicit_project_read_write` | 调用者的 `project_directory`，可在其中读写 |
 
 文件工具由 Claude 自身的工作目录规则限定在工作目录与额外只读目录内，这不是任意 Shell／脚本的操作系统
-隔离。Codex 以私有草稿的 scratch 或调用者的 `project_directory` 为主文件夹，按次生成的权限 profile 只对
-该可写目录授予写入，并把材料目录声明为只读输入。`edit` 需要可写 workspace；没有 `edit` 的已保存定义
+隔离。Codex 以私有草稿的 scratch 或调用者的 `project_directory` 为主文件夹（即 cwd），按次生成的权限 profile
+只对该可写目录及本次临时文件夹授予写入，并把材料目录声明为只读输入。两种 CLI 收到的实际位置见 stdin 开头的
+`## Runtime Invocation Locations`（[说明](docs/agent_runtime_claude_native_tools.md)）。`edit` 需要可写 workspace；没有 `edit` 的已保存定义
 不获得 Write／Edit。
 
-`--command-permit` 是普通 Shell 的逐次预批准，适用于所有宿主上的 Claude。`--resources` 中的 `commands`
+`--command-permit` 是默认 Claude 调用中普通 Shell 的逐次预批准。`--resources` 中的 `commands`
 是另一项显式扩展：按 ID 执行并记录命令，只在 macOS（sandbox-exec，需要 `cli_tools`）上可用，不限制普通 Bash，
 也不是四种常用模式的前提。
 
@@ -421,21 +521,49 @@ Runtime 只为宿主的 `--command-permit` 渲染 `Bash(<permit>)` 允许规则�
   否则保持原样并给出 `seal_skipped_reason`。Test Run 结果的 `attempt_workspaces` 列出每个文件夹。
 - Runtime 不自动启动清理日程。宿主用 [maintain_attempt_workspaces](docs/agent_runtime_reviewer_api.md#maintain_attempt_workspaces)
   以 `intent="query"` 或 `"cleanup"` 查询或删除自己留档集合中已封存且过期的文件夹；`retention_seconds=None`
-  不删除。调用者的 `project_directory`、Provider 登录状态与服务数据从不进入清理集合。
+  不删除，`0` 表示封存后不再额外等待。调用者的 `project_directory`、Provider 登录状态与服务数据从不进入清理集合。
 - 宿主受限的 `--example` 多 Agent callback 样例不同：它的工作目录是临时目录，结束并取得记录后删除，不留 Attempt 文件夹。
-- 本地留档不是 PostgreSQL 持久化，也不承诺跨进程恢复。
+- 本地留档不是 PostgreSQL 持久化，也不承诺跨进程恢复。需要中央留档时，用下一节的 `agent-runtime-archive`。
+
+<a id="central-run-archive"></a>
+
+### 中央留档与本次清理 / Central run archive and owned cleanup
+
+一次 Test Run 结束后，宿主可以显式把这次的记录和它自己的 Attempt 文件夹存进中央数据库，读回核对后再删除本次现场。
+默认的 Test Run 不变，不会自动存入中央留档或清理。命令需要 `[postgres]` 可选依赖；保存对象是 `--record-out`
+写出的完整记录文件。
+
+- root 的 `.runtime/config.json` 里配置一个 `run_archive`（与定义仓库 `release_stores` 分开）：
+  `{"host": "localhost", "port": 5432, "database": "the_workspace", "user": "comms_app", "schema": "runtime_archive",
+  "password_credential": "project001.postgresql.comms_app"}`。配置里只写凭据名，密码由代码在每次连接时通过本机
+  已安装的中央凭据客户端 `wscred.exe` 私下取得，不进参数、环境变量、记录或输出。表结构由数据库 owner 用
+  `run_archive_ddl(grant_role=...)` 建一次（只授予 SELECT 与 INSERT）；保存时不建表。
+- `agent-runtime-archive save --root ROOT --record RECORD --receipt-out RECEIPT [--cleanup]`：保存 `--record-out`
+  记录和本次 Attempt 文件夹中的普通文件（保留结构与字节；Runtime 的 marker、seal 不存，链接与特殊文件不跟随并记为
+  未留档），一次事务提交后用新连接读回，逐项核对路径、大小与 SHA-256，再由代码写出收据。`run_status` 是运行自身的结果，
+  `archive_status`（`verified`、`write_failed`、`readback_failed`）是留档结果，两者分开；留档失败时现场不动。
+- `agent-runtime-archive read --root ROOT --receipt RECEIPT [--view summary|output|log] [--extract-to NEW_DIR]`：
+  从数据库重新读回并核对，返回存档的记录（输出、失败、完整执行日志）与文件索引，`--extract-to` 还原全部文件。
+  现场删除后同样可读。
+- `agent-runtime-archive cleanup --root ROOT --receipt RECEIPT [--query] [--hold]`：再次从数据库读回核对（收据里的
+  状态不作为依据），确认现场文件仍与留档一致，然后只把本次列出的 Attempt 交给 `maintain_attempt_workspaces`
+  （`retention_seconds=0`，即封存后不再等待；仍要求执行结束、进程停止已确认、已封存、无活跃租约）。`--hold` 表示下游
+  仍在使用而保留；现场有链接、留档后有新文件或读回失败时都保留并说明原因。项目目录、业务数据与留档行从不删除。
+- 项目目录中的业务产出不在 Attempt 内，不被复制进留档，也不被清理；需要保存时由项目自己处理。
+- 完整步骤见[运行留档与本次清理](docs/agent_runtime_registration_runbook.md#archive-test-run)，可运行样例见
+  [同节样例](docs/agent_runtime_registration_runbook.md#archive-test-run-example)。
 
 <a id="token-usage"></a>
 
 ### 用量与 token 含义 / Token usage
 
-| 字段 | 含义 | Claude CLI 来源 | Codex CLI 来源 |
-| --- | --- | --- | --- |
-| `input_tokens` | 输入总量，**包含缓存**；与 dev10 含义相同 | 普通输入、缓存读取、缓存创建三项都已报告时的和，否则未知 | Codex 报告的 `input_tokens` |
-| `ordinary_input_tokens` | 非缓存的普通输入（dev11 新增） | Claude 原始 `input_tokens` | 未知（`null`） |
-| `cache_read_tokens` | 缓存读取，属于输入总量 | `cache_read_input_tokens` | `cached_input_tokens` |
-| `cache_creation_tokens` | 缓存创建，属于输入总量 | `cache_creation_input_tokens` | 已报告时记录，否则未知 |
-| `output_tokens` | 输出，单独计算 | `output_tokens` | `output_tokens` |
+| 字段 | 含义 | Claude CLI 来源 | Codex CLI 来源 | Antigravity CLI 来源 |
+| --- | --- | --- | --- | --- |
+| `input_tokens` | 输入总量，**包含缓存**；与 dev10 含义相同 | 普通输入、缓存读取、缓存创建三项都已报告时的和，否则未知 | Codex 报告的 `input_tokens` | 未知：agy 的 `input_tokens` 是否含缓存读取尚未确立 |
+| `ordinary_input_tokens` | 非缓存的普通输入（dev11 新增） | Claude 原始 `input_tokens` | 未知（`null`） | 未知 |
+| `cache_read_tokens` | 缓存读取，属于输入总量 | `cache_read_input_tokens` | `cached_input_tokens` | 未知（原始值保留在 trace） |
+| `cache_creation_tokens` | 缓存创建，属于输入总量 | `cache_creation_input_tokens` | 已报告时记录，否则未知 | 未知 |
+| `output_tokens` | 输出，单独计算 | `output_tokens` | `output_tokens` | `output_tokens`（已含 `thinking_tokens`，不再相加） |
 
 未知值是 `null`，不是零；普通输入不由总量减缓存推算，总量与缓存子集也不再相加。四项输入都已知时，
 `input_tokens` 等于普通输入、缓存读取与缓存创建之和。Test Run 结果的 `usage`、执行记录与
@@ -450,6 +578,7 @@ Runtime 只为宿主的 `--command-permit` 渲染 `Bash(<permit>)` 允许规则�
 
 | 能力 | Windows | macOS | Linux |
 | --- | --- | --- | --- |
+| 原生项目指令、业务 skills 与宿主 Shell | Claude 与 Codex 的 `code_change`／`mcp_data` 要求；CLI 原生发现项目指令和 skills，传递选定 MCP，Shell 使用宿主权限 | `project_directory`、`native_project=True`；Codex 另选 `codex_execution_mode="host"`。项目指令指定业务 Python。完整条件见[原生项目模式](#native-project) |
 | 冻结材料与只读依赖 | 支持 | 支持 | 支持 |
 | 原生 Read／Grep／Glob／Edit／Write、按许可的 Bash | 支持（Bash 需要 Git Bash） | 支持 | 支持 |
 | 声明的 MCP 连接 | 支持 | 支持 | 支持 |
@@ -464,8 +593,9 @@ Module）在 Windows 上通过同一 CLI 注册和运行。审核调用方若在
 
 本开发线只在 Windows 上重新验证；macOS／Linux 两列描述包内实现，不表示本版本已在这些平台测试。
 所有平台的随包 CLI 都未接通生产领域 Gateway（`gateway_read`／`hybrid` 输入）、`managed_attachment`、
-`direct_sandboxed` 工具联网、Codex 逐次命令许可，以及 Codex 无 shell 的 read／search／edit 组合；这些
-请求会在调用前报告不支持。已注册且记录 network `denied` 并含 Shell 的旧 Reviewer 在没有 Claude sandbox 的
+`direct_sandboxed` 工具联网、Codex 逐次命令许可，以及 Codex 无 shell 的 read／search／edit 组合；
+Antigravity 首个绑定只接受 `structured_output` 与 `file_review` 两种形状，显式项目、MCP、callback、
+记录型 `commands` 与 prompt-only JSON 均不在其内。这些请求会在调用前报告不支持。已注册且记录 network `denied` 并含 Shell 的旧 Reviewer 在没有 Claude sandbox 的
 宿主（例如 Windows）上会得到 Claude 自己的 sandbox 拒绝；需要新预设时按
 [升级已有 Reviewer](docs/agent_runtime_registration_runbook.md#upgrade-existing-reviewer) 注册新的定义版本。
 平台细节见 [Claude CLI 工具与宿主环境](docs/agent_runtime_claude_native_tools.md#21-明确的本地工程资源与命令记录)。
@@ -479,7 +609,7 @@ skipped，不算通过：
 
 | 开关 | 开启的用例 | 另需 |
 | --- | --- | --- |
-| `AGENT_RUNTIME_REAL_RUN=1` | 四种常用模式样例（`tests/test_agent_runtime_pattern_examples.py`）、外层 CLI 边界验收（`tests/test_agent_runtime_cli_boundary_acceptance.py`）、Codex workspace、时限与进度等真实运行用例 | 样例与边界验收用 `AGENT_RUNTIME_CLAUDE_BIN`／`AGENT_RUNTIME_CODEX_BIN` 指向原生程序；可选 `AGENT_RUNTIME_CLAUDE_MODEL`、`AGENT_RUNTIME_CODEX_MODEL`、`AGENT_RUNTIME_ACCEPTANCE_EFFORT`、`AGENT_RUNTIME_EXAMPLE_ROOT` |
+| `AGENT_RUNTIME_REAL_RUN=1` | 四种常用模式样例与 `native_project` 样例（`tests/test_agent_runtime_pattern_examples.py`）、外层 CLI 边界验收（`tests/test_agent_runtime_cli_boundary_acceptance.py`）、Codex workspace、时限与进度等真实运行用例 | 样例与边界验收用 `AGENT_RUNTIME_CLAUDE_BIN`／`AGENT_RUNTIME_CODEX_BIN` 指向原生程序；可选 `AGENT_RUNTIME_CLAUDE_MODEL`、`AGENT_RUNTIME_CODEX_MODEL`、`AGENT_RUNTIME_ACCEPTANCE_EFFORT`、`AGENT_RUNTIME_EXAMPLE_ROOT` |
 | `RUN_PROVIDER_INTEGRATION=1` | 较早的 Provider smoke 用例：原生结构化输出（`-k live`）、Claude 原生工具真实用例、`--example` 多 Agent 样例（仅 macOS/Linux）等 | 已登录的 CLI；部分用例另需各自说明的变量 |
 
 ```powershell
@@ -490,25 +620,7 @@ python -B -m pytest -q -rs -p no:cacheprovider tests/test_agent_runtime_pattern_
 
 Provider 调用可能计费。同一宿主上不要并行启动多批真实用例。
 
-## 第一次使用：先看运行配置与职责
-
-Runtime 把任务定义、运行环境、执行配置和执行记录分开管理。外部调用者不需要从生产代码里
-拼装这些部分，也不需要为每个 Reviewer 另配一套底座。
-
-| 组成 | 负责方 | 外部调用者需要知道什么 |
-| --- | --- | --- |
-| Module / ModuleReviewer / Workflow | Registry；任务 owner 提供 prompt、schema 与业务含义 | Module 是通用任务定义；ModuleReviewer 继承固定默认能力；单节点 Workflow 默认与 Module 同名 |
-| root、Python、程序、材料及依赖 | Foundation 做 setup；Invocation 使用运行资源；宿主提供资源与授权 | Python 默认固定为启动 Runtime 的当前环境；root 不自动授权读取整个项目，也不绑定模型 |
-| Execution Profile / Variant | Execution.prepare 生成，Registry 承载准确定义 | Module 决定能力要求；transport、模型、effort 与同步运行时限逐项取本次调用、该 Workflow 的参数文件、workspace 参数文件，最后是 Runtime 默认；无需调用者手拼 Profile |
-| CLI 与工具、Attempt 和结果 | Invocation 负责实际调用及原始记录；Execution 负责执行生命周期 | 工具错误与整次执行失败分开；业务是否通过由任务 owner 校验 |
-| 记录、恢复与查询 | Ledger / Durability / Inspection | 普通自测不依赖 PG；未请求持久化时返回本次记录并在本地留档 Attempt 文件夹，不承诺跨进程恢复 |
-
-**完整运行配置、默认值、接口字段与责任边界**见[由代码导出的 Runtime run profile](docs/agent_runtime_reviewer_api.md#runtime-run-profile)。
-该页先给整体组成，再列真实的 Module、ModuleReviewer 默认、ExecutionProfileRelease、Variant、
-执行入口和 CLI 参数。完整值来自代码与 docstring，不是另一份手工 Profile 配置。
-
-`agent-runtime-test-run --help` 同时显示职责摘要和当前 Python 路径。Runtime CLI 管注册、执行和查询；
-Portable CLI 管审核对象的准备与结果校验，两套 CLI 保持分开。宿主不复制模型启动或日志解析逻辑。
+<a id="start-by-task"></a>
 
 ## 按任务开始 / Start by task
 
@@ -517,18 +629,21 @@ Portable CLI 管审核对象的准备与结果校验，两套 CLI 保持分开�
 | 我想做什么 | 从哪里开始 |
 | --- | --- |
 | 刚 clone 仓库，安装 Runtime 与配套 Skills | [Clone 后安装 Runtime 和 Skills](#clone-and-install-skills)：选定项目与 Python 环境，安装包、setup、验证三份 Skills |
+| 准备新项目或补齐 CLI／MCP 配置 | `agent-runtime-setup --root DIR --provider claude\|codex\|both`，见[项目 setup](docs/agent_runtime_registration_runbook.md#local-runtime-setup) |
 | 在指定 root 使用 Runtime 工具 | [轻量运行前 setup](docs/agent_runtime_registration_runbook.md#local-runtime-setup)；现有命令自动完成，无需另装 Skill |
 | 注册新的 Reviewer / register a new reviewer | [准备资料与注册](docs/agent_runtime_registration_runbook.md#new-reviewer) |
 | 升级已有环境，继续使用旧 Reviewer | [升级与一次性采用](docs/agent_runtime_registration_runbook.md#upgrade-existing-reviewer)：安装包、登记新定义、回读并验证 |
 | 用宿主环境首次测试 Reviewer / test a reviewer | [从已注册定义执行测试](docs/agent_runtime_registration_runbook.md#test-reviewer) |
 | 查看 Claude 运行中状态 / watch a running Claude review | [运行中安全摘要](docs/agent_runtime_registration_runbook.md#watch-claude-run)：进程存活、耗时、输出字节与当前事件，不含正文 |
 | 查询审核结果、执行日志或失败 / inspect a review | [按执行 ID 查询](docs/agent_runtime_registration_runbook.md#inspect-reviewer) |
+| 让 Agent 带着项目指令、项目 Skills、已有 MCP 与项目 Python 在自己的项目里工作 | [原生项目模式](#native-project)：`--native-project`（Codex 另加 `--codex-execution-mode host`） |
 | 选择纯输出、文件审核、代码开发或 MCP 取数的配置 | [四种常用模式](#four-common-patterns)、`module_requirements_preset` 与随包 Skill `agent-runtime-usage` |
 | 在新宿主上先跑通四种模式 | [可运行样例](#runnable-examples)：`python -m agent_runtime.testing.conformance_pattern_examples run ...` |
 | 清理已留档的 Attempt 文件夹 | [任务材料、留档与宿主清理](#retention-and-cleanup) |
-| 查完整运行配置、接口参数、返回值和错误 | [自动生成的 Module 与执行 API reference](docs/agent_runtime_reviewer_api.md) |
+| 运行后存入中央留档、读回还原，并只清理本次 Attempt | [中央留档与本次清理](#central-run-archive)：`agent-runtime-archive save\|read\|cleanup`；[可运行样例](docs/agent_runtime_registration_runbook.md#archive-test-run-example) |
+| 查一次运行的组成与职责、默认值、接口参数、返回值和错误 | [由代码导出的 Runtime run profile](docs/agent_runtime_reviewer_api.md#runtime-run-profile)，再按该页链接查 Module 与执行 API；`agent-runtime-test-run --help` 显示职责摘要与当前 Python 路径 |
 | 开发 Runtime，运行回归测试 | [开发者能力与测试样例](docs/agent_runtime_capabilities.md) |
-| 运行多 Agent callback 示例或独立评价（仅 macOS/Linux） | [宿主受限的高级 callback 样例](docs/agent_runtime_capability_runbook.md#宿主受限的高级callback样例)；同一个 `agent-runtime-test-run` 命令提供 `--example` |
+| 运行多 Agent callback 示例或独立评价（仅 macOS/Linux，需要 `cli_tools`；Windows 不支持） | [宿主受限的高级 callback 样例](docs/agent_runtime_capability_runbook.md#宿主受限的高级callback样例)；同一个 `agent-runtime-test-run` 命令提供 `--example` |
 
 注册保存 Module/Workflow 定义；执行时由 Runtime 固定准确版本并准备本次配置，不要求先给宿主
 root 绑定模型或 Profile。宿主提供资源、授权和薄操作入口，不能把测试 fixture 当作正式配置。
@@ -538,13 +653,6 @@ root 绑定模型或 Profile。宿主提供资源、授权和薄操作入口，�
 API reference 给出准确参数、默认值、返回值与错误；runbook 和操作 Skill 连接这些接口；同版本
 源码中的测试说明如何验证相应能力。工作记录和历史交付报告不承担必需的接口说明。调用者仍需
 提供自己的任务定义、输入、程序与资源，不能把缺少这些输入理解成需要寻找作者的历史聊天。
-
-随包样例分两类。四种常用模式样例（[可运行样例](#runnable-examples)）各用一个普通 Module 与普通 Test Run，
-在所有宿主上运行，检查真实的文件效果、执行日志与 MCP fixture 审计。`--example` 多 Agent 样例使用显式选择的
-callback 工具，是宿主受限的高级扩展（macOS/Linux，需要 `cli_tools`；Windows 不支持）：
-`agent_capability_example` 包含查询、写作、并行审核、修订及同进程等待事件；`agent_evaluation_example`
-让被测 Agent 自行请求任务内审核，再由独立 Agent 依据 Runtime 记录评价。工具读取的 fixture 与生产 Gateway 分开，
-样例不取得生产数据权限。源代码中的替身测试和显式开启的真实 Provider 测试分别报告。
 
 Agent Runtime is a reusable management and execution layer for stateful AI
 agents. It is the part of an agent framework that answers operational
@@ -1107,211 +1215,6 @@ Workflow API；反过来，接口支持 Workflow-bound 请求也不证明宿主�
 `standalone` purpose 当前不由这两个内核入口接纳；定义的 `standalone_allowed` entry policy
 与执行 purpose 是不同字段。具体请求仍须通过定义、资源和 Adapter 的实际校验。
 
-<a id="current-module-execution-admission-matrix"></a>
-
-### 随包执行路径的工具与资源支持
-
-以下按外部调用者实际提供的资源区分能力，适用于普通 Module，也适用于继承默认要求的
-ModuleReviewer。实际适用项以 Module 的固定要求为准；提供资源或更换模型不隐含扩展能力，
-不支持的要求不会被静默删掉。
-
-| 需要的能力 | 当前路径 | 调用者从哪里提供 |
-| --- | --- | --- |
-| 无任务工具的内联模型调用 | Claude CLI；或显式选择 Codex 的 `tool_free`、`inline`、空工具、workspace `none`、network `denied` 组合 | 已注册 Module 的要求；模型、effort 和程序路径使用 [执行参数](docs/agent_runtime_reviewer_api.md#run_local_workflow_test) |
-| 原生读取、搜索、编辑和 Shell | Claude 的 `agent`、`inline`、network `denied` 或 `provider_managed` 路径按记录的工具精确映射（read：Read；search：Grep、Glob；edit：Edit、Write；shell：Bash），不另加工具；workspace 为 `none`、私有草稿或调用者显式提供的 `project_directory`（`explicit_project_read_write`）。Shell 命令只由宿主 `command_permits` 预批准（`Bash(<permit>)`），Claude 自身的只读命令按其文档始终可运行，不默认开放完整 Shell。Codex workspace v5：read、search、edit 由 shell 承担，故须含 `shell`；只声明 MCP 时 shell 关闭；Codex 不支持逐次命令许可（`ADAPTER_CAPABILITY_UNSUPPORTED`） | 固定 Module 要求；本次材料与依赖通过 `--resources` / Python 参数提供，项目目录与命令许可通过 `--project-directory` / `--command-permit` 提供，见 [ClaudeAdapter](docs/agent_runtime_reviewer_api.md#claudeadapter) 与 [Codex workspace 执行](docs/agent_runtime_claude_native_tools.md#4-codex-workspace-执行reviewer-默认环境) |
-| 冻结材料与只读依赖 | 所有宿主：材料以只读副本放入 Attempt 文件夹并在运行后校验；Windows 不表示可执行位 | `--material-root` 加 `--material`／`--all-materials`（[prepare_material_files](docs/agent_runtime_reviewer_api.md#prepare_material_files) 按实际 bytes 计算），或 `--resources` 中的 `material_root`、`material_files`、`read_only_dependencies` |
-| 按 ID 执行并记录本地工程命令 | 仅 macOS（sandbox-exec）上的 Claude 路径与 Codex workspace v5；需要 `shell`、私有草稿和 `cli_tools` 依赖；普通 Shell 不被限制成该命令列表 | `--resources` 中的 `commands` 或 Python `commands` 参数；[原生命令说明](docs/agent_runtime_claude_native_tools.md#21-明确的本地工程资源与命令记录) |
-| 使用宿主已配置的 MCP 连接 | Module 声明 `mcp__<name>`；只传递声明的连接（Claude 经私有 `mcp.json`，Codex 经 `-c mcp_servers.<name>` 并按次关闭未声明的宿主服务器）；凭据只以环境变量名引用，trace 只记录名称与配置哈希 | `root/.runtime/config.json` 的 `mcp_servers.<transport>` |
-| 调用宿主明确提供的本地函数（callback） | macOS／Linux 上的 Claude 自测路径，通过受控进程桥（Windows 没有 Unix-domain socket，打开会话前报告不支持）；工具名匹配 Module/Profile 的非原生工具，工具 schema 随 factory 定义固定；使用 `cli_tools` | Python `tool_session_factory`（或图入口的 `tool_session_factory_for_node`）；[函数及参数合同](docs/agent_runtime_reviewer_api.md#run_local_workflow_test)与[图调用合同](docs/agent_runtime_reviewer_api.md#localworkflowmodulebridge) |
-| 生产领域 Gateway、`gateway_read` / `hybrid` 输入、`direct_sandboxed` 工具联网，或 Codex 只有 read/search/edit 而无 shell 的工具组合 | 随包 CLI 尚未接通这些路径；通用协议或候选实现的存在不代表可直接调用 | 返回所选入口/Adapter 的具体不支持结果，交对应集成维护者，不改 Module 要求或换 transport 来掩盖缺口 |
-
-Callback 是可信宿主程序提供的实际函数会话，不是从任务 JSON 加载代码或服务。普通 CLI 的
-资源 JSON 不接收 factory，`--example` 只使用样例自己的固定 factory；自定义 callback 使用上表的
-Python 接口。生产领域 Gateway 另有外部授权和数据访问合同，本地 callback 不提供这种授权。
-
-workspace `none` 只表示没有模型可写任务草稿，Runtime 仍可创建隔离的进程目录。network `denied`
-限制任务工具联网，不禁止 Provider 完成模型调用所需的连接；`provider_managed` 表示 Runtime 不另加
-工具联网限制，由 CLI 自身与宿主配置决定。已保存的 `denied`、`gateway_only`、`direct_sandboxed`
-保持原意。宿主的 Claude 用户/项目设置与 Codex `config.toml`、execpolicy 规则正常加载，其限制照常生效。
-原生工具、本地命令和 callback 都不能
-自动获得领域操作许可；真实授权拒绝保留其来源。资源失效、关闭的 fence 或必要记录失败仍按各自
-合同处理，不能靠捕获一个工具异常取得继续执行的权限。
-
-Claude permission events and ordinary tool failures are recorded independently
-of the invocation outcome. Codex completion requires a successful process, an
-unambiguous successful Provider terminal and valid output. Both CLI paths retain
-captured stdout/stderr and public tool events in the existing private trace,
-including failure and cancellation prefixes. `read_execution_log` returns these
-facts with explicit capture or content limitations. A valid business `non_pass`
-or `blocked` response remains a completed technical execution, not a reason to
-retry the model. Tool, Provider, Attempt and business outcomes stay distinct.
-
-Ordinary execution extracts basic metadata and the final result, and archives
-raw logs; it does not parse tool behavior to decide success or retry. Inspection's
-`read_execution_log` parses detailed tool events only when private content is
-requested. Historical traces that already contain `tool_log` retain their saved
-interpretation. A log gap affects the view's completeness, not the recorded
-Attempt status. The Test Run API and CLI request this detailed view
-before their temporary resources close; a behavioral assessment remains separate.
-
-Claude's current binding is `claude_cli_adapter@v4`. It runs with
-`--permission-mode dontAsk`, the user's own Claude settings loaded, the recorded
-tools mapped exactly and only Runtime's allow rules (Read/Grep/Glob, `Edit(<declared
-folder>/**)`, `Bash(<permit>)`) added. Its complete stdin prompt,
-including relative resource locations, is frozen before the Prompt Envelope is
-stored. Old Claude v1/v2/v3 and `claude_cli_native_tools_executor@v2` records remain
-readable, and committed requests replay without an Adapter; new executions use
-an explicitly prepared current Profile. Hosts must migrate their current entry
-points before adopting this package rather than reinterpret saved bindings.
-
-The Test Run CLI accepts `--material-root DIR` with repeatable `--material FILE`
-(or an explicit `--all-materials`) for task files whose relative paths, SHA-256
-and executable flags code computes from the actual bytes, and `--resources FILE`
-for an explicitly frozen
-file tree, read-only dependency directories and task-supplied command IDs,
-`--project-directory DIR` for an `explicit_project_read_write` Module and
-`--command-permit RULE` (repeatable) for host-prepared Shell permits. Frozen
-files and dependencies work on every host; declared commands need macOS, where
-Claude can use, when commands are
-supplied, an additional Runtime-owned local MCP tool. The `cli_tools` extra is
-required for the local command or task-callback bridge. Each selected command runs in its own
-actual OS sandbox under the same live resource guard; it supplies real argv,
-cwd, returncode and captured bytes. Ordinary Bash is not restricted to this
-command list, and the list does not define a business verdict or domain grant.
-The original CLI observations remain available alongside parent-process facts;
-only uniquely proven correlations become one unified call.
-
-Optional `root/.runtime/config.json` stores executable and read-only dependency
-locators, the Attempt folder root (`attempt_workspace_root`), the host's
-selectable MCP connections (`mcp_servers`) and named PostgreSQL release stores
-(`release_stores`: `{"name": {"database_url_env": VAR, "schema": SCHEMA}}`, the
-DSN staying in the named environment variable), not models, Profiles, task
-material, DSNs or database permissions. Explicit
-arguments override the selected resource defaults, including an empty dependency
-tuple. Unused defaults do not expose resources to tool-free Modules. See
-`load_runtime_config` and `run_local_workflow_test` in the generated API
-for the exact fields, relative-path rules and error boundaries. This ordinary
-self-test writes no definition store; it reads PostgreSQL only when the caller
-selects an exact PostgreSQL definition, and never writes it. Each Attempt folder
-is retained under `attempt_workspace_root` (default `root/.runtime/attempt_workspaces`)
-with `archive/execution_record.json`, and sealed when the run ended with a
-confirmed process stop; `record["attempt_workspaces"]` reports each folder.
-`maintain_attempt_workspaces` queries or removes sealed, expired folders under
-host retention policy. A caller `project_directory` is never archived, sealed
-or cleaned.
-
-Transport, model, effort and synchronous run_timeout_seconds are resolved per parameter from four layers: this
-call's arguments, then `root/.runtime/execution_parameters/workflows/<workflow_id>.json`,
-then `root/.runtime/execution_parameters/workspace.json`, then the Runtime
-default (`claude_cli`, `claude-opus-5[1m]`, `xhigh`). Both files are optional
-JSON objects. Format `runtime_execution_parameters_v1` retains the three model
-fields. Format `runtime_execution_parameters_v2` also accepts run_timeout_seconds,
-an integer from 1 to 86400 (default 1200). Null, bool, fractional, out-of-range
-and unknown values fail instead of being ignored:
-
-```json
-{"schema_version": "runtime_execution_parameters_v2", "model_id": "claude-fable-5-1[1m]", "reasoning_profile": "xhigh", "run_timeout_seconds": 3600}
-```
-
-Parameter files never select a definition version; pass `--version` or an exact
-ref/hash per call, otherwise the latest registered local version is used. A
-present file that is invalid, or contains any other key, fails preparation
-instead of falling through. A model or effort written in a layer whose transport
-differs from the resolved transport is rejected, so a Claude model is never sent
-to Codex. The Test Run record lists each parameter's source layer and file hash
-in `execution_parameter_sources`.
-
-Use `--run-timeout-seconds 3600` for a one-call override. The work deadline starts
-at the synchronous entry, includes preparation, managed same-process children
-and any retries actually scheduled, and never extends a parent deadline. The
-nominal Profile timeout stays immutable; Invocation also enforces the remaining
-live allowance. `execution_budget` reports requested/effective durations, elapsed
-time and parent lineage. Bounded cleanup may finish after the work deadline.
-Cross-process children and persisted Workflow lifetimes are not covered.
-Process control is outer-only: Runtime stops the process it started (POSIX: its
-session group with killpg; Windows: TerminateProcess) and confirms its exit within
-a bound, otherwise it reports `cleanup_error` and retains its private folders.
-Processes the CLI starts itself are the CLI's own; a pipe one of them keeps open
-is reported as `output_streams_closed=false`, a log-completeness fact rather than
-a stop failure. psutil is only a test dependency.
-
-New executions require `module_execution_requirements_v2`, which keeps fixed
-capabilities separate from per-call time. Follow the [existing Reviewer upgrade procedure](docs/agent_runtime_registration_runbook.md#upgrade-existing-reviewer)
-to register the unchanged approved source once under a new definition version, then reuse it across time choices. Historical
-definitions and completed records retain their bytes and hashes; they are not
-silently upgraded. Reading or replaying old completed results starts no Provider.
-
-Opt-in live smoke tests cover the remaining CLI implementations. The Codex
-test below covers the tool-free path; the Codex workspace cases are in
-`tests/test_agent_runtime_codex_workspace.py`. Claude CLI's native-tool cases,
-the Codex workspace environment and their prerequisites are documented in
-`docs/agent_runtime_claude_native_tools.md`; none invokes Claude Agent SDK.
-The four common patterns have opt-in real CLI cases in
-`tests/test_agent_runtime_pattern_examples.py` (the packaged examples) and
-`tests/test_agent_runtime_cli_boundary_acceptance.py`, enabled by
-`AGENT_RUNTIME_REAL_RUN=1` with `AGENT_RUNTIME_CLAUDE_BIN` or
-`AGENT_RUNTIME_CODEX_BIN` naming the native program; without them the cases are
-skipped, not passed. See [Live-run gates](#live-run-gates) for the separate
-`RUN_PROVIDER_INTEGRATION=1` smoke tests.
-
-For a registered Module, the `agent-runtime-test-run` command also accepts
-`--transport codex_cli --model MODEL --effort EFFORT`. Codex has no default
-model or effort; they come from this call or the same parameter-file layer as
-the transport. Omitting every layer keeps the Claude defaults. A workspace
-parameter file that sends every Test Run to Codex:
-
-```json
-{"schema_version": "runtime_execution_parameters_v1", "transport_kind": "codex_cli", "model_id": "gpt-6-astra", "reasoning_profile": "xhigh"}
-```
-
-A tool-free Module binds `codex_cli_agent_executor@v5`. An agent Module (tools
-including shell with a private draft or an explicit project directory, or only
-declared MCP connections with shell off; denied or provider-managed tool network;
-inline input) binds `codex_cli_agent_workspace_executor@v5`. By default (`codex_execution_mode="configured"`), Codex's permission
-profile extends its own read-only base, declares the Attempt's materials folder
-as readable (the intended input, not claimed as enforcement) and grants writes
-only to the declared folder; tool network is switched off only for a recorded
-`denied`. On Windows the Codex sandbox runs commands under its own identity and
-Codex adds access only for write folders, so Attempt task folders are created to
-inherit the host's access (POSIX keeps 0o700); roots under a protected temp folder
-or redirected application data are not reachable by that sandbox.
-Codex uses the host's own login and configuration (CODEX_HOME passes through;
-config.toml and execpolicy rules load), with project docs, Skills, plugins,
-agents and web search suppressed and `approval_policy="never"`. Before each
-exec the same binary lists its configured MCP servers and every server the call
-does not declare is disabled for that call (`host_mcp_disabled` in the trace);
-the call is refused before exec (`ADAPTER_BINDING_UNAVAILABLE`) if Codex would
-enable a different set. The listing's content is never recorded, including
-when the listing process itself fails.
-For an explicitly authorized `code_change` task, pass `codex_execution_mode="host"`
-(or `--codex-execution-mode host`) with the project directory. This native host
-choice uses `-s danger-full-access` and the host user permissions. The directory
-is task scope, not an OS-enforced boundary. It requires Codex agent, inline input,
-`explicit_project_read_write`, `provider_managed`, and exactly read/search/edit/shell;
-material packages, extra dependencies, command extensions and MCP are refused.
-The option is per-call only, with no parameter-file or raw-flag override. Actual
-mode, argv, cwd and tool configuration are recorded in the existing provider trace.
-The task owner can include non-secret concrete tool and application entry points
-in the ordinary input before Runtime freezes the complete prompt.
-
-The real process launch is ordered against temporary-resource closure; no
-Product Authorization decision is fabricated for this path.
-
-The tool-free v5 and workspace v5 bindings are current. Workspace v5 adds the explicit host choice while preserving configured-mode defaults. Historical
-Profiles and committed results remain readable; exact committed requests can replay
-without the retired Adapter. New execution requires an explicitly prepared current
-Profile rather than rewriting a saved record. The earlier workspace candidate
-(`codex_cli_agent_workspace_executor@v2`) stays readable and is refused by
-binding. A Module's required tools are never dropped to fit either path. See
-the generated Codex API and registration runbook for the actual resource
-parameters, errors and supported combinations.
-
-```bash
-RUN_PROVIDER_INTEGRATION=1 python -m pytest \
-  tests/test_agent_runtime_native_structured_output.py \
-  -k 'live_codex'
-```
-
 The development version remains appropriate because a Product host must still
 supply and validate its authentication, authorization, governed-data, and
 deployment assembly. The shadow `ModuleExecutor` compatibility seam is retired:
@@ -1328,3 +1231,27 @@ contract. PostgreSQL execution authorities pin the resolved profile in Variant
 and Attempt facts rather than creating a second control-plane selection
 authority. A production host must close and test that registered selection
 handoff for its own start path.
+
+<a id="current-module-execution-admission-matrix"></a>
+
+### 随包执行路径的工具与资源支持
+
+能力以 Module 注册时固定的要求为准，适用于普通 Module 与继承默认要求的 ModuleReviewer。提供资源或更换模型
+不隐含扩展能力；所选入口或 Adapter 不支持的要求在调用前报告，不会被静默删掉。本地自测不编造产品授权决定。
+各项说明的位置：
+
+| 需要了解 | 说明所在 |
+| --- | --- |
+| 四种预设的固定要求、本次调用提供的资源与各 CLI 差异 | [预设参数与 CLI 差异](#preset-reference)、[原生基础文件读写](#native-file-io) |
+| 原生项目指令、业务 skills 与宿主 Shell | [原生项目模式](#native-project)、[原生项目执行](docs/agent_runtime_claude_native_tools.md#6-native-project-execution) |
+| 材料、只读依赖、Attempt 留档与清理 | [任务材料、留档与宿主清理](#retention-and-cleanup)、[中央留档与本次清理](#central-run-archive) |
+| 平台差异、记录型 `commands`、callback，以及尚未接通的生产 Gateway、`gateway_read`／`hybrid` 输入、`direct_sandboxed` 与 Codex 无 shell 的文件工具组合 | [平台与显式扩展限制](#platform-and-extension-limits)、[本地命令与 callback](docs/agent_runtime_claude_native_tools.md#21-明确的本地工程资源与命令记录) |
+| Claude 的工具映射、`dontAsk` 与允许规则、日志及失败结果 | [Claude 参数与材料](docs/agent_runtime_claude_native_tools.md#2-参数与材料) |
+| Codex configured／host 模式、权限 profile、MCP 选择与 Windows sandbox 条件 | [Codex workspace 执行](docs/agent_runtime_claude_native_tools.md#4-codex-workspace-执行reviewer-默认环境) |
+| Antigravity 首个绑定 | [Antigravity 执行](docs/agent_runtime_claude_native_tools.md#5-antigravity-执行首个绑定) |
+| 当前绑定；旧 Profile 与已提交结果仍可读取、已提交请求按原记录重放，新调用只用明确准备的当前 Profile | Claude 见[使用 Runtime 准备结果](docs/agent_runtime_claude_native_tools.md#12-使用-runtime-准备结果)，Codex 见 [Codex workspace 执行](docs/agent_runtime_claude_native_tools.md#4-codex-workspace-执行reviewer-默认环境)；规则见随包 Design 08 §3.11.3 与 §5.3 |
+| `root/.runtime/config.json` 的字段、相对路径与显式参数优先 | [load_runtime_config](docs/agent_runtime_reviewer_api.md#load_runtime_config) |
+| transport、模型、effort 与运行时限的四层来源，参数文件格式与示例 | [run_local_workflow_test](docs/agent_runtime_reviewer_api.md#run_local_workflow_test)、[首次测试与再次调用](docs/agent_runtime_registration_runbook.md#test-reviewer) |
+| 工作期限、进程停止与清理 | [run_local_workflow_test](docs/agent_runtime_reviewer_api.md#run_local_workflow_test)；随包 Design 08 §3.4.3 |
+| 已有定义采用 `module_execution_requirements_v2` | [升级已有 Reviewer](docs/agent_runtime_registration_runbook.md#upgrade-existing-reviewer) |
+| 真实 CLI 用例 | [真实 CLI 用例开关](#live-run-gates) |

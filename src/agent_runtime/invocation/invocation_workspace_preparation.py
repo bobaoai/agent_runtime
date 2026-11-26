@@ -390,8 +390,10 @@ def maintain_attempt_workspaces(
     non-blocking lease: the path must be an ordinary directory (no link or
     reparse point) whose marker names the id; its identity is captured; the seal
     record and the host facts are checked; ``retention_seconds`` (None means no
-    automatic deletion) is compared using the seal's ``effective_at_utc`` and the
-    host's ``observed_at_utc``, both RFC 3339 UTC instants from the host clock.
+    automatic deletion; 0 means no extra wait once the seal applies) is compared
+    using the seal's ``effective_at_utc`` and the host's ``observed_at_utc``, both
+    RFC 3339 UTC instants from the host clock; an observed instant before the
+    seal is still retained as inconsistent time evidence.
     With intent ``cleanup`` and no retained reason, the folder is removed through
     the host disposal bound to the captured identity, lifting read-only state
     only inside the owned tree; a replaced folder is never deleted. A disposal
@@ -403,8 +405,8 @@ def maintain_attempt_workspaces(
     """
     if intent not in _INTENTS:
         raise ValueError("intent must be query or cleanup")
-    if retention_seconds is not None and (type(retention_seconds) is not int or retention_seconds < 1):
-        raise ValueError("retention_seconds must be a positive integer or None")
+    if retention_seconds is not None and (type(retention_seconds) is not int or retention_seconds < 0):
+        raise ValueError("retention_seconds must be a non-negative integer or None")
     observed = _parse_utc_instant("observed_at_utc", observed_at_utc)
     if not isinstance(facts, Mapping):
         raise ValueError("facts must map Attempt ids to AttemptWorkspaceRetentionFacts")

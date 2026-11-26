@@ -695,6 +695,18 @@ def test_maintenance_retains_with_each_stated_reason(tmp_path, change, reasons):
 
 
 @pytest.mark.deterministic
+def test_zero_retention_cleans_at_the_seal_instant_and_none_still_keeps(tmp_path):
+    root = tmp_path / "attempts"
+    folder = _attempt(root)
+    (result,) = _maintain(root, retention=0, observed="2025-12-31T23:59:59Z")
+    assert result.retained_reasons == ("time_evidence_inconsistent",) and folder.is_dir()
+    (result,) = _maintain(root, retention=None, observed="2026-01-01T00:00:00Z")
+    assert result.retained_reasons == ("retention_policy_absent",) and folder.is_dir()
+    (result,) = _maintain(root, retention=0, observed="2026-01-01T00:00:00Z")
+    assert result.outcome == "deleted" and not folder.exists()
+
+
+@pytest.mark.deterministic
 @pytest.mark.parametrize("case", ["unsealed", "foreign_marker", "missing", "linked", "leased"])
 def test_maintenance_retains_unconfirmed_ownership_seal_or_live_lease(tmp_path, case):
     root = tmp_path / "attempts"
@@ -727,7 +739,7 @@ def test_maintenance_retains_unconfirmed_ownership_seal_or_live_lease(tmp_path, 
 
 
 @pytest.mark.deterministic
-@pytest.mark.parametrize("change", [dict(intent="delete"), dict(retention=0), dict(observed="2026-01-01 00:02:00"),
+@pytest.mark.parametrize("change", [dict(intent="delete"), dict(retention=-1), dict(observed="2026-01-01 00:02:00"),
                                     dict(facts={"attempt_a": object()}), dict(facts={"../escape": _READY})])
 def test_maintenance_validates_every_input_before_touching_a_path(tmp_path, change):
     root = tmp_path / "never_created"

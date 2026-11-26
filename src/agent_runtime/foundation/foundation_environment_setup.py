@@ -132,15 +132,48 @@ def validate_release_store_entries(entries) -> dict[str, dict]:
     return result
 
 
+_RUN_ARCHIVE_FIELDS = frozenset({"host", "port", "database", "user", "schema", "password_credential"})
+_CREDENTIAL_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+
+
+def validate_run_archive_binding(entry) -> dict | None:
+    """Validate the host's one central Runtime run-archive binding, or None when absent.
+
+    ``entry`` is ``{"host", "port", "database", "user", "schema",
+    "password_credential"}``: the existing central PostgreSQL server, database
+    and application role, the Runtime archive schema, and the name of the
+    central credential that holds that role's password. Only the name is
+    configured; the password is read privately by the code that opens the
+    archive. This binding is separate from release_stores, which locate
+    registered definitions. Returns a private copy.
+    """
+    if entry is None:
+        return None
+    if type(entry) is not dict or set(entry) != _RUN_ARCHIVE_FIELDS:
+        raise ValueError("run_archive needs exactly host, port, database, user, schema and password_credential")
+    for name in ("host", "database", "user"):
+        value = entry[name]
+        if type(value) is not str or not value.strip() or "\x00" in value or len(value.encode("utf-8")) > 255:
+            raise ValueError(f"run_archive {name} must be a non-empty string")
+    port = entry["port"]
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError("run_archive port must be an integer from 1 to 65535")
+    if type(entry["schema"]) is not str or not _RELEASE_STORE_SCHEMA.fullmatch(entry["schema"]):
+        raise ValueError("run_archive schema must be a lowercase PostgreSQL identifier")
+    if type(entry["password_credential"]) is not str or not _CREDENTIAL_NAME.fullmatch(entry["password_credential"]):
+        raise ValueError("run_archive password_credential must be a central credential name")
+    return dict(entry)
+
+
 def load_runtime_config(root: Path) -> dict[str, object]:
     """Read optional host resource defaults from root/.runtime/config.json.
 
     Args:
         root: Host configuration root, never a model read grant. The optional
             JSON object accepts provider_cli_paths, read_only_dependencies,
-            attempt_workspace_root, mcp_servers and release_stores.
+            attempt_workspace_root, mcp_servers, release_stores and run_archive.
             provider_cli_paths maps
-            claude_cli or codex_cli to executable paths; read_only_dependencies is
+            claude_cli, codex_cli or antigravity_cli to executable paths; read_only_dependencies is
             a list of trusted dependency directory paths; attempt_workspace_root
             is where this root's Attempt folders are retained (default
             root/.runtime/attempt_workspaces); mcp_servers maps claude_cli or
@@ -149,13 +182,16 @@ def load_runtime_config(root: Path) -> dict[str, object]:
             connections it declares. release_stores names the host's existing
             PostgreSQL release stores by DSN environment-variable name and
             schema (see validate_release_store_entries), so an operator selects
-            a store by name instead of assembling its locator. Relative locators
-            are resolved against root. Tilde is not expanded.
+            a store by name instead of assembling its locator. run_archive is
+            the one central database binding where agent-runtime-archive saves
+            finished Test Runs (see validate_run_archive_binding). Relative
+            locators are resolved against root. Tilde is not expanded.
     Returns:
         A new dictionary with provider_cli_paths (a mapping to Path values),
         read_only_dependencies (a tuple of Path values), attempt_workspace_root
-        (a Path), mcp_servers (transport to validated entries) and
-        release_stores (name to validated locator). A missing
+        (a Path), mcp_servers (transport to validated entries),
+        release_stores (name to validated locator) and run_archive (the
+        validated binding, or None when not configured). A missing
         config file supplies these defaults. Locators are normalized here; the execution
         consumer checks the existence and type of resources it actually selects.
         Unused provider/dependency defaults never open resources or add tools.
@@ -173,11 +209,16 @@ def load_runtime_config(root: Path) -> dict[str, object]:
         objects, not implicit connections from this configuration.
     """
     root = Path(root).resolve()
+    return _parse_runtime_config(root, _read(_target(root, ".runtime", "config.json")))
+
+
+def _parse_runtime_config(root: Path, body: bytes | None) -> dict[str, object]:
+    """The load_runtime_config result for these config bytes (None: no file) under a resolved root."""
     default_workspaces = root / ".runtime" / "attempt_workspaces"
-    body = _read(_target(root, ".runtime", "config.json"))
     if body is None:
         return {"provider_cli_paths": {}, "read_only_dependencies": (),
-                "attempt_workspace_root": default_workspaces, "mcp_servers": {}, "release_stores": {}}
+                "attempt_workspace_root": default_workspaces, "mcp_servers": {}, "release_stores": {},
+                "run_archive": None}
 
     def unique_object(pairs):
         result = {}
@@ -189,17 +230,17 @@ def load_runtime_config(root: Path) -> dict[str, object]:
 
     document = json.loads(body, object_pairs_hook=unique_object)
     allowed = {"provider_cli_paths", "read_only_dependencies", "attempt_workspace_root", "mcp_servers",
-               "release_stores"}
+               "release_stores", "run_archive"}
     if type(document) is not dict or set(document) - allowed:
         raise ValueError("Runtime config accepts only provider_cli_paths, read_only_dependencies, "
-                         "attempt_workspace_root, mcp_servers and release_stores")
+                         "attempt_workspace_root, mcp_servers, release_stores and run_archive")
     mcp_servers = document.get("mcp_servers", {})
     if type(mcp_servers) is not dict or set(mcp_servers) - {"claude_cli", "codex_cli"}:
         raise ValueError("mcp_servers must map claude_cli/codex_cli to connection entries")
     providers = document.get("provider_cli_paths", {})
     dependencies = document.get("read_only_dependencies", [])
-    if type(providers) is not dict or set(providers) - {"claude_cli", "codex_cli"}:
-        raise ValueError("provider_cli_paths must map claude_cli/codex_cli to resource locators")
+    if type(providers) is not dict or set(providers) - {"claude_cli", "codex_cli", "antigravity_cli"}:
+        raise ValueError("provider_cli_paths must map claude_cli/codex_cli/antigravity_cli to resource locators")
     if type(dependencies) is not list:
         raise ValueError("read_only_dependencies must be a list of directory locators")
 
@@ -215,7 +256,8 @@ def load_runtime_config(root: Path) -> dict[str, object]:
             "attempt_workspace_root": default_workspaces if workspaces is None else locator(workspaces),
             "mcp_servers": {transport: validate_mcp_connection_entries(entries)
                             for transport, entries in mcp_servers.items()},
-            "release_stores": validate_release_store_entries(document.get("release_stores", {}))}
+            "release_stores": validate_release_store_entries(document.get("release_stores", {})),
+            "run_archive": validate_run_archive_binding(document.get("run_archive"))}
 
 
 def _remove(path: Path) -> None:

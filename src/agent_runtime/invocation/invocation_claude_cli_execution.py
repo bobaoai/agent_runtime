@@ -45,11 +45,13 @@ from .invocation_result_assembly import (
 from .invocation_schema_projection import NativeOutputSchemaProjectionError, claude_native_output_schema
 from .invocation_tool_definition import (
     MCP_TOOL_PREFIX, ModuleArtifactHost, callback_tool_names, declared_mcp_connections, runtime_package_version,
+    validate_native_project,
 )
 from ..foundation.foundation_environment_setup import validate_mcp_connection_entries
 from .invocation_provider_tool_execution import ProviderToolSessionBridge
 from .invocation_local_resource_preparation import (
     parse_local_resources, assert_local_materials_unchanged, LocalResourceError, stage_attempt_materials,
+    compose_invocation_prompt, invocation_locations,
 )
 from .invocation_local_command_execution import (
     LocalCommandSession, LOCAL_COMMAND_CLI_TOOL_NAME, provider_private_locations,
@@ -69,6 +71,19 @@ _NATIVE_TOOL_CATEGORIES = {tool: category for category, tools in NATIVE_TOOLS.it
 _WRITABLE_WORKSPACES = ("own_draft_read_write", "explicit_project_read_write")
 _PERMIT = re.compile(r"^[^\r\n)]+$")
 _PREFLIGHT_LIMIT_SECONDS = 30
+# Native project execution: Claude's own Skill tool, PowerShell beside Bash (Claude offers it where its
+# PowerShell tool exists), and, with declared MCP connections, Claude's server-resource and deferred
+# tool-schema surfaces. Settings keep each call independent; nothing else is switched off.
+_NATIVE_PROJECT_SHELL = ("Bash", "PowerShell")
+_NATIVE_PROJECT_MCP_SUPPORT = ("ListMcpResourcesTool", "ReadMcpResourceTool", "ToolSearch")
+_NATIVE_PROJECT_SETTINGS = {"autoMemoryEnabled": False, "disableAllHooks": True}
+
+
+def _native_project_tools(tool_policy, declared_mcp) -> list[str]:
+    """Claude built-in tools offered in native project mode, in recorded tool order."""
+    tools = [tool for name in tool_policy
+             for tool in (_NATIVE_PROJECT_SHELL if name == "shell" else NATIVE_TOOLS.get(name, ()))]
+    return [*tools, "Skill", *(_NATIVE_PROJECT_MCP_SUPPORT if declared_mcp else ())]
 
 
 def _run_cli_preflight(argv: list[str], *, environment: dict[str, str], deadline: float | None) -> str:
@@ -295,6 +310,30 @@ def _extension_settings(*, cwd: Path, materials: Path, cli_temporary: Path, read
     return settings
 
 
+def _call_settings(*, profile, cwd: Path, materials: Path, read_dependencies, write_rule: str | None,
+                   cli_temporary: Path, writable_draft: bool, native_project: bool, mcp_declared: bool,
+                   extension_roots=None) -> dict:
+    """The exact --settings object of one call; execute renders it unchanged. Pure; no IO.
+
+    extension_roots (private roots of the command/callback extensions, or None)
+    keeps the extensions' unchanged settings. A native project call gets only
+    autoMemoryEnabled=false and disableAllHooks=true, with or without MCP. Every
+    other call keeps _native_settings, and declared MCP adds the existing
+    context exclusions (claudeMdExcludes, auto-memory, hooks, enabledPlugins={}).
+    """
+    if extension_roots is not None:
+        return _extension_settings(cwd=cwd, materials=materials, cli_temporary=cli_temporary,
+                                   read_dependencies=read_dependencies, writable_draft=writable_draft,
+                                   private_roots=extension_roots)
+    if native_project:
+        return dict(_NATIVE_PROJECT_SETTINGS)
+    settings = _native_settings(profile=profile, cwd=cwd, materials=materials, read_dependencies=read_dependencies,
+                                write_rule=write_rule, cli_temporary=cli_temporary, draft_layout=writable_draft)
+    if mcp_declared:
+        settings.update(claudeMdExcludes=["**"], autoMemoryEnabled=False, disableAllHooks=True, enabledPlugins={})
+    return settings
+
+
 def _model_identity(value):
     """Accept exact model IDs and the known CLI context-window selector only.
 
@@ -342,7 +381,7 @@ class ClaudeAdapter:
                  adapter_binding: tuple[str, str] = _CURRENT_BINDING,
                  progress_observer: Callable[[CliProcessProgress], None] | None = None,
                  mcp_servers: dict | None = None, project_directory: Path | None = None,
-                 command_permits: tuple[str, ...] = ()) -> None:
+                 command_permits: tuple[str, ...] = (), native_project: bool = False) -> None:
         """Bind trusted resources and the current executable Adapter identity.
 
         adapter_binding is claude_cli_adapter@v4. Old Profile records remain
@@ -352,8 +391,15 @@ class ClaudeAdapter:
         Grep, Glob; edit: Edit, Write; shell: Bash) under --permission-mode
         dontAsk with the user's own settings loaded. A private draft runs in the
         Attempt work folder with scratch writable and materials denied to Edit;
-        an explicit project runs in the caller's project_directory. The complete prompt is frozen
-        before execution, including any Runtime resource description.
+        an explicit project runs in the caller's project_directory. The Prompt Envelope is frozen
+        before execution, including any Runtime resource description, and is sent unchanged.
+        An agent call's stdin is a short code-generated "Runtime Invocation Locations" section
+        (working and writable directories, the Attempt materials folder, these
+        read_only_dependencies and, with shell, the Runtime Python), a blank line, then
+        that envelope; a tool-free call sends the envelope alone. The trace's
+        actual_prompt keeps the exact stdin text, which Inspection returns; the envelope
+        ref and hash identify only the envelope. TMPDIR, TEMP, TMP and CLAUDE_CODE_TMPDIR
+        all name the call's private temporary folder in the CLI's environment only.
         read_only_dependencies are trusted existing paths, never task-supplied
         strings; temporary self-tests require these roots in their exact live binding.
         Shell-capable calls use the Python environment running Runtime: its bin
@@ -392,9 +438,29 @@ class ClaudeAdapter:
                 pre-approve those commands; Claude's own read-only commands and the
                 user's allow/deny rules keep their native effect. No permit means no
                 Runtime Bash allow rule.
+            native_project: Per-call choice, False by default (every rendering
+                above is unchanged). True runs one independent call in the
+                caller's project_directory with the project's native context:
+                no --safe-mode or --disable-slash-commands, so CLAUDE.md and
+                user/project skills load by Claude's own rules; tools add Skill
+                and, for shell, PowerShell beside Bash, plus ListMcpResourcesTool,
+                ReadMcpResourceTool and ToolSearch when MCP is declared; allow
+                rules under dontAsk cover those tools, Edit(./**) and each
+                declared mcp__<name>, while user, project and managed deny/ask
+                rules keep their precedence. Settings are only
+                autoMemoryEnabled=false and disableAllHooks=true (no file-scope
+                block, sandbox or --add-dir); MCP stays the strict private
+                mcp.json of declared connections. Shell runs with host
+                permissions: the directory is task scope, not an OS boundary.
+                Requires an explicit_project_read_write Profile accepted by
+                validate_native_project; refuses command_permits and additional
+                read_only_dependencies. Recorded as native_project in the trace
+                and effective_configuration.
         Raises:
             TypeError: progress_observer is not callable.
-            ValueError: Unknown adapter identity or invalid descriptor.
+            ValueError: Unknown adapter identity or invalid descriptor, a
+                non-bool native_project, or native_project with command_permits
+                or additional read_only_dependencies.
             OSError: Executable or a dependency path cannot be resolved.
         Effects:
             Resolves paths only; no provider invocation, registration or login.
@@ -419,6 +485,11 @@ class ClaudeAdapter:
                                                       for item in command_permits):
             raise ValueError("command_permits must be non-empty single-line Bash rule bodies without ')'")
         self._command_permits = command_permits
+        validate_native_project(native_project)
+        if native_project and (command_permits or self._dependencies):
+            raise ValueError("native_project runs Shell with host permissions and takes no command_permits "
+                             "or additional read_only_dependencies")
+        self._native_project = native_project
         self.descriptor = AgentExecutionAdapterDescriptor(
             adapter_contract_version="v1",
             adapter_id=self.executor_adapter_id, adapter_revision=self.executor_adapter_revision,
@@ -487,15 +558,25 @@ class ClaudeAdapter:
         _execution_expectation(profile, (self.executor_adapter_id, self.executor_adapter_revision))
         if (output_schema is not None) != (profile.output_constraint_mode == NATIVE_STRUCTURED_OUTPUT):
             raise ValueError("CLI schema presence differs from Profile output constraint mode")
+        validate_native_project(self._native_project, profile=profile)
         native = [tool for name in profile.tool_policy if name in NATIVE_TOOLS for tool in NATIVE_TOOLS[name]]
+        if self._native_project:
+            native = _native_project_tools(profile.tool_policy, declared_mcp)
         tools = ",".join(native)
         if local_commands is not None and type(local_commands) is not LocalCommandSession:
             raise TypeError("local_commands must be the exact Runtime LocalCommandSession")
         extension = local_commands is not None or provider_tools is not None
+        if extension and self._native_project:
+            raise ValueError("native_project takes no command or callback extension")
         mcp_config = {"mcpServers": {}} if local_commands is None else local_commands.mcp_config
         if extension:
             # Explicit extension calls keep their existing allow list unchanged.
             allowed = list(native) + ([LOCAL_COMMAND_CLI_TOOL_NAME] if local_commands is not None else [])
+        elif self._native_project:
+            # Whole-tool allow rules under dontAsk; native deny/ask rules still take precedence.
+            allowed = [tool for tool in native if tool not in {"Edit", "Write"}]
+            if write_rule is not None:
+                allowed.append(f"Edit({write_rule})")
         else:
             allowed = [tool for tool in native if tool in {"Read", "Grep", "Glob"}]
             if write_rule is not None:
@@ -518,7 +599,9 @@ class ClaudeAdapter:
         if mcp_config_path is not None:
             mcp_values.append(str(mcp_config_path))
         any_mcp = extension or bool(declared_mcp)
-        argv = [str(self._cli_path), "-p", *([] if any_mcp else ["--safe-mode"]), "--disable-slash-commands",
+        # Native project calls keep CLAUDE.md and skills: no safe-mode and slash commands (skills) stay on.
+        argv = [str(self._cli_path), "-p", *([] if any_mcp or self._native_project else ["--safe-mode"]),
+                *([] if self._native_project else ["--disable-slash-commands"]),
                 "--strict-mcp-config", "--mcp-config", *mcp_values,
                 "--no-chrome", "--no-session-persistence", "--model", profile.model_id,
                 "--effort", profile.reasoning_profile, "--permission-mode", "dontAsk",
@@ -559,6 +642,7 @@ class ClaudeAdapter:
         request.validate()
         profile = self._registry.get_execution_profile(request.execution_profile_ref, request.execution_profile_sha256)
         expectation = _execution_expectation(profile, (self.executor_adapter_id, self.executor_adapter_revision))
+        validate_native_project(self._native_project, profile=profile)
         callback_names = callback_tool_names(profile.tool_policy)
         if callback_names:
             if request.self_test_binding_ref is None or self._tool_factory is None:
@@ -770,17 +854,14 @@ class ClaudeAdapter:
                         factory=self._tool_factory, definitions=self._tool_definitions, timeout_seconds=profile.timeout_seconds))
                     if events is not None:
                         events.bind_callback_tools(provider_tools.cli_tools)
-                if local_commands is not None or provider_tools is not None:
-                    settings = _extension_settings(cwd=cwd, materials=materials, cli_temporary=cli_temporary,
-                        read_dependencies=read_dependencies, writable_draft=writable_draft,
-                        private_roots=[item.private_root for item in (local_commands, provider_tools) if item is not None])
-                else:
-                    settings = _native_settings(profile=profile, cwd=cwd, materials=materials,
-                        read_dependencies=read_dependencies, write_rule=write_rule, cli_temporary=cli_temporary,
-                        draft_layout=writable_draft)
+                settings = _call_settings(profile=profile, cwd=cwd, materials=materials,
+                    read_dependencies=read_dependencies, write_rule=write_rule, cli_temporary=cli_temporary,
+                    writable_draft=writable_draft, native_project=self._native_project,
+                    mcp_declared=bool(connections),
+                    extension_roots=None if local_commands is None and provider_tools is None else
+                    [item.private_root for item in (local_commands, provider_tools) if item is not None])
                 mcp_config_path = None
                 if connections:
-                    settings.update(claudeMdExcludes=["**"], autoMemoryEnabled=False, disableAllHooks=True, enabledPlugins={})
                     mcp_config_path = cli_temporary / "mcp.json"
                     mcp_config_path.write_text(json.dumps({"mcpServers": {name: entry["config"]
                         for name, entry in connections.items()}}, ensure_ascii=False), encoding="utf-8")
@@ -796,9 +877,11 @@ class ClaudeAdapter:
                 bins = [str(dep / "bin") for dep in self._dependencies if (dep / "bin").is_dir()]
                 python_bins = [str(python.parent)] if python is not None else []
                 host_path = [entry for entry in environment.get("PATH", "").split(os.pathsep) if entry]
+                # One per-call temporary folder for every convention: TMPDIR (POSIX tools,
+                # Python), TEMP/TMP (Windows native and .NET tools) and Claude's own variable.
                 environment.update(PATH=os.pathsep.join(dict.fromkeys([*python_bins, *bins, *host_path])),
-                    TMPDIR=str(cli_temporary), CLAUDE_CODE_TMPDIR=str(cli_temporary),
-                    PYTHONDONTWRITEBYTECODE="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+                    TMPDIR=str(cli_temporary), TEMP=str(cli_temporary), TMP=str(cli_temporary),
+                    CLAUDE_CODE_TMPDIR=str(cli_temporary), PYTHONDONTWRITEBYTECODE="1",
                     GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
                 stage = "cli_preflight"
                 version = _run_cli_preflight([str(self._cli_path), "--version"], environment=environment,
@@ -809,7 +892,14 @@ class ClaudeAdapter:
                             "--strict-mcp-config", "--add-dir")
                 if any(flag not in help_text for flag in required) or (native_schema is not None and "--json-schema" not in help_text):
                     raise ValueError("configured Claude CLI lacks a required option")
-                prompt = prepared.prompt
+                write_directories = ([str(cwd / write_rule[2:].removesuffix("/**")) if write_rule != "./**" else str(cwd)]
+                                     if write_rule is not None else [])
+                # Agent calls get the code-owned locations of this Attempt ahead of the unchanged
+                # frozen envelope; tool-free calls send the envelope alone.
+                locations = None if profile.execution_mode == "tool_free" else invocation_locations(
+                    working_directory=cwd, writable_directories=write_directories, materials_directory=materials,
+                    read_only_dependencies=self._dependencies, runtime_python=python)
+                prompt = compose_invocation_prompt(locations, prepared.prompt)
                 recorded_environment = {key: ("<redacted>" if key in forwarded else value) for key, value in environment.items()}
                 allowed_index = argv.index("--allowedTools") + 1
                 allowed_rules = argv[allowed_index:argv.index("--settings")]
@@ -826,8 +916,8 @@ class ClaudeAdapter:
                     "allowed_rules": [rule for rule in allowed_rules if rule],
                     "permission_mode": "dontAsk",
                     "read_directories": [str(cwd), *settings.get("permissions", {}).get("additionalDirectories", [])],
-                    "write_directories": ([str(cwd / write_rule[2:].removesuffix("/**")) if write_rule != "./**" else str(cwd)]
-                                          if write_rule is not None else []),
+                    "write_directories": write_directories,
+                    "invocation_locations": locations,
                     "mcp_connections": [{"name": name, "config_sha256": hashlib.sha256(json.dumps(
                         entry["config"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
                         "environment_keys": list(entry["environment_keys"])} for name, entry in connections.items()],
@@ -839,6 +929,14 @@ class ClaudeAdapter:
                     "command_permits": list(self._command_permits) if "shell" in profile.tool_policy else [],
                     "file_io": "native_tools" if set(profile.tool_policy) & {"read", "search", "edit"} else "none",
                 }
+                if self._native_project:
+                    # Configuration intent only; what Claude actually discovered and used is in the
+                    # raw init event (tools, skills, plugins, mcp_servers) and the tool events.
+                    trace["native_project"] = True
+                    trace["effective_configuration"].update(
+                        native_project=True, context_enabled=["claude_md", "skills"],
+                        context_suppressed=["auto_memory", "hooks"], command_scope="host",
+                        filesystem_scope="task_directed")
                 stage = "provider_invocation"
                 command_cleanup_error = None
                 try:
@@ -974,7 +1072,15 @@ class ClaudeAdapter:
             if result.get("api_error_status") == 429:
                 fail("rate_limit", "claude_cli_rate_limited", "Claude reported a rate limit", retry="retry_allowed")
         if "initialization" not in trace or event_error or not result:
-            fail("provider", "claude_cli_result_missing_or_invalid", event_error or "CLI initialization or terminal result is missing")
+            message = event_error or "CLI initialization or terminal result is missing"
+            reason = result.get("startup_failure_reason") if result and not event_error else None
+            if isinstance(reason, str) and reason:
+                # Claude's own structured startup failure explains the missing init event.
+                errors = result.get("errors")
+                native = "; ".join(map(str, errors)) if isinstance(errors, list) else ""
+                message = f"CLI initialization is missing: Claude reported startup failure {reason}" + (
+                    f": {native}" if native else "")
+            fail("provider", "claude_cli_result_missing_or_invalid", message)
         if trace["exit_code"] != 0 or result.get("is_error") is not False or result.get("subtype") != "success":
             fail("provider", "claude_cli_error_result", "Claude CLI did not complete successfully", retry="retry_allowed")
         usage, invalid_usage = usage_fields()

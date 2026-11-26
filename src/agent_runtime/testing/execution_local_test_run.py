@@ -44,9 +44,9 @@ def build_parser(*, require_workflow=True, require_input=True):
     parser.add_argument("--release-schema", help="PostgreSQL definition: existing release schema to read.")
     parser.add_argument("--expected-module-id", help="Optional exact Module ID the selected Workflow must run; checked before materials are captured or a model is called.")
     parser.add_argument("--input", required=require_input, type=Path, help="JSON input prepared under the selected Module or example input schema.")
-    parser.add_argument("--transport", help="This call's transport: claude_cli or codex_cli. Omit to use the parameter files or the claude_cli default.")
-    parser.add_argument("--model", help="This call's concrete model ID. Omit to use the parameter files or the default; codex_cli has no default model.")
-    parser.add_argument("--effort", help="This call's reasoning effort. Omit to use the parameter files or the default; codex_cli has no default effort.")
+    parser.add_argument("--transport", help="This call's transport: claude_cli, codex_cli or antigravity_cli (structured_output and file_review shapes only). Omit to use the parameter files or the claude_cli default.")
+    parser.add_argument("--model", help="This call's concrete model ID. Omit to use the parameter files or the default; codex_cli and antigravity_cli have no default model.")
+    parser.add_argument("--effort", help="This call's reasoning effort. Omit to use the parameter files or the default; codex_cli and antigravity_cli have no default effort.")
     parser.add_argument("--run-timeout-seconds", type=int,
         help="Total synchronous work budget (1..86400 seconds); four-layer default 1200. Managed children cannot extend the parent deadline.")
     parser.add_argument("--cli-path", type=Path, help="Installed native executable; overrides root/.runtime/config.json provider_cli_paths, then the native program on PATH is used if unconfigured. Each CLI uses the host's own login and configuration.")
@@ -57,9 +57,16 @@ def build_parser(*, require_workflow=True, require_input=True):
     parser.add_argument("--all-materials", action="store_true", help="Select every ordinary file below --material-root. A link, reparse point or special file anywhere below it is refused rather than skipped.")
     parser.add_argument("--project-directory", type=Path, help="Caller-owned existing writable directory (checkout, worktree, task copy or output directory) for a Module whose workspace policy is explicit_project_read_write. Runtime never deletes it.")
     parser.add_argument("--codex-execution-mode", choices=("configured", "host"), default="configured",
-        help="Per-call Codex configuration: configured preserves the default; host uses native host permissions for code_change with an explicit project directory. cwd is task scope, not an OS boundary. No material package, extra dependencies, command extension or MCP in host mode.")
+        help="Per-call Codex configuration: configured preserves the default; host uses native host permissions for code_change with an explicit project directory. cwd is task scope, not an OS boundary. No material package, extra dependencies or command extension in host mode, and no MCP unless --native-project is also given.")
+    parser.add_argument("--native-project", action="store_true",
+        help="Run one independent CLI call inside --project-directory with the project's native context: Claude loads "
+             "CLAUDE.md and its skills (Skill tool; PowerShell beside Bash; allow rules under dontAsk; auto-memory and "
+             "hooks off), Codex loads AGENTS.md and .agents/skills and needs --codex-execution-mode host. Only declared "
+             "MCP connections are passed; credentials stay with each CLI. Shell uses host permissions; the directory is "
+             "task scope, not an OS boundary. Only code_change/mcp_data-shaped Modules; no materials, --resources "
+             "commands or dependencies, --command-permit, or Antigravity. Each call is one fresh session that is never resumed (Claude --no-session-persistence, Codex --ephemeral).")
     parser.add_argument("--command-permit", action="append", default=[], dest="command_permits",
-        help="Repeatable Claude Bash rule body pre-approved for this call, e.g. \"python -m pytest:*\". Claude's own read-only commands still run; other commands are denied. Codex refuses per-call permits.")
+        help="Repeatable Shell command permit for this call. Claude: a Bash rule body, e.g. \"python -m pytest:*\"; Claude's own read-only commands still run; other commands are denied. Antigravity: an agy command rule body rendered as command(<permit>); the live-tested form is regex: plus Python re.escape of the complete command. Codex refuses per-call permits.")
     parser.add_argument("--record-out", type=Path, help="New file (its folder must exist) that receives the returned record, or the error document when no record was returned; an existing file is refused before setup or any model call. Read it later with agent-runtime-inspect --test-run-record.")
     return parser
 

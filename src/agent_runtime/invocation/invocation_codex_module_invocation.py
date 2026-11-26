@@ -76,6 +76,7 @@ from .invocation_process_execution import (
 from .invocation_process_execution import _runtime_python_executable, _runtime_python_read_roots
 from .invocation_local_resource_preparation import (
     LocalResourceError, assert_local_materials_unchanged, parse_local_resources, stage_attempt_materials,
+    compose_invocation_prompt, invocation_locations,
 )
 from .invocation_local_command_execution import (
     LocalCommandSession, LOCAL_COMMAND_SERVER_NAME, LOCAL_COMMAND_TOOL_NAME, _SYSTEM_READ_ROOTS,
@@ -86,7 +87,9 @@ from .invocation_workspace_preparation import (
     prepare_attempt_workspace,
     validate_project_directory,
 )
-from .invocation_tool_definition import declared_mcp_connections
+from .invocation_tool_definition import (
+    NativeProjectUnsupportedError, declared_mcp_connections, validate_native_project,
+)
 
 
 _APP_BUNDLE_BIN = "/Applications/Codex.app/Contents/Resources/codex"
@@ -392,16 +395,18 @@ class CodexCapabilityUnsupportedError(ValueError):
     error_code = "ADAPTER_CAPABILITY_UNSUPPORTED"
 
 
-def validate_codex_execution_mode(mode: str, *, profile=None) -> None:
+def validate_codex_execution_mode(mode: str, *, profile=None, native_project: bool = False) -> None:
     """Validate the closed, trusted host choice without opening resources.
 
     configured preserves the generated CLI permission configuration. host uses
     the host's permissions for the exact code_change capability combination;
     the project directory is task scope, not an OS-enforced filesystem boundary.
+    With native_project the accepted shape is validate_native_project's instead
+    (the project shapes, including declared MCP connections), checked there.
     """
     if type(mode) is not str or mode not in {"configured", "host"}:
         raise ValueError("codex_execution_mode must be configured or host")
-    if mode == "host" and profile is not None:
+    if mode == "host" and profile is not None and native_project is not True:
         if (profile.transport_kind != "codex_cli" or profile.execution_mode != "agent"
                 or profile.attempt_workspace_policy != "explicit_project_read_write"
                 or profile.network_policy != "provider_managed"
@@ -573,17 +578,18 @@ _FEATURES_OFF = ("multi_agent", "plugins", "plugin_sharing", "apps", "browser_us
 
 
 def _command(*, profile, workspace, codex_bin, schema_path, mcp_servers: tuple[str, ...], shell_tool: bool,
-             permission_options: tuple[str, ...], sandbox: tuple[str, ...]) -> list[str]:
+             permission_options: tuple[str, ...], sandbox: tuple[str, ...], native_project: bool = False) -> list[str]:
     # The shell lives in the functions namespace; excluding it from code mode
     # removes the shell tool itself (codex-cli 0.153.4), so only Shell calls keep it.
     # Host login, config.toml and execpolicy rules load normally; these overrides
     # only select context, approval, declared MCP connections and directory scope.
+    # A native project call leaves project docs (AGENTS.md) and skill discovery at Codex's defaults.
     excluded = '["collaboration","clock"]' if shell_tool else '["functions","collaboration","clock"]'
-    options = ["project_doc_max_bytes=0", 'approval_policy="never"',
-        "agents.enabled=false", "skills.include_instructions=false",
+    options = [*([] if native_project else ["project_doc_max_bytes=0"]), 'approval_policy="never"',
+        "agents.enabled=false", *([] if native_project else ["skills.include_instructions=false"]),
         "features.code_mode.excluded_tool_namespaces=" + excluded,
-        *mcp_servers, "features.skip_host_skill_discovery=true", 'web_search="disabled"',
-        "features.shell_tool=" + ("true" if shell_tool else "false")]
+        *mcp_servers, *([] if native_project else ["features.skip_host_skill_discovery=true"]),
+        'web_search="disabled"', "features.shell_tool=" + ("true" if shell_tool else "false")]
     options.extend("features." + name + "=false" for name in _FEATURES_OFF)
     options.extend(permission_options)
     argv = [str(codex_bin), "exec", "-m", profile.model_id,
@@ -663,7 +669,7 @@ def render_codex_mcp_servers(connections: dict, local_commands: LocalCommandSess
 def build_workspace_command(*, profile: ExecutionProfileRelease, main_folder: Path, codex_bin: str,
                             permission_profile: dict | None, local_commands: LocalCommandSession | None = None,
                             schema_path: Path | None = None, mcp_connections: dict | None = None,
-                            codex_execution_mode: str = "configured") -> list[str]:
+                            codex_execution_mode: str = "configured", native_project: bool = False) -> list[str]:
     """Render the workspace v5 command for one prepared Attempt, without I/O.
 
     With a recorded ``shell`` the shell tool is on as a non-login shell and the
@@ -683,20 +689,32 @@ def build_workspace_command(*, profile: ExecutionProfileRelease, main_folder: Pa
         mcp_connections: Validated declared connections by name, or None.
         codex_execution_mode: configured retains the generated permission
             profile; host selects native host execution for code_change.
+        native_project: False (default) keeps every rendering above. True,
+            with host mode and a Profile validate_native_project accepts,
+            renders the host command without the project-doc and skill
+            suppressions (AGENTS.md and skills load by Codex's own discovery)
+            and with the declared MCP connections; the undeclared host
+            servers are disabled per call by the default invoker as usual.
     Returns:
         A fresh argv list for one codex exec invocation.
     Raises:
-        ValueError: Profile targets another binding or capability set.
+        ValueError: Profile targets another binding or capability set, or
+            native_project is not a bool.
+        NativeProjectUnsupportedError: native_project without host mode or
+            with a Profile outside the native project shapes.
         TypeError: local_commands is not the exact Runtime session.
     """
     _workspace_execution_expectation(profile)
-    validate_codex_execution_mode(codex_execution_mode, profile=profile)
+    validate_codex_execution_mode(codex_execution_mode, profile=profile, native_project=native_project)
+    validate_native_project(native_project, profile=profile, codex_execution_mode=codex_execution_mode)
     if codex_execution_mode == "host":
-        if permission_profile is not None or local_commands is not None or mcp_connections:
+        if permission_profile is not None or local_commands is not None or (mcp_connections and not native_project):
             raise CodexCapabilityUnsupportedError("host execution takes no permission profile, command extension or MCP")
         return _command(profile=profile, workspace=main_folder, codex_bin=codex_bin, schema_path=schema_path,
-                        mcp_servers=("mcp_servers={}",), shell_tool=True,
-                        permission_options=("allow_login_shell=false",), sandbox=("-s", "danger-full-access"))
+                        mcp_servers=render_codex_mcp_servers(mcp_connections or {}) if native_project
+                        else ("mcp_servers={}",), shell_tool=True,
+                        permission_options=("allow_login_shell=false",), sandbox=("-s", "danger-full-access"),
+                        native_project=native_project)
     if local_commands is not None and type(local_commands) is not LocalCommandSession:
         raise TypeError("local_commands must be the exact Runtime LocalCommandSession")
     shell_tool = "shell" in profile.tool_policy
@@ -857,6 +875,7 @@ class _CodexCliExecutorBase:
         project_directory: Path | None = None,
         command_permits: tuple[str, ...] = (),
         codex_execution_mode: str = "configured",
+        native_project: bool = False,
     ) -> None:
         """Configure the admitted Codex implementation without preparing resources.
 
@@ -892,8 +911,20 @@ class _CodexCliExecutorBase:
                 or host. host requires the exact code_change capability set and
                 no additional dependencies, materials or command extension.
                 The project directory states task scope, not an OS boundary.
+            native_project: Per-call choice, False by default (unchanged
+                behavior). True requires the workspace adapter and
+                codex_execution_mode="host": one independent codex exec in the
+                caller's project_directory with AGENTS.md and skills left to
+                Codex's own discovery, the declared MCP connections rendered
+                and every undeclared host server disabled for the call; the
+                other context overrides (agents, web search, memories, hooks,
+                plugins and the other listed features) stay off. Recorded as
+                native_project in the trace and effective_configuration.
         Raises:
-            ValueError: Invalid artifact host, MCP connection or directory locator.
+            ValueError: Invalid artifact host, MCP connection or directory locator,
+                or a non-bool native_project.
+            NativeProjectUnsupportedError: native_project without host mode or
+                on the tool-free adapter.
             OSError: A locator cannot be resolved by the host filesystem.
         Effects:
             Stores resource locators and builds the descriptor. Does not create a
@@ -928,6 +959,11 @@ class _CodexCliExecutorBase:
         if codex_execution_mode == "host" and (not self.workspace_execution or self._dependencies):
             raise CodexCapabilityUnsupportedError("host execution requires the workspace adapter and no extra dependencies")
         self._codex_execution_mode = codex_execution_mode
+        validate_native_project(native_project)
+        if native_project and (codex_execution_mode != "host" or not self.workspace_execution):
+            raise NativeProjectUnsupportedError(
+                "Codex native project execution needs the workspace adapter and codex_execution_mode=\"host\"")
+        self._native_project = native_project
         self._descriptor = provider_adapter_descriptor(
             adapter_id=self.executor_adapter_id,
             adapter_revision=self.executor_adapter_revision,
@@ -991,7 +1027,8 @@ class _CodexCliExecutorBase:
         profile = self._release_registry.get_execution_profile(request.execution_profile_ref,
                                                               request.execution_profile_sha256)
         expectation = self.execution_expectation(profile)
-        validate_codex_execution_mode(self._codex_execution_mode, profile=profile)
+        validate_codex_execution_mode(self._codex_execution_mode, profile=profile, native_project=self._native_project)
+        validate_native_project(self._native_project, profile=profile, codex_execution_mode=self._codex_execution_mode)
         if self.workspace_execution:
             check_codex_external_grants((*_runtime_python_read_roots(), *self._dependencies),
                                         workspace_root=self._workspace_root)
@@ -1068,6 +1105,7 @@ class _CodexCliExecutorBase:
             "execution_profile_sha256": profile.release_sha256,
             "timeout_seconds": profile.timeout_seconds,
             "codex_execution_mode": self._codex_execution_mode,
+            **({"native_project": True} if self._native_project else {}),
         }
         parsed = _parse_codex_stream(b"")
         # Set when a CLI process this call started was not confirmed stopped; the
@@ -1239,7 +1277,9 @@ class _CodexCliExecutorBase:
                         read_only_dependencies=self._dependencies))
                 argv = build_workspace_command(profile=profile, main_folder=cwd, codex_bin=executable,
                     permission_profile=permission, local_commands=local_commands, schema_path=schema_path,
-                    mcp_connections=connections, codex_execution_mode=self._codex_execution_mode)
+                    mcp_connections=connections, codex_execution_mode=self._codex_execution_mode,
+                    native_project=self._native_project)
+                python = None
                 if shell_tool:
                     python = _runtime_python_executable()
                     bins = [str(dep / "bin") for dep in self._dependencies if (dep / "bin").is_dir()]
@@ -1249,11 +1289,19 @@ class _CodexCliExecutorBase:
                             *_developer_tool_bins(invocation_deadline(host, request)), *host_path])),
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", PYTHONDONTWRITEBYTECODE="1")
                 if temporary is not None:
-                    environment["TMPDIR"] = str(temporary)
+                    # One per-call folder for POSIX/Python (TMPDIR) and Windows native tools (TEMP, TMP).
+                    environment.update(TMPDIR=str(temporary), TEMP=str(temporary), TMP=str(temporary))
                 trace.update(main_folder=str(cwd), codex_permission_profile=permission,
                              material_sha256=material_hashes)
+                # Code-owned locations of this Attempt ahead of the unchanged frozen envelope.
+                locations = invocation_locations(
+                    working_directory=cwd, writable_directories=write_folders, materials_directory=materials,
+                    read_only_dependencies=self._dependencies, runtime_python=python)
+                prompt = compose_invocation_prompt(locations, prepared.prompt)
+            else:
+                locations = None
             trace.update(argv=redact_codex_argv(list(argv)), cwd=str(cwd),
-                         prompt_envelope_sha256=request.prompt_envelope_sha256,
+                         prompt_envelope_sha256=request.prompt_envelope_sha256, actual_prompt=prompt,
                          environment_keys=sorted(environment))
             trace["effective_configuration"] = {
                 "codex_execution_mode": self._codex_execution_mode,
@@ -1263,6 +1311,7 @@ class _CodexCliExecutorBase:
                 "read_directories": [str(path) for path in ((materials,) if materials is not None else ())
                                      + self._dependencies],
                 "write_directories": [str(Path(folder)) for folder in write_folders],
+                "invocation_locations": locations,
                 "mcp_connections": [{"name": name, "config_sha256": _canonical_sha256(entry["config"]),
                                      "environment_keys": list(entry["environment_keys"])}
                                     for name, entry in connections.items()],
@@ -1277,6 +1326,11 @@ class _CodexCliExecutorBase:
                 "file_io": ("via_shell" if shell_tool else
                             "unavailable_without_shell" if self.workspace_execution else "none"),
             }
+            if self._native_project:
+                # Configuration intent only; skill reads, commands and MCP calls are in the raw events.
+                trace["effective_configuration"].update(
+                    native_project=True, context_enabled=["agents_md", "skills"],
+                    context_suppressed=["agents", "web_search", *("feature:" + name for name in _FEATURES_OFF)])
             launch_guard = None
             if request.self_test_binding_ref is not None:
                 launch_guard = lambda launch: host.guard_self_test_launch(
@@ -1455,7 +1509,8 @@ class CodexCliModuleExecutor(_CodexCliExecutorBase):
     """Execute an isolated tool-free Module with the host's own Codex login.
 
     v5 adds no task tools and passes no MCP server. v3/v4 releases are
-    readable historical definitions, not executable aliases.
+    readable historical definitions, not executable aliases. Its stdin is the
+    Prompt Envelope alone, recorded as the trace's actual_prompt.
     """
 
     executor_adapter_id = "codex_cli_agent_executor"
@@ -1474,6 +1529,14 @@ class CodexCliAgentWorkspaceModuleExecutor(_CodexCliExecutorBase):
     Declared MCP connections are the only MCP servers passed; the command proxy
     is added only when local commands are explicitly selected. Historical v2/v3/v4
     Profiles stay readable and are refused by binding.
+
+    The Prompt Envelope is sent unchanged after a short code-generated "Runtime
+    Invocation Locations" section: working and writable directories, the Attempt
+    materials folder, the selected read-only dependencies and, with shell, the
+    Runtime Python. The trace's actual_prompt keeps that exact stdin, which
+    Inspection returns; the envelope ref and hash identify only the envelope.
+    TMPDIR, TEMP and TMP all name the Attempt's temporary folder in the CLI's
+    environment only.
     """
 
     executor_adapter_id = "codex_cli_agent_workspace_executor"

@@ -257,6 +257,7 @@ committed, resolved, returned, or registered as a candidate.
 | Product or service identity, resource permissions, authorization decisions and grants | The applicable service/resource authority; [Product Authorization](the_product_authorization.md) for its own domain | Carries the references required for Runtime-initiated protected operations; does not read policy bodies or re-authorize native MCP calls |
 | Runtime Module and Workflow execution, lineage, context, evaluation mechanics, recovery, and telemetry | Agent Runtime | Owns its execution lifecycle and records; does not take over an external executor's internal workflow |
 | Provider, model, execution mode, selected files, writable directories, MCP connections and Gateway/database routes | Host-provided resource scope, Execution Profile and Agent Execution Adapter | Runtime fixes and translates the requested configuration; the selected Provider, host and services execute their own access controls |
+| Provider login, MCP sign-in or consent, and tool or backend permission | The human user in the native CLI, and the owning service | Runtime setup records selected program and connection locators and reports status or gaps; it never starts a login, copies credentials or grants a permission, and preparation is not execution verification |
 | Stable Project Workflow identity plus Operation, Artifact, Design Contract, dependency, readiness, freshness, and provenance graph | [Artifact Graph](the_artifact_graph.md) and the owning domain | Runtime consumes exact registered identities and emits typed execution evidence; it does not own the project index, create an accepted `artifact_instance`, or grant product-level consumability |
 | Physical placement, residency, retention, backup, export, and destruction | [Data Governance](the_data_governance.md) | Uses registered storage bindings and preserves isolation |
 | Build, package, release admission, deployment, rollback, and retirement evidence | [Software Delivery](the_software_delivery.md) | Exposes versioned Runtime release units and conformance evidence |
@@ -267,7 +268,8 @@ Domain workflow admission, product authorization, Runtime admission, domain acce
 
 ### 5.1 External executor boundary
 
-Claude CLI、Codex CLI 及同类外部执行器按公开调用接口接入。Runtime 负责确定本次参数、输入和
+Claude CLI、Codex CLI、Antigravity CLI（首个绑定只覆盖 `structured_output` 与 `file_review` 两种形状）及同类
+外部执行器按公开调用接口接入。Runtime 负责确定本次参数、输入和
 工作目录，启动与停止自己发起的调用，接收运行日志、退出状态和最终结果，并保存自己的执行事实。
 内部规划、模型迭代、原生文件读写、命令／MCP 调用、内部重试和服务授权由执行器及服务自行处理。
 Runtime 的工作分为启动前任务组装、运行中外层调用与日志接收、结束时结果交接与留档。普通 CLI 调用不另做
@@ -362,7 +364,10 @@ flowchart LR
 Runtime imports no domain package, host catalog, product route table, or Skill
 projection during production execution. The host installs compatible Runtime,
 provider, durability, and domain-plugin releases explicitly. Discovery alone
-grants no execution authority.
+grants no execution authority. The packaged setup command prepares one project
+root: it installs the operator Skills and records the selected native CLI
+programs and MCP connections in that root's host configuration
+([Design 05](agent_runtime_05_delivery_roadmap.md) §7).
 
 A code-owned Runtime architecture registration separately registers logical
 responsibilities, physical source directories, and concrete implementation
@@ -503,7 +508,12 @@ failure class, Context event, and usage fields available from the provider. It
 loads the admitted Prompt Bundle bound by the Module Release and produces the
 exact request that Runtime sends to the selected external interface. The
 content-bearing input is committed in the Cell-local Prompt Envelope before
-invocation and sent unchanged. For a CLI, this is the task input and configuration
+invocation and sent unchanged. A CLI Adapter may place one code-generated section
+before that unchanged envelope, stating the locations it prepared for the Attempt
+(working, writable, material and dependency directories and the Runtime Python).
+That section carries no task semantics. The envelope ref and hash keep identifying
+only the frozen envelope, not the complete CLI input; the Attempt record keeps the
+complete text actually sent. For a CLI, this is the task input and configuration
 provided to that CLI; it is not a claim to capture its hidden system prompts,
 internal API requests or complete model context. Inspection shows the bytes
 Runtime actually sent and the public information it actually received.

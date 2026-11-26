@@ -33,6 +33,7 @@ RUNTIME_REQUIRED_SUPPORTING_PLANE_IDS = (
     "conformance",
 )
 RUNTIME_REQUIRED_IMPLEMENTATION_TECHNOLOGY_IDS = (
+    "antigravity_cli",
     "claude_cli",
     "codex_cli",
     "html",
@@ -282,6 +283,14 @@ RUNTIME_IMPLEMENTATION_BINDING_REGISTRATIONS = (
         technology_id="postgresql",
         implementation_source_paths=(
             "src/agent_runtime/inspection/inspection_postgres_querying.py",
+        ),
+    ),
+    RuntimeImplementationBindingRegistration(
+        implementation_binding_id="invocation_antigravity_cli",
+        logical_responsibility_id="invocation",
+        technology_id="antigravity_cli",
+        implementation_source_paths=(
+            "src/agent_runtime/invocation/invocation_antigravity_cli_execution.py",
         ),
     ),
     RuntimeImplementationBindingRegistration(
@@ -651,6 +660,11 @@ RUNTIME_SOURCE_FILE_REGISTRATIONS = (
         implementation_binding_id="invocation_claude_cli",
     ),
     _source(
+        "invocation", "antigravity_cli", "execution",
+        "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+        implementation_binding_id="invocation_antigravity_cli",
+    ),
+    _source(
         "invocation", "process", "execution",
         "designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
     ),
@@ -840,10 +854,22 @@ RUNTIME_SUPPORTING_SOURCE_FILE_REGISTRATIONS = (
         owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
     ),
     RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/testing/conformance_test_run_archiving.py",
+        supporting_plane_id="conformance", source_directory_id="testing",
+        subject="test_run", nominalized_action="archiving",
+        owner_contract_ref="designDoc/agent_runtime_08_agent_execution_adapter_contract.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
         source_path="src/agent_runtime/testing/conformance_pattern_examples.py",
         supporting_plane_id="conformance", source_directory_id="testing",
         subject="pattern", nominalized_action="examples",
         owner_contract_ref="designDoc/agent_runtime_11_agent_capability_verification.md",
+    ),
+    RuntimeSupportingSourceFileRegistration(
+        source_path="src/agent_runtime/testing/conformance_host_setup.py",
+        supporting_plane_id="conformance", source_directory_id="testing",
+        subject="host", nominalized_action="setup",
+        owner_contract_ref="designDoc/agent_runtime_05_delivery_roadmap.md",
     ),
     RuntimeSupportingSourceFileRegistration(
         source_path="src/agent_runtime/testing/conformance_fixture_mcp_serving.py",
